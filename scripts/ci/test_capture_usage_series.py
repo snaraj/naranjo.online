@@ -136,6 +136,27 @@ def running_line(running, stamp="2026-08-23T12:00:00.000Z", last=None, **overrid
     return json.dumps(record)
 
 
+def turn_model_line(identifier, stamp="2026-08-23T11:59:30.000Z"):
+    """The record that DECLARES which model the turn about to run uses.
+
+    The shape journals the model where a turn OPENS and the cumulative counts
+    where it ends, which is why the walk carries the model in force rather
+    than reading one off the counting record (issue #302). Named for what it
+    contains, like every other shape here.
+    """
+    return json.dumps(
+        {
+            "timestamp": stamp,
+            "type": "turn_context",
+            "payload": {
+                "turn_id": "01a037b7-7e24-7a63-a78f-3fd55ee77675",
+                "model": identifier,
+                "approval_policy": "on-request",
+            },
+        }
+    )
+
+
 def session_meta_line():
     """The header record a session journal opens with, and its whole leak set."""
     return json.dumps(
@@ -595,6 +616,370 @@ class OversizedLineTest(unittest.TestCase):
             module.MAX_RECORD_BYTES = original_bytes
 
 
+class RunningTotalsAttributionTest(unittest.TestCase):
+    """The model and the counts arrive in DIFFERENT records (issue #302).
+
+    This shape used to attribute every token it read to the residual, because
+    the reader only knew how to read a counting record and the model is named
+    somewhere else in the file. Every case below is a real journal shape, and
+    each pins one half of the rule: the model in force at an advance is the
+    one that advance is billed to.
+    """
+
+    MEMBER = capture_usage_series.MODEL_KEYS[6]
+    OTHER_MEMBER = capture_usage_series.MODEL_KEYS[7]
+
+    def walk(self, lines):
+        counters = capture_usage_series.new_counters()
+        with tempfile.TemporaryDirectory() as root:
+            path = pathlib.Path(root) / "day" / "session.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            rows = list(capture_usage_series.read_running_totals(root, counters))
+        return [(total, member) for _day, total, _parts, member in rows], counters
+
+    def identifier(self, key):
+        """The raw identifier the vocabulary says folds to one member."""
+        document = json.loads(
+            (pathlib.Path(__file__).resolve().parents[2] / "internal/panels/config/models.json")
+            .read_text(encoding="utf-8")
+        )
+        for group in document["groups"]:
+            for member in group["members"]:
+                if member["key"] == key and member["ids"]:
+                    return member["ids"][0]
+        raise AssertionError("no identifier declared for %s" % key)
+
+    def test_every_advance_is_billed_to_the_declared_model(self):
+        rows, counters = self.walk(
+            [
+                turn_model_line(self.identifier(self.MEMBER)),
+                running_line(100),
+                running_line(300),
+            ]
+        )
+        self.assertEqual(rows, [(100, self.MEMBER), (200, self.MEMBER)])
+        self.assertEqual(counters["unattributed"], 0)
+
+    def test_a_file_that_switches_models_bills_each_advance_to_the_one_in_force(self):
+        rows, _counters = self.walk(
+            [
+                turn_model_line(self.identifier(self.MEMBER)),
+                running_line(100),
+                turn_model_line(self.identifier(self.OTHER_MEMBER)),
+                running_line(300),
+                running_line(450),
+            ]
+        )
+        self.assertEqual(
+            rows,
+            [(100, self.MEMBER), (200, self.OTHER_MEMBER), (150, self.OTHER_MEMBER)],
+        )
+
+    def test_advances_before_any_declaration_fold_to_the_residual(self):
+        # The honest answer for tokens whose model the file never named: the
+        # residual is the fold of what cannot be attributed, and inventing an
+        # attribution from the NEXT declaration would bill one model for
+        # another's work.
+        rows, counters = self.walk(
+            [
+                running_line(100),
+                turn_model_line(self.identifier(self.MEMBER)),
+                running_line(300),
+            ]
+        )
+        self.assertEqual(
+            rows, [(100, capture_usage_series.MODEL_OTHER), (200, self.MEMBER)]
+        )
+        self.assertEqual(counters["unattributed"], 0)
+
+    def test_a_restart_after_a_switch_keeps_the_model_in_force(self):
+        # The restart arithmetic and the attribution are independent: a
+        # session that resets its own accounting is still running the model
+        # its last declaration named.
+        rows, counters = self.walk(
+            [
+                turn_model_line(self.identifier(self.MEMBER)),
+                running_line(100),
+                turn_model_line(self.identifier(self.OTHER_MEMBER)),
+                running_line(300),
+                running_line(50),
+            ]
+        )
+        self.assertEqual(
+            rows,
+            [(100, self.MEMBER), (200, self.OTHER_MEMBER), (50, self.OTHER_MEMBER)],
+        )
+        self.assertEqual(counters["restarts"], 1)
+
+    def test_an_unnamed_identifier_folds_to_the_residual_and_is_counted_once(self):
+        # Counted where it is DECLARED rather than once per advance: one
+        # unreviewed identifier is one fold, however many turns it billed.
+        rows, counters = self.walk(
+            [
+                turn_model_line("avendor-not-a-member"),
+                running_line(100),
+                running_line(300),
+            ]
+        )
+        self.assertEqual(
+            rows,
+            [
+                (100, capture_usage_series.MODEL_OTHER),
+                (200, capture_usage_series.MODEL_OTHER),
+            ],
+        )
+        self.assertEqual(counters["unattributed"], 1)
+        self.assertNotIn("not-a-member", json.dumps(rows))
+
+    def test_each_file_opens_with_no_model_of_its_own(self):
+        # The model in force is per FILE, exactly as the running total is: a
+        # declaration in one journal says nothing about the next.
+        counters = capture_usage_series.new_counters()
+        with tempfile.TemporaryDirectory() as root:
+            first = pathlib.Path(root) / "day" / "a.jsonl"
+            first.parent.mkdir(parents=True, exist_ok=True)
+            first.write_text(
+                "\n".join([turn_model_line(self.identifier(self.MEMBER)), running_line(100)])
+                + "\n",
+                encoding="utf-8",
+            )
+            (pathlib.Path(root) / "day" / "b.jsonl").write_text(
+                running_line(400) + "\n", encoding="utf-8"
+            )
+            rows = list(capture_usage_series.read_running_totals(root, counters))
+        self.assertEqual(
+            sorted((total, member) for _day, total, _p, member in rows),
+            [(100, self.MEMBER), (400, capture_usage_series.MODEL_OTHER)],
+        )
+
+
+class ModelFoldTest(unittest.TestCase):
+    """The two folds the vocabulary file declares, and the residual behind them."""
+
+    def setUp(self):
+        self.counters = capture_usage_series.new_counters()
+        self.document = json.loads(
+            (pathlib.Path(__file__).resolve().parents[2] / "internal/panels/config/models.json")
+            .read_text(encoding="utf-8")
+        )
+
+    def members(self):
+        for group in self.document["groups"]:
+            for member in group["members"]:
+                yield member
+
+    def test_every_declared_identifier_folds_to_its_own_member(self):
+        declared = 0
+        for member in self.members():
+            for identifier in member["ids"]:
+                declared += 1
+                self.assertEqual(
+                    capture_usage_series.model_key(identifier, self.counters),
+                    member["key"],
+                )
+        self.assertGreater(declared, 0, "the vocabulary declares no identifiers to fold")
+        self.assertEqual(self.counters["unattributed"], 0)
+
+    def test_an_identifier_is_normalised_before_it_is_matched(self):
+        # A written version number carries dots; a machine key never does, so
+        # the raw identifier is lowercased and its dots read as hyphens before
+        # the exact match. Both spellings must reach the same member.
+        for member in self.members():
+            for identifier in member["ids"]:
+                if "-" not in identifier:
+                    continue
+                spelled = identifier.replace("-", ".", 1).upper()
+                self.assertEqual(
+                    capture_usage_series.model_key(spelled, self.counters),
+                    member["key"],
+                    spelled,
+                )
+
+    def test_the_prefix_fold_still_reduces_a_vendor_qualified_identifier(self):
+        # The rule that existed before the file did, unchanged: an identifier
+        # is a vendor segment, a hyphen, then the model. Every member that
+        # opted into it in the file must still answer to it.
+        for member in self.members():
+            if not member.get("prefixStrip"):
+                continue
+            self.assertEqual(
+                capture_usage_series.model_key("avendor-%s" % member["key"], self.counters),
+                member["key"],
+            )
+
+    def test_a_member_that_did_not_opt_into_the_prefix_fold_is_not_reachable_by_it(self):
+        # Membership, not shape: a member declared with exact identifiers is
+        # matched by those and by nothing else, so a raw identifier that
+        # merely ENDS in a key cannot claim it.
+        for member in self.members():
+            if member.get("prefixStrip"):
+                continue
+            self.assertEqual(
+                capture_usage_series.model_key("avendor-%s" % member["key"], self.counters),
+                capture_usage_series.MODEL_OTHER,
+            )
+
+    def test_the_residual_can_never_be_named(self):
+        for spelling in (
+            capture_usage_series.MODEL_OTHER,
+            "avendor-%s" % capture_usage_series.MODEL_OTHER,
+        ):
+            self.assertEqual(
+                capture_usage_series.model_key(spelling, self.counters),
+                capture_usage_series.MODEL_OTHER,
+            )
+        self.assertEqual(self.counters["unattributed"], 2)
+
+
+class ModelVocabularyLoadTest(unittest.TestCase):
+    """Every rule the vocabulary loader states, given an input that breaks it.
+
+    The producer refuses to RUN on a malformed vocabulary rather than
+    degrading: a capture with half a vocabulary silently reattributes real
+    tokens to the residual, and a capture with none emits a document the
+    origin refuses on every push until somebody reads a log.
+    """
+
+    TEMPLATE = {
+        "schema": "usage-models/v1",
+        "residual": {"key": "other", "label": "Other", "slot": 0},
+        "groups": [
+            {
+                "key": "alpha",
+                "label": "Alpha",
+                "members": [
+                    {
+                        "key": "alpha-one",
+                        "label": "Alpha One",
+                        "slot": 1,
+                        "ids": ["raw-alpha-one"],
+                        "prefixStrip": False,
+                    },
+                    {
+                        "key": "alpha-two",
+                        "label": "Alpha Two",
+                        "slot": 2,
+                        "ids": [],
+                        "prefixStrip": True,
+                    },
+                ],
+            }
+        ],
+    }
+
+    def load(self, document, raw=None):
+        with tempfile.TemporaryDirectory() as root:
+            path = pathlib.Path(root) / "models.json"
+            path.write_text(
+                raw if raw is not None else json.dumps(document), encoding="utf-8"
+            )
+            return capture_usage_series.load_model_vocabulary(path)
+
+    def test_the_template_loads_and_says_what_it_declares(self):
+        keys, residual, labels, groups, group_labels, ids, prefix_keys = self.load(
+            self.TEMPLATE
+        )
+        self.assertEqual(keys, ("other", "alpha-one", "alpha-two"))
+        self.assertEqual(residual, "other")
+        self.assertEqual(labels["alpha-one"], "Alpha One")
+        self.assertEqual(groups, {"alpha-one": "alpha", "alpha-two": "alpha"})
+        self.assertEqual(group_labels, {"alpha": "Alpha"})
+        self.assertEqual(ids, {"raw-alpha-one": "alpha-one"})
+        self.assertEqual(prefix_keys, frozenset({"alpha-two"}))
+
+    def test_a_missing_file_refuses_the_run(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(capture_usage_series.CaptureError):
+                capture_usage_series.load_model_vocabulary(
+                    pathlib.Path(root) / "absent.json"
+                )
+
+    def test_every_malformed_shape_refuses(self):
+        def edited(mutate):
+            document = json.loads(json.dumps(self.TEMPLATE))
+            mutate(document)
+            return document
+
+        cases = {
+            "a schema this code does not understand": edited(
+                lambda d: d.__setitem__("schema", "usage-models/v2")
+            ),
+            "a section outside the declared shape": edited(
+                lambda d: d.__setitem__("extra", 1)
+            ),
+            "a residual on a chromatic slot": edited(
+                lambda d: d["residual"].__setitem__("slot", 3)
+            ),
+            "a residual an identifier can name": edited(
+                lambda d: d["residual"].__setitem__("ids", ["raw-other"])
+            ),
+            "a residual that folds by prefix": edited(
+                lambda d: d["residual"].__setitem__("prefixStrip", True)
+            ),
+            "a residual with no written name": edited(
+                lambda d: d["residual"].__setitem__("label", "")
+            ),
+            "a key that is not machine-shaped": edited(
+                lambda d: d["groups"][0]["members"][0].__setitem__("key", "Alpha One")
+            ),
+            "a member with no written name": edited(
+                lambda d: d["groups"][0]["members"][0].__setitem__("label", "")
+            ),
+            "a member on the residual's neutral slot": edited(
+                lambda d: d["groups"][0]["members"][0].__setitem__("slot", 0)
+            ),
+            "two members of one group painted alike": edited(
+                lambda d: d["groups"][0]["members"][1].__setitem__("slot", 1)
+            ),
+            "one key declared twice": edited(
+                lambda d: d["groups"][0]["members"][1].__setitem__("key", "alpha-one")
+            ),
+            "a key colliding with the residual": edited(
+                lambda d: d["groups"][0]["members"][1].__setitem__("key", "other")
+            ),
+            "one identifier folding to two members": edited(
+                lambda d: d["groups"][0]["members"][1].__setitem__("ids", ["raw-alpha-one"])
+            ),
+            "an identifier that is not lowercase": edited(
+                lambda d: d["groups"][0]["members"][0].__setitem__("ids", ["Raw-Alpha-One"])
+            ),
+            "a blank identifier": edited(
+                lambda d: d["groups"][0]["members"][0].__setitem__("ids", [""])
+            ),
+            "a group with no written label": edited(
+                lambda d: d["groups"][0].__setitem__("label", "")
+            ),
+            "a group key that is not machine-shaped": edited(
+                lambda d: d["groups"][0].__setitem__("key", "Alpha")
+            ),
+            "one group declared twice": edited(
+                lambda d: d["groups"].append(json.loads(json.dumps(d["groups"][0])))
+            ),
+            "a group with no members": edited(
+                lambda d: d["groups"][0].__setitem__("members", [])
+            ),
+            "a file with no groups at all": edited(lambda d: d.__setitem__("groups", [])),
+        }
+        for name, document in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(capture_usage_series.CaptureError):
+                    self.load(document)
+
+    def test_bytes_that_are_not_a_document_refuse(self):
+        for raw in ("not json", "[]", '{"schema": "usage-models/v1"}'):
+            with self.subTest(raw=raw):
+                with self.assertRaises(capture_usage_series.CaptureError):
+                    self.load(None, raw=raw)
+
+    def test_a_file_over_its_size_bound_refuses(self):
+        with self.assertRaises(capture_usage_series.CaptureError):
+            self.load(
+                None,
+                raw=" " * (capture_usage_series.MAX_MODELS_FILE_BYTES + 1),
+            )
+
+
 class RunningPartsTest(unittest.TestCase):
     """The three named tiers of the running-totals partition."""
 
@@ -669,6 +1054,81 @@ class RunningPartsTest(unittest.TestCase):
         ):
             parts, _counters = self.parts(**kwargs)
             self.assertLessEqual(set(parts), set(capture_usage_series.CATEGORY_KEYS))
+
+
+class NoPlaceholderRowsTest(unittest.TestCase):
+    """A row of zeroes is not a measurement of nothing; it is nothing.
+
+    The rule holds on BOTH partitions and at both places a row can become
+    empty: `day_indexed` drops a member that measured nothing across the
+    whole series, and `carrying` drops one that measured nothing across the
+    trailing WINDOW the section actually claims — a state the first cannot
+    see (issue #302). Downstream, the origin refuses a model row of zeroes
+    outright, so a producer that stopped doing this would push documents the
+    panel rejects rather than documents with a decorative row.
+    """
+
+    def test_a_member_that_measured_nothing_never_reaches_a_section(self):
+        window = ["2026-08-10", "2026-08-11"]
+        for vocabulary, present, absent in (
+            (capture_usage_series.CATEGORY_KEYS, "input", "reasoning"),
+            (capture_usage_series.MODEL_KEYS, capture_usage_series.MODEL_KEYS[1], capture_usage_series.MODEL_OTHER),
+        ):
+            with self.subTest(present=present):
+                by_day = {day: {present: 5, absent: 0} for day in window}
+                self.assertEqual(
+                    capture_usage_series.day_indexed(by_day, window, vocabulary),
+                    {present: [5, 5]},
+                )
+
+    def test_a_row_that_is_zero_across_its_own_window_is_dropped(self):
+        # The case day_indexed cannot see: a member measured on the first day
+        # of the series and never again, under a section whose window starts
+        # after it. Before the window is applied the row carries something;
+        # after it, the row is a named entity drawn at nought percent.
+        rows = {"early": [5, 0, 0], "late": [0, 3, 4]}
+        windowed = capture_usage_series.window_section(rows, 1)
+        self.assertEqual(windowed, {"early": [0, 0], "late": [3, 4]})
+        self.assertEqual(capture_usage_series.carrying(windowed), {"late": [3, 4]})
+
+    def test_dropping_a_row_of_zeroes_changes_no_day_total(self):
+        # The claim carrying makes, checked rather than asserted in prose: an
+        # all-zero row contributes nothing to any day, so the partition the
+        # caller then proves is exactly the partition it was.
+        totals = [3, 4]
+        rows = {"early": [0, 0], "late": [3, 4]}
+        capture_usage_series.assert_partition(totals, rows, 0)
+        capture_usage_series.assert_partition(totals, capture_usage_series.carrying(rows), 0)
+
+    def test_a_walk_that_names_its_model_emits_a_section_with_no_hollow_row(self):
+        member = capture_usage_series.MODEL_KEYS[6]
+        document = json.loads(
+            (pathlib.Path(__file__).resolve().parents[2] / "internal/panels/config/models.json")
+            .read_text(encoding="utf-8")
+        )
+        identifier = next(
+            entry["ids"][0]
+            for group in document["groups"]
+            for entry in group["members"]
+            if entry["key"] == member
+        )
+        with tempfile.TemporaryDirectory() as root:
+            nested = os.path.join(root, "2026", "08", "23")
+            os.makedirs(nested)
+            with open(os.path.join(nested, "session.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(turn_model_line(identifier) + "\n")
+                handle.write(running_line(60, stamp="2026-08-23T20:00:00.000Z") + "\n")
+                handle.write(running_line(200, stamp="2026-08-24T04:00:00.000Z") + "\n")
+            section, counters = capture_usage_series.capture(
+                root, capture_usage_series.FORMAT_RUNNING_TOTALS
+            )
+        # Every token this walk read was declared, so the residual measured
+        # nothing and is absent rather than present at zero.
+        self.assertEqual(section["models"], {member: [60, 140]})
+        self.assertNotIn(capture_usage_series.MODEL_OTHER, section["models"])
+        self.assertEqual(counters["unattributed"], 0)
+        for key, values in section["models"].items():
+            self.assertGreater(sum(values), 0, key)
 
 
 class RunningTotalsCaptureTest(unittest.TestCase):
@@ -2190,71 +2650,188 @@ class CategoryVocabularyParityTest(unittest.TestCase):
         )
 
 
-class ModelVocabularyParityTest(unittest.TestCase):
-    """The closed MODEL vocabulary is ONE fact spelled in three places.
+# Where the swept sources live: every production file that could grow a
+# second copy of the vocabulary. The data file itself is deliberately absent
+# — data is exactly where a model name belongs.
+SWEPT_SOURCES = (
+    ("internal/panels", (".go",)),
+    ("frontend/src", (".ts", ".svelte", ".css")),
+    ("scripts", (".py",)),
+)
 
-    scripts/capture_usage_series.py MODEL_KEYS (the capture-side guard and
-    the residual fold), internal/panels/types.go modelServeOrder (origin
-    admission and serve order), and frontend/src/lib/token-usage.ts modelSlots
-    (the fixed palette slots and the frontend's own admission). Exactly the
-    three seats the category vocabulary occupies, for exactly the same reason:
-    a key admitted by one side and refused by another is a pipeline that
-    disagrees with itself.
 
-    ORDER matters here as much as membership. modelServeOrder is the canonical
-    SERVE order — the origin walks it to emit rows deterministically, so every
-    replica's bytes and therefore its digest ETag stay identical — and the
-    frontend admits by walking the same list, so a reordering on one side
-    alone is an origin and a reader that disagree about the rows (issue
-    #170). Palette slots are NOT positional: modelSlots binds one to each
-    KEY, which is what let issue #299 insert a member mid-list without
-    repainting the named ones.
+def quoted_needles(*values):
+    """Both quotings of each value, which is the shape a table would take.
+
+    Quoted rather than bare, and that is the difference between a guard and a
+    nuisance: `other` is an English word that appears in prose all over this
+    repository, while `'other'` is a key in a lookup table. The needles are
+    built from the DATA FILE at run time, so this test file never spells a
+    model name either.
+    """
+    return tuple(
+        quoting % value for value in values for quoting in ("'%s'", '"%s"')
+    )
+
+
+def spelled_models(text, needles):
+    """Every vocabulary needle the given source text spells."""
+    return sorted({needle for needle in needles if needle in text})
+
+
+class ModelVocabularyTest(unittest.TestCase):
+    """The model vocabulary is ONE file, and only that file spells a model.
+
+    It used to be three hand-kept tables — MODEL_KEYS here,
+    modelServeOrder in internal/panels/types.go, and modelSlots in
+    frontend/src/lib/token-usage.ts — held together by a regex comparison
+    between them. Issue #302 replaced the three with
+    internal/panels/config/models.json, which every consumer READS, so the
+    seats cannot drift apart at all. What is left to prove is different in
+    kind, and this class proves exactly it:
+
+      1. this producer's vocabulary IS the file's own reading order;
+      2. the other two consumers read that same file rather than a copy;
+      3. no production source anywhere spells a model key or a written name,
+         so a fourth table cannot quietly appear;
+      4. the sweep in (3) can actually fail.
+
+    ORDER still matters as much as membership. The serve order is what the
+    origin walks to emit rows deterministically, so every replica's bytes and
+    therefore its digest ETag stay identical, and the browser admits by
+    walking the same list. The residual leads it by RULE: the producer folds
+    an unrecognized identifier into the residual and counts the fold, so a
+    vendor renaming a model mid-flight loses the split for those tokens
+    rather than losing the tokens, and a vocabulary edit that moved the
+    residual would silently reassign every fold to a real model.
     """
 
     REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-    def test_matches_the_go_admission_vocabulary(self):
-        source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
-
-        match = required_match(
-            r"modelServeOrder = \[\]string\{([^}]*)\}",
-            source,
-            "internal/panels/types.go carries no modelServeOrder",
+    def vocabulary(self):
+        return json.loads(
+            (self.REPO_ROOT / "internal/panels/config/models.json").read_text(encoding="utf-8")
         )
-        go_keys = tuple(re.findall(r'"([^"]+)"', match.group(1)))
+
+    def declared_order(self):
+        document = self.vocabulary()
+        order = [document["residual"]["key"]]
+        for group in document["groups"]:
+            order.extend(member["key"] for member in group["members"])
+        return order
+
+    def needles(self):
+        document = self.vocabulary()
+        spellings = [document["residual"]["key"], document["residual"]["label"]]
+        for group in document["groups"]:
+            spellings.extend([group["key"], group["label"]])
+            for member in group["members"]:
+                spellings.extend([member["key"], member["label"]])
+                spellings.extend(member.get("ids") or ())
+        return quoted_needles(*spellings)
+
+    def test_the_producer_serves_the_files_own_order(self):
         self.assertEqual(
-            go_keys,
-            capture_usage_series.MODEL_KEYS,
-            "modelServeOrder in internal/panels/types.go and MODEL_KEYS in "
-            "scripts/capture_usage_series.py must stay identical, in order",
-        )
-
-    def test_matches_the_frontend_palette_slots(self):
-        source = (self.REPO_ROOT / "frontend/src/lib/token-usage.ts").read_text(encoding="utf-8")
-
-        match = required_match(
-            r"modelSlots[^(]*\(\[([^\]]*(?:\][^\]]*)*?)\]\);",
-            source,
-            "frontend/src/lib/token-usage.ts carries no modelSlots",
-        )
-        ts_keys = tuple(re.findall(r"\['([^']+)',\s*\d+\]", match.group(1)))
-        self.assertEqual(
-            ts_keys,
-            capture_usage_series.MODEL_KEYS,
-            "modelSlots in frontend/src/lib/token-usage.ts and MODEL_KEYS in "
-            "scripts/capture_usage_series.py must stay identical, in order",
+            list(capture_usage_series.MODEL_KEYS),
+            self.declared_order(),
+            "MODEL_KEYS must be internal/panels/config/models.json's own reading order: "
+            "the residual, then every group's members in the order the file lists them",
         )
 
     def test_the_residual_member_leads_the_vocabulary(self):
-        # MODEL_KEYS[0] is the residual by RULE, not by convention: the
-        # producer folds an unrecognized identifier into it and counts the
-        # fold, so a vendor renaming a model mid-flight loses the split for
-        # those tokens rather than losing the tokens. A vocabulary edit that
-        # moved it would silently reassign every fold to a real model.
         self.assertEqual(
             capture_usage_series.MODEL_KEYS[0],
             capture_usage_series.MODEL_OTHER,
             "the residual member must lead MODEL_KEYS; the fold is keyed on it",
+        )
+        self.assertEqual(
+            capture_usage_series.MODEL_OTHER,
+            self.vocabulary()["residual"]["key"],
+            "the residual the producer folds into must be the one the file reserves",
+        )
+
+    def test_the_model_window_budget_is_one_number_in_three_places(self):
+        """The days a model section may cover is one budget three stages enforce.
+
+        It was hand-kept in all three until issue #302 moved it: the producer
+        windows its emission to it, the origin refuses a wider one, and the
+        browser refuses a wider one again. A change in one seat alone is a
+        producer emitting documents the origin rejects on every push, or an
+        origin admitting a section the page then refuses to draw — so the
+        number is pinned across the three the way the payload ceiling is.
+        """
+        origin = required_match(
+            r"maxModelDays = (\d+)",
+            (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8"),
+            "internal/panels/types.go carries no maxModelDays",
+        )
+        browser = required_match(
+            r"const maxModelDays = (\d+);",
+            (self.REPO_ROOT / "frontend/src/lib/token-usage.ts").read_text(encoding="utf-8"),
+            "frontend/src/lib/token-usage.ts carries no maxModelDays",
+        )
+        self.assertEqual(
+            int(origin.group(1)),
+            capture_usage_series.MAX_MODEL_DAYS,
+            "maxModelDays in internal/panels/types.go and MAX_MODEL_DAYS in "
+            "scripts/capture_usage_series.py must state the identical budget",
+        )
+        self.assertEqual(
+            int(browser.group(1)),
+            capture_usage_series.MAX_MODEL_DAYS,
+            "maxModelDays in frontend/src/lib/token-usage.ts and MAX_MODEL_DAYS in "
+            "scripts/capture_usage_series.py must state the identical budget",
+        )
+
+    def test_the_origin_and_the_browser_read_the_same_file(self):
+        origin = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
+        self.assertIn(
+            "//go:embed config/models.json",
+            origin,
+            "internal/panels must embed the vocabulary file rather than transcribe it",
+        )
+        browser = (self.REPO_ROOT / "frontend/src/lib/token-usage.ts").read_text(encoding="utf-8")
+        self.assertIn(
+            "config/models.json",
+            browser,
+            "frontend/src/lib/token-usage.ts must import the vocabulary file rather than "
+            "transcribe it",
+        )
+
+    def test_no_production_source_spells_a_model(self):
+        needles = self.needles()
+        self.assertGreater(len(needles), 20, "the sweep has almost nothing to look for")
+        for tree, suffixes in SWEPT_SOURCES:
+            for source in sorted((self.REPO_ROOT / tree).rglob("*")):
+                if source.suffix not in suffixes:
+                    continue
+                # Test sources are exempt by construction: a fixture that
+                # exercises a key has to spell one, and this file is itself
+                # the proof of that.
+                if source.name.endswith("_test.go") or source.name.startswith("test_"):
+                    continue
+                found = spelled_models(source.read_text(encoding="utf-8"), needles)
+                self.assertEqual(
+                    found,
+                    [],
+                    "%s spells %s; a model key, a written name and a vendor group live "
+                    "only in internal/panels/config/models.json, which every consumer reads"
+                    % (source.relative_to(self.REPO_ROOT), ", ".join(found)),
+                )
+
+    def test_the_sweep_can_fail(self):
+        # Non-vacuity: a guard that cannot redden is decoration. A source
+        # that reintroduces the residual as a literal must be caught, and one
+        # that merely mentions the word in prose must not.
+        needles = self.needles()
+        residual = capture_usage_series.MODEL_OTHER
+        self.assertEqual(
+            spelled_models("const table = ['%s', 0];" % residual, needles),
+            ["'%s'" % residual],
+        )
+        self.assertEqual(
+            spelled_models("# every other member keeps its slot", needles),
+            [],
         )
 
 
@@ -2452,6 +3029,13 @@ class CapParityTest(unittest.TestCase):
         # of integers on every source, which is exactly the trade
         # MAX_MODEL_DAYS was chosen to bound, and the number moved here
         # rather than in a comment somewhere because it is MEASURED.
+        #
+        # Issue #302 spent the trade the other way. The second vendor group
+        # more than doubled the vocabulary, which at the old ninety-two day
+        # window put the eleven-digit maximum over the ceiling — so the
+        # WINDOW was cut to ten weeks and the claim below is unchanged. The
+        # ceiling was never a candidate: it is one number five stages agree
+        # on, and moving it would move all five.
         self.assertLess(self.structural_maximum(11), cap)
         self.assertGreater(self.structural_maximum(12), cap)
 

@@ -306,6 +306,13 @@ conscious edits, never fights:
   volume when one is served and falls back to the vendored bootstrap set
   when it is not, so publishing media becomes an operator file copy with no
   git, CI, or release consequence (`docs/media-manifest.md`).
+- Adding a model, or a whole vendor group, to the usage split: one edit to
+  `internal/panels/config/models.json` plus the release it rides. The three
+  consumers read that file, so no code moves; what a growing vocabulary DOES
+  cost is measured rather than assumed — every member costs one integer per
+  window day on every source against the sealed payload ceiling, and
+  `CapParityTest` fails the build when the window and the vocabulary no
+  longer fit together (the ceiling is never the lever; the window is).
 - Ingress provider changes: a values override of the `ingress` block per
   the deployment-provider contract.
 
@@ -961,11 +968,19 @@ Structural promises of the panels subsystem, pinned by
   figure is a doctrine violation no matter how good the panel looks with
   it.
 - **Vendor names are data, never code.** Tool and vendor names appear
-  only as data labels inside snapshots and the embedded fetch config
-  (see `vendorMarks` in `internal/panels/doctrine_test.go`); the pin
-  scans production source bytes — identifiers, strings, and comments
-  alike — so a provider swap is a data edit and the compiled binary
-  carries no vendor coupling.
+  only as data labels inside snapshots, the embedded fetch config, and the
+  model vocabulary `internal/panels/config/models.json` — the ONE file that
+  spells every model key, written name, palette slot, vendor group and raw
+  identifier, which the origin embeds, the exporter reads and the frontend
+  imports (issue #302 retired the three hand-kept tables and the regex
+  parity test between them). Two pins hold the line: `vendorMarks` in
+  `internal/panels/doctrine_test.go` scans that package's production source
+  bytes — identifiers, strings, and comments alike — and the vocabulary
+  sweep in `scripts/ci/test_capture_usage_series.py` proves no Go,
+  TypeScript, Svelte, CSS or Python production source anywhere spells a
+  model key, a written name or a vendor group. A provider swap and a model
+  addition are both data edits, and the compiled binary carries no vendor
+  coupling.
 
 ## Docs and attribution conventions
 

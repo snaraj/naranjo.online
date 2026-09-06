@@ -9,7 +9,17 @@
  * understood rather than dropped, that 44px of CSS became 44px of box, that
  * a reduced-motion preference actually reaches the popover.
  */
+import { readFileSync } from 'node:fs';
+
 import { expect, test } from '@playwright/test';
+
+/* The model vocabulary, read from the one file every consumer reads (issue
+ * #302). The lane below builds its payload from it rather than from a list
+ * typed here, so it exercises the widest block the shipped vocabulary can
+ * actually produce and grows with it. */
+const modelVocabulary = JSON.parse(
+  readFileSync(new URL('../../internal/panels/config/models.json', import.meta.url), 'utf8')
+);
 
 // The narrowest viewport this site supports, and the sizes it must fit
 // between there and a large phone. 320 is the floor named in AGENTS.md;
@@ -1544,6 +1554,122 @@ test('every board square shows all of its own content, front and back (owner 202
     for (let index = 0; index < count; index += 1) {
       await squares.nth(index).click();
     }
+  }
+});
+
+/* THE MODEL BLOCK IS HEADED BY ITS VENDOR GROUP, AND PRINTS EVERY ROW IT
+ * CARRIES (issue #302).
+ *
+ * Two claims the source pins cannot make, because both are about what the
+ * ENGINE laid out. First the heading: the block reads the group's written
+ * name from the vocabulary file, never the operator-typed source label the
+ * capture came from. Second the geometry, which is the one that bites — the
+ * larger vendor group declares seven named members, and with the residual
+ * that is eight rows in a fixed square with `overflow: hidden`. The bars box
+ * reserves its rows from the group's declared count, and this lane measures
+ * whether the rows it reserved are actually SHOWN, at a phone width and a
+ * desktop one, in every engine.
+ *
+ * The payload is built from the shipped vocabulary rather than from a list
+ * typed here, so the widest block this site can serve is the one measured. */
+test('a vendor group heads its own block and prints every row it reserves (issue #302)', async ({
+  page,
+}) => {
+  // The largest group is the demanding one: most members, tallest block.
+  const group = modelVocabulary.groups.reduce((widest, candidate) =>
+    candidate.members.length > widest.members.length ? candidate : widest
+  );
+  const keys = [modelVocabulary.residual.key, ...group.members.map((member) => member.key)];
+  const reserved = group.members.length + 1;
+  await stageUsagePayload(page, (envelope) => {
+    const [source] = envelope.data.sources;
+    envelope.data.sources = [source];
+    source.series = {
+      startDate: '2026-06-01',
+      totals: [keys.length, keys.length * 2, keys.length * 3],
+      recorded: true,
+      models: keys.map((key) => ({ key, totals: [1, 2, 3] })),
+    };
+  });
+  await visit(page);
+
+  const readBlock = () =>
+    page.evaluate(() => {
+      const square = [...window.document.querySelectorAll('.board-square')].find(
+        (candidate) =>
+          candidate.querySelector('[data-face="front"] .board-bar') !== null
+      );
+      if (square === undefined) {
+        return null;
+      }
+      const face = square.querySelector('[data-face="front"]');
+      const box = face.getBoundingClientRect();
+      const bars = [...face.querySelectorAll('.board-bar')];
+      const inside = (node) => {
+        const seat = node.getBoundingClientRect();
+        return seat.bottom <= box.bottom + 1 && seat.right <= box.right + 1;
+      };
+      return {
+        label: face.querySelector('.board-label').textContent.trim(),
+        declared: square.getAttribute('data-rows'),
+        rows: face.querySelector('.board-bars').style.getPropertyValue('--board-bar-rows').trim(),
+        bars: bars.length,
+        barsShown: bars.filter(inside).length,
+        /* Each ROW's own content, not just its box. A grid item is sized to
+           its track, so a row whose label and groove no longer fit still
+           reports a rect inside the face while quietly clipping itself —
+           which is the exact silence this whole lane exists to break. */
+        barsWhole: bars.filter((node) => node.scrollHeight <= node.clientHeight + 1).length,
+        readings: bars.map((node) => node.querySelector('.board-reading').textContent.trim()),
+        labels: bars.map((node) => node.querySelector('.board-bar-label').textContent.trim()),
+        scrollHeight: face.scrollHeight,
+        clientHeight: face.clientHeight,
+      };
+    });
+
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    const block = await readBlock();
+    expect(block, `no square drew model bars at ${width}px`).not.toBeNull();
+    expect(
+      block.label,
+      `the block is headed "${block.label}" at ${width}px; it must carry the vendor group's own written name`
+    ).toBe(`Models · ${group.label}`);
+    expect(
+      block.rows,
+      `the bars box reserved ${block.rows} rows at ${width}px; the group declares ${reserved}`
+    ).toBe(String(reserved));
+    expect(block.declared, `the square did not declare its row count at ${width}px`).toBe(
+      String(reserved)
+    );
+    expect(
+      block.bars,
+      `the block drew ${block.bars} rows at ${width}px; the payload carried ${keys.length}`
+    ).toBe(keys.length);
+    expect(
+      block.barsShown,
+      `the block draws ${block.bars} rows at ${width}px and shows ${block.barsShown}; the rest are hidden with no sign of it`
+    ).toBe(block.bars);
+    expect(
+      block.barsWhole,
+      `${block.bars - block.barsWhole} of ${block.bars} rows clip their own label or groove at ${width}px; the reserve divides the box into rows the pitch no longer fits`
+    ).toBe(block.bars);
+    expect(
+      block.scrollHeight,
+      `the block holds ${block.scrollHeight}px of content in a ${block.clientHeight}px face at ${width}px`
+    ).toBeLessThanOrEqual(block.clientHeight + 1);
+    expect(
+      block.readings.filter((reading) => reading === '0%'),
+      `a row printed 0% at ${width}px; the origin refuses a member that carries nothing`
+    ).toEqual([]);
+    expect(
+      block.labels,
+      `the rows at ${width}px are not the members the envelope carried, in the order it served them`
+    ).toEqual([
+      modelVocabulary.residual.label,
+      ...group.members.map((member) => member.label),
+    ]);
   }
 });
 

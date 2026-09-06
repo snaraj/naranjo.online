@@ -393,6 +393,12 @@ export type LedgerSquare = {
   readonly sub?: string;
   /* A front made of bars instead of a headline figure. */
   readonly bars?: readonly LedgerBar[];
+  /* How many bar rows the face RESERVES, which is what the adapter's own
+   * vocabulary declares rather than what this payload happened to carry. The
+   * face divides its box into that many rows, so an envelope with fewer bars
+   * leaves the box exactly where it was and the page never moves under a
+   * later arrival (the zero-CLS floor). Absent on a face with no bars. */
+  readonly barRows?: number;
   /* A window's utilization, under the figure. Present exactly when the source
    * reported a window with one; a source that reports no window draws no
    * meter rather than a bar at zero. */
@@ -403,6 +409,8 @@ export type LedgerSquare = {
     readonly label: string;
     readonly facts?: readonly LedgerFact[];
     readonly bars?: readonly LedgerBar[];
+    /* The back's own reserve, read exactly as the front's is. */
+    readonly barRows?: number;
     readonly note?: string;
   };
 };

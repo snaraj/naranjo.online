@@ -15,6 +15,9 @@ import {
   formatUtilization,
   meterFillPct,
   meterSeverity,
+  modelGroup,
+  modelGroupLabel,
+  modelGroupRows,
   modelLabel,
   modelShares,
   modelSlot,
@@ -56,6 +59,16 @@ const [component, commits, helper, manifest, binding, sheet] = await Promise.all
   readFile(new URL('../src/lib/blocks/tokenSquares.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
 ]);
+
+/* The model vocabulary, read as BYTES rather than through the module's own
+   import, so the pins below compare the module's view against the file the
+   origin embeds and the capture tool reads — not against itself. */
+const vocabulary = JSON.parse(
+  await readFile(new URL('../../internal/panels/config/models.json', import.meta.url), 'utf8')
+);
+const vocabularyMembers = vocabulary.groups.flatMap((group) =>
+  group.members.map((member) => ({ ...member, group: group.key }))
+);
 
 /* One envelope carrying the shipped payload plus a token series, for driving
  * the commits block's own adapter the way its multi-panel host does: the
@@ -1221,13 +1234,16 @@ describe('the model breakdown (token-usage/v2)', () => {
     );
   });
 
-  it('holds the model window to the 92-day budget the Go boundary enforces', () => {
+  it('holds the model window to the ten-week budget the Go boundary enforces', () => {
     // The same sixth rule the origin applies (maxModelDays in
     // internal/panels/types.go), mirrored per the 2026-08-27 adversarial
-    // review of PR #230 (finding 4). A 93-day series: the models section
-    // may cover its trailing 92 days, not all 93 — while the categories
-    // breakdown answers to the series bound alone, exactly as in Go.
-    const days = 93;
+    // review of PR #230 (finding 4). A 71-day series: the models section
+    // may cover its trailing 70 days, not all 71 — while the categories
+    // breakdown answers to the series bound alone, exactly as in Go. The
+    // budget was a quarter until the vocabulary gained a second vendor group
+    // (issue #302): a row costs one integer per day per member, and the
+    // shared payload ceiling is not a lever.
+    const days = 71;
     const totals = Array.from({ length: days }, () => 2);
     const series = (extra) => ({
       sources: [
@@ -1243,7 +1259,7 @@ describe('the model breakdown (token-usage/v2)', () => {
       tokenUsageSources(
         series({ models: [{ key: 'opus-5', startDate: '2026-01-02', totals: windowed }] })
       )[0]?.series?.models?.[0]?.totals?.length,
-      92
+      70
     );
     assert.deepEqual(
       tokenUsageSources(series({ models: [{ key: 'opus-5', totals }] })),
@@ -1253,7 +1269,7 @@ describe('the model breakdown (token-usage/v2)', () => {
       tokenUsageSources(
         series({ categories: [{ key: 'input', totals }] })
       )[0]?.series?.categories?.[0]?.totals?.length,
-      93
+      71
     );
   });
 
@@ -1443,6 +1459,252 @@ describe('the model breakdown (token-usage/v2)', () => {
         { key: 'other', total: 0, pct: 0 }
       ]
     );
+  });
+});
+
+describe('the model vocabulary is one data file', () => {
+  /* Issue #302 retired three hand-kept tables — the capture tool's
+     MODEL_KEYS, the origin's serve order and this module's slot table —
+     and the regex parity test that compared them. What is left to pin is
+     that this consumer's view IS the file, member for member, in the file's
+     own order. The scripts/ci suite pins the same for the producer and
+     proves no production source anywhere spells a model. */
+
+  it('resolves every member from the file it imports', () => {
+    assert.ok(vocabularyMembers.length > 6, 'the vocabulary is too small to be interesting');
+    for (const member of vocabularyMembers) {
+      assert.equal(modelSlot(member.key), member.slot, member.key);
+      assert.equal(modelLabel(member.key), member.label, member.key);
+      assert.equal(modelGroup(member.key), member.group, member.key);
+    }
+    assert.equal(modelSlot(vocabulary.residual.key), vocabulary.residual.slot);
+    assert.equal(modelLabel(vocabulary.residual.key), vocabulary.residual.label);
+    /* The residual belongs to no vendor: it is the fold every source may
+       carry, and it rides the block of whichever group its source's named
+       members sit in. */
+    assert.equal(modelGroup(vocabulary.residual.key), '');
+  });
+
+  it('keeps every named member on its own chromatic slot inside its group', () => {
+    for (const group of vocabulary.groups) {
+      const slots = group.members.map((member) => modelSlot(member.key));
+      assert.equal(new Set(slots).size, slots.length, group.key);
+      assert.ok(
+        slots.every((slot) => slot !== vocabulary.residual.slot),
+        `${group.key} paints a member with the residual's neutral slot`
+      );
+      assert.equal(modelGroupLabel(group.key), group.label);
+      /* The reserve is the group's declared members plus the residual, which
+         any source may carry into the block. */
+      assert.equal(modelGroupRows(group.key), group.members.length + 1);
+    }
+    assert.equal(modelGroupLabel('a-group-that-does-not-exist'), '');
+    assert.equal(modelGroupRows('a-group-that-does-not-exist'), 0);
+  });
+
+  it('declares every reading mode a swatch for every slot it can hand out', () => {
+    /* A member whose slot has no declared token would silently draw the
+       residual's neutral, which is the one colour that means "we could not
+       attribute this". The stylesheet must therefore cover every slot the
+       vocabulary can return, in every reading mode. */
+    const slots = new Set([
+      vocabulary.residual.slot,
+      ...vocabularyMembers.map((member) => member.slot)
+    ]);
+    for (const slot of slots) {
+      assert.match(sheet, new RegExp(`--usage-cat-${slot}: var\\(--color-cat-${slot}\\)`));
+      for (const mode of ['light', 'dark', 'slate', 'sepia']) {
+        assert.match(sheet, new RegExp(`--palette-${mode}-cat-${slot}: #[0-9a-f]{6}`));
+      }
+      assert.match(
+        sheet,
+        new RegExp(`--color-cat-${slot}: var\\(--palette-light-cat-${slot}\\)`)
+      );
+    }
+  });
+
+  it('gives every block size the vocabulary can produce a row rung in the sheet', () => {
+    /* The bars box divides its fixed height into the declared number of rows.
+       Past five rows the loose pitch does not print inside a square, so the
+       stylesheet tightens it — and a vendor group that grows past the last
+       rung must be a red build rather than a clipped square. */
+    for (const group of vocabulary.groups) {
+      const rows = modelGroupRows(group.key);
+      if (rows <= 5) {
+        continue;
+      }
+      assert.match(sheet, new RegExp(`\\.board-bars\\[data-rows='${rows}'\\]`), group.key);
+      assert.match(sheet, new RegExp(`\\.board-square\\[data-rows='${rows}'\\]`), group.key);
+    }
+    assert.match(sheet, /\.board-bars \{[^}]*grid-template-rows: repeat\(var\(--board-bar-rows/);
+    assert.match(component, /style:--board-bar-rows=\{square\.barRows \?\? square\.bars\.length\}/);
+  });
+});
+
+describe('the model split is blocked by vendor group', () => {
+  /* Issue #302. The block a reader sees is one VENDOR GROUP's shares, headed
+     by that group's own written name from the vocabulary file — never by the
+     source's operator-typed label, which names where the numbers were
+     captured rather than whose models they measure. Every fixture below
+     builds its members FROM the vocabulary, so these pins say something
+     about the rule rather than about a list transcribed twice. */
+
+  const keysOf = (group) => group.members.map((member) => member.key);
+
+  /* A payload whose every member carries the same non-zero row, partitioning
+     the series exactly. Rows of zeroes are refused (see below), so a fixture
+     cannot pad a block with placeholders even by accident. */
+  const carrying = (blocks) => ({
+    sources: blocks.map(({ label, keys }) => ({
+      label,
+      windows: [],
+      series: {
+        startDate: '2026-08-10',
+        totals: [keys.length, keys.length * 2, keys.length * 3],
+        recorded: true,
+        models: keys.map((key) => ({ key, totals: [1, 2, 3] }))
+      }
+    }))
+  });
+
+  const squaresOf = (payload) => tokenSquaresProps(envelopeFor(payload)).squares;
+  const modelSquares = (payload) =>
+    squaresOf(payload).filter((square) => square.key.startsWith('models'));
+
+  it('heads each block with its vendor group, not with the source label', () => {
+    const [first, second] = vocabulary.groups;
+    const squares = modelSquares(
+      carrying([
+        { label: 'a-capture-tool', keys: keysOf(first) },
+        { label: 'another-capture-tool', keys: keysOf(second) }
+      ])
+    );
+    assert.equal(squares.length, 1);
+    assert.equal(squares[0].label, `Models · ${first.label}`);
+    assert.equal(squares[0].back.label, `Models · ${second.label}`);
+    assert.equal(squares[0].ariaLabel, `Model shares for ${first.label}`);
+    /* Neither operator-typed label reaches the heading. */
+    for (const face of [squares[0].label, squares[0].back.label]) {
+      assert.doesNotMatch(face, /capture-tool/);
+    }
+  });
+
+  it('renders exactly the members the envelope carries, and never a nought row', () => {
+    const [group] = vocabulary.groups;
+    const keys = keysOf(group).slice(0, 2);
+    const squares = modelSquares(carrying([{ label: 'a-capture-tool', keys }]));
+    assert.equal(squares[0].bars.length, keys.length);
+    assert.deepEqual(
+      squares[0].bars.map((bar) => bar.label),
+      keys.map(modelLabel)
+    );
+    for (const bar of squares[0].bars) {
+      assert.notEqual(bar.reading, '0%');
+      assert.ok(bar.fillPct === null || bar.fillPct > 0, bar.reading);
+    }
+  });
+
+  it('reserves the box from the group the block belongs to, never from the payload', () => {
+    const [group] = vocabulary.groups;
+    const squares = modelSquares(
+      carrying([{ label: 'a-capture-tool', keys: keysOf(group).slice(0, 2) }])
+    );
+    /* Two members arrived; the box still holds every member the group
+       declares plus the residual, so an envelope that later carries more
+       moves nothing. */
+    assert.equal(squares[0].barRows, modelGroupRows(group.key));
+    assert.ok(squares[0].barRows > squares[0].bars.length);
+  });
+
+  it('carries the residual in the block of the group its source measured', () => {
+    const [group] = vocabulary.groups;
+    const keys = [vocabulary.residual.key, ...keysOf(group).slice(0, 1)];
+    const squares = modelSquares(carrying([{ label: 'a-capture-tool', keys }]));
+    assert.deepEqual(
+      squares[0].bars.map((bar) => bar.label),
+      [vocabulary.residual.label, modelLabel(keys[1])]
+    );
+    assert.equal(squares[0].label, `Models · ${group.label}`);
+  });
+
+  it('renders no block at all when the residual is the only member', () => {
+    /* A block saying "all of it was something we cannot name" is the
+       aggregate above it with extra steps, and the producer already omits
+       the section for exactly this case. */
+    const squares = squaresOf(
+      carrying([{ label: 'a-capture-tool', keys: [vocabulary.residual.key] }])
+    );
+    assert.deepEqual(
+      squares.filter((square) => square.key.startsWith('models')),
+      []
+    );
+    /* The rest of the board is untouched: this is a missing block, never a
+       missing panel. */
+    assert.ok(squares.length > 0);
+  });
+
+  it('renders one block per group when a source ever carries two', () => {
+    const [first, second] = vocabulary.groups;
+    const keys = [...keysOf(first).slice(0, 1), ...keysOf(second).slice(0, 1)];
+    const squares = modelSquares(carrying([{ label: 'a-capture-tool', keys }]));
+    assert.equal(squares.length, 1);
+    assert.equal(squares[0].label, `Models · ${first.label}`);
+    assert.equal(squares[0].back.label, `Models · ${second.label}`);
+    assert.equal(squares[0].bars.length, 1);
+    assert.equal(squares[0].back.bars.length, 1);
+    assert.equal(squares[0].barRows, modelGroupRows(first.key));
+    assert.equal(squares[0].back.barRows, modelGroupRows(second.key));
+  });
+
+  it('refuses a member that carries nothing across the window it covers', () => {
+    /* Defence in depth: the producer omits such a row and the origin refuses
+       the document, so a payload carrying one reached the browser past two
+       boundaries that both say no. The claim that a placeholder cannot be
+       rendered has to survive a regression in either of them. */
+    const [group] = vocabulary.groups;
+    const [alive, hollow] = keysOf(group);
+    assert.deepEqual(
+      tokenUsageSources({
+        sources: [
+          {
+            label: 'a-capture-tool',
+            windows: [],
+            series: {
+              startDate: '2026-08-10',
+              totals: [1, 2, 3],
+              recorded: true,
+              models: [
+                { key: alive, totals: [1, 2, 3] },
+                { key: hollow, totals: [0, 0, 0] }
+              ]
+            }
+          }
+        ]
+      }),
+      []
+    );
+  });
+
+  it('falls back to the shipped insights under the source that reported them', () => {
+    /* No model partition — an older document or a source that reports none.
+       The frozen insights belong to no vendor group, so the block is headed
+       by the source that reported them rather than by a group it is not a
+       partition of. */
+    const squares = modelSquares({
+      sources: [
+        {
+          label: 'a-capture-tool',
+          windows: [],
+          insights: [{ label: 'Frozen', pct: 100 }]
+        }
+      ]
+    });
+    assert.equal(squares[0].label, 'Models · a-capture-tool');
+    assert.deepEqual(
+      squares[0].bars.map((bar) => bar.label),
+      ['Frozen']
+    );
+    assert.equal(squares[0].barRows, 1);
   });
 });
 

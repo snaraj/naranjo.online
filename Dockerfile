@@ -11,6 +11,11 @@ WORKDIR /src/frontend
 # The build bakes the footer's version in from the repository's VERSION file
 # (vite.config.ts), so that file is a build input of the frontend stage.
 COPY VERSION /src/VERSION
+# The model vocabulary is one data file every consumer reads rather than three
+# hand-kept tables (issue #302); src/lib/token-usage.ts imports it, so it is a
+# build input of this stage exactly as VERSION is. Nothing else under
+# internal/ enters the frontend context.
+COPY internal/panels/config/models.json /src/internal/panels/config/models.json
 COPY frontend/package.json frontend/package-lock.json ./
 # The tag and digest select Node, while these checks also prove the npm bundled
 # by that image matches the separately reviewed package-manager pin.

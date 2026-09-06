@@ -763,6 +763,7 @@ func admitSeriesSection(section usageSeriesSource) (*TokenUsageSeries, error) {
 		categoryServeOrder,
 		maxSeriesCategories,
 		0,
+		false,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("categories: %w", err)
@@ -775,6 +776,7 @@ func admitSeriesSection(section usageSeriesSource) (*TokenUsageSeries, error) {
 		modelServeOrder,
 		maxSeriesModels,
 		maxModelDays,
+		true,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("models: %w", err)
@@ -819,10 +821,22 @@ func breakdownOffset(declared, seriesStart string, days int) (int, error) {
 // stacked reading and the plain reading can never disagree.
 //
 // ONE function, TWO vocabularies (issue #170). Categories and models differ
-// in exactly three data points — which vocabulary admits a key, how many rows
-// are allowed, and how many days the window may span — so they share this
-// admission instead of growing two implementations of the same five rules.
-// The producer's own emission checks the identical five before it writes.
+// in exactly four data points — which vocabulary admits a key, how many rows
+// are allowed, how many days the window may span, and whether an all-zero row
+// is admissible — so they share this admission instead of growing two
+// implementations of the same rules. The producer's own emission checks the
+// identical set before it writes.
+//
+// noEmptyRows is the MODEL partition's fourth rule (issue #302). A member
+// whose window total is zero is a row that says nothing: it renders a named
+// entity at nought percent beside entities that were actually used, and every
+// such placeholder costs its window of integers against the payload ceiling
+// the whole pipeline shares. The producer already omits it, so a document
+// carrying one has either been edited or been produced by something that
+// disagrees with this boundary — and both are refusals rather than rows to
+// tidy away at render time. The category partition keeps the older rule: its
+// five accounting classes are a fixed division of the same day, and a class
+// that genuinely measured nothing is a reading rather than a placeholder.
 //
 // The window makes the partition a claim about the days it covers and NOTHING
 // else. Days before it carry no row and are not summed against; the series
@@ -837,7 +851,7 @@ func breakdownOffset(declared, seriesStart string, days int) (int, error) {
 // close it. admitCount bounds every count to maxCountValue, which alone makes
 // maxRows values unable to overflow; and addCounts refuses an overflow
 // anyway, so a future edit to either bound cannot quietly reopen the wrap.
-func admitBreakdown(rows map[string][]int64, declared, seriesStart string, totals []int64, vocabulary []string, maxRows, maxDays int) ([]TokenUsageCategory, error) {
+func admitBreakdown(rows map[string][]int64, declared, seriesStart string, totals []int64, vocabulary []string, maxRows, maxDays int, noEmptyRows bool) ([]TokenUsageCategory, error) {
 	if len(rows) == 0 {
 		if declared != "" {
 			return nil, errors.New("a window is declared with no rows to cover it")
@@ -863,6 +877,7 @@ func admitBreakdown(rows map[string][]int64, declared, seriesStart string, total
 		if len(values) != span {
 			return nil, fmt.Errorf("row %q covers %d days; the window covers %d", key, len(values), span)
 		}
+		var carried int64
 		for day, value := range values {
 			if err := admitCount(value); err != nil {
 				return nil, fmt.Errorf("row %q: %w", key, err)
@@ -872,6 +887,10 @@ func admitBreakdown(rows map[string][]int64, declared, seriesStart string, total
 				return nil, fmt.Errorf("row %q overflows the day %d partition", key, day)
 			}
 			sums[day] = sum
+			carried += value
+		}
+		if noEmptyRows && carried == 0 {
+			return nil, fmt.Errorf("row %q carries nothing across the window it covers", key)
 		}
 	}
 	for day, sum := range sums {

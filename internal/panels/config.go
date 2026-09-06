@@ -84,6 +84,143 @@ func applyTitles(definitions []panelDefinition, titles map[string]string) {
 	}
 }
 
+// mustLoadModelVocabulary loads the embedded model vocabulary or stops the
+// program. The bytes are compiled in, so a fault here is a BUILD defect that
+// no runtime input can reach or repair; the alternatives are both worse. An
+// empty vocabulary would refuse every model section for the life of the
+// process while looking healthy, and a partially loaded one would admit a
+// subset nobody reviewed. Refusing to start is the loud, fail-closed answer,
+// and loadModelVocabulary below is a pure function so every refusal it can
+// reach is exercised by tests rather than by a broken binary.
+func mustLoadModelVocabulary(raw []byte) []string {
+	serveOrder, err := loadModelVocabulary(raw)
+	if err != nil {
+		panic("panels: the embedded model vocabulary is unusable: " + err.Error())
+	}
+	return serveOrder
+}
+
+// loadModelVocabulary strictly decodes the embedded model vocabulary and
+// proves every rule the rest of the pipeline then relies on:
+//
+//   - the schema marker is the one this code understands;
+//   - the residual holds the neutral slot and leads the serve order, so the
+//     fold never lands on a named entity's swatch;
+//   - every key is unique across every group, so one key cannot mean two
+//     entities and the serve order cannot repeat a row;
+//   - every slot is unique WITHIN its group, because a slot is an identity
+//     inside the block that renders it — reuse ACROSS groups is deliberate
+//     and fine, since colour is never the only channel;
+//   - every raw identifier is lowercase and unique across the whole file, so
+//     the producer's fold is deterministic whichever member it checks first;
+//   - every key, label and group label is present and label-shaped, so a
+//     blank heading or an unrenderable key cannot ship.
+//
+// A fault in any of them refuses the whole file rather than dropping the
+// offending member: a vocabulary with a hole is a pipeline whose three
+// readers disagree, which is the failure this file exists to make impossible.
+func loadModelVocabulary(raw []byte) ([]string, error) {
+	var document modelsDocument
+	if err := decodeStrict(raw, &document); err != nil {
+		return nil, err
+	}
+	if document.Schema != modelsSchema {
+		return nil, fmt.Errorf("model vocabulary: schema %q is not %q", document.Schema, modelsSchema)
+	}
+	if err := validateModelMember(document.Residual); err != nil {
+		return nil, fmt.Errorf("model vocabulary residual: %w", err)
+	}
+	if document.Residual.Slot != 0 {
+		return nil, errors.New("model vocabulary: the residual must hold the neutral slot 0")
+	}
+	if len(document.Residual.IDs) != 0 || document.Residual.PrefixStrip {
+		return nil, errors.New("model vocabulary: the residual is the fold of everything else and can never be named by an identifier")
+	}
+	if len(document.Groups) == 0 {
+		return nil, errors.New("model vocabulary: no groups")
+	}
+	serveOrder := []string{document.Residual.Key}
+	keys := map[string]bool{document.Residual.Key: true}
+	identifiers := map[string]bool{}
+	groups := map[string]bool{}
+	for _, group := range document.Groups {
+		if !isLabelShaped(group.Key) || group.Label == "" {
+			return nil, errors.New("model vocabulary: every group needs a label-shaped key and a written label")
+		}
+		if groups[group.Key] {
+			return nil, fmt.Errorf("model vocabulary: group %q is declared twice", group.Key)
+		}
+		groups[group.Key] = true
+		if len(group.Members) == 0 {
+			return nil, fmt.Errorf("model vocabulary: group %q has no members", group.Key)
+		}
+		slots := map[int]bool{}
+		for _, member := range group.Members {
+			if err := validateModelMember(member); err != nil {
+				return nil, fmt.Errorf("model vocabulary: group %q: %w", group.Key, err)
+			}
+			if member.Slot == document.Residual.Slot {
+				return nil, fmt.Errorf("model vocabulary: %q takes the residual's neutral slot", member.Key)
+			}
+			if slots[member.Slot] {
+				return nil, fmt.Errorf("model vocabulary: group %q paints two members with slot %d", group.Key, member.Slot)
+			}
+			slots[member.Slot] = true
+			if keys[member.Key] {
+				return nil, fmt.Errorf("model vocabulary: %q is declared twice", member.Key)
+			}
+			keys[member.Key] = true
+			for _, identifier := range member.IDs {
+				if identifier == "" || identifier != strings.ToLower(identifier) {
+					return nil, fmt.Errorf("model vocabulary: %q carries an identifier that is not lowercase", member.Key)
+				}
+				if identifiers[identifier] {
+					return nil, fmt.Errorf("model vocabulary: an identifier folds to two members, including %q", member.Key)
+				}
+				identifiers[identifier] = true
+			}
+			serveOrder = append(serveOrder, member.Key)
+		}
+	}
+	return serveOrder, nil
+}
+
+// validateModelMember holds one member to the shape every stage assumes: a
+// machine key the wire can carry and both readers can admit, and a written
+// label neither of them has to invent.
+func validateModelMember(member modelsMember) error {
+	if !isLabelShaped(member.Key) {
+		return fmt.Errorf("%q is not a machine key", member.Key)
+	}
+	if member.Label == "" {
+		return fmt.Errorf("%q carries no written label", member.Key)
+	}
+	if member.Slot < 0 {
+		return fmt.Errorf("%q carries a negative palette slot", member.Key)
+	}
+	return nil
+}
+
+// isLabelShaped reports whether a key is the machine shape every stage of
+// this pipeline agrees on: a lowercase letter, then lowercase letters,
+// digits and hyphens, bounded. It is the same grammar the producer's
+// emission guard admits, which is why a display name can never travel as a
+// key.
+func isLabelShaped(key string) bool {
+	if len(key) == 0 || len(key) > 32 {
+		return false
+	}
+	for index, letter := range key {
+		switch {
+		case letter >= 'a' && letter <= 'z':
+		case index > 0 && (letter >= '0' && letter <= '9' || letter == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // loadFetchConfig strictly decodes the embedded fetch configuration and
 // converts its unit-explicit fields into validated duration bounds.
 func loadFetchConfig(raw []byte) (fetchConfigDocument, FetchConfig, error) {

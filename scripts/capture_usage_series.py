@@ -211,32 +211,167 @@ KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,31}$")
 # here keeps the vendor-neutrality pin intact.
 CATEGORY_KEYS = ("input", "output", "cache-read", "cache-write", "reasoning")
 
-# The CLOSED model vocabulary, in the order it is served, and the same list
-# the origin's modelServeOrder and the frontend's modelSlots carry — pinned
-# across the three by ModelVocabularyParityTest exactly as the category
-# vocabulary is. The members are MACHINE KEYS, never display copy: a key is
-# what crosses the boundary, and the reader that renders it resolves its own
-# label from its own copy of this list. That split is what lets the emission
-# guard below stay a closed membership check — a display label carries spaces
-# and dots and could never be a field name — and it is why no product name is
-# spelled anywhere in this file.
+# THE MODEL VOCABULARY IS DATA, AND IT LIVES IN ONE FILE (issue #302).
 #
-# `other` is index 0 BY RULE, not by convention: it is the reserved residual
-# member, the class every token that this tool cannot attribute to a
-# vocabulary member falls into. It is never a named entity's slot, so a
-# reader's colour for a named model never lands on the residual.
+# Every model key, its written name, its palette slot, its vendor group, and
+# the raw identifiers it folds from are declared in the repository's
+# internal/panels/config/models.json. The origin embeds that file, the
+# frontend imports it, and this program reads it — so a model joins the
+# pipeline as ONE reviewed data edit rather than as three hand-kept tables
+# and a regex test comparing them. It is also why no product name is spelled
+# anywhere in this file: a key is what crosses the boundary, and every reader
+# resolves the written name from the same bytes.
 #
-# The list is CLOSED, not append-only: a member joins in its SERVE position
-# (`fable-5-1` beside `fable-5`, issue #299), because this order is what the
-# origin walks to emit rows deterministically. An index here is NOT a colour:
-# the frontend's modelSlots binds a fixed palette slot to each KEY, so a member
-# keeps its swatch wherever it sits in this list, and the residual draws the
-# neutral slot by rule. A retired model keeps its key as a tombstone rather
-# than freeing the name.
-MODEL_KEYS = ("other", "fable-5", "fable-5-1", "opus-5", "sonnet-5", "opus-4-8")
+# `other` is the reserved residual member — the class every token this tool
+# cannot attribute falls into — and the file declares it separately from the
+# groups so it can never be a named entity's slot and a reader's colour for a
+# named model never lands on it. It leads the serve order by RULE, which is
+# the order the origin walks to emit rows deterministically.
+MODELS_FILE = pathlib.Path(__file__).resolve().parents[1].joinpath(
+    "internal", "panels", "config", "models.json"
+)
 
-# The reserved residual member, spelled once.
-MODEL_OTHER = "other"
+# How large the vocabulary file may be. It is repository data next to this
+# program, not operator configuration, so the bound exists to keep a hostile
+# or corrupted checkout from being read whole rather than to police a size.
+MAX_MODELS_FILE_BYTES = 1 << 18
+
+
+def load_model_vocabulary(path):
+    """Read the model vocabulary, or refuse to run.
+
+    Returns (keys, residual, labels, groups, group labels, ids, prefix keys).
+    A missing or malformed file is a REFUSAL rather than a degraded run: a
+    capture with half a vocabulary silently reattributes real tokens to the
+    residual, and a capture with none emits a document the origin refuses on
+    every push until somebody reads a log.
+
+    Every rule the origin's own loader enforces is enforced here too, against
+    the same bytes, so the two cannot come to disagree about what the file
+    says: the schema marker, the residual on the neutral slot and named by no
+    identifier, unique keys across every group, unique slots within a group,
+    lowercase identifiers unique across the file, and a written label on every
+    member and group.
+    """
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_MODELS_FILE_BYTES + 1)
+    except OSError:
+        raise CaptureError("the model vocabulary could not be read")
+    if len(raw) > MAX_MODELS_FILE_BYTES:
+        raise CaptureError("the model vocabulary is over its size bound")
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise CaptureError("the model vocabulary is not a JSON document")
+    if not isinstance(document, dict) or document.get("schema") != MODELS_SCHEMA:
+        raise CaptureError("the model vocabulary does not declare the expected schema")
+    if set(document) != {"schema", "residual", "groups"}:
+        raise CaptureError("the model vocabulary carries an unknown section")
+    residual = document["residual"]
+    if not isinstance(residual, dict) or residual.get("slot") != 0:
+        raise CaptureError("the model vocabulary residual must hold the neutral slot")
+    if residual.get("ids") or residual.get("prefixStrip"):
+        raise CaptureError("the model vocabulary residual can never be named by an identifier")
+    keys = [admitted_model_key(residual)]
+    labels = {keys[0]: admitted_model_label(residual)}
+    groups = {}
+    group_labels = {}
+    ids = {}
+    prefix_keys = set()
+    declared = document.get("groups")
+    if not isinstance(declared, list) or not declared:
+        raise CaptureError("the model vocabulary declares no groups")
+    for group in declared:
+        if not isinstance(group, dict):
+            raise CaptureError("the model vocabulary carries a malformed group")
+        group_key = group.get("key")
+        group_label = group.get("label")
+        if (
+            not isinstance(group_key, str)
+            or not KEY_PATTERN.fullmatch(group_key)
+            or group_key != group_key.lower()
+        ):
+            raise CaptureError("a model vocabulary group carries no machine key")
+        if not isinstance(group_label, str) or not group_label:
+            raise CaptureError("a model vocabulary group carries no written label")
+        if group_key in group_labels:
+            raise CaptureError("a model vocabulary group is declared twice")
+        group_labels[group_key] = group_label
+        members = group.get("members")
+        if not isinstance(members, list) or not members:
+            raise CaptureError("a model vocabulary group carries no members")
+        slots = set()
+        for member in members:
+            if not isinstance(member, dict):
+                raise CaptureError("the model vocabulary carries a malformed member")
+            key = admitted_model_key(member)
+            if key in labels:
+                raise CaptureError("a model vocabulary key is declared twice")
+            slot = member.get("slot")
+            if not isinstance(slot, int) or isinstance(slot, bool) or slot <= 0:
+                raise CaptureError("a model vocabulary member takes no chromatic slot")
+            if slot in slots:
+                raise CaptureError("a model vocabulary group paints two members alike")
+            slots.add(slot)
+            labels[key] = admitted_model_label(member)
+            groups[key] = group_key
+            keys.append(key)
+            for identifier in member.get("ids") or ():
+                if not isinstance(identifier, str) or not identifier:
+                    raise CaptureError("a model vocabulary identifier is empty")
+                if identifier != identifier.lower():
+                    raise CaptureError("a model vocabulary identifier is not lowercase")
+                if identifier in ids:
+                    raise CaptureError("a model vocabulary identifier folds to two members")
+                ids[identifier] = key
+            if member.get("prefixStrip") is True:
+                prefix_keys.add(key)
+    return (
+        tuple(keys),
+        keys[0],
+        labels,
+        groups,
+        group_labels,
+        ids,
+        frozenset(prefix_keys),
+    )
+
+
+def admitted_model_key(member):
+    """One member's machine key, or a refusal.
+
+    The grammar is the emission guard's own, which is exactly what stops a
+    display name from ever travelling as a key.
+    """
+    key = member.get("key")
+    if not isinstance(key, str) or not KEY_PATTERN.fullmatch(key) or key != key.lower():
+        raise CaptureError("a model vocabulary member carries no machine key")
+    return key
+
+
+def admitted_model_label(member):
+    """One member's written name, or a refusal. A blank label is a rendering
+    defect, not a decision, so it refuses here rather than reaching a page."""
+    label = member.get("label")
+    if not isinstance(label, str) or not label:
+        raise CaptureError("a model vocabulary member carries no written label")
+    return label
+
+
+# The exact schema marker the vocabulary file declares. A breaking reshape
+# mints a new marker; it never bends this one.
+MODELS_SCHEMA = "usage-models/v1"
+
+(
+    MODEL_KEYS,
+    MODEL_OTHER,
+    MODEL_LABELS,
+    MODEL_GROUPS,
+    MODEL_GROUP_LABELS,
+    MODEL_IDS,
+    MODEL_PREFIX_KEYS,
+) = load_model_vocabulary(MODELS_FILE)
 
 # Every field name the emission may legitimately contain, CLOSED. The guard
 # refuses any dictionary key outside this set (plus the caller's explicitly
@@ -400,12 +535,18 @@ WEEK_DAYS = 7
 # How many trailing days the per-model breakdown may cover. It is a BUDGET,
 # not a limit of the record: a per-model row costs one integer per day per
 # member, and at the series-day bound the section alone would outweigh the
-# entire payload ceiling every stage of this pipeline enforces. A quarter is
-# the reserve the shared ceiling can carry with room left for the aggregate
-# and its categories, and the covered range is DECLARED (the section carries
-# its own start date) so a reader is told what it is looking at rather than
-# shown a silent truncation.
-MAX_MODEL_DAYS = 92
+# entire payload ceiling every stage of this pipeline enforces. The covered
+# range is DECLARED (the section carries its own start date) so a reader is
+# told what it is looking at rather than shown a silent truncation.
+#
+# TEN WEEKS, down from a quarter (issue #302). The budget is members TIMES
+# days, and the vocabulary more than doubled when the second vendor group
+# arrived; at ninety-two days the widest document the origin admits no longer
+# left the one further decimal digit of headroom the ceiling is measured
+# against. The ceiling is one number five stages agree on and is not a lever,
+# so the window moved instead — and CapParityTest measures the result rather
+# than trusting this comment.
+MAX_MODEL_DAYS = 70
 
 # The tool's own per-day roll-up, named for what it contains. `activity_days`
 # explains why a second, weaker source of the same measurement exists at all;
@@ -927,6 +1068,20 @@ def read_running_totals(root, counters):
     lower accounting contributes its own new total. Both are tallied so the
     diagnostics say how much of the walk was replay and how much was a
     restart, without naming a single file.
+
+    THE MODEL AND THE COUNTS ARRIVE IN DIFFERENT RECORDS (issue #302), which
+    is why this shape used to attribute everything to the residual. One kind
+    of record DECLARES which model the turn runs, and a later kind reports
+    the cumulative totals; so the walk carries the model currently in force
+    and attributes each advance to it. A file that switches models mid-way
+    attributes each advance to the model in force AT that advance, and
+    advances before any declaration fold to the residual — the honest answer
+    for tokens whose model this file never named. The declaration itself is
+    the only thing that folds, so an identifier the vocabulary does not name
+    is counted once where it is declared rather than once per advance.
+
+    Each line is decoded ONCE and offered to both readers; the decoded record
+    never leaves this loop, exactly as in the message shape.
     """
     for record in admitted_records(root, counters):
         counters["files"] += 1
@@ -934,9 +1089,17 @@ def read_running_totals(root, counters):
         if handle is None:
             continue
         previous = {field: 0 for field in RUNNING_FIELDS}
+        member = MODEL_OTHER
         with handle:
             for line in bounded_lines(handle, counters):
-                reduced = reduce_running_line(line)
+                decoded = decoded_record(line)
+                if decoded is None:
+                    continue
+                declared = declared_model_of(decoded)
+                if declared is not None:
+                    member = model_key(declared, counters)
+                    continue
+                reduced = running_totals_of(decoded)
                 if reduced is None:
                     continue
                 day, running = reduced
@@ -957,11 +1120,7 @@ def read_running_totals(root, counters):
                 if advance <= 0:
                     continue
                 counters["counted"] += 1
-                # This shape journals no model, so every record it carries is
-                # the residual member by construction — never an invented
-                # label, and never a silent omission from a partition that has
-                # to cover every day.
-                yield day, advance, running_parts(advances, advance, counters), MODEL_OTHER
+                yield day, advance, running_parts(advances, advance, counters), member
 
 
 def reduce_line(line, seen, counters):
@@ -1016,6 +1175,30 @@ def reduce_running_line(line):
     guarantee than an identity check, because it needs no identifier to be
     present, unique, or stable.
     """
+    record = decoded_record(line)
+    return None if record is None else running_totals_of(record)
+
+
+def reduce_declared_model(line):
+    """The model identifier one line DECLARES for the turn it opens, or None.
+
+    A separate reader because the two facts arrive in separate records: this
+    shape journals the model where a turn begins and the counts where the
+    turn ends, so a walk that only knew how to read counts could never
+    attribute them (issue #302). It names no tool and no record type — the
+    field it reads is the declaration, and a record that does not carry one
+    is simply not a declaration.
+    """
+    record = decoded_record(line)
+    return None if record is None else declared_model_of(record)
+
+
+def decoded_record(line):
+    """One journal line decoded to a record object, or None.
+
+    The one decode both readers above share, so the walk pays for it once per
+    line. The result never leaves the caller's loop.
+    """
     line = line.strip()
     if not line:
         return None
@@ -1023,8 +1206,20 @@ def reduce_running_line(line):
         record = json.loads(line)
     except ValueError:
         return None
-    if not isinstance(record, dict):
+    return record if isinstance(record, dict) else None
+
+
+def declared_model_of(record):
+    """The model identifier a decoded record declares, or None."""
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
         return None
+    declared = payload.get(MESSAGE_MODEL_FIELD)
+    return declared if isinstance(declared, str) and declared else None
+
+
+def running_totals_of(record):
+    """(day, cumulative fields) from a decoded running-totals record, or None."""
     payload = record.get("payload")
     if not isinstance(payload, dict):
         return None
@@ -1131,27 +1326,39 @@ def running_parts(advances, total, counters):
 def model_key(value, counters):
     """One record's model identifier reduced to a vocabulary member.
 
-    The identifier a journal writes is VENDOR-QUALIFIED — a vendor segment,
-    a hyphen, then the model. This drops the leading segment and asks the
-    closed vocabulary whether what remains is a member; nothing here spells a
-    vendor or a model, so the reduction stays a mechanical transform rather
-    than a table of names in code (the same rule that keeps the record shapes
-    named for what they contain).
+    TWO FOLDS, BOTH DECLARED IN THE VOCABULARY FILE, tried in that order.
+
+      1. EXACT. The identifier is normalised — lowercased, and dots read as
+         hyphens, because a machine key carries no dots and a written version
+         number does — and looked up in the file's own identifier table. This
+         is how a journal that names its model outright is attributed, and it
+         is exact so two members can never both claim one identifier (the
+         file refuses that at load).
+      2. PREFIX. The identifier is VENDOR-QUALIFIED — a vendor segment, a
+         hyphen, then the model — so the leading segment is dropped and the
+         remainder is asked whether it is a member that opted into this fold.
+         It is applied to the RAW value, exactly as it always was, so every
+         identifier that folded before this file existed folds identically
+         now. The residual never opts in, so `<anything>-other` still lands
+         where the third case sends it.
 
     AN IDENTIFIER OUTSIDE THE VOCABULARY BECOMES THE RESIDUAL MEMBER, and it
     is counted. That is the deliberate half of the design: model churn is
     constant, and the two failure modes on the other side are both worse —
     minting a label nobody reviewed puts unreviewed copy on a public page,
-    and refusing the document leaves the panel frozen until a human edits
-    three files. The residual member is already in the vocabulary, already
-    has its neutral slot, and already means exactly this. The REFUSAL lives
-    where it belongs instead: the origin and the browser refuse any models
-    key outside the vocabulary, so an unreviewed label can never be rendered
-    even if a producer somehow emitted one.
+    and refusing the document leaves the panel frozen until a human edits the
+    vocabulary. The residual member is already in the vocabulary, already has
+    its neutral slot, and already means exactly this. The REFUSAL lives where
+    it belongs instead: the origin and the browser refuse any models key
+    outside the vocabulary, so an unreviewed label can never be rendered even
+    if a producer somehow emitted one.
     """
     if isinstance(value, str):
+        member = MODEL_IDS.get(value.lower().replace(".", "-"))
+        if member is not None:
+            return member
         _, separator, remainder = value.partition("-")
-        if separator and remainder in MODEL_KEYS and remainder != MODEL_OTHER:
+        if separator and remainder in MODEL_PREFIX_KEYS:
             return remainder
     counters["unattributed"] += 1
     return MODEL_OTHER
@@ -1346,6 +1553,22 @@ def assert_partition(totals, sections, offset):
 def window_section(sections, offset):
     """Trim every row of a breakdown to a trailing window of the series."""
     return {key: values[offset:] for key, values in sections.items()}
+
+
+def carrying(sections):
+    """Drop every row that carries nothing across the window it covers.
+
+    `day_indexed` already drops a member that measured nothing across the
+    whole series; this is the same rule applied where the SECTION is finally
+    shaped, because a member can be non-zero somewhere in the series and zero
+    across the trailing window the section actually claims (issue #302). Such
+    a row draws a named entity at nought percent beside entities that were
+    used, and costs its whole window of integers against the payload ceiling
+    to say nothing. Dropping it changes no total: an all-zero row contributes
+    nothing to any day's sum, so the partition the caller then asserts is
+    exactly the partition it was.
+    """
+    return {key: values for key, values in sections.items() if any(values)}
 
 
 def trailing_offset(window, covered):
@@ -2081,7 +2304,7 @@ def capture(
             "no day of the record carries a category partition, so the window "
             "figures cannot be measured"
         )
-    categories = window_section(categories, offset)
+    categories = carrying(window_section(categories, offset))
     assert_partition(totals, categories, offset)
     section["categories"] = categories
     if offset > 0:
@@ -2106,13 +2329,14 @@ def capture(
         if sum(values[index] for values in models.values()) == totals[index]
     }
     model_start = trailing_offset(window, model_covered)
-    if models and set(models) != {MODEL_OTHER} and model_start is not None:
+    if models and model_start is not None:
         model_offset = max(model_start, len(totals) - MAX_MODEL_DAYS, 0)
-        windowed = window_section(models, model_offset)
-        assert_partition(totals, windowed, model_offset)
-        section["models"] = windowed
-        if model_offset > 0:
-            section["modelsStartDate"] = window[model_offset]
+        windowed = carrying(window_section(models, model_offset))
+        if windowed and set(windowed) != {MODEL_OTHER}:
+            assert_partition(totals, windowed, model_offset)
+            section["models"] = windowed
+            if model_offset > 0:
+                section["modelsStartDate"] = window[model_offset]
 
     section["windows"] = windows_from(series, categories, offset, today)
     section["derived"] = derived_figures(series)
