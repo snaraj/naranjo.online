@@ -55,8 +55,8 @@ export interface TokenUsageWindow {
  * after it shipped. Every one of them is optional, so a payload written before
  * they existed still renders — an additive extension inside the same kind
  * version, exactly as the envelope contract requires. `recorded` marks a
- * figure captured out of band rather than fetched live, so a tile can say
- * where it came from instead of implying a freshness it does not have. */
+ * figure the sealed push recorded rather than a live fetch: provenance the
+ * envelope's readers can see, which the page no longer prints (issue 299). */
 export type TokenStatUnit = 'tokens' | 'days' | 'seconds' | 'count';
 
 export interface TokenUsageStat {
@@ -70,10 +70,10 @@ export interface TokenUsageStat {
 export interface TokenUsageSeries {
   startDate: string;
   totals: number[];
-  /* True when the series was captured out of band — the sealed one-way push
-   * rather than a live fetch. It is the series' own provenance, and it is
-   * what the insight rows derived from the series inherit, so a derived
-   * figure says where it came from exactly as a tile does. */
+  /* True when the series came from the sealed one-way push rather than a
+   * live fetch. It is the series' own provenance, and it is what the insight
+   * rows derived from the series inherit, so a derived figure carries the
+   * same flag a tile does. */
   recorded?: boolean;
   /* Optional per-day breakdown of the same series by accounting category
    * (input, output, cache reads, ...). The origin guarantees the categories

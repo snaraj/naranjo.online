@@ -581,11 +581,12 @@ func TestDataRootAdmitsAWindowedModelBreakdown(t *testing.T) {
 	section := alphaSection(document)
 	section["modelsStartDate"] = "2026-08-16"
 	section["models"] = map[string]any{
-		"opus-4-8": []int64{0, 1},
-		"sonnet-5": []int64{0, 2},
-		"opus-5":   []int64{0, 2},
-		"fable-5":  []int64{0, 1},
-		"other":    []int64{0, 1},
+		"opus-4-8":  []int64{0, 1},
+		"sonnet-5":  []int64{0, 2},
+		"opus-5":    []int64{0, 1},
+		"fable-5-1": []int64{0, 1},
+		"fable-5":   []int64{0, 1},
+		"other":     []int64{0, 1},
 	}
 	if _, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex)); err != nil {
 		t.Fatalf("the windowed model breakdown was refused: %v", err)

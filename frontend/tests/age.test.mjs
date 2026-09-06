@@ -18,7 +18,6 @@ import {
   relativeAge,
   unknownAge,
 } from '../src/lib/age.ts';
-import { recordedOutOfBand } from '../src/lib/blocks.ts';
 
 const noon = Date.parse('2026-08-27T12:00:00Z');
 const at = (iso) => relativeAge(iso, noon);
@@ -119,24 +118,17 @@ test('the absolute instant is UTC, locale-free, and refuses what it cannot read'
   assert.equal(absoluteInstant('not-an-instant'), null);
 });
 
-test('the detail names the phrase, dates it, and marks it only when there is a figure to mark', () => {
-  const live = ageDetail('2026-08-29T07:02:14Z', Date.parse('2026-08-29T10:02:14Z'), false);
+test('the detail names the phrase and dates it, and a dash carries no row', () => {
+  const live = ageDetail('2026-08-29T07:02:14Z', Date.parse('2026-08-29T10:02:14Z'));
   assert.equal(live.name, 'updated 3 hours ago', 'the detail’s name is the full sentence');
   assert.deepEqual(live.rows, [{ label: '', value: 'Aug 29, 2026, 07:02 UTC' }]);
+  // The detail takes exactly the instant and the clock: the provenance
+  // argument left with the sentence it used to add (issue 299).
+  assert.equal(ageDetail.length, 1);
 
-  // A recorded figure carries the page's one provenance wording, as a row of
-  // the detail rather than a mark stamped on the visible line.
-  const marked = ageDetail('2026-08-29T07:02:14Z', Date.parse('2026-08-29T10:02:14Z'), true);
-  assert.deepEqual(marked.rows, [
-    { label: '', value: 'Aug 29, 2026, 07:02 UTC' },
-    { label: '', value: recordedOutOfBand },
-  ]);
-  assert.equal(recordedOutOfBand, 'recorded out of band, not fetched live');
-
-  /* A DASH GETS NO PROVENANCE ROW, and the two halves ride one condition:
-     there is no instant to print, so there is no figure that could have been
-     recorded, and marking one would claim a capture nobody made. */
-  const unreadable = ageDetail('not-an-instant', noon, true);
+  /* A DASH GETS NO ROW: there is no instant to print, and a dash is not a
+     figure anything can vouch for. */
+  const unreadable = ageDetail('not-an-instant', noon);
   assert.equal(unreadable.name, 'last update not reported');
   assert.deepEqual(unreadable.rows, []);
 });

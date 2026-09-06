@@ -1039,6 +1039,146 @@ class ExportTest(unittest.TestCase):
                 )
 
 
+class DatasetTest(unittest.TestCase):
+    """The graphing dataset (issue #299): every source at full depth from the
+    history stores, one metadata object per category and per model, verified
+    days marked, and nothing in it that is not a day, a key, an instant, or
+    the schema."""
+
+    INSTANT = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.scratch = pathlib.Path(scratch.name)
+        self.root = self.scratch / "transcripts"
+        write_tree(
+            str(self.root),
+            {
+                "a-private-project/session.jsonl": [
+                    transcript_line(),
+                    transcript_line(
+                        timestamp="2026-08-11T09:00:00Z",
+                        requestId="req_b",
+                        message={"id": "msg_b", "usage": {"output_tokens": 3}},
+                    ),
+                ]
+            },
+        )
+        self.history = self.scratch / "history"
+        self.history.mkdir()
+
+    def test_the_dataset_carries_metadata_per_member_and_marks_verified_days(self):
+        readings = self.history / "alpha.verified.json"
+        readings.write_text(
+            json.dumps(
+                {
+                    "schema": capture.VERIFIED_SCHEMA,
+                    "readings": {"2026-08-10": {"total": 100, "readOn": "2026-08-11"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        sources, _ = export_usage_series.export(
+            self.root,
+            "alpha",
+            [],
+            MERGE_NOW,
+            history_store=self.history / "alpha.json",
+            verified_readings=readings,
+        )
+        dataset = export_usage_series.build_dataset(sources, self.history, MERGE_NOW)
+        self.assertEqual(dataset["schema"], export_usage_series.DATASET_SCHEMA)
+        self.assertEqual(dataset["unit"], "tokens")
+        self.assertEqual(dataset["dayBucketing"], "local")
+        self.assertEqual(set(dataset["sources"]), {"alpha"})
+        source = dataset["sources"]["alpha"]
+        self.assertEqual(
+            source["coverage"],
+            {"start": "2026-08-10", "end": "2026-08-11", "days": 2, "measuredDays": 2, "verifiedDays": 1},
+        )
+        # The corrected day: its total, its mark, and no split (135 was the
+        # walk's, and a split summing to 135 does not partition 100).
+        self.assertEqual(source["days"][0], {"date": "2026-08-10", "total": 100, "verified": True})
+        self.assertEqual(
+            source["days"][1],
+            {"date": "2026-08-11", "total": 3, "categories": {"output": 3}, "models": {"other": 3}},
+        )
+        member = {"unit": "tokens", "total": 3, "sharePct": 100.0, "days": 1, "first": "2026-08-11", "last": "2026-08-11"}
+        self.assertEqual(source["categories"], [{"key": "output", "kind": "category", **member}])
+        self.assertEqual(source["models"], [{"key": "other", "kind": "model", **member}])
+        self.assertIsNone(source["stats"])
+        self.assertEqual(source["windows"], sources["alpha"]["windows"])
+        self.assertEqual(source["derived"], sources["alpha"]["derived"])
+        self.assertEqual(source["capturedAt"], sources["alpha"]["capturedAt"])
+        # Nothing but days, keys, instants and the schema — the sweep the
+        # emission guard runs on the wire, restated for a file that also
+        # carries shares and marks.
+        strings = []
+        collect_strings(dataset, strings)
+        for value in strings:
+            self.assertTrue(
+                value == export_usage_series.DATASET_SCHEMA
+                or capture.DAY_PATTERN.match(value)
+                or capture.KEY_PATTERN.match(value)
+                or re.match(self.INSTANT, value),
+                value,
+            )
+        for leak in (LEAK_SESSION, LEAK_PATH, LEAK_BRANCH, LEAK_PROSE):
+            self.assertNotIn(leak, json.dumps(dataset))
+
+    def test_shares_are_taken_over_the_days_that_carry_the_split(self):
+        # Two split days at different magnitudes; the first day of the record
+        # carries no split at all and must not dilute the shares.
+        self.history.joinpath("alpha.json").write_text(
+            json.dumps(
+                {
+                    "schema": capture.HISTORY_SCHEMA,
+                    "days": {
+                        "2026-08-01": {"total": 1_000},
+                        "2026-08-10": {"total": 135, "categories": {"input": 10, "output": 5, "cache-read": 100, "cache-write": 20}},
+                        "2026-08-11": {"total": 3, "categories": {"output": 3}},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        sources, _ = export_usage_series.export(
+            self.root, "alpha", [], MERGE_NOW, history_store=self.history / "alpha.json"
+        )
+        dataset = export_usage_series.build_dataset(sources, self.history, MERGE_NOW)
+        categories = {entry["key"]: entry for entry in dataset["sources"]["alpha"]["categories"]}
+        self.assertEqual(
+            {key: entry["sharePct"] for key, entry in categories.items()},
+            {"input": 7.25, "output": 5.8, "cache-read": 72.46, "cache-write": 14.49},
+        )
+        self.assertEqual(categories["output"]["days"], 2)
+        self.assertEqual(categories["input"]["first"], "2026-08-10")
+        self.assertEqual(dataset["sources"]["alpha"]["coverage"]["measuredDays"], 3)
+
+    def test_a_source_without_a_store_carries_its_served_days_only(self):
+        merge = self.scratch / "merge.json"
+        merge.write_text(json.dumps(merge_document()), encoding="utf-8")
+        sources, _ = export_usage_series.export(
+            self.root, "alpha", [("beta", merge)], MERGE_NOW, history_store=self.history / "alpha.json"
+        )
+        dataset = export_usage_series.build_dataset(sources, self.history, MERGE_NOW)
+        beta = dataset["sources"]["beta"]
+        self.assertEqual(beta["days"], [{"date": "2026-08-10", "total": 30}, {"date": "2026-08-11", "total": 10}])
+        self.assertEqual(beta["categories"], [])
+        self.assertEqual(beta["models"], [])
+        self.assertEqual(beta["coverage"]["verifiedDays"], 0)
+
+    def test_the_dataset_is_written_by_rename_from_a_sibling(self):
+        path = self.history / "dataset.json"
+        export_usage_series.write_dataset(path, {"schema": export_usage_series.DATASET_SCHEMA})
+        self.assertTrue(path.is_file())
+        self.assertFalse(path.with_name("dataset.json.tmp").exists())
+        text = path.read_text(encoding="utf-8")
+        self.assertTrue(text.endswith("}\n"))
+        self.assertEqual(json.loads(text), {"schema": export_usage_series.DATASET_SCHEMA})
+
+
 class MainTest(unittest.TestCase):
     def run_main(self, argv):
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -1066,12 +1206,41 @@ class MainTest(unittest.TestCase):
             document["generatedAt"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
         )
         self.assertEqual(set(document["sources"]), {"alpha"})
-        # Diagnostics are counts, never paths.
+        # Diagnostics are counts, never paths; the second line is the run's
+        # coverage, calendar days only (issue #267).
+        lines = stderr.strip().splitlines()
+        self.assertEqual(len(lines), 2, stderr)
         self.assertRegex(
-            stderr.strip(),
+            lines[0],
             r"^files=\d+ unreadable=\d+ symlinks=\d+ oversized=\d+ lines=\d+ counted=\d+ "
-        r"duplicates=\d+ unpartitioned=\d+ unattributed=\d+ sources=\d+$",
+            r"duplicates=\d+ unpartitioned=\d+ unattributed=\d+ sources=\d+$",
         )
+        self.assertRegex(lines[1], r"^coverage alpha=\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$")
+
+    def test_the_dataset_is_built_from_the_history_stores_or_not_at_all(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = os.path.join(scratch, "transcripts")
+            self.tree(root)
+            history = os.path.join(scratch, "history")
+            os.mkdir(history)
+            dataset = os.path.join(history, "dataset.json")
+            out = os.path.join(scratch, "usage.json")
+            code, _stdout, stderr = self.run_main(
+                ["--transcripts", root, "--source", "alpha", "--out", out, "--dataset", dataset]
+            )
+            self.assertEqual(code, 2)
+            self.assertIn("history stores", stderr)
+            self.assertFalse(os.path.exists(dataset))
+            code, _stdout, stderr = self.run_main(
+                ["--transcripts", root, "--source", "alpha", "--out", out,
+                 "--history-store", os.path.join(history, "alpha.json"), "--dataset", dataset]
+            )
+            self.assertEqual(code, 0, stderr)
+            with open(dataset, "r", encoding="utf-8") as handle:
+                document = json.load(handle)
+            self.assertEqual(document["schema"], export_usage_series.DATASET_SCHEMA)
+            self.assertEqual([row["date"] for row in document["sources"]["alpha"]["days"]], ["2026-08-10"])
+            self.assertNotIn(scratch, json.dumps(document))
 
     def test_the_baselines_argument_reaches_the_accrual(self):
         # Issue #276, end to end through the CLI: a committed table naming

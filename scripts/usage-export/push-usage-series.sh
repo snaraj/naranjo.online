@@ -86,12 +86,40 @@
 #
 # Exit status is nonzero on any failure; diagnostics never include payload
 # content. Stage names and byte counts only.
+#
+# What the scheduler's log says per run (issue #299, the failure-logging
+# rule): one START line as each stage begins, so a stage that never ends is
+# visible as a START with no SUMMARY; on failure the stage and the elapsed
+# seconds; on success one SUMMARY line with every stage's duration, the
+# sealed size and checksum prefix, and the revision of the checkout the
+# exporter ran from — the fault class where a scheduled job silently ran a
+# tree nine commits behind what the origin admits (issue #288).
 
 set -eu
 
+run_started=$(/bin/date +%s)
+stage=configure
+elapsed() {
+    echo $(( $(/bin/date +%s) - run_started ))
+}
+
 fail() {
     echo "usage-export: $1" >&2
+    echo "usage-export: FAILED stage=$stage elapsed=$(elapsed)s" >&2
     exit 1
+}
+
+# begin/finish bracket one stage: begin names it (so a failure inside names
+# it too) and prints its START; finish appends its duration to the SUMMARY.
+timings=""
+stage_started=0
+begin() {
+    stage=$1
+    stage_started=$(/bin/date +%s)
+    echo "usage-export: START $stage"
+}
+finish() {
+    timings="$timings $stage=$(( $(/bin/date +%s) - stage_started ))s"
 }
 
 CONFIG="${NARANJO_USAGE_EXPORT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/naranjo-usage-export/config}"
@@ -219,11 +247,18 @@ for triple in $MERGE_CAPTURES; do
     set -- --transcripts "$tree" --source "$key" --format "$format"
     if [ -n "$HISTORY_DIR" ]; then
         set -- "$@" --history-store "$HISTORY_DIR/$key.json"
+        # A verified readings file beside the store is applied over it
+        # (issue #299); its absence is the ordinary state, never a refusal.
+        if [ -f "$HISTORY_DIR/$key.verified.json" ]; then
+            set -- "$@" --verified-readings "$HISTORY_DIR/$key.verified.json"
+        fi
     fi
+    begin "recapture-$key"
     sandbox-exec -f "$PRODUCER_PROFILE" \
         /usr/bin/env python3 -I -B "$CAPTURE_SCRIPT" "$@" \
         > "$SCRATCH/$key.json" \
         || fail "a merge source could not be recaptured; nothing was pushed"
+    finish
     MERGE_SOURCES="$MERGE_SOURCES $key=$SCRATCH/$key.json"
 done
 
@@ -249,16 +284,26 @@ if [ -n "$ACTIVITY_CACHE" ]; then
 fi
 if [ -n "$HISTORY_DIR" ]; then
     set -- "$@" --history-store "$HISTORY_DIR/$SOURCE_LABEL.json"
+    if [ -f "$HISTORY_DIR/$SOURCE_LABEL.verified.json" ]; then
+        set -- "$@" --verified-readings "$HISTORY_DIR/$SOURCE_LABEL.verified.json"
+    fi
+    # The graphing dataset is rebuilt from the stores on every run and lives
+    # beside them (issue #299): machine-local, never sealed, never pushed.
+    set -- "$@" --dataset "$HISTORY_DIR/dataset.json"
 fi
 for pair in $MERGE_SOURCES; do
     set -- "$@" --merge-source "$pair"
 done
+begin export
 sandbox-exec -f "$PRODUCER_PROFILE" \
     /usr/bin/env python3 -I -B "$EXPORT_SCRIPT" "$@" || fail "export refused"
+finish
 
 # 3. Seal on this machine, before anything leaves it.
+begin seal
 "$USAGESEAL_BIN" -mode seal -key-file "$KEY_FILE" < "$PLAIN" > "$SEALED" \
     || fail "sealing refused"
+finish
 
 # THE payload ceiling, in SEALED bytes — one number every stage enforces
 # (2026-08-24 security review, finding 4). Canonical in Go at
@@ -436,9 +481,15 @@ check_resolved globalknownhostsfile /dev/null
 check_resolved passwordauthentication no
 check_resolved gssapiauthentication no
 
+begin push
 remote_line=$(push_ssh "$PUSH_HOST" usage-export-receive < "$SEALED") || fail "push refused"
 
 remote_sum=$(echo "$remote_line" | head -n 1 | cut -d' ' -f1)
 [ "$remote_sum" = "$local_sum" ] || fail "checksum mismatch after push"
+finish
 
 echo "usage-export: pushed $sealed_bytes sealed bytes; checksum verified"
+# The revision is a public repository's commit id, never a path or a host
+# fact; "unknown" when REPO_DIR is not a checkout at all.
+exporter_revision=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+echo "usage-export: SUMMARY pushed=${sealed_bytes}B sha256=$(echo "$local_sum" | cut -c1-12) exporter=$exporter_revision elapsed=$(elapsed)s stages:$timings"

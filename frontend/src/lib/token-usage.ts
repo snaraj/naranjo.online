@@ -3,7 +3,6 @@
  * whatever these helpers return; it never computes, so a formatting or
  * admission bug is a one-file fix with a failing test beside it. */
 
-import { recordedOutOfBand } from './blocks.ts';
 import type {
   LedgerBar,
   LedgerBoardProps,
@@ -212,33 +211,6 @@ export function formatStatValue(value: number | null, unit: TokenStatUnit): stri
     return formatWhole(value);
   }
   return formatTokenCount(value);
-}
-
-/* provenanceIsMixed decides whether a source needs per-figure provenance
- * marks at all, and it is the whole of the answer to a real reading problem:
- * every tile and every insight carried a "recorded" suffix, which came to
- * about a hundred repetitions on one screen, all of them saying the same
- * thing. The owner's instruction was blunt — obviously it is, remove it.
- *
- * What the marker is FOR is distinguishing figures, and a label that appears
- * on every figure distinguishes none of them. So the rule becomes: mark by
- * exception. A source whose figures all share one provenance says nothing per
- * figure, because there is nothing to tell apart — the panel's own status
- * already carries where the payload came from. A source whose figures DISAGREE
- * marks the recorded ones, because those are the figures that would otherwise
- * borrow the freshness of the live ones beside them, which is exactly the
- * borrowing the panel doctrine forbids.
- *
- * That mixed state is not hypothetical: it is what mergeUsagePayload produces
- * the moment a refresh succeeds, overlaying live tiles onto the recorded ones
- * a usage API cannot report. The marker appears precisely when it earns its
- * space, and the provenance data itself is untouched in the payload. */
-export function provenanceIsMixed(source: TokenUsageSource): boolean {
-  const figures: Array<{ recorded?: boolean }> = [...(source.stats ?? []), ...(source.insights ?? [])];
-  return (
-    figures.some((figure) => figure.recorded === true) &&
-    figures.some((figure) => figure.recorded !== true)
-  );
 }
 
 /* tokenUsageSources is the component's admission gate, mirroring the strict
@@ -714,8 +686,13 @@ export function categorySlot(key: string): number {
  * because the fold happens at capture, where the raw identifier is, and a
  * document arriving with an unknown key has not been through it. */
 const modelSlots: ReadonlyMap<string, number> = new Map([
-  ['other', 1],
+  /* The residual member draws the NEUTRAL slot (issue #299): it is not an
+     entity but the fold of every identifier the vocabulary does not name, and
+     its swatch says so. The chromatic slot it used to hold went to the member
+     that joined beside it, so no existing member repainted. */
+  ['other', 0],
   ['fable-5', 2],
+  ['fable-5-1', 1],
   ['opus-5', 3],
   ['sonnet-5', 4],
   ['opus-4-8', 5]
@@ -740,6 +717,7 @@ export function modelSlot(key: string): number {
 const modelLabels: ReadonlyMap<string, string> = new Map([
   ['other', 'Other'],
   ['fable-5', 'Fable 5'],
+  ['fable-5-1', 'Fable 5.1'],
   ['opus-5', 'Opus 5'],
   ['sonnet-5', 'Sonnet 5'],
   ['opus-4-8', 'Opus 4.8']
@@ -931,43 +909,12 @@ function backFacts(source: TokenUsageSource): LedgerFact[] {
  * saturation, so the board and the retired panel would have said the identical
  * thing. */
 function insightBars(source: TokenUsageSource): LedgerBar[] {
-  /* The rendered set is resolved BEFORE provenance is, because the two are the
-     same question asked in the right order: what figures does this square
-     show, and do they come from one place? Deriving the rows first means a
-     live-derived set is weighed exactly as a served one is, instead of the
-     marks being decided against figures that were then replaced. */
-  const insights = renderedInsights(source);
-  const mixed = provenanceIsMixed({ ...source, insights });
-  return insights.map((insight) => ({
+  return renderedInsights(source).map((insight) => ({
     key: insight.label,
     label: insight.label,
     fillPct: insight.pct === null ? null : meterFillPct(insight.pct),
-    reading: formatShare(insight.pct),
-    marked: mixed && insight.recorded === true
+    reading: formatShare(insight.pct)
   }));
-}
-
-/* THE PROVENANCE LINE (issue 268's wording, carried into the board).
- *
- * A figure captured out of band says so, in the page's one sentence for it,
- * and it says so where the figures it qualifies are — the back of the square,
- * under the breakdown a reader turned it over to see. It is not on the front:
- * the owner removed the visible per-figure mark ("just remove it") and moved
- * provenance to the surface a reader opens, which for a square is its back.
- *
- * The rule is provenance BY EXCEPTION, exactly as the tiles' was: a source
- * whose every figure shares one provenance marks none of them, and a source
- * that mixes them says so. The sentence is the shared constant; nothing here
- * composes words. */
-function provenanceNote(source: TokenUsageSource, marked: boolean): string | undefined {
-  return marked || provenanceIsMixed({ ...source, insights: renderedInsights(source) })
-    ? recordedOutOfBand
-    : undefined;
-}
-
-/* Whether a source's own stats say they were captured out of band. */
-function recordedSource(source: TokenUsageSource): boolean {
-  return (source.stats ?? []).some((stat) => stat.recorded === true);
 }
 
 /* The sub-line under a source's lifetime figure: its current streak and its
@@ -1042,8 +989,7 @@ export function tokenSquares(sources: readonly TokenUsageSource[]): LedgerSquare
           key: source.label,
           term: source.label,
           value: statFigure(statOf(source, lifetimeKey))
-        })),
-        note: sources.some(recordedSource) ? recordedOutOfBand : undefined
+        }))
       }
     }
   ];
@@ -1061,7 +1007,7 @@ export function tokenSquares(sources: readonly TokenUsageSource[]): LedgerSquare
       back: {
         label: `${source.label} breakdown`,
         facts: facts.length > 0 ? facts : undefined,
-        note: facts.length > 0 ? provenanceNote(source, recordedSource(source)) : tokenUsageSourceEmptyNote
+        note: facts.length > 0 ? undefined : tokenUsageSourceEmptyNote
       }
     });
   }
@@ -1083,30 +1029,17 @@ export function tokenSquares(sources: readonly TokenUsageSource[]): LedgerSquare
       back: {
         label: second === undefined ? 'Models' : `Models · ${second.label}`,
         bars: backBars.length > 0 ? backBars : undefined,
-        note:
-          backBars.length > 0
-            ? provenanceNote(second, backBars.some((bar) => bar.marked))
-            : tokenUsageSourceEmptyNote
+        note: backBars.length > 0 ? undefined : tokenUsageSourceEmptyNote
       }
     });
   }
   /* The session record, from the first source that keeps one. */
   const keeper = sources.find((source) => statOf(source, 'sessions') !== undefined) ?? first;
   const sessions = statFigure(statOf(keeper, 'sessions'));
-  const active = statOf(keeper, 'active-days');
-  const tracked = statOf(keeper, 'tracked-days');
   squares.push({
     key: 'sessions',
     label: 'Sessions',
     figure: sessions,
-    sub:
-      active === undefined || tracked === undefined
-        ? undefined
-        /* Both figures already carry their own unit — the stat's `days` unit
-           is what formatStatValue writes — so the sentence must not add a
-           second one: "11 days active of 15 days tracked", never "15 days days
-           tracked". */
-        : `${statFigure(active)} active of ${statFigure(tracked)} tracked`,
     ariaLabel: `Sessions: ${sessions}`,
     back: {
       label: 'Records',

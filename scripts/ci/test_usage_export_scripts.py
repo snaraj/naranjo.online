@@ -395,6 +395,9 @@ class PushTransportHardeningTest(unittest.TestCase):
                         }
                     },
                     "totalSessions": 5,
+                    # ...and the day that accounting is exact as of (issue
+                    # #288); a cache without one refuses the run.
+                    "lastComputedDate": earlier.isoformat(),
                 }
             ),
             encoding="utf-8",
@@ -440,6 +443,101 @@ class PushTransportHardeningTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
         self.assertNotIn("--history-store", argv)
+
+    def test_a_configured_history_directory_writes_the_dataset_and_applies_readings(self):
+        # Issue #299: the graphing dataset is rebuilt beside the stores on
+        # every run, and a verified readings file beside a store reaches its
+        # producer — only when it exists, because absence is the ordinary
+        # state and never a refusal.
+        history = self.scratch / "history"
+        self.write_config(HISTORY_DIR=str(history))
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(argv[argv.index("--dataset") + 1], str(history / "dataset.json"))
+        self.assertNotIn("--verified-readings", argv)
+        dataset = json.loads((history / "dataset.json").read_text(encoding="utf-8"))
+        self.assertEqual(dataset["schema"], "usage-dataset/v1")
+        alpha = dataset["sources"]["alpha"]
+        self.assertEqual([row["date"] for row in alpha["days"]], [TRANSCRIPT_FIXTURE_DAY])
+        self.assertEqual(alpha["coverage"]["verifiedDays"], 0)
+        # A reading for the day before the fixture's record: the argument
+        # appears, the day joins the record at the surface's figure, and the
+        # dataset says which day is verified.
+        earlier = (datetime.date.fromisoformat(TRANSCRIPT_FIXTURE_DAY) - datetime.timedelta(days=1)).isoformat()
+        (history / "alpha.verified.json").write_text(
+            json.dumps(
+                {
+                    "schema": "usage-verified/v1",
+                    "readings": {earlier: {"total": 5, "readOn": TRANSCRIPT_FIXTURE_DAY}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(
+            argv[argv.index("--verified-readings") + 1], str(history / "alpha.verified.json")
+        )
+        dataset = json.loads((history / "dataset.json").read_text(encoding="utf-8"))
+        alpha = dataset["sources"]["alpha"]
+        self.assertEqual(alpha["days"][0], {"date": earlier, "total": 5, "verified": True})
+        self.assertEqual(alpha["coverage"]["verifiedDays"], 1)
+        self.assertEqual(alpha["coverage"]["start"], earlier)
+
+    def test_the_log_brackets_every_stage_and_ends_with_one_summary_line(self):
+        # Issue #299, the failure-logging rule: a START line per stage in
+        # order, the export's coverage line, and one SUMMARY line carrying the
+        # sealed size, the checksum prefix, the exporter's checkout revision,
+        # the elapsed time and every stage's duration. Stage names and counts
+        # only — the log must name no path.
+        second = self.scratch / "second-transcripts"
+        transcript_fixture(second)
+        self.write_config(MERGE_CAPTURES="beta=messages=%s" % second)
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertEqual(
+            [line for line in lines if line.startswith("usage-export: START ")],
+            [
+                "usage-export: START recapture-beta",
+                "usage-export: START export",
+                "usage-export: START seal",
+                "usage-export: START push",
+            ],
+        )
+        self.assertIn("coverage alpha=%s..%s beta=%s..%s" % ((TRANSCRIPT_FIXTURE_DAY,) * 4), result.stderr)
+        revision = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--short=12", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        expected = revision.stdout.strip() if revision.returncode == 0 else "unknown"
+        self.assertRegex(
+            lines[-1],
+            r"^usage-export: SUMMARY pushed=\d+B sha256=[0-9a-f]{12} exporter=%s elapsed=\d+s "
+            r"stages: recapture-beta=\d+s export=\d+s seal=\d+s push=\d+s$" % re.escape(expected),
+        )
+        self.assertEqual(lines[-2], "usage-export: pushed %s sealed bytes; checksum verified" % lines[-1].split("pushed=")[1].split("B")[0])
+        self.assertNotIn(str(self.scratch), result.stdout + result.stderr)
+
+    def test_a_failure_names_its_stage_and_the_elapsed_time(self):
+        # Before any stage: a configuration refusal is reported at the
+        # configure stage. Inside a stage: a recapture that finds no records
+        # is reported at that stage's name.
+        self.write_config(ACTIVITY_CACHE=str(self.scratch / "missing"))
+        result = run_script(PUSH, env=self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertRegex(result.stderr, r"usage-export: FAILED stage=configure elapsed=\d+s")
+        empty = self.scratch / "empty"
+        empty.mkdir()
+        self.write_config(MERGE_CAPTURES="beta=messages=%s" % empty)
+        result = run_script(PUSH, env=self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not be recaptured", result.stderr)
+        self.assertRegex(result.stderr, r"usage-export: FAILED stage=recapture-beta elapsed=\d+s")
+        self.assertNotIn("SUMMARY", result.stdout)
 
     def test_no_configured_cache_passes_no_cache_argument(self):
         # The negative control, and the reason the test above is not vacuous:

@@ -22,7 +22,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
 import { relativeAge } from '../src/lib/age.ts';
-import { recordedOutOfBand, section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
+import { section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
 import {
   roleLedgerProps,
@@ -1010,27 +1010,17 @@ test('a count of one is a count of one thing', () => {
   assert.match(ledgerTable, /aria-hidden="true"/);
 });
 
-test('a figure the origin recorded says so in its detail, never on the visible line (issue 268)', () => {
-  /* The owner, of the inline italic mark repeated on every row: "stale, static
-     and ugly ... just remove it". Provenance did NOT go with it — it moved one
-     interaction away, into the same detail primitive the stat tiles use — so
-     this pin is in two halves and both matter. */
+test('a figure the origin recorded says nothing about it, on the line or in its detail (issue 299)', () => {
+  /* The owner, of the inline italic mark repeated on every row (issue 268):
+     "stale, static and ugly ... just remove it". The sentence then lived one
+     interaction away, in the detail; the owner's directive of 2026-09-06
+     (issue 299) removed every instance of it. What remains pinned is the
+     absence on both halves. */
   const noon = Date.parse('2026-08-27T12:00:00Z');
-  /* The captured face marks EVERY figure it carries, because none of them was
-     fetched live. The commit total the card used to show left with the card
-     (owner directive of 2026-09-03, issue 287), so the star tally is what this
-     pin reads now — the same claim about the same channel, on a figure the
-     table still draws. */
   const captured = projectTableProps(null, noon).rows[0].counts;
   const stars = captured.find((count) => count.key === 'stars');
-  assert.equal(stars.marked, true, 'the captured face is captured however the row is drawn');
-  assert.deepEqual(
-    stars.detail.rows,
-    [{ label: '', value: recordedOutOfBand }],
-    'a recorded figure carries no provenance row in its detail'
-  );
-  // The wording is the page's ONE constant, not a second copy of the sentence.
-  assert.equal(recordedOutOfBand, 'recorded out of band, not fetched live');
+  assert.ok(!('marked' in stars), 'the captured face carries a provenance mark');
+  assert.deepEqual(stars.detail.rows, [], 'a recorded figure carries a provenance row in its detail');
   // And nothing on the visible line says it: the mark, its class and its
   // browser tooltip are gone from the component rather than merely unused.
   assert.doesNotMatch(ledgerTable, /entry-recorded|table-recorded/);

@@ -267,20 +267,13 @@ export type LedgerLogProps = {
 
 /* One counter in a table row: a drawn glyph, its bare figure, the words the
  * glyph replaced (kept for the accessibility tree, exactly as EntryCount keeps
- * them), and the detail every figure on this page carries.
- *
- * `marked` and `detail` are the provenance-by-exception channel (issue 268),
- * carried through the redesign unchanged: a figure captured out of band says
- * so in its detail, in the page's one sentence for it, and never on the
- * visible line. A counter that dropped them would be a figure quietly claiming
- * a freshness the payload never promised. */
+ * them), and the detail every figure on this page carries. */
 export type LedgerCount = {
   readonly key: string;
   readonly glyph: 'star' | 'issue' | 'pull' | 'clock';
   readonly value: string;
   readonly label: string;
   readonly detail: TipDetail;
-  readonly marked?: boolean;
 };
 
 export type LedgerTableRow = {
@@ -360,7 +353,6 @@ export type LedgerBar = {
   readonly label: string;
   readonly fillPct: number | null;
   readonly reading: string;
-  readonly marked: boolean;
 };
 
 /* One line of a square's back face. The optional slot is the fixed palette
@@ -561,15 +553,7 @@ export type MediaGalleryProps = {
   readonly tiles?: number;
 };
 
-/* --- Counters, and the one word for a figure captured out of band -------- */
-
-/* The provenance-by-exception wording, spelled ONCE for the whole page (owner
- * directive, issue 268). A figure captured out of band says so, and it says so
- * in these exact words wherever it appears — the usage tiles' visible suffix
- * and the entry log's detail row are the same sentence rather than two
- * sentences somebody keeps in step. A reader learns one mark for "this was
- * recorded out of band", not one per panel. */
-export const recordedOutOfBand = 'recorded out of band, not fetched live';
+/* --- Counters --------------------------------------------------------------- */
 
 /* One counter beside a linked entry's title: a small drawn glyph, the bare
  * figure it counts, and the detail that spells the whole thing out.
@@ -588,7 +572,8 @@ export const recordedOutOfBand = 'recorded out of band, not fetched live';
  * `detail` is the same primitive and the same grammar the stat tiles use
  * (DetailTip, issue 136 rule 1): the detail's NAME is the full phrase, and its
  * rows carry whatever else the counter can vouch for — the absolute instant
- * behind a live age, the provenance row behind a recorded figure. */
+ * behind a live age. The page prints no provenance sentence (owner directive,
+ * 2026-09-06, issue 299); provenance stays in the payload's `recorded` flags. */
 export type EntryCount = {
   readonly key: string;
   readonly glyph: 'node' | 'star' | 'clock' | 'issue' | 'pull';
@@ -602,8 +587,4 @@ export type EntryCount = {
    * of freezing at whatever the render happened to catch. A counter without
    * one renders exactly the value, label and detail the adapter built. */
   readonly since?: string;
-  /* Whether this figure was recorded out of band. It no longer stamps a mark
-   * on the visible row — it drives the provenance row inside the detail, which
-   * is where the owner asked for it to live. */
-  readonly marked?: boolean;
 };

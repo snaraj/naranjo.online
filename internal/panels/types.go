@@ -1990,7 +1990,7 @@ var categoryServeOrder = []string{"input", "output", "cache-read", "cache-write"
 // modelSlots by ModelVocabularyParityTest in scripts/ci, exactly as the
 // category vocabulary is: adding a model is one reviewed data edit landing
 // in three places together, never a document's choice.
-var modelServeOrder = []string{"other", "fable-5", "opus-5", "sonnet-5", "opus-4-8"}
+var modelServeOrder = []string{"other", "fable-5", "fable-5-1", "opus-5", "sonnet-5", "opus-4-8"}
 
 // usageSeriesDocument is the strict on-disk shape of the sealed series file
 // (schema usage-series/v1). Sources are keyed by the SAME label the embedded

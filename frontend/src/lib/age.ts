@@ -34,7 +34,6 @@
  * not information, and "updated in 3 minutes" is a sentence no card should
  * ever render. */
 
-import { recordedOutOfBand } from './blocks.ts';
 import { formatCalendarDate } from './grid.ts';
 import type { TipDetail, TipRow } from './tooltip.ts';
 
@@ -119,24 +118,13 @@ export function absoluteInstant(instant: string): string | null {
 /* ageDetail is the whole hover/touch readout for an age counter: the phrase
  * as the detail's name — the same grammar every other counter follows, where
  * the name IS the full sentence the terse cell dropped — then the absolute
- * instant, then the provenance row when the figure was recorded out of band.
- *
- * The provenance row rides the SAME condition as the absolute instant rather
- * than a second test of its own, and that is the "a dash gets no provenance
- * row" rule made structural: an instant this module cannot read renders `—`,
- * and a dash is not a figure anything can vouch for. */
-export function ageDetail(
-  instant: string,
-  now: number = Date.now(),
-  marked: boolean = false
-): TipDetail {
+ * instant. An instant this module cannot read renders `—` and carries no row:
+ * a dash is not a figure anything can vouch for. */
+export function ageDetail(instant: string, now: number = Date.now()): TipDetail {
   const absolute = absoluteInstant(instant);
   const rows: TipRow[] = [];
   if (absolute !== null) {
     rows.push({ label: '', value: absolute });
-    if (marked) {
-      rows.push({ label: '', value: recordedOutOfBand });
-    }
   }
   return { name: relativeAge(instant, now).phrase, rows };
 }
