@@ -105,6 +105,10 @@
        line at the face's normal leading, for an engine without the unit. */
     font-family: var(--panel-title-family, inherit);
     font-size: var(--panel-title-size, 0.8125rem);
+    /* A unitless leading inherits as a proportion, so the smaller note keeps
+       a smaller line box instead of Firefox recomputing `normal` two pixels
+       taller than the title row reserved before that note arrived. */
+    line-height: var(--panel-head-leading, 1.1);
     min-block-size: 1.3em;
     min-block-size: 1lh;
   }

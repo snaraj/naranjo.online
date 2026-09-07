@@ -853,7 +853,7 @@ test('the seven repositories are the owner’s, at the addresses the owner gave'
   // as the addresses.
   assert.deepEqual(projects.map(projectUrl), [
     'https://github.com/snaraj/naranjo.online',
-    'https://github.com/snaraj/website-infrastructure',
+    'https://github.com/snaraj/platform',
     'https://github.com/snaraj/lidersea.com',
     'https://github.com/snaraj/dotfiles',
     'https://github.com/snaraj/foobar2000-lyricsbuddy',

@@ -867,11 +867,36 @@ func mapUsage(shape string, raw []byte) (usageMapping, error) {
 	if len(buckets) == 0 {
 		return usageMapping{}, fmt.Errorf("usage document for shape %q carries no buckets", shape)
 	}
-	latest := buckets[len(buckets)-1]
+	// Upstream ordering is not part of either grammar. Derive both named
+	// windows from calendar days so newest-first pages cannot turn the oldest
+	// bucket into "today", and a 31-day fetch cannot masquerade as one week.
+	latestDay := buckets[0].day
+	for _, bucket := range buckets[1:] {
+		if bucket.day > latestDay {
+			latestDay = bucket.day
+		}
+	}
+	latestDate, _ := time.Parse(dayLayout, latestDay)
+	weekStart := latestDate.AddDate(0, 0, -(daysPerWeek - 1)).Format(dayLayout)
+	latest := tokenBucket{}
 	week := tokenBucket{}
 	for _, bucket := range buckets {
-		week.input += bucket.input
-		week.output += bucket.output
+		if bucket.day == latestDay {
+			if err := addUsageCount(&latest.input, bucket.input); err != nil {
+				return usageMapping{}, fmt.Errorf("today input: %w", err)
+			}
+			if err := addUsageCount(&latest.output, bucket.output); err != nil {
+				return usageMapping{}, fmt.Errorf("today output: %w", err)
+			}
+		}
+		if bucket.day >= weekStart && bucket.day <= latestDay {
+			if err := addUsageCount(&week.input, bucket.input); err != nil {
+				return usageMapping{}, fmt.Errorf("week input: %w", err)
+			}
+			if err := addUsageCount(&week.output, bucket.output); err != nil {
+				return usageMapping{}, fmt.Errorf("week output: %w", err)
+			}
+		}
 	}
 	series, err := dailySeries(buckets)
 	if err != nil {
@@ -884,7 +909,10 @@ func mapUsage(shape string, raw []byte) (usageMapping, error) {
 			peak = total
 		}
 	}
-	windowTotal := week.input + week.output
+	windowTotal := week.input
+	if err := addUsageCount(&windowTotal, week.output); err != nil {
+		return usageMapping{}, fmt.Errorf("week total: %w", err)
+	}
 	return usageMapping{
 		windows: []TokenUsageWindow{
 			{Period: "today", InputTokens: latest.input, OutputTokens: latest.output},
@@ -911,18 +939,33 @@ func decodeUsageBuckets(shape string, raw []byte) ([]tokenBucket, error) {
 		if err := decodeStrict(raw, &document); err != nil {
 			return nil, fmt.Errorf("usage-report document: %w", err)
 		}
+		if document.HasMore || document.NextPage != "" {
+			return nil, errors.New("usage-report document is paginated; one page is not a complete window")
+		}
 		for _, bucket := range document.Data {
-			day, err := time.Parse(time.RFC3339, bucket.StartingAt)
+			start, err := time.Parse(time.RFC3339, bucket.StartingAt)
 			if err != nil {
 				return nil, fmt.Errorf("usage-report bucket start: %w", err)
 			}
-			totals := tokenBucket{day: day.UTC().Format(dayLayout)}
+			end, err := time.Parse(time.RFC3339, bucket.EndingAt)
+			if err != nil || !validUsageInterval(start, end) {
+				return nil, errors.New("usage-report bucket carries an invalid interval")
+			}
+			totals := tokenBucket{day: start.UTC().Format(dayLayout), start: start, end: end}
 			for _, result := range bucket.Results {
-				totals.input += result.UncachedInputTokens +
-					result.CacheReadInputTokens +
-					result.CacheCreation.Ephemeral5mInputTokens +
-					result.CacheCreation.Ephemeral1hInputTokens
-				totals.output += result.OutputTokens
+				for _, value := range []int64{
+					result.UncachedInputTokens,
+					result.CacheReadInputTokens,
+					result.CacheCreation.Ephemeral5mInputTokens,
+					result.CacheCreation.Ephemeral1hInputTokens,
+				} {
+					if err := addUsageCount(&totals.input, value); err != nil {
+						return nil, fmt.Errorf("usage-report input: %w", err)
+					}
+				}
+				if err := addUsageCount(&totals.output, result.OutputTokens); err != nil {
+					return nil, fmt.Errorf("usage-report output: %w", err)
+				}
 			}
 			buckets = append(buckets, totals)
 		}
@@ -931,18 +974,69 @@ func decodeUsageBuckets(shape string, raw []byte) ([]tokenBucket, error) {
 		if err := decodeStrict(raw, &document); err != nil {
 			return nil, fmt.Errorf("usage-page document: %w", err)
 		}
+		if document.HasMore || document.NextPage != "" {
+			return nil, errors.New("usage-page document is paginated; one page is not a complete window")
+		}
 		for _, bucket := range document.Data {
-			totals := tokenBucket{day: time.Unix(bucket.StartTime, 0).UTC().Format(dayLayout)}
+			start, end := time.Unix(bucket.StartTime, 0).UTC(), time.Unix(bucket.EndTime, 0).UTC()
+			if bucket.StartTime < 0 || bucket.EndTime < 0 || !validUsageInterval(start, end) {
+				return nil, errors.New("usage-page bucket carries an invalid interval")
+			}
+			totals := tokenBucket{day: start.Format(dayLayout), start: start, end: end}
 			for _, result := range bucket.Results {
-				totals.input += result.InputTokens
-				totals.output += result.OutputTokens
+				if err := addUsageCount(&totals.input, result.InputTokens); err != nil {
+					return nil, fmt.Errorf("usage-page input: %w", err)
+				}
+				if err := addUsageCount(&totals.output, result.OutputTokens); err != nil {
+					return nil, fmt.Errorf("usage-page output: %w", err)
+				}
 			}
 			buckets = append(buckets, totals)
 		}
 	default:
 		return nil, fmt.Errorf("unknown usage response shape %q", shape)
 	}
+	// The request asks for 31 rows, while the response itself is bounded by the
+	// fetch body limit. An in-place insertion sort keeps this dependency-free
+	// mapping file inside its reviewed import surface.
+	for index := 1; index < len(buckets); index++ {
+		candidate := buckets[index]
+		at := index
+		for at > 0 && candidate.start.Before(buckets[at-1].start) {
+			buckets[at] = buckets[at-1]
+			at--
+		}
+		buckets[at] = candidate
+	}
+	for index := 1; index < len(buckets); index++ {
+		if buckets[index].start.Before(buckets[index-1].end) {
+			return nil, errors.New("usage document carries overlapping buckets")
+		}
+	}
 	return buckets, nil
+}
+
+// validUsageInterval ensures a bucket can be assigned to its start date
+// without moving usage across a UTC calendar boundary. A daily bucket may
+// end exactly at the next midnight; a sub-day bucket must end before it.
+func validUsageInterval(start, end time.Time) bool {
+	start = start.UTC()
+	end = end.UTC()
+	nextDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
+	return end.After(start) && !end.After(nextDay)
+}
+
+// addUsageCount applies the same integer contract the sealed producer and
+// browser enforce. Authenticated upstream data is still untrusted input: a
+// negative count, a single value above JavaScript's exact-integer ceiling,
+// or a bucket sum crossing it refuses the refresh instead of producing a
+// plausible-looking wrapped or rounded total.
+func addUsageCount(total *int64, value int64) error {
+	if value < 0 || value > maxCountValue || *total > maxCountValue-value {
+		return fmt.Errorf("count lies outside [0,%d]", maxCountValue)
+	}
+	*total += value
+	return nil
 }
 
 // dailySeries turns dated buckets into the contiguous day-indexed series the
@@ -960,7 +1054,14 @@ func dailySeries(buckets []tokenBucket) (*TokenUsageSeries, error) {
 		if err != nil {
 			return nil, fmt.Errorf("usage series day: %w", err)
 		}
-		totalsByDay[bucket.day] += bucket.input + bucket.output
+		combined := totalsByDay[bucket.day]
+		if err := addUsageCount(&combined, bucket.input); err != nil {
+			return nil, fmt.Errorf("usage series input: %w", err)
+		}
+		if err := addUsageCount(&combined, bucket.output); err != nil {
+			return nil, fmt.Errorf("usage series output: %w", err)
+		}
+		totalsByDay[bucket.day] = combined
 		if index == 0 || day.Before(first) {
 			first = day
 		}
@@ -1017,6 +1118,8 @@ type usageMapping struct {
 // day it covers so both upstream grammars can feed one dated series.
 type tokenBucket struct {
 	day    string
+	start  time.Time
+	end    time.Time
 	input  int64
 	output int64
 }

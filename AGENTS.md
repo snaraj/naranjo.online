@@ -471,10 +471,12 @@ merges. No third distinct-context pass is required.
   labels: the umbrella `agent-authored` AND the acting agent's own label —
   `fable5.1` (Claude Fable 5.1, color `D97706`, registered 2026-09-04 by
   owner directive on PR #295), `fable5` (Claude Fable 5), `5.6-sol`
-  (ChatGPT 5.6 SOL ULTRA), `opus5` (Claude Opus 5), `opus4.8` (Claude
+  (ChatGPT 5.6 SOL ULTRA), `gpt-6` (Codex GPT-6, color `10A37F`),
+  `opus5` (Claude Opus 5), `opus4.8` (Claude
   Opus 4.8), `sonnet5` (Claude Sonnet 5, color `0EA5E9`). The body
   signature must match the label (`- Fable5.1` ↔ `fable5.1`,
-  `- Fable5` ↔ `fable5`), and adversarial-review verdicts carry the
+  `- Fable5` ↔ `fable5`, `- Codex GPT-6` ↔ `gpt-6`), and
+  adversarial-review verdicts carry the
   same identity as `- <Agent> (adversarial reviewer)`. Labels plus
   signatures keep authorship auditable across the parallel frontier-model
   lanes with no owner relay. When a new model joins, its label — description "Authored by
@@ -697,7 +699,8 @@ committer, on every outgoing commit — is exactly:
   bodies, and issue bodies end with the ACTING agent's own signature,
   matching its agent label per the roster (`- Fable5.1` ↔ `fable5.1`,
   `- Fable5` ↔ `fable5`, `- Sonnet5` ↔ `sonnet5`, `- Opus5` ↔ `opus5`,
-  `- 5.6 Sol` ↔ `5.6-sol`) — never a different lane's name and never a
+  `- 5.6 Sol` ↔ `5.6-sol`, `- Codex GPT-6` ↔ `gpt-6`) — never a
+  different lane's name and never a
   fixed default.
 - Treat the Git index as public (requirement 12): no hostname, IP
   address, machine or account identifier, username, workspace path,
