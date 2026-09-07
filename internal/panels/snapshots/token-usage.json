@@ -155,27 +155,6 @@
             "recorded": true
           },
           {
-            "key": "chats",
-            "label": "Chats",
-            "value": 663,
-            "unit": "count",
-            "recorded": true
-          },
-          {
-            "key": "skills-explored",
-            "label": "Skills explored",
-            "value": 6,
-            "unit": "count",
-            "recorded": true
-          },
-          {
-            "key": "skills-used",
-            "label": "Skills used",
-            "value": 108,
-            "unit": "count",
-            "recorded": true
-          },
-          {
             "key": "current-streak",
             "label": "Current streak",
             "value": 5,

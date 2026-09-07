@@ -286,8 +286,9 @@ const fixtureUsageReport = `{"data":[` +
 // TestMapUsageSumsBothGrammars pins the token arithmetic per grammar: the
 // usage-report grammar sums uncached, cache-read, and both cache-creation
 // classes into input, while the usage-page grammar uses its aggregate
-// input_tokens; both serve a today window from the newest bucket, a week
-// window over all buckets, and the dated daily series the grid renders.
+// input_tokens; both serve today from every bucket on the newest calendar
+// day, a trailing seven-calendar-day week, and the dated daily series the
+// grid renders.
 func TestMapUsageSumsBothGrammars(t *testing.T) {
 	t.Parallel()
 	report, err := mapUsage(shapeUsageReport, []byte(fixtureUsageReport))
@@ -320,7 +321,7 @@ func TestMapUsageSumsBothGrammars(t *testing.T) {
 	if err != nil {
 		t.Fatalf("usage-page mapping error = %v", err)
 	}
-	if page.windows[0].InputTokens != 50 || page.windows[1].InputTokens != 150 || page.windows[1].OutputTokens != 15 {
+	if page.windows[0].InputTokens != 150 || page.windows[0].OutputTokens != 15 || page.windows[1].InputTokens != 150 || page.windows[1].OutputTokens != 15 {
 		t.Errorf("usage-page windows = %+v", page.windows)
 	}
 	// Both fixture buckets sit inside the same Unix day, so the series must
@@ -346,6 +347,9 @@ func TestMapUsageSumsBothGrammars(t *testing.T) {
 	}
 	if reversed.series == nil || reversed.series.StartDate != "2026-08-09" {
 		t.Fatalf("newest-first series = %+v, want it anchored on the OLDEST day", reversed.series)
+	}
+	if reversed.windows[0].InputTokens != 10 || reversed.windows[0].OutputTokens != 4 {
+		t.Errorf("newest-first today window = %+v, want the newest calendar day's totals", reversed.windows[0])
 	}
 	if want := []int64{170, 14}; len(reversed.series.Totals) != 2 ||
 		reversed.series.Totals[0] != want[0] || reversed.series.Totals[1] != want[1] {
@@ -383,6 +387,35 @@ func TestMapUsageSumsBothGrammars(t *testing.T) {
 			_, err := mapUsage(shapeUsageReport, []byte(strings.Replace(fixtureUsageReport, `"2026-08-09T00:00:00Z"`, `"yesterday"`, 1)))
 			return err
 		},
+		"incomplete paginated document": func() error {
+			_, err := mapUsage(shapeUsagePage, []byte(strings.Replace(fixtureUsagePage, `"has_more":false`, `"has_more":true`, 1)))
+			return err
+		},
+		"overlapping intervals": func() error {
+			overlap := strings.Replace(fixtureUsageReport, `"2026-08-10T00:00:00Z","ending_at":"2026-08-11T00:00:00Z"`, `"2026-08-09T12:00:00Z","ending_at":"2026-08-11T00:00:00Z"`, 1)
+			_, err := mapUsage(shapeUsageReport, []byte(overlap))
+			return err
+		},
+		"backwards interval": func() error {
+			bad := strings.Replace(fixtureUsagePage, `"start_time":1,"end_time":2`, `"start_time":2,"end_time":1`, 1)
+			_, err := mapUsage(shapeUsagePage, []byte(bad))
+			return err
+		},
+		"interval crosses its assigned UTC day": func() error {
+			bad := strings.Replace(fixtureUsagePage, `"start_time":1,"end_time":2`, `"start_time":43200,"end_time":129600`, 1)
+			_, err := mapUsage(shapeUsagePage, []byte(bad))
+			return err
+		},
+		"negative token count": func() error {
+			bad := strings.Replace(fixtureUsagePage, `"input_tokens":100`, `"input_tokens":-1`, 1)
+			_, err := mapUsage(shapeUsagePage, []byte(bad))
+			return err
+		},
+		"token count above the exact-integer bound": func() error {
+			bad := strings.Replace(fixtureUsagePage, `"input_tokens":100`, fmt.Sprintf(`"input_tokens":%d`, int64(maxCountValue)+1), 1)
+			_, err := mapUsage(shapeUsagePage, []byte(bad))
+			return err
+		},
 		"series beyond the day bound": func() error {
 			_, err := mapUsage(shapeUsageReport, []byte(strings.Replace(fixtureUsageReport, `"2026-08-09T00:00:00Z"`, `"2000-01-01T00:00:00Z"`, 1)))
 			return err
@@ -391,6 +424,35 @@ func TestMapUsageSumsBothGrammars(t *testing.T) {
 		if err := run(); err == nil {
 			t.Errorf("%s: mapping accepted a bad document", name)
 		}
+	}
+}
+
+// TestMapUsageWeekIsSevenCalendarDays prevents the endpoint's 31-day fetch
+// depth from silently redefining the public "week" label. The full response
+// still feeds the activity series and its peak/streak tiles; only the named
+// week window is restricted to the newest seven calendar days.
+func TestMapUsageWeekIsSevenCalendarDays(t *testing.T) {
+	t.Parallel()
+	var buckets []string
+	for day := 1; day <= 9; day++ {
+		buckets = append(buckets, fmt.Sprintf(
+			`{"object":"bucket","start_time":%d,"end_time":%d,"results":[{"object":"r","input_tokens":%d,"output_tokens":0}]}`,
+			int64(day-1)*86400, int64(day)*86400, day,
+		))
+	}
+	raw := `{"object":"page","data":[` + strings.Join(buckets, ",") + `],"has_more":false,"next_page":null}`
+	mapped, err := mapUsage(shapeUsagePage, []byte(raw))
+	if err != nil {
+		t.Fatalf("mapUsage() error = %v", err)
+	}
+	if got := mapped.windows[0].InputTokens; got != 9 {
+		t.Errorf("today input = %d, want newest day's 9", got)
+	}
+	if got := mapped.windows[1].InputTokens; got != 42 {
+		t.Errorf("week input = %d, want days 3..9 totalling 42", got)
+	}
+	if got := len(mapped.series.Totals); got != 9 {
+		t.Errorf("series days = %d, want the complete nine-day response", got)
 	}
 }
 
@@ -565,6 +627,67 @@ func TestLoadFetchConfigFailsClosed(t *testing.T) {
 	if _, _, err := loadFetchConfig([]byte(`{"hosts":[],"ttlMinutes":45,"timeoutSeconds":10,"maxBytes":1,"initialBackoffSeconds":1,"maxBackoffMinutes":1}`)); err == nil {
 		t.Error("config with an empty allowlist was accepted")
 	}
+}
+
+// TestInfrastructureCommitSourceUsesCurrentRepositoryName pins the rename at
+// the producer boundary. GitHub may redirect an old repository URL, but a
+// redirect is not a source contract: it can suppress a credential, change a
+// final URL, or disappear, and the public row would still wear a retired
+// label. Both the label and endpoint therefore name the current object.
+func TestInfrastructureCommitSourceUsesCurrentRepositoryName(t *testing.T) {
+	t.Parallel()
+	document, _, err := loadFetchConfig(fetchConfigBytes)
+	if err != nil {
+		t.Fatalf("shipped config refused: %v", err)
+	}
+	if document.VCSActivity == nil || document.VCSActivity.Commits == nil {
+		t.Fatal("shipped config carries no commit producer")
+	}
+	found := false
+	for _, source := range document.VCSActivity.Commits.Sources {
+		if source.Repo == "website-infrastructure" || strings.Contains(source.Endpoint, "/website-infrastructure/") {
+			t.Errorf("commit source still names the retired repository: %+v", source)
+		}
+		if source.Repo == "platform" {
+			found = true
+			if source.Endpoint != "https://api.github.com/repos/snaraj/platform/commits?per_page=3" {
+				t.Errorf("platform endpoint = %q", source.Endpoint)
+			}
+		}
+	}
+	if !found {
+		t.Error("commit producer carries no platform source")
+	}
+}
+
+// TestCodexSnapshotDoesNotClaimUnmeasuredCounts keeps release-time sample
+// values from acquiring a fresh capturedAt on every sealed push. The current
+// producer can refresh the daily series and baseline-backed lifetime total;
+// it has no source for these native-application counts, so absence is the
+// only truthful value until such a source exists.
+func TestCodexSnapshotDoesNotClaimUnmeasuredCounts(t *testing.T) {
+	t.Parallel()
+	loaded, err := SnapshotSource{Name: "snapshots/token-usage.json"}.load(snapshotFiles, KindTokenUsageV2)
+	if err != nil {
+		t.Fatalf("load token snapshot: %v", err)
+	}
+	var payload TokenUsageData
+	if err := decodeStrict(loaded.data, &payload); err != nil {
+		t.Fatalf("decode token snapshot: %v", err)
+	}
+	unsupported := map[string]bool{"chats": true, "skills-explored": true, "skills-used": true}
+	for _, source := range payload.Sources {
+		if source.Label != "codex" {
+			continue
+		}
+		for _, stat := range source.Stats {
+			if unsupported[stat.Key] {
+				t.Errorf("codex snapshot still claims unmeasured %q", stat.Key)
+			}
+		}
+		return
+	}
+	t.Error("token snapshot carries no codex source")
 }
 
 // TestPanelHeadingsComeFromConfigData pins the heading path introduced for the

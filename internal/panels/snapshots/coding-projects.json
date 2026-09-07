@@ -12,7 +12,7 @@
         "recorded": true
       },
       {
-        "name": "website-infrastructure",
+        "name": "platform",
         "description": "My infrastructure for self-hosting scalable and secure applications using Kubernetes",
         "stars": 1,
         "pushedAt": "2026-08-29T08:12:06Z",

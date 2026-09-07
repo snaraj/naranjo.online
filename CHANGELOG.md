@@ -7,6 +7,26 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.80] - 2026-09-07
+
+### Changed
+
+- The GitHub activity and project fallbacks use the infrastructure
+  repository's current `platform` name, so its commits no longer disappear
+  behind a retired repository URL (issue #306).
+
+### Fixed
+
+- Live token API responses now derive `today` from the newest calendar day
+  regardless of bucket order and derive `week` from exactly the trailing
+  seven days instead of summing the configured 31-day fetch (issue #306).
+- Incomplete pagination, overlapping or backwards bucket intervals, negative
+  counts and totals outside the shared exact-integer bound now retain the
+  last good payload rather than serving partial or ambiguous usage figures.
+- Three Codex counts that the exporter cannot measure are no longer shipped
+  as frozen release-time facts. Supported lifetime and daily-series figures
+  continue to refresh; unsupported figures remain honestly absent.
+
 ## [0.1.79] - 2026-09-06
 
 ### Added
