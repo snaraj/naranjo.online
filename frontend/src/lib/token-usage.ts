@@ -13,6 +13,12 @@ import type {
 import { addDays, formatMagnitude, formatWhole } from './grid.ts';
 import { dayNumber, formatDateRange } from './periods.ts';
 import { panelStaleAfterMs, panelStaleNote } from './panels.ts';
+/* The model vocabulary is DATA and it lives in one file, outside this
+   directory on purpose: the origin embeds the same bytes and the capture tool
+   reads them, so no consumer keeps a copy that could disagree (issue #302).
+   The container's frontend stage copies the file in beside VERSION, which is
+   the precedent this follows. */
+import modelVocabulary from '../../../internal/panels/config/models.json' with { type: 'json' };
 import type {
   PanelEnvelope,
   PanelStatus,
@@ -360,20 +366,22 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
   return insights;
 }
 
-/* maxBreakdownRows bounds how many rows ONE breakdown of a series may carry —
- * the same bound the Go boundary enforces for both of them
- * (maxSeriesCategories and maxSeriesModels in internal/panels/types.go, equal
- * by design). The closed vocabularies below are already tighter; this is the
- * structural guard that still holds if one is ever widened, so a payload can
- * never inflate the render with hundreds of entries. */
-const maxBreakdownRows = 8;
+/* How many rows ONE breakdown of a series may carry. The category bound is
+ * the structural guard the Go boundary states as maxSeriesCategories; the
+ * model bound is the model vocabulary's own size, exactly as maxSeriesModels
+ * is, so a payload naming more model rows than the file has members is
+ * refused before a single key is looked up. Neither can inflate the render
+ * with hundreds of entries. */
+const maxCategoryRows = 8;
 
 /* maxModelDays bounds how many trailing days the model breakdown may cover —
- * the same 92-day budget the Go boundary enforces (maxModelDays in
+ * the same ten-week budget the Go boundary enforces (maxModelDays in
  * internal/panels/types.go), mirrored here so a regression there still meets
- * a refusal before rendering. The categories breakdown carries no separate
- * day bound on either side, exactly as in Go. */
-const maxModelDays = 92;
+ * a refusal before rendering. It was a quarter until the vocabulary gained
+ * its second vendor group (issue #302): the section costs one integer per day
+ * per member, and the shared payload ceiling is not a lever. The categories
+ * breakdown carries no separate day bound on either side, exactly as in Go. */
+const maxModelDays = 70;
 
 /* admitSeries returns the admitted series, undefined when the section is
  * absent, or null when it exists and is malformed. The start date must be a
@@ -405,7 +413,13 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
     series.recorded = true;
   }
   if (value.categories !== undefined) {
-    const categories = admitBreakdown(value.categories, totals, value.startDate, categorySlots);
+    const categories = admitBreakdown(
+      value.categories,
+      totals,
+      value.startDate,
+      categorySlots,
+      maxCategoryRows
+    );
     if (categories === null) {
       return null;
     }
@@ -414,7 +428,15 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
     }
   }
   if (value.models !== undefined) {
-    const models = admitBreakdown(value.models, totals, value.startDate, modelSlots, maxModelDays);
+    const models = admitBreakdown(
+      value.models,
+      totals,
+      value.startDate,
+      modelSlots,
+      modelSlots.size,
+      maxModelDays,
+      true
+    );
     if (models === null) {
       return null;
     }
@@ -441,7 +463,8 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
  *      exactly what it must be, because the claim that hostile keys cannot
  *      reach rendering has to survive a future boundary regression rather
  *      than depend on one.
- *   2. COUNT. At most maxBreakdownRows entries, and no key twice.
+ *   2. COUNT. At most as many entries as the vocabulary has members, and no
+ *      key twice.
  *   3. WINDOW. Rows may cover a declared TRAILING window of the series
  *      instead of all of it. Every row must declare the SAME window, and a
  *      declared start must name a day strictly INSIDE the series — so
@@ -453,10 +476,20 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
  *      disagree. A breakdown that says something different from the graph
  *      above it is not a smaller error than a missing one.
  *
+ *   6. NO PLACEHOLDER ROWS, for the model partition only (issue #302). A
+ *      member whose window total is zero is a named entity drawn at nought
+ *      percent beside entities that were actually used; the producer omits
+ *      it and the origin refuses it, so a payload carrying one has been
+ *      edited or produced by something that disagrees with both. The
+ *      category partition keeps the older rule: its five accounting classes
+ *      are a fixed division of the same day, so a class that genuinely
+ *      measured nothing is a reading rather than a placeholder.
+ *
  * ONE function, TWO vocabularies. Categories and models differ in nothing but
- * which vocabulary admits a key, so they share this admission rather than
- * growing two implementations of the same five rules — the identical shape
- * the Go boundary took for the identical reason.
+ * which vocabulary admits a key, how many rows and days it allows, and
+ * whether an empty row is a reading — so they share this admission rather
+ * than growing two implementations of the same rules, the identical shape the
+ * Go boundary took for the identical reason.
  *
  * Any failing corner refuses the whole payload rather than rendering a
  * half-true breakdown. */
@@ -465,9 +498,11 @@ function admitBreakdown(
   totals: number[],
   seriesStart: string,
   vocabulary: ReadonlyMap<string, number>,
-  maxDays = 0
+  maxRows: number,
+  maxDays = 0,
+  noEmptyRows = false
 ): TokenUsageCategory[] | null {
-  if (!Array.isArray(value) || value.length > maxBreakdownRows) {
+  if (!Array.isArray(value) || value.length > maxRows) {
     return null;
   }
   if (value.length === 0) {
@@ -520,6 +555,9 @@ function admitBreakdown(
         return null;
       }
       sums[day] = running;
+    }
+    if (noEmptyRows && dailies.every((value) => value === 0)) {
+      return null;
     }
     const row: TokenUsageCategory = { key: entry.key, totals: dailies };
     if (declared !== undefined) {
@@ -671,62 +709,94 @@ export function categorySlot(key: string): number {
   return categorySlots.get(key) ?? 0;
 }
 
-/* modelSlots is the frontend's single statement of the CLOSED MODEL
- * vocabulary, and the fixed palette slot each member owns — the same two jobs
- * categorySlots does, for the second partition of the same series (issue
- * #170). It is pinned against the capture tool's MODEL_KEYS and the Go
- * modelServeOrder by ModelVocabularyParityTest in scripts/ci, so adding a
- * model is one deliberate edit made in three places together.
+/* The CLOSED MODEL vocabulary, read from the one file that states it
+ * (issue #302). Every key, written name, palette slot and vendor group the
+ * pipeline knows lives in internal/panels/config/models.json: the origin
+ * embeds it, the capture tool reads it, and this module imports it, so the
+ * three consumers cannot drift apart the way three hand-kept tables could.
+ * A model joins the pipeline as ONE reviewed data edit.
  *
- * The order is the canonical serve order, and `other` leads it because it is
- * the RESIDUAL: the producer folds an identifier it does not recognize into
- * it and counts the fold, so a vendor renaming a model mid-flight loses the
- * split for those tokens rather than losing the tokens. Admission here is
- * still by MEMBERSHIP — a key outside this map refuses the whole payload —
- * because the fold happens at capture, where the raw identifier is, and a
- * document arriving with an unknown key has not been through it. */
+ * Admission here is by MEMBERSHIP — a key outside the file refuses the whole
+ * payload — because the fold from a raw identifier happens at capture, where
+ * that identifier is, and a document arriving with an unknown key has not
+ * been through it.
+ *
+ * The residual leads the serve order and draws the NEUTRAL slot: it is not an
+ * entity but the fold of every identifier the vocabulary does not name, and
+ * its swatch says so, which is why a named entity never inherits it. */
+const modelResidual = modelVocabulary.residual;
+
+const modelMembers = modelVocabulary.groups.flatMap((group) =>
+  group.members.map((member) => ({ ...member, group: group.key }))
+);
+
+/* The canonical SERVE order: the residual, then each group's members in the
+ * order the file lists them. The origin walks the identical order to emit
+ * rows, so every replica's bytes — and therefore its digest ETag — stay the
+ * same, and admission below walks it too. */
 const modelSlots: ReadonlyMap<string, number> = new Map([
-  /* The residual member draws the NEUTRAL slot (issue #299): it is not an
-     entity but the fold of every identifier the vocabulary does not name, and
-     its swatch says so — the residual itself repaints from chromatic to
-     neutral, which is the point. The chromatic slot it held went to the
-     member that joined beside it, so every NAMED member keeps its swatch. */
-  ['other', 0],
-  ['fable-5', 2],
-  ['fable-5-1', 1],
-  ['opus-5', 3],
-  ['sonnet-5', 4],
-  ['opus-4-8', 5]
+  [modelResidual.key, modelResidual.slot],
+  ...modelMembers.map((member): [string, number] => [member.key, member.slot])
 ]);
 
 export function modelSlot(key: string): number {
-  return modelSlots.get(key) ?? 0;
+  return modelSlots.get(key) ?? modelResidual.slot;
 }
 
-/* modelLabels is display copy, and the reason it is a table rather than a
- * transformation: a model's written name is not derivable from its key. The
- * category labels are (hyphens become spaces, and "cache read" is right), but
- * `opus-4-8` humanizes to "opus 4 8", which is not the product's name. The
- * keys stay machine-shaped on the wire — the producer's emission guard admits
- * only lowercase label shapes, so "Opus 4.8" could never travel as a key —
- * and the written form is resolved here, at the one place that renders.
+/* Display copy, and the reason it is a table rather than a transformation: a
+ * model's written name is not derivable from its key. The category labels are
+ * (hyphens become spaces, and "cache read" is right), but a key like
+ * `opus-4-8` humanizes to "opus 4 8", which is not the product's name. Keys
+ * stay machine-shaped on the wire — the producer's emission guard admits only
+ * lowercase label shapes, so a written name could never travel as one — and
+ * the written form is resolved here, at the one place that renders.
  *
- * A key the map does not know cannot reach this function: admission refuses
- * a model outside the vocabulary, and the two lists are the same list. The
- * fallback exists so a future vocabulary edit that forgets a label degrades
- * to the key rather than to `undefined` in the reader's face. */
+ * A key the map does not know cannot reach this function: admission refuses a
+ * model outside the vocabulary, and the two lists are the same list. The
+ * fallback exists so a vocabulary edit that forgets a label degrades to the
+ * key rather than to `undefined` in the reader's face. */
 const modelLabels: ReadonlyMap<string, string> = new Map([
-  ['other', 'Other'],
-  ['fable-5', 'Fable 5'],
-  ['fable-5-1', 'Fable 5.1'],
-  ['opus-5', 'Opus 5'],
-  ['sonnet-5', 'Sonnet 5'],
-  ['opus-4-8', 'Opus 4.8']
+  [modelResidual.key, modelResidual.label],
+  ...modelMembers.map((member): [string, string] => [member.key, member.label])
 ]);
 
 export function modelLabel(key: string): string {
   return modelLabels.get(key) ?? key;
 }
+
+/* Which vendor group a member belongs to, and the written heading that group
+ * puts on its own block. The residual belongs to NO group — it is the fold
+ * every source may carry — so it answers with the empty string and rides the
+ * block of whichever group its source's named members sit in. */
+const modelGroups: ReadonlyMap<string, string> = new Map(
+  modelMembers.map((member): [string, string] => [member.key, member.group])
+);
+
+export function modelGroup(key: string): string {
+  return modelGroups.get(key) ?? '';
+}
+
+const modelGroupLabels: ReadonlyMap<string, string> = new Map(
+  modelVocabulary.groups.map((group): [string, string] => [group.key, group.label])
+);
+
+export function modelGroupLabel(group: string): string {
+  return modelGroupLabels.get(group) ?? '';
+}
+
+/* How many rows a group's block RESERVES: its declared members plus the
+ * residual, which any source may carry into it. The box a block holds is
+ * sized from this rather than from the rows one envelope happens to bring,
+ * so a later envelope with fewer members leaves the page exactly where it
+ * was — the zero-CLS floor, stated where the count is known. */
+export function modelGroupRows(group: string): number {
+  const declared = modelVocabulary.groups.find((entry) => entry.key === group);
+  return declared === undefined ? 0 : declared.members.length + 1;
+}
+
+/* The vendor groups in the file's own order, which is the order their blocks
+ * are rendered in. */
+const modelGroupKeys: readonly string[] = modelVocabulary.groups.map((group) => group.key);
 
 /* modelShares summarizes the model partition the way categoryShares does the
  * category one, with ONE deliberate difference in the denominator: a model
@@ -765,7 +835,8 @@ export const tokenUsageFallbackTitle = 'Token usage';
 export const tokenUsageEmptyNote = 'No usage data available.';
 export const tokenUsageSourceEmptyNote = 'No usage recorded for this source yet.';
 
-/* renderedInsights answers which proportions this section actually shows.
+/* modelBlocks answers which proportions this source actually shows, and whose
+ * models they are.
  *
  * The panel has always had an insights row, and until the series carried a
  * MODEL partition those proportions could only be release-time figures frozen
@@ -776,21 +847,70 @@ export const tokenUsageSourceEmptyNote = 'No usage recorded for this source yet.
  * payload that has no model partition — an older document, a source that does
  * not report one, or a live fetch that never carried one.
  *
- * The derived rows inherit the SERIES' provenance rather than claiming none:
- * the sealed push is an out-of-band capture, so a derived share is a recorded
+ * The rows inherit the SERIES' provenance rather than claiming none: the
+ * sealed push is an out-of-band capture, so a measured share is a recorded
  * figure exactly as the tiles beside it are, and it says so through the same
  * marking rule instead of borrowing a freshness the envelope did not
  * promise. */
-function renderedInsights(source: TokenUsageSource): TokenUsageInsight[] {
+/* One rendered model block: the bars of one vendor group as read from one
+ * source, the heading that group puts on them, and the rows its box reserves. */
+type ModelBlock = {
+  readonly label: string;
+  readonly ariaLabel: string;
+  readonly bars: LedgerBar[];
+  readonly rows: number;
+};
+
+function modelBlocks(source: TokenUsageSource): ModelBlock[] {
   const shares = source.series ? modelShares(source.series) : [];
-  if (shares.length > 0) {
-    return shares.map((share) => ({
-      label: modelLabel(share.key),
-      pct: share.pct,
-      recorded: source.series?.recorded === true
-    }));
+  if (shares.length === 0) {
+    /* No model partition — an older document, a source that does not report
+       one, or a live fetch that never carried one. The frozen snapshot
+       insights are then what this source can say, and they belong to no
+       vendor group, so the block is headed by the source that reported them
+       rather than by a group it is not a partition of. */
+    const insights = source.insights ?? [];
+    return insights.length === 0
+      ? []
+      : [
+          {
+            label: `Models · ${source.label}`,
+            ariaLabel: `Model shares for ${source.label}`,
+            bars: insights.map(insightBar),
+            rows: insights.length
+          }
+        ];
   }
-  return source.insights ?? [];
+  /* One block per vendor GROUP, headed by the group's own written name from
+     the vocabulary file — never by the source's operator-typed label, which
+     names where the numbers were captured rather than whose models they
+     measure (issue #302). A source whose members all sit in one group renders
+     one block; a source that ever carries two groups' members renders one
+     block each, in the file's order.
+
+     The residual belongs to no group, so it rides the FIRST group present:
+     it is the fold of what that source could not attribute, and splitting it
+     across blocks would double-count it. A payload whose only member IS the
+     residual renders nothing at all — a block saying "all of it was
+     something we cannot name" is the aggregate above it with extra steps. */
+  const groupOfShare = (share: CategoryShare): string => modelGroup(share.key);
+  const present = modelGroupKeys.filter((group) =>
+    shares.some((share) => groupOfShare(share) === group)
+  );
+  const recorded = source.series?.recorded === true;
+  return present.map((group, index) => {
+    const carried = shares.filter(
+      (share) => groupOfShare(share) === group || (index === 0 && groupOfShare(share) === '')
+    );
+    return {
+      label: `Models · ${modelGroupLabel(group)}`,
+      ariaLabel: `Model shares for ${modelGroupLabel(group)}`,
+      bars: carried.map((share) =>
+        insightBar({ label: modelLabel(share.key), pct: share.pct, recorded })
+      ),
+      rows: modelGroupRows(group)
+    };
+  });
 }
 
 /* The stale threshold and the line itself are the page's, not this panel's
@@ -905,17 +1025,16 @@ function backFacts(source: TokenUsageSource): LedgerFact[] {
     .map((stat) => ({ key: stat.key, term: stat.label, value: statFigure(stat) }));
 }
 
-/* One source's insight rows as bars. The same rows the tiles' insight region
- * drew, through the same derivation (renderedInsights) and the same
- * saturation, so the board and the retired panel would have said the identical
- * thing. */
-function insightBars(source: TokenUsageSource): LedgerBar[] {
-  return renderedInsights(source).map((insight) => ({
+/* One proportion as a bar. The same row the tiles' insight region drew, at
+ * the same saturation, so the board and the retired panel would have said the
+ * identical thing. */
+function insightBar(insight: TokenUsageInsight): LedgerBar {
+  return {
     key: insight.label,
     label: insight.label,
     fillPct: insight.pct === null ? null : meterFillPct(insight.pct),
     reading: formatShare(insight.pct)
-  }));
+  };
 }
 
 /* The sub-line under a source's lifetime figure: its current streak and its
@@ -1012,30 +1131,29 @@ export function tokenSquares(sources: readonly TokenUsageSource[]): LedgerSquare
       }
     });
   }
-  /* The model split: the first source's shares on the front, the second's
-     behind it. Two sources is what the payload carries today and the shape
-     survives either way — one source turns to its own empty note, and a third
-     source's shares stay on its own square rather than being silently
-     dropped, because the front is always sources[0] and the back sources[1]. */
-  const [first, second] = sources;
-  const frontBars = insightBars(first);
-  const backBars = second === undefined ? [] : insightBars(second);
-  if (frontBars.length > 0 || backBars.length > 0) {
+  /* The model split: every source's blocks in order, two to a square — one on
+     the front and one behind it. Two blocks is what the payload carries today
+     (one vendor group per source) and the shape survives either way: an odd
+     last block turns to its own empty note, and a fifth block would take its
+     own square rather than being silently dropped. */
+  const blocks = sources.flatMap(modelBlocks);
+  for (let index = 0; index < blocks.length; index += 2) {
+    const front = blocks[index];
+    const back = blocks[index + 1];
     squares.push({
-      key: 'models',
-      label: `Models · ${first.label}`,
-      bars: frontBars.length > 0 ? frontBars : undefined,
-      figure: frontBars.length > 0 ? undefined : unknownFigure,
-      ariaLabel: `Model shares for ${first.label}`,
-      back: {
-        label: second === undefined ? 'Models' : `Models · ${second.label}`,
-        bars: backBars.length > 0 ? backBars : undefined,
-        note: backBars.length > 0 ? undefined : tokenUsageSourceEmptyNote
-      }
+      key: index === 0 ? 'models' : `models-${index / 2 + 1}`,
+      label: front.label,
+      bars: front.bars,
+      barRows: front.rows,
+      ariaLabel: front.ariaLabel,
+      back:
+        back === undefined
+          ? { label: 'Models', note: tokenUsageSourceEmptyNote }
+          : { label: back.label, bars: back.bars, barRows: back.rows }
     });
   }
   /* The session record, from the first source that keeps one. */
-  const keeper = sources.find((source) => statOf(source, 'sessions') !== undefined) ?? first;
+  const keeper = sources.find((source) => statOf(source, 'sessions') !== undefined) ?? sources[0];
   const sessions = statFigure(statOf(keeper, 'sessions'));
   squares.push({
     key: 'sessions',

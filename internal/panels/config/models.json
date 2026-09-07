@@ -1,0 +1,106 @@
+{
+  "schema": "usage-models/v1",
+  "residual": {
+    "key": "other",
+    "label": "Other",
+    "slot": 0
+  },
+  "groups": [
+    {
+      "key": "anthropic",
+      "label": "Anthropic",
+      "members": [
+        {
+          "key": "fable-5",
+          "label": "Fable 5",
+          "slot": 2,
+          "ids": [],
+          "prefixStrip": true
+        },
+        {
+          "key": "fable-5-1",
+          "label": "Fable 5.1",
+          "slot": 1,
+          "ids": [],
+          "prefixStrip": true
+        },
+        {
+          "key": "opus-5",
+          "label": "Opus 5",
+          "slot": 3,
+          "ids": [],
+          "prefixStrip": true
+        },
+        {
+          "key": "sonnet-5",
+          "label": "Sonnet 5",
+          "slot": 4,
+          "ids": [],
+          "prefixStrip": true
+        },
+        {
+          "key": "opus-4-8",
+          "label": "Opus 4.8",
+          "slot": 5,
+          "ids": [],
+          "prefixStrip": true
+        }
+      ]
+    },
+    {
+      "key": "openai",
+      "label": "OpenAI",
+      "members": [
+        {
+          "key": "gpt-6-astra",
+          "label": "GPT-6 Astra",
+          "slot": 2,
+          "ids": ["gpt-6-astra"],
+          "prefixStrip": false
+        },
+        {
+          "key": "gpt-5-6-sol",
+          "label": "GPT-5.6 Sol",
+          "slot": 3,
+          "ids": ["gpt-5-6-sol"],
+          "prefixStrip": false
+        },
+        {
+          "key": "gpt-5-6-luna",
+          "label": "GPT-5.6 Luna",
+          "slot": 4,
+          "ids": ["gpt-5-6-luna"],
+          "prefixStrip": false
+        },
+        {
+          "key": "gpt-5-6-terra",
+          "label": "GPT-5.6 Terra",
+          "slot": 5,
+          "ids": ["gpt-5-6-terra"],
+          "prefixStrip": false
+        },
+        {
+          "key": "gpt-5-3-codex-spark",
+          "label": "GPT-5.3 Codex Spark",
+          "slot": 6,
+          "ids": ["gpt-5-3-codex-spark"],
+          "prefixStrip": false
+        },
+        {
+          "key": "gpt-daybreak-blue",
+          "label": "Daybreak Blue",
+          "slot": 1,
+          "ids": ["gpt-daybreak-blue-latest"],
+          "prefixStrip": false
+        },
+        {
+          "key": "codex-auto-review",
+          "label": "Codex auto-review",
+          "slot": 7,
+          "ids": ["codex-auto-review"],
+          "prefixStrip": false
+        }
+      ]
+    }
+  ]
+}

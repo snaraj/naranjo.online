@@ -1106,19 +1106,43 @@ class DatasetTest(unittest.TestCase):
         )
         member = {"unit": "tokens", "total": 3, "sharePct": 100.0, "days": 1, "first": "2026-08-11", "last": "2026-08-11"}
         self.assertEqual(source["categories"], [{"key": "output", "kind": "category", **member}])
-        self.assertEqual(source["models"], [{"key": "other", "kind": "model", **member}])
+        # A MODEL member also carries its written name and its vendor group,
+        # read from the vocabulary file (issue #302): graphing software labels
+        # an axis and facets by vendor, and a machine key is neither. The
+        # residual belongs to no vendor and carries a null rather than a blank
+        # group name. None of this ever reaches the wire — the dataset is
+        # machine-local output, which is exactly why it may carry copy the
+        # emission guard would rightly refuse.
+        self.assertEqual(
+            source["models"],
+            [
+                {
+                    "key": "other",
+                    "kind": "model",
+                    "label": capture.MODEL_LABELS["other"],
+                    "group": None,
+                    **member,
+                }
+            ],
+        )
         self.assertIsNone(source["stats"])
         self.assertEqual(source["windows"], sources["alpha"]["windows"])
         self.assertEqual(source["derived"], sources["alpha"]["derived"])
         self.assertEqual(source["capturedAt"], sources["alpha"]["capturedAt"])
-        # Nothing but days, keys, instants and the schema — the sweep the
-        # emission guard runs on the wire, restated for a file that also
-        # carries shares and marks.
+        # Nothing but days, keys, instants, the schema and the vocabulary's
+        # own written names — the sweep the emission guard runs on the wire,
+        # restated for a file that also carries shares and marks. The labels
+        # are admitted as a CLOSED set read from the vocabulary file, never as
+        # free text: a display name is the one thing here that is neither a
+        # key nor a date, and admitting the shape "any string with a space in
+        # it" would retire the sweep rather than widen it (issue #302).
+        written = set(capture.MODEL_LABELS.values()) | set(capture.MODEL_GROUP_LABELS.values())
         strings = []
         collect_strings(dataset, strings)
         for value in strings:
             self.assertTrue(
                 value == export_usage_series.DATASET_SCHEMA
+                or value in written
                 or capture.DAY_PATTERN.match(value)
                 or capture.KEY_PATTERN.match(value)
                 or re.match(self.INSTANT, value),

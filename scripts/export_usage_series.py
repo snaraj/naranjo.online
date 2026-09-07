@@ -545,12 +545,20 @@ DATASET_BREAKDOWNS = (
 )
 
 
-def breakdown_metadata(name, kind, vocabulary, rows):
+def breakdown_metadata(name, kind, vocabulary, rows, labels=None, groups=None):
     """One metadata object per breakdown member the source's days carry.
 
     Shares are taken over the days that CARRY the breakdown, never over the
     whole series: a member's share of days that never split is a percentage
     of a question nobody asked (the frontend's modelShares rule).
+
+    A MODEL member also carries its written name and its vendor group,
+    straight from the vocabulary file (issue #302). Graphing software wants
+    to label an axis and to facet by vendor, and a key like `opus-4-8` is
+    neither; the dataset is machine-local output, so carrying the two here
+    saves every reader from re-deriving them and none of it ever reaches the
+    wire. The residual belongs to no vendor and says so with a null rather
+    than a blank string, which would read as a group whose name is missing.
     """
     covered = [(day, row[name]) for day, row in rows if row.get(name)]
     grand = sum(sum(split.values()) for _, split in covered)
@@ -560,18 +568,20 @@ def breakdown_metadata(name, kind, vocabulary, rows):
         if not member:
             continue
         total = sum(value for _, value in member)
-        entries.append(
-            {
-                "key": key,
-                "kind": kind,
-                "unit": DATASET_UNIT,
-                "total": total,
-                "sharePct": round(100 * total / grand, 2) if grand else None,
-                "days": len(member),
-                "first": member[0][0],
-                "last": member[-1][0],
-            }
-        )
+        entry = {
+            "key": key,
+            "kind": kind,
+            "unit": DATASET_UNIT,
+            "total": total,
+            "sharePct": round(100 * total / grand, 2) if grand else None,
+            "days": len(member),
+            "first": member[0][0],
+            "last": member[-1][0],
+        }
+        if labels is not None:
+            entry["label"] = labels[key]
+            entry["group"] = groups.get(key)
+        entries.append(entry)
     return entries
 
 
@@ -633,7 +643,14 @@ def build_dataset(sources, history_dir, now):
             "derived": section["derived"],
             "windows": section["windows"],
             "categories": breakdown_metadata("categories", "category", capture.CATEGORY_KEYS, rows),
-            "models": breakdown_metadata("models", "model", capture.MODEL_KEYS, rows),
+            "models": breakdown_metadata(
+                "models",
+                "model",
+                capture.MODEL_KEYS,
+                rows,
+                capture.MODEL_LABELS,
+                capture.MODEL_GROUPS,
+            ),
             "days": days,
         }
     return dataset

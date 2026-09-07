@@ -710,13 +710,23 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     '#3d5330', '#55823f', '#79b455', '#a9e37e', '#ccff8a', // sepia greens + peak
     '#161a23', '#1d222d', '#2a3040', '#5f6a84', '#b9c2d4', // slate ramp
     '#1b1612', '#28221d', '#312a25', '#3e362f', '#7b6d60', '#b79d7e', '#f4eaea', // browntown seeds
-    // The token-usage category sets (issue #142): four modes times six
-    // slots, every value its own hex — including dark's neutral steps,
-    // which the r==g==b sweep above also holds to the mode's no-hue rule.
+    // The token-usage entity sets (issue #142, widened at #302): four modes
+    // times eight slots, every value its own hex — including dark's neutral
+    // steps, which the r==g==b sweep above also holds to the no-hue rule.
     '#5f6672', '#2a63b8', '#96550a', '#0b8a6a', '#6d4bb8', '#a3315e', // light categories
     '#565656', '#6f6f6f', '#868686', '#a2a2a2', '#bebebe', '#dadada', // dark category steps
     '#5a657e', '#3f81d9', '#b87e1f', '#1f9e7d', '#8a68d8', '#cf5585', // slate categories
     '#77685a', '#5c88d8', '#bb7d24', '#2f9e7d', '#8f6ad4', '#d15a88', // sepia categories
+    // Slots 6 and 7, added at issue #302 because the model vocabulary's larger
+    // vendor group declares seven named members and no two members of one
+    // group may share a slot. Chosen by the same measurement the five above
+    // were: >= 3:1 on the mode's raised surface, and adjacent-pair separation
+    // of at least 19.8 (normal) and 13.8 (deuteranopia and protanopia) in
+    // every chromatic mode. Dark keeps its no-hue rule, checked by the sweep.
+    '#cc5145', '#698240', // light
+    '#949494', '#f2f2f2', // dark steps
+    '#b46852', '#678546', // slate
+    '#b56754', '#6d8a4b', // sepia
     // The two status inks added at issues 222 and 229, each with its own
     // darkened twin for the light card. They are enumerated here for the
     // same reason every value above is: a status ink restated at a second

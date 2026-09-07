@@ -235,31 +235,36 @@ admitted, and an oversized one was truncated, atomically installed over the
 last good file, and only then reported as a checksum mismatch.
 
 The ceiling is measured, not guessed, and the measurement has been REDONE
-three times — at the 2026-08-24 round-3 review, when a required per-source
+four times — at the 2026-08-24 round-3 review, when a required per-source
 `capturedAt` and mandatory window and derived sections made the printed
 figures stale; again for issue #170, which added the per-model
-partition; and again for issue #276, which grew the derived set to five and
-added the captured-stats section. The structural maximum the origin can
+partition; again for issue #276, which grew the derived set to five and
+added the captured-stats section; and again for issue #302, which more than
+doubled the model vocabulary. The structural maximum the origin can
 admit is one document
 covering both shipped snapshot sources, each at the 732-day series bound with
-the complete five-key category vocabulary, the complete six-key model
-vocabulary over its own 92-day window, the complete six-key captured-stats
+the complete five-key category vocabulary, the complete thirteen-key model
+vocabulary over its own 70-day window, the complete six-key captured-stats
 vocabulary, and every required section present.
-Compact-encoded and sealed, that measures **111,690 bytes** at ten-digit daily
+Compact-encoded and sealed, that measures **119,836 bytes** at ten-digit daily
 values — an order of magnitude above the shipped snapshot's own measured peak
-day of 1,911,380,289. Pretty-printed, the identical document is 221,596
-bytes, so compact output alone roughly halves it. 131,072 leaves **19,382
-bytes** of headroom: the same maximum still seals to 121,600 bytes at
+day of 1,911,380,289. Pretty-printed, the identical document is 237,884
+bytes, so compact output alone roughly halves it. 131,072 leaves **11,236
+bytes** of headroom: the same maximum still seals to 130,462 bytes at
 eleven-digit values and only crosses the ceiling at twelve, where it
-reaches 131,510.
+reaches 141,088.
 
 The models section spent one decimal digit of that headroom — it was three
 before #170 — and the sixth model member (issue #299) spent the second:
-every member costs one integer per window day on every source, so the next
-member is a measured decision, not a free edit. That is precisely the trade
-the section's 92-day window bounds. One
+every member costs one integer per window day on every source, so a member is
+a measured decision, not a free edit. Issue #302 paid that price the other
+way round. Seven named members joined at once, which at the old 92-day window
+put the eleven-digit maximum over the ceiling; the ceiling is one number five
+stages agree on and moving it would move all five, so the WINDOW was cut to
+ten weeks instead and the one-further-digit claim above is the same claim it
+always was. That is precisely the trade the window bounds. One
 integer per day per member over the full 732-day series would cost roughly
-eight times what the window costs and would not fit under this ceiling at
+ten times what the window costs and would not fit under this ceiling at
 all, which is why the section declares the range it covers instead of
 quietly covering fewer days than the series above it.
 
@@ -290,6 +295,63 @@ it. A file sealed at exactly 131,072 bytes is therefore refused at serve
 time. What equality buys is only that the last step no longer hides a
 SMALLER ceiling than the four before it; what makes an over-budget document
 safe is the refusal itself, which keeps the last good response serving.
+
+### The model vocabulary is one data file (issue #302)
+
+`internal/panels/config/models.json` (`usage-models/v1`) is the ONLY place a
+model key, a written name, a palette slot, a vendor group or a raw model
+identifier is spelled. The origin embeds it, `capture_usage_series.py` reads
+it from the repository beside itself, and the page imports it at build time;
+before this it was three hand-kept tables held together by a regex test that
+compared them, and adding a model meant editing three files in step. Adding a
+model or a vendor group is now one data edit plus a release, and a test sweeps
+every production source in Go, TypeScript, Svelte, CSS and Python to prove no
+fourth table has appeared.
+
+The file declares, per member: the machine key that crosses the wire, the
+written name every reader resolves, the palette slot the entity owns inside
+its group, and how a raw identifier folds to it. The RESIDUAL is declared
+separately from the groups, holds the neutral slot, and can never be named by
+an identifier — it is the fold of everything the vocabulary does not know, so
+a named entity may never inherit its swatch. Keys are unique across the whole
+file, slots are unique WITHIN a group (reuse across groups is deliberate:
+colour is never the only channel, since the written name and the printed
+percentage ride beside every bar), and every raw identifier is lowercase and
+unique across the file. A fault in any of that refuses the whole file rather
+than dropping the offending member: a vocabulary with a hole is three readers
+that disagree.
+
+**The fold, from raw identifier to key**, is two rules, both declared in the
+file and tried in that order. EXACT: the identifier is normalised — lowercased,
+and dots read as hyphens, because a machine key carries no dots and a written
+version number does — and looked up in the file's identifier table. PREFIX: an
+identifier that is vendor-qualified (a vendor segment, a hyphen, then the
+model) has its leading segment dropped and the remainder matched against
+members that opted into that rule, which is exactly the behaviour the producer
+had before the file existed. Anything else folds to the residual and is
+COUNTED, because model churn is constant and the two alternatives are worse:
+minting a label nobody reviewed puts unreviewed copy on a public page, and
+refusing the document freezes the panel until a human edits the vocabulary.
+
+**Attribution in the running-totals shape.** Those journals put the model and
+the token counts in DIFFERENT records: one kind declares the model a turn
+runs, and a later kind reports the running totals. The walk therefore carries
+the model in force per file and bills each advance to it. Advances before any
+declaration fold to the residual — the honest answer for tokens whose model
+the file never named — a file that switches models mid-way bills each advance
+to the model in force at that advance, and the model in force is per FILE,
+exactly as the running total is. The declaration is the only thing that folds,
+so an identifier the vocabulary does not name is counted once where it is
+declared rather than once per advance.
+
+**No placeholder rows.** A member that carries nothing across the window a
+section covers is dropped by the producer, refused by the origin, and refused
+again by the page. A row of zeroes draws a named model at nought percent
+beside models that were actually used, and costs its whole window of integers
+against the ceiling above to say nothing. The category partition keeps the
+older rule on purpose: its five accounting classes are a fixed division of the
+same day, so a class that genuinely measured nothing is a reading rather than
+a placeholder.
 
 ## Days, lifetime figures, and the one-time baselines (issue #276)
 
@@ -483,7 +545,8 @@ change.
    every run: per source a coverage object, the lifetime and captured
    stats, the windows and derived figures, one metadata object per category
    and per model — key, kind, unit, total, share of the days that carry the
-   split, covered days, first and last day — and every remembered day with
+   split, covered days, first and last day, and for a model its written name
+   and vendor group from the vocabulary file — and every remembered day with
    its partitions, verified days marked. It is machine-local OUTPUT, never
    sealed and never pushed; it carries shares and marks the wire's emission
    guard would rightly refuse. `$HISTORY_DIR/<key>.verified.json` is INPUT,

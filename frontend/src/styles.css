@@ -321,15 +321,26 @@
   --palette-sepia-grid-4: #a9e37e;
   --palette-sepia-grid-peak: #ccff8a;
 
-  /* The token-usage CATEGORY set: identity colors for the per-day breakdown
-     (input, output, cache read, cache write, reasoning — slots 1..5, fixed
-     per category key so a color follows its entity across every payload;
-     slot 0 is the neutral for any key outside that vocabulary). These are
-     categorical, not a ramp: each chromatic mode's five hues were validated
-     with the dataviz palette checks against that mode's own raised-surface
-     value — lightness band, chroma floor, adjacent-pair CVD separation
-     >= 8, normal-vision separation >= 15, and >= 3:1 contrast — with all
-     six checks passing for light, slate, and sepia.
+  /* The token-usage ENTITY set: identity colors for the per-day breakdowns.
+     The five accounting classes take slots 1..5 (input, output, cache read,
+     cache write, reasoning) and the model vocabulary's members take a slot
+     within their own vendor group, which is why the set runs to seven
+     chromatic hues (issue 302: the larger group declares seven named
+     members). A slot is fixed per KEY so a color follows its entity across
+     every payload, and slot 0 is the neutral the residual and any key
+     outside a vocabulary draw. Reuse ACROSS groups is deliberate — a colour
+     is never the only channel here, the written name and the printed
+     percentage ride beside every bar — while within one group no two members
+     share a slot. These are categorical, not a ramp: each chromatic mode's
+     hues were validated with the dataviz palette checks against that mode's
+     own raised-surface value — lightness band, chroma floor, adjacent-pair
+     CVD separation >= 8, normal-vision separation >= 15, and >= 3:1
+     contrast — with every check passing for light, slate, and sepia. The two
+     hues slots 6 and 7 added were chosen by that measurement rather than by
+     eye, and the larger group's members were assigned slots in the order
+     that keeps its ADJACENT pairs apart: worst adjacent separation across
+     the three chromatic modes is 19.8 to normal vision and 13.8 under
+     deuteranopia and protanopia, against floors of 15 and 8.
 
      The true dark mode is the DELIBERATE exception, exactly as its grid
      ramp is: the mode's whole design is that the brand mark stays its only
@@ -345,6 +356,8 @@
   --palette-light-cat-3: #0b8a6a;
   --palette-light-cat-4: #6d4bb8;
   --palette-light-cat-5: #a3315e;
+  --palette-light-cat-6: #cc5145;
+  --palette-light-cat-7: #698240;
 
   --palette-dark-cat-0: #565656;
   --palette-dark-cat-1: #6f6f6f;
@@ -352,6 +365,8 @@
   --palette-dark-cat-3: #a2a2a2;
   --palette-dark-cat-4: #bebebe;
   --palette-dark-cat-5: #dadada;
+  --palette-dark-cat-6: #949494;
+  --palette-dark-cat-7: #f2f2f2;
 
   --palette-slate-cat-0: #5a657e;
   --palette-slate-cat-1: #3f81d9;
@@ -359,6 +374,8 @@
   --palette-slate-cat-3: #1f9e7d;
   --palette-slate-cat-4: #8a68d8;
   --palette-slate-cat-5: #cf5585;
+  --palette-slate-cat-6: #b46852;
+  --palette-slate-cat-7: #678546;
 
   --palette-sepia-cat-0: #77685a;
   --palette-sepia-cat-1: #5c88d8;
@@ -366,6 +383,8 @@
   --palette-sepia-cat-3: #2f9e7d;
   --palette-sepia-cat-4: #8f6ad4;
   --palette-sepia-cat-5: #d15a88;
+  --palette-sepia-cat-6: #b56754;
+  --palette-sepia-cat-7: #6d8a4b;
 
   /* Stacking order, as tokens rather than magic numbers. Two things sit over
      the document and they must be told apart. The reading-mode popover hangs
@@ -859,6 +878,8 @@
   --usage-cat-3: var(--color-cat-3);
   --usage-cat-4: var(--color-cat-4);
   --usage-cat-5: var(--color-cat-5);
+  --usage-cat-6: var(--color-cat-6);
+  --usage-cat-7: var(--color-cat-7);
   /* The per-source heading ("Claude Code", "Codex") -- one step above the
      panel's body size (owner directive, 2026-08-28: "a bit bigger so they're
      easier to see"). It is the name of the thing every figure under it
@@ -924,6 +945,8 @@
   --color-cat-3: var(--palette-light-cat-3);
   --color-cat-4: var(--palette-light-cat-4);
   --color-cat-5: var(--palette-light-cat-5);
+  --color-cat-6: var(--palette-light-cat-6);
+  --color-cat-7: var(--palette-light-cat-7);
   /* The page's one font stack, as a token: a card's type ramp reads it rather
      than restating it, so the family is chosen in exactly one place. The face
      is the self-hosted JetBrains Mono declared at the top of this file (owner
@@ -1023,6 +1046,8 @@
     --color-cat-3: var(--palette-dark-cat-3);
     --color-cat-4: var(--palette-dark-cat-4);
     --color-cat-5: var(--palette-dark-cat-5);
+    --color-cat-6: var(--palette-dark-cat-6);
+    --color-cat-7: var(--palette-dark-cat-7);
     --gallery-stage-ground: var(--palette-projection-ground);
   }
 }
@@ -1053,6 +1078,8 @@
   --color-cat-3: var(--palette-dark-cat-3);
   --color-cat-4: var(--palette-dark-cat-4);
   --color-cat-5: var(--palette-dark-cat-5);
+  --color-cat-6: var(--palette-dark-cat-6);
+  --color-cat-7: var(--palette-dark-cat-7);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 
@@ -1088,6 +1115,8 @@
   --color-cat-3: var(--palette-slate-cat-3);
   --color-cat-4: var(--palette-slate-cat-4);
   --color-cat-5: var(--palette-slate-cat-5);
+  --color-cat-6: var(--palette-slate-cat-6);
+  --color-cat-7: var(--palette-slate-cat-7);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 
@@ -1117,6 +1146,8 @@
   --color-cat-3: var(--palette-sepia-cat-3);
   --color-cat-4: var(--palette-sepia-cat-4);
   --color-cat-5: var(--palette-sepia-cat-5);
+  --color-cat-6: var(--palette-sepia-cat-6);
+  --color-cat-7: var(--palette-sepia-cat-7);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 
@@ -2538,13 +2569,44 @@ h1 {
   overflow: hidden;
 }
 
+/* THE BARS BOX IS RESERVED FROM A DECLARED COUNT (issue 302), the same shape
+   `.commit-rows` and the calendar's `--grid-columns` already take: the
+   adapter writes how many rows its own vocabulary declares, and the face
+   divides that many equal rows out of its fixed height. An envelope carrying
+   fewer members leaves the box exactly where it was, so a later arrival never
+   moves the page, and the widest block a group can produce is printed rather
+   than clipped by the overflow rule above. */
+.board-bars {
+  flex: 1 1 auto;
+  gap: var(--board-bar-gap, 0.25rem);
+  grid-template-rows: repeat(var(--board-bar-rows, 1), minmax(0, 1fr));
+}
+
 .board-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 2.5rem;
   align-items: center;
-  gap: 0.25rem 0.375rem;
+  gap: var(--board-bar-gap, 0.25rem) 0.375rem;
   font-family: var(--font-mono);
   font-size: 0.625rem;
+  line-height: var(--board-bar-lead, normal);
+}
+
+/* A block that declares more rows than the loose pitch prints inside a square
+   tightens the pitch instead of overflowing it: the leading closes up, the
+   rule thins, and the gaps halve. The ladder is enumerated rather than
+   computed because CSS cannot derive a type size from a row count, and a
+   frontend test requires every group size the vocabulary declares to have a
+   rung here — so a vendor group that grows past this ladder is a red build
+   rather than a clipped square. */
+.board-bars[data-rows='6'],
+.board-bars[data-rows='7'],
+.board-bars[data-rows='8'],
+.board-bars[data-rows='9'],
+.board-bars[data-rows='10'] {
+  --board-bar-gap: 0.125rem;
+  --board-bar-lead: 1.1;
+  --board-bar-rule: 3px;
 }
 
 .board-bar-label {
@@ -2573,7 +2635,7 @@ h1 {
 .board-track {
   grid-row: 2;
   grid-column: 1 / -1;
-  block-size: 4px;
+  block-size: var(--board-bar-rule, 4px);
   background: var(--ledger-raised);
 }
 
@@ -2912,6 +2974,20 @@ h1 {
     grid-column: 1 / -1;
     aspect-ratio: 2 / 1;
   }
+
+  /* A square carrying a dense block takes the row's whole width, for the
+     reason the odd last one does: two columns of a phone leave a box that
+     cannot print the rows its vocabulary declares, and a clipped bar is a
+     reading the page silently withheld. The wider box is the same height
+     ratio the odd-last rule uses, so the board's rhythm is unchanged. */
+  .board-square[data-rows='6'],
+  .board-square[data-rows='7'],
+  .board-square[data-rows='8'],
+  .board-square[data-rows='9'],
+  .board-square[data-rows='10'] {
+    grid-column: 1 / -1;
+    aspect-ratio: 3 / 2;
+  }
 }
 
 /* ===========================================================================
@@ -3065,6 +3141,14 @@ h1 {
 
 .board-swatch[data-slot='5'] {
   background: var(--usage-cat-5);
+}
+
+.board-swatch[data-slot='6'] {
+  background: var(--usage-cat-6);
+}
+
+.board-swatch[data-slot='7'] {
+  background: var(--usage-cat-7);
 }
 
 .board-fact {

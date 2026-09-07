@@ -12,6 +12,10 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "noEmit": true,
+    // The model vocabulary is DATA in one file that all three consumers read
+    // (issue #302); this is what lets src/lib import those bytes rather than
+    // keep a fourth copy of them.
+    "resolveJsonModule": true,
     "strict": true,
     "target": "ES2023"
   },

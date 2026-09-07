@@ -54,18 +54,31 @@
       <div class="board-grid">
         {#each squares as square (square.key)}
           {@const open = turned.has(square.key)}
+          {@const rows = Math.max(square.barRows ?? 0, square.back.barRows ?? 0)}
           <button
             class="board-square"
             type="button"
             aria-pressed={open}
             aria-label={`${open ? returnLabel : turnLabel} ${square.ariaLabel}`}
             data-turned={open ? 'true' : 'false'}
+            data-rows={rows > 0 ? rows : undefined}
             onclick={() => turn(square.key)}>
             <span class="board-pivot">
               <span class="board-face" data-face="front" aria-hidden={open}>
                 <span class="board-label">{square.label}</span>
                 {#if square.bars}
-                  <span class="board-bars">
+                  <!-- The box is reserved from the ADAPTER's declared row
+                    count, never from the rows this payload happened to
+                    bring: the face divides that many rows out of its own
+                    fixed height, so a later envelope carrying fewer bars
+                    leaves the box where it was and the page never moves
+                    (zero CLS). Written by the component from the count it
+                    actually claims, exactly as the calendar writes its
+                    column count. -->
+                  <span
+                    class="board-bars"
+                    data-rows={square.barRows ?? square.bars.length}
+                    style:--board-bar-rows={square.barRows ?? square.bars.length}>
                     {#each square.bars as bar (bar.key)}
                       <span class="board-bar">
                         <span class="board-bar-label">{bar.label}</span>
@@ -99,7 +112,10 @@
               <span class="board-face" data-face="back" aria-hidden={!open}>
                 <span class="board-label">{square.back.label}</span>
                 {#if square.back.bars}
-                  <span class="board-bars">
+                  <span
+                    class="board-bars"
+                    data-rows={square.back.barRows ?? square.back.bars.length}
+                    style:--board-bar-rows={square.back.barRows ?? square.back.bars.length}>
                     {#each square.back.bars as bar (bar.key)}
                       <span class="board-bar">
                         <span class="board-bar-label">{bar.label}</span>

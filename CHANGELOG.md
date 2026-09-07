@@ -7,6 +7,45 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.79] - 2026-09-06
+
+### Added
+
+- The token-usage panel shows an OpenAI block beside the Anthropic one. The
+  Codex journals name the model a turn runs in one record and its token
+  counts in another, so every advance used to fold into the residual and the
+  block had nothing to say; the walk now carries the model in force and bills
+  each advance to it, so the split names GPT-6 Astra, GPT-5.6 Sol, Luna and
+  Terra, GPT-5.3 Codex Spark, Daybreak Blue and the Codex auto-review
+  (issue #302).
+- Two further chromatic swatches in every reading mode, so the larger vendor
+  group's seven named members each own their own colour inside their block.
+
+### Changed
+
+- The model vocabulary is ONE data file, `internal/panels/config/models.json`
+  (`usage-models/v1`): every model key, written name, palette slot, vendor
+  group and raw identifier is spelled there, and the origin, the exporter and
+  the page all read it. Three hand-kept tables and the regex parity test that
+  compared them are gone; adding a model or a vendor group is now a data edit
+  plus a release.
+- A model block is headed by its VENDOR GROUP's written name rather than by
+  the source label the capture came from, and a source carrying two groups
+  renders one block each.
+- A block reserves its height from the number of members its group declares,
+  so an envelope that later carries more members moves nothing on the page.
+- The per-model window covers ten weeks rather than a quarter. The vocabulary
+  more than doubled, a row costs one integer per day per member, and the
+  payload ceiling is one number five stages agree on: the window moved so the
+  ceiling did not.
+
+### Fixed
+
+- A model that carries no tokens across the window it covers is never shown.
+  The exporter drops such a row, the origin refuses a document containing one,
+  and the page refuses it too, so a named model can no longer be drawn at
+  nought percent beside models that were actually used.
+
 ## [0.1.78] - 2026-09-06
 
 ### Added

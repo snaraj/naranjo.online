@@ -1663,6 +1663,16 @@ var snapshotFiles embed.FS
 //go:embed config/fetch.json
 var fetchConfigBytes []byte
 
+// modelsConfigBytes embeds the model vocabulary: every key, display label,
+// palette slot, vendor group, and raw identifier the pipeline knows — data,
+// never Go source, exactly like the fetch configuration beside it. It is the
+// ONE place those names are spelled; the producer and the frontend read the
+// same file, so a model joins the pipeline as a single reviewed data edit
+// rather than as three hand-duplicated tables that can disagree.
+//
+//go:embed config/models.json
+var modelsConfigBytes []byte
+
 // builtinPanels is the explicit registry: every panel the site serves, in
 // index order. Adding a panel is a conscious edit plus its data files —
 // there is no discovery, no reflection, and no way to register from outside.
@@ -1839,25 +1849,28 @@ const (
 	// bound stops a hostile file from inflating the payload with hundreds.
 	maxSeriesCategories = 8
 
-	// maxSeriesModels bounds the per-model breakdown the same way and at the
-	// same number, for the same reason: a structural guard that still holds
-	// if the closed vocabulary is ever widened.
-	maxSeriesModels = 8
-
 	// maxModelDays bounds how many trailing days the per-model breakdown may
 	// cover, and it is a BUDGET rather than a limit of the record. A row
 	// costs one integer per day per member, so at maxSeriesDays the section
 	// alone would outweigh the entire sealed ceiling before the aggregate is
 	// counted at all — full-depth per-model dailies are not a cap edit away,
-	// they are a different encoding. A quarter is the reserve this ceiling
-	// can carry with room left over, and the covered range is DECLARED by the
+	// they are a different encoding. The covered range is DECLARED by the
 	// section's own start date, so a reader is told what they are looking at
 	// rather than shown a silent truncation.
+	//
+	// TEN WEEKS, down from a quarter (issue #302). The budget is the product
+	// of members and days, and the vocabulary more than doubled when the
+	// second vendor group arrived; at the old ninety-two days the widest
+	// document the origin admits no longer left the one further decimal digit
+	// of headroom the ceiling is measured against. The ceiling itself is not
+	// a lever — it is one number five stages agree on — so the WINDOW moved
+	// instead, and CapParityTest measures the result rather than trusting
+	// this comment.
 	//
 	// The categories breakdown has no separate day bound: it answers to
 	// maxSeriesDays like the series it partitions, because it costs the same
 	// per day as the totals beside it rather than a multiple of them.
-	maxModelDays = 92
+	maxModelDays = 70
 
 	// maxCountValue is THE upper bound on every count a pushed document
 	// carries, and it is one number three languages agree on (2026-08-24
@@ -1969,28 +1982,88 @@ var usageSeriesStatKeys = map[string]string{
 // hue assignment is stable.
 var categoryServeOrder = []string{"input", "output", "cache-read", "cache-write", "reasoning"}
 
+// modelsDocument is the strict on-disk shape of the embedded model
+// vocabulary (schema usage-models/v1). It is the ONE statement of the model
+// keys, their display labels, their palette slots, their vendor groups, and
+// the raw identifiers each folds from; the producer and the frontend read
+// the same bytes, so the three seats cannot drift apart (issue #302 retired
+// the three hand-duplicated tables and the regex parity test that compared
+// them).
+//
+// Nothing here spells a vendor or a product: those live in the file, which
+// is data, and doctrine_test's vendor pin scans this source to keep it that
+// way.
+type modelsDocument struct {
+	// Schema must equal modelsSchema.
+	Schema string `json:"schema"`
+	// Residual is the reserved fold-everything-else member: the class every
+	// identifier the vocabulary does not name falls into. It leads the serve
+	// order and holds the neutral palette slot by RULE, so a named entity
+	// never inherits the residual's swatch and the fold never lands on one.
+	Residual modelsMember `json:"residual"`
+	// Groups are the vendor groups, in serve order; each renders its own
+	// block under its own label.
+	Groups []modelsGroup `json:"groups"`
+}
+
+// modelsGroup is one vendor group: a machine key, the display label its
+// block is headed with, and its members in serve order.
+type modelsGroup struct {
+	Key     string         `json:"key"`
+	Label   string         `json:"label"`
+	Members []modelsMember `json:"members"`
+}
+
+// modelsMember is one vocabulary member. Key is what crosses the wire; Label
+// is display copy the reader resolves; Slot is the fixed palette slot the
+// entity owns inside its group; IDs are the raw identifiers that fold to it
+// exactly; PrefixStrip marks a member that also accepts an identifier whose
+// text after its first hyphen equals its key.
+//
+// The fold fields are read by the PRODUCER, which is the only stage that
+// ever sees a raw identifier. The origin admits by key membership alone and
+// carries them so the vocabulary stays one file rather than two.
+type modelsMember struct {
+	Key         string   `json:"key"`
+	Label       string   `json:"label"`
+	Slot        int      `json:"slot"`
+	IDs         []string `json:"ids,omitempty"`
+	PrefixStrip bool     `json:"prefixStrip,omitempty"`
+}
+
+// modelsSchema is the exact schema marker the embedded vocabulary declares.
+// A breaking reshape mints a new marker; it never bends this one.
+const modelsSchema = "usage-models/v1"
+
 // modelServeOrder is the CLOSED model vocabulary AND the canonical order its
 // rows are SERVED in — the same two jobs categoryServeOrder does, for the
-// second breakdown (issue #170). Its members are MACHINE KEYS, never display
-// copy: a key is what crosses this boundary, and the reader that renders it
-// resolves its own label from its own copy of this list. That split is what
-// keeps this file free of a model name (doctrine_test's vendor pin) while
-// still admitting by MEMBERSHIP rather than by shape — the H1 lesson, which
-// a label-shaped `private-feature` would otherwise walk straight through and
+// second breakdown (issue #170), now READ from the embedded vocabulary rather
+// than transcribed here (issue #302). Its members are MACHINE KEYS, never
+// display copy: a key is what crosses this boundary, and the reader that
+// renders it resolves the written name from the same file. That split is what
+// keeps this source free of a model name (doctrine_test's vendor pin) while
+// still admitting by MEMBERSHIP rather than by shape — the H1 lesson, which a
+// label-shaped `private-feature` would otherwise walk straight through and
 // onto a public page.
 //
-// Index is the palette slot the frontend paints from, so the list is
-// APPEND-ONLY: reusing or reordering an index repaints history under a
-// different entity, and a retired member keeps its slot as a tombstone. The
-// first member is the reserved residual — the class every token the producer
-// cannot attribute falls into — and it holds index 0 by RULE, so a named
-// entity never inherits the neutral slot.
+// The residual leads the order by RULE, so a named entity never inherits the
+// neutral slot the fold draws, and the order is the file's own — residual,
+// then each group's members in the order the file lists them — so every
+// replica emits identical bytes and its digest ETag stays identical.
 //
-// Pinned by value against the producer's MODEL_KEYS and the frontend's
-// modelSlots by ModelVocabularyParityTest in scripts/ci, exactly as the
-// category vocabulary is: adding a model is one reviewed data edit landing
-// in three places together, never a document's choice.
-var modelServeOrder = []string{"other", "fable-5", "fable-5-1", "opus-5", "sonnet-5", "opus-4-8"}
+// It is built once at package init. A malformed file is a BUILD defect: the
+// bytes are compiled in and no runtime input can reach them, so the load
+// panics rather than degrading to an empty vocabulary that would silently
+// refuse every models section for the life of the process.
+var modelServeOrder = mustLoadModelVocabulary(modelsConfigBytes)
+
+// maxSeriesModels bounds the per-model breakdown the way maxSeriesCategories
+// bounds the category one, and it is the vocabulary's own size: the file
+// declares every key a document may carry, so a document naming more rows
+// than the file has members is refused before a single key is looked up.
+// Raising it means adding a member to the file, which is a reviewed data
+// edit — never a widening of this bound on its own.
+var maxSeriesModels = len(modelServeOrder)
 
 // usageSeriesDocument is the strict on-disk shape of the sealed series file
 // (schema usage-series/v1). Sources are keyed by the SAME label the embedded

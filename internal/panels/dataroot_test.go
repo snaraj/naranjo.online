@@ -593,10 +593,24 @@ func TestDataRootAdmitsAWindowedModelBreakdown(t *testing.T) {
 	}
 	_, data := decodeServedUsage(t, state)
 	models := data.Sources[0].Series.Models
-	if len(models) != len(modelServeOrder) {
-		t.Fatalf("served %d models, want %d", len(models), len(modelServeOrder))
+	// The served order is the vocabulary's own, filtered to the rows this
+	// document carries — derived rather than transcribed, so widening the
+	// vocabulary (issue #302 more than doubled it) cannot silently turn this
+	// pin into a comparison of one hardcoded list against another.
+	carried := section["models"].(map[string]any)
+	want := make([]string, 0, len(carried))
+	for _, key := range modelServeOrder {
+		if _, ok := carried[key]; ok {
+			want = append(want, key)
+		}
 	}
-	for index, key := range modelServeOrder {
+	if len(want) != len(carried) {
+		t.Fatalf("the document names %d rows the vocabulary does not carry", len(carried)-len(want))
+	}
+	if len(models) != len(want) {
+		t.Fatalf("served %d models, want %d", len(models), len(want))
+	}
+	for index, key := range want {
 		if models[index].Key != key {
 			t.Fatalf("model %d is %q, want %q (canonical order)", index, models[index].Key, key)
 		}
@@ -611,6 +625,36 @@ func TestDataRootAdmitsAWindowedModelBreakdown(t *testing.T) {
 		if category.StartDate != "" {
 			t.Fatalf("category %q claims window %q; it is aligned with the series", category.Key, category.StartDate)
 		}
+	}
+}
+
+// TestDataRootKeepsAnEmptyAccountingClass is the other half of issue #302's
+// no-empty-row rule, and it exists so the rule is understood rather than
+// merely enforced. The MODEL partition refuses a member that carries nothing
+// — such a member is a placeholder for an entity that was not used. The
+// CATEGORY partition keeps one: its five accounting classes are a fixed
+// division of the same day, so a class that genuinely measured nothing is a
+// reading, and dropping it would turn "no reasoning tokens this week" into
+// silence. Same admission function, one deliberate difference; without this
+// pin the difference would look like an oversight.
+func TestDataRootKeepsAnEmptyAccountingClass(t *testing.T) {
+	t.Parallel()
+	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
+	document := validDocument()
+	alphaSection(document)["categories"] = map[string]any{
+		"input":     []int64{5, 0, 7},
+		"reasoning": []int64{0, 0, 0},
+	}
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex)); err != nil {
+		t.Fatalf("an accounting class that measured nothing was refused: %v", err)
+	}
+	_, data := decodeServedUsage(t, state)
+	served := map[string]bool{}
+	for _, category := range data.Sources[0].Series.Categories {
+		served[category.Key] = true
+	}
+	if !served["reasoning"] {
+		t.Fatal("the class that measured nothing was dropped; a measured zero is a reading, not a placeholder")
 	}
 }
 
@@ -637,6 +681,24 @@ func TestDataRootRefusesHostileBreakdownWindows(t *testing.T) {
 		"a model key smuggled into the categories section": {func(d map[string]any) {
 			alphaSection(d)["categories"] = map[string]any{"opus-5": []int64{5, 0, 7}}
 		}, "categories: key is outside the closed vocabulary"},
+		// Issue #302. A model row of nothing is a named entity drawn at
+		// nought percent beside entities that were actually used, and it
+		// costs its whole window of integers against the shared payload
+		// ceiling. The producer omits it, so a document carrying one has
+		// been edited or produced by something that disagrees with this
+		// boundary — a refusal, never a row to tidy away at render time.
+		"a model row that carries nothing across its window": {func(d map[string]any) {
+			alphaSection(d)["models"] = map[string]any{
+				"other":  []int64{5, 0, 7},
+				"opus-5": []int64{0, 0, 0},
+			}
+		}, `models: row "opus-5" carries nothing across the window it covers`},
+		"a residual row that carries nothing across its window": {func(d map[string]any) {
+			alphaSection(d)["models"] = map[string]any{
+				"other":  []int64{0, 0, 0},
+				"opus-5": []int64{5, 0, 7},
+			}
+		}, `models: row "other" carries nothing across the window it covers`},
 		"models sum over the series totals": {func(d map[string]any) {
 			alphaSection(d)["models"] = map[string]any{"opus-5": []int64{5, 0, 8}}
 		}, "models: rows sum to 8 on day 2; the series total is 7"},
