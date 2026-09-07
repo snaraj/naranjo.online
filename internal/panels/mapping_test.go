@@ -678,6 +678,9 @@ func TestSnapshotDoesNotClaimUnmeasuredCounts(t *testing.T) {
 	unsupported := map[string]bool{"chats": true, "skills-explored": true, "skills-used": true, "longest-task": true}
 	foundCodex := false
 	for _, source := range payload.Sources {
+		if len(source.Insights) != 0 {
+			t.Errorf("source %q snapshot still claims unmeasured insight percentages", source.Label)
+		}
 		for _, stat := range source.Stats {
 			if unsupported[stat.Key] {
 				t.Errorf("source %q snapshot still claims unmeasured %q", source.Label, stat.Key)

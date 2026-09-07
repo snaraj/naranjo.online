@@ -104,29 +104,7 @@
             694645396
           ],
           "recorded": true
-        },
-        "insights": [
-          {
-            "label": "Opus 5",
-            "pct": 58.7,
-            "recorded": true
-          },
-          {
-            "label": "Fable 5",
-            "pct": 27.1,
-            "recorded": true
-          },
-          {
-            "label": "Sonnet 5",
-            "pct": 8.7,
-            "recorded": true
-          },
-          {
-            "label": "Opus 4.8",
-            "pct": 5.5,
-            "recorded": true
-          }
-        ]
+        }
       },
       {
         "label": "codex",
@@ -182,19 +160,7 @@
             622231144
           ],
           "recorded": true
-        },
-        "insights": [
-          {
-            "label": "Max reasoning",
-            "pct": 62,
-            "recorded": true
-          },
-          {
-            "label": "Fast mode",
-            "pct": 2,
-            "recorded": true
-          }
-        ]
+        }
       }
     ]
   }

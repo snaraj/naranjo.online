@@ -27,6 +27,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   exporter cannot measure are no longer shipped as frozen release-time facts.
   Supported lifetime and daily-series figures continue to refresh;
   unsupported figures remain honestly absent.
+- Release-time model and reasoning percentages are no longer used as
+  fallbacks. The measured model partition continues to render when present;
+  an unavailable partition now stays absent instead of showing an old share.
 
 ## [0.1.79] - 2026-09-06
 
