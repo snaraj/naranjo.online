@@ -211,6 +211,18 @@ KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,31}$")
 # here keeps the vendor-neutrality pin intact.
 CATEGORY_KEYS = ("input", "output", "cache-read", "cache-write", "reasoning")
 
+class CaptureError(Exception):
+    """A refusal. Its message never carries a path or any transcript content.
+
+    Declared HERE, above everything that raises it, because the first raiser
+    runs at MODULE IMPORT: the model vocabulary is loaded below, before any
+    function is called, and a refusal there used to die as a NameError naming
+    a class defined six hundred lines further down (2026-09-06 adversarial
+    review of PR #303, finding 1). A refusal that cannot name itself is not a
+    refusal, it is a crash that happens to be fail-closed.
+    """
+
+
 # THE MODEL VOCABULARY IS DATA, AND IT LIVES IN ONE FILE (issue #302).
 #
 # Every model key, its written name, its palette slot, its vendor group, and
@@ -363,15 +375,25 @@ def admitted_model_label(member):
 # mints a new marker; it never bends this one.
 MODELS_SCHEMA = "usage-models/v1"
 
-(
-    MODEL_KEYS,
-    MODEL_OTHER,
-    MODEL_LABELS,
-    MODEL_GROUPS,
-    MODEL_GROUP_LABELS,
-    MODEL_IDS,
-    MODEL_PREFIX_KEYS,
-) = load_model_vocabulary(MODELS_FILE)
+# The load runs at IMPORT, because the vocabulary it produces is consumed at
+# module level (EMISSION_KEYS below unions MODEL_KEYS). A refusal here can
+# therefore never reach main()'s handler, so it is reported exactly the way
+# main() reports one — the message on stderr, exit status 1, no traceback —
+# rather than being left to unwind as an unhandled exception with a stack
+# trace nobody can act on.
+try:
+    (
+        MODEL_KEYS,
+        MODEL_OTHER,
+        MODEL_LABELS,
+        MODEL_GROUPS,
+        MODEL_GROUP_LABELS,
+        MODEL_IDS,
+        MODEL_PREFIX_KEYS,
+    ) = load_model_vocabulary(MODELS_FILE)
+except CaptureError as error:  # pragma: no cover - proven by subprocess
+    print(str(error), file=sys.stderr)
+    raise SystemExit(1)
 
 # Every field name the emission may legitimately contain, CLOSED. The guard
 # refuses any dictionary key outside this set (plus the caller's explicitly
@@ -642,10 +664,6 @@ STATS_KEYS = (
 # TokenUsageSource in internal/panels/types.go so the snapshot reads like the
 # struct it decodes into.
 SOURCE_KEY_ORDER = ("label", "account", "windows", "stats", "series", "insights")
-
-
-class CaptureError(Exception):
-    """A refusal. Its message never carries a path or any transcript content."""
 
 
 def new_counters():
@@ -1179,20 +1197,6 @@ def reduce_running_line(line):
     return None if record is None else running_totals_of(record)
 
 
-def reduce_declared_model(line):
-    """The model identifier one line DECLARES for the turn it opens, or None.
-
-    A separate reader because the two facts arrive in separate records: this
-    shape journals the model where a turn begins and the counts where the
-    turn ends, so a walk that only knew how to read counts could never
-    attribute them (issue #302). It names no tool and no record type — the
-    field it reads is the declaration, and a record that does not carry one
-    is simply not a declaration.
-    """
-    record = decoded_record(line)
-    return None if record is None else declared_model_of(record)
-
-
 def decoded_record(line):
     """One journal line decoded to a record object, or None.
 
@@ -1556,7 +1560,7 @@ def window_section(sections, offset):
 
 
 def carrying(sections):
-    """Drop every row that carries nothing across the window it covers.
+    """Drop every MODEL row that carries nothing across the window it covers.
 
     `day_indexed` already drops a member that measured nothing across the
     whole series; this is the same rule applied where the SECTION is finally
@@ -1567,6 +1571,15 @@ def carrying(sections):
     to say nothing. Dropping it changes no total: an all-zero row contributes
     nothing to any day's sum, so the partition the caller then asserts is
     exactly the partition it was.
+
+    IT IS THE MODEL PARTITION'S RULE AND NOT THE CATEGORY PARTITION'S, and
+    the difference is deliberate on both ends of the pipe (2026-09-06
+    adversarial review of PR #303, finding 3). A model is an entity that
+    either was used or was not; an accounting class is a fixed division of
+    the same day, so a class at zero across the window is the measurement
+    "no reasoning tokens this week" and dropping it would turn that reading
+    into silence. The origin says the same thing from the other side, in
+    TestDataRootKeepsAnEmptyAccountingClass.
     """
     return {key: values for key, values in sections.items() if any(values)}
 
@@ -2304,7 +2317,7 @@ def capture(
             "no day of the record carries a category partition, so the window "
             "figures cannot be measured"
         )
-    categories = carrying(window_section(categories, offset))
+    categories = window_section(categories, offset)
     assert_partition(totals, categories, offset)
     section["categories"] = categories
     if offset > 0:

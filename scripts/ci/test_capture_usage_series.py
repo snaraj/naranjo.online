@@ -24,6 +24,8 @@ import os
 import re
 import shutil
 import pathlib
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -134,6 +136,26 @@ def running_line(running, stamp="2026-08-23T12:00:00.000Z", last=None, **overrid
     }
     record.update(overrides)
     return json.dumps(record)
+
+
+def running_totals_line(stamp, **fields):
+    """One running-totals record whose cumulative fields are stated outright.
+
+    `running_line` above models the owner's own tree, where the cache fields
+    equal the whole and the coarse tier carries the day. This one lets a test
+    choose the tier — a day that partitions five ways, a day that partitions
+    two ways, or a day that cannot be partitioned at all — which is what the
+    categories-window rules need in order to be exercised at all.
+    """
+    usage = {field: 0 for field in capture_usage_series.RUNNING_FIELDS}
+    usage.update(fields)
+    return json.dumps(
+        {
+            "timestamp": stamp,
+            "type": "event_msg",
+            "payload": {"type": "token_count", "info": {"total_token_usage": usage}},
+        }
+    )
 
 
 def turn_model_line(identifier, stamp="2026-08-23T11:59:30.000Z"):
@@ -832,6 +854,133 @@ class ModelFoldTest(unittest.TestCase):
         self.assertEqual(self.counters["unattributed"], 2)
 
 
+class VocabularyRefusalIsAProgramRefusalTest(unittest.TestCase):
+    """A refusal at IMPORT must read like every other refusal (PR #303, finding 1).
+
+    The vocabulary is loaded at module import, because the module-level
+    emission guard consumes it, so a refusal there can never reach main()'s
+    handler. It used to raise `CaptureError` from above the class's own
+    definition and die as a `NameError`; even once that was fixed, an
+    unhandled exception would have printed a stack trace where every other
+    refusal in this program prints one line.
+
+    Driven as a SUBPROCESS rather than through an import, because the fault
+    is in what the interpreter does with the module before anything is
+    callable — a test that imports the module cannot observe an exit status,
+    and a module already imported cannot be made to fail again.
+    """
+
+    SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "capture_usage_series.py"
+
+    def run_with_vocabulary(self, raw):
+        """Run a COPY of the script whose vocabulary file is `raw`, or absent.
+
+        MODELS_FILE is resolved from the script's own location, so the copy
+        reads the temporary file rather than the repository's.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            tree = pathlib.Path(root)
+            (tree / "scripts").mkdir()
+            (tree / "internal" / "panels" / "config").mkdir(parents=True)
+            shutil.copy(self.SCRIPT, tree / "scripts" / self.SCRIPT.name)
+            if raw is not None:
+                (tree / "internal" / "panels" / "config" / "models.json").write_text(
+                    raw, encoding="utf-8"
+                )
+            return subprocess.run(
+                [sys.executable, "-I", "-B", str(tree / "scripts" / self.SCRIPT.name), "--help"],
+                capture_output=True,
+                text=True,
+            )
+
+    def test_a_malformed_vocabulary_refuses_the_way_every_refusal_does(self):
+        for name, raw in (
+            ("not a document", "not json"),
+            ("an unexpected schema", '{"schema": "usage-models/v2"}'),
+            ("no groups", '{"schema": "usage-models/v1", "residual": {"key": "other", "label": "Other", "slot": 0}, "groups": []}'),
+            ("missing", None),
+        ):
+            with self.subTest(case=name):
+                done = self.run_with_vocabulary(raw)
+                self.assertEqual(done.returncode, 1, done.stderr)
+                self.assertRegex(done.stderr, r"^the model vocabulary [^\n]+\n$")
+                # A refusal, not a crash: no stack trace, and never the
+                # NameError this exact shape used to raise.
+                self.assertNotIn("Traceback", done.stderr)
+                self.assertNotIn("NameError", done.stderr)
+                self.assertEqual(done.stdout, "")
+
+    def test_the_shipped_vocabulary_lets_the_program_run(self):
+        # The control, without which every assertion above would pass on a
+        # script that refused for some other reason entirely.
+        raw = (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "internal/panels/config/models.json"
+        ).read_text(encoding="utf-8")
+        done = self.run_with_vocabulary(raw)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stderr, "")
+        self.assertIn("--transcripts", done.stdout)
+
+
+class CategoryWindowKeepsAnEmptyClassTest(unittest.TestCase):
+    """An accounting class at zero across the window is a READING (finding 3).
+
+    The model partition drops a member that carries nothing across the window
+    it covers, because a model either was used or was not. An accounting
+    class is a fixed division of the same day, so a class at zero across the
+    window is the measurement "no reasoning tokens this week", and dropping
+    it would turn that reading into silence. The origin says the same thing
+    from the other side in TestDataRootKeepsAnEmptyAccountingClass; this is
+    the producer end of the identical rule.
+    """
+
+    def capture(self, lines):
+        with tempfile.TemporaryDirectory() as root:
+            nested = os.path.join(root, "2026", "08")
+            os.makedirs(nested)
+            with open(os.path.join(nested, "session.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write("\n".join(lines) + "\n")
+            return capture_usage_series.capture(
+                root, capture_usage_series.FORMAT_RUNNING_TOTALS
+            )
+
+    def test_a_class_that_measured_nothing_inside_the_window_still_reaches_the_wire(self):
+        # Four days. The first partitions into one class; the second cannot be
+        # partitioned at all, which is what pushes the categories window past
+        # the first; the last two partition into a different class. The class
+        # from day one is therefore ZERO across the window the section
+        # declares — and it is still emitted, at zero, because that is what it
+        # measured there.
+        section, _counters = self.capture(
+            [
+                running_totals_line(
+                    "2026-08-20T12:00:00.000Z",
+                    total_tokens=10,
+                    output_tokens=10,
+                    reasoning_output_tokens=10,
+                ),
+                running_totals_line("2026-08-21T12:00:00.000Z", total_tokens=30),
+                running_totals_line(
+                    "2026-08-22T12:00:00.000Z", total_tokens=45, input_tokens=15
+                ),
+                running_totals_line(
+                    "2026-08-23T12:00:00.000Z", total_tokens=65, input_tokens=35
+                ),
+            ]
+        )
+        self.assertEqual(section["series"]["totals"], [10, 20, 15, 20])
+        self.assertEqual(section["categoriesStartDate"], "2026-08-22")
+        self.assertEqual(
+            section["categories"], {"input": [15, 20], "reasoning": [0, 0]}
+        )
+        # And the reading is a true one: the rows still partition every day
+        # the window covers, zero row included.
+        capture_usage_series.assert_partition(
+            section["series"]["totals"], section["categories"], 2
+        )
+
+
 class ModelVocabularyLoadTest(unittest.TestCase):
     """Every rule the vocabulary loader states, given an input that breaks it.
 
@@ -1059,13 +1208,16 @@ class RunningPartsTest(unittest.TestCase):
 class NoPlaceholderRowsTest(unittest.TestCase):
     """A row of zeroes is not a measurement of nothing; it is nothing.
 
-    The rule holds on BOTH partitions and at both places a row can become
-    empty: `day_indexed` drops a member that measured nothing across the
-    whole series, and `carrying` drops one that measured nothing across the
-    trailing WINDOW the section actually claims — a state the first cannot
-    see (issue #302). Downstream, the origin refuses a model row of zeroes
-    outright, so a producer that stopped doing this would push documents the
-    panel rejects rather than documents with a decorative row.
+    Two places a row can become hollow, and the rules differ by partition.
+    `day_indexed` drops a member that measured nothing across the whole
+    SERIES, on both partitions, and always has. `carrying` drops one that
+    measured nothing across the trailing WINDOW the section claims — a state
+    the first cannot see (issue #302) — and it applies to the MODEL partition
+    alone: an accounting class at zero inside the window is the reading "no
+    reasoning tokens this week", which CategoryWindowKeepsAnEmptyClassTest
+    pins from the other direction. Downstream, the origin refuses a model row
+    of zeroes outright, so a producer that stopped doing this would push
+    documents the panel rejects rather than documents with a decorative row.
     """
 
     def test_a_member_that_measured_nothing_never_reaches_a_section(self):
