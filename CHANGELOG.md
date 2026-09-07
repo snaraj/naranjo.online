@@ -23,9 +23,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - Incomplete pagination, overlapping or backwards bucket intervals, negative
   counts and totals outside the shared exact-integer bound now retain the
   last good payload rather than serving partial or ambiguous usage figures.
-- Three Codex counts that the exporter cannot measure are no longer shipped
-  as frozen release-time facts. Supported lifetime and daily-series figures
-  continue to refresh; unsupported figures remain honestly absent.
+- Three Codex counts and both sources' longest-task durations that the
+  exporter cannot measure are no longer shipped as frozen release-time facts.
+  Supported lifetime and daily-series figures continue to refresh;
+  unsupported figures remain honestly absent.
 
 ## [0.1.79] - 2026-09-06
 

@@ -660,12 +660,12 @@ func TestInfrastructureCommitSourceUsesCurrentRepositoryName(t *testing.T) {
 	}
 }
 
-// TestCodexSnapshotDoesNotClaimUnmeasuredCounts keeps release-time sample
+// TestSnapshotDoesNotClaimUnmeasuredCounts keeps release-time sample
 // values from acquiring a fresh capturedAt on every sealed push. The current
 // producer can refresh the daily series and baseline-backed lifetime total;
 // it has no source for these native-application counts, so absence is the
 // only truthful value until such a source exists.
-func TestCodexSnapshotDoesNotClaimUnmeasuredCounts(t *testing.T) {
+func TestSnapshotDoesNotClaimUnmeasuredCounts(t *testing.T) {
 	t.Parallel()
 	loaded, err := SnapshotSource{Name: "snapshots/token-usage.json"}.load(snapshotFiles, KindTokenUsageV2)
 	if err != nil {
@@ -675,19 +675,19 @@ func TestCodexSnapshotDoesNotClaimUnmeasuredCounts(t *testing.T) {
 	if err := decodeStrict(loaded.data, &payload); err != nil {
 		t.Fatalf("decode token snapshot: %v", err)
 	}
-	unsupported := map[string]bool{"chats": true, "skills-explored": true, "skills-used": true}
+	unsupported := map[string]bool{"chats": true, "skills-explored": true, "skills-used": true, "longest-task": true}
+	foundCodex := false
 	for _, source := range payload.Sources {
-		if source.Label != "codex" {
-			continue
-		}
 		for _, stat := range source.Stats {
 			if unsupported[stat.Key] {
-				t.Errorf("codex snapshot still claims unmeasured %q", stat.Key)
+				t.Errorf("source %q snapshot still claims unmeasured %q", source.Label, stat.Key)
 			}
 		}
-		return
+		foundCodex = foundCodex || source.Label == "codex"
 	}
-	t.Error("token snapshot carries no codex source")
+	if !foundCodex {
+		t.Error("token snapshot carries no codex source")
+	}
 }
 
 // TestPanelHeadingsComeFromConfigData pins the heading path introduced for the
