@@ -495,7 +495,7 @@
         "at": "2026-08-24T04:48:29Z"
       },
       {
-        "repo": "website-infrastructure",
+        "repo": "platform",
         "message": "conventions: add lane-crossing declaration field to PR template (#94) (#207)",
         "at": "2026-08-24T04:37:41Z"
       },
@@ -510,12 +510,12 @@
         "at": "2026-08-24T03:58:11Z"
       },
       {
-        "repo": "website-infrastructure",
+        "repo": "platform",
         "message": "security(flux-rbac): repair anonymous release proof - Codex 5.6 Sol Ultra (#206)",
         "at": "2026-08-23T21:15:44Z"
       },
       {
-        "repo": "website-infrastructure",
+        "repo": "platform",
         "message": "security(flux-rbac): add release-bound convergence transaction - Codex 5.6 Sol Ultra (#205)",
         "at": "2026-08-23T09:18:30Z"
       },

@@ -72,8 +72,8 @@
           "endpoint": "https://api.github.com/repos/snaraj/lidersea.com/commits?per_page=3"
         },
         {
-          "repo": "website-infrastructure",
-          "endpoint": "https://api.github.com/repos/snaraj/website-infrastructure/commits?per_page=3"
+          "repo": "platform",
+          "endpoint": "https://api.github.com/repos/snaraj/platform/commits?per_page=3"
         }
       ]
     }

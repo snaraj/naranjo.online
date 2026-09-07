@@ -7925,7 +7925,13 @@ test('each column edge carries a handle, flush with the column and painting noth
          is that hover alters the handle's geometry and paint; the page being
          allowed to scroll is not part of it. */
       return {
-        box: [box.left + window.scrollX, box.top + window.scrollY, box.width, box.height],
+        /* Gecko may re-report the same device-pixel edge a few ten-thousandths
+           of a CSS pixel apart after pointer placement. Quantize below one
+           thousandth: far beneath a drawable pixel, while any real geometry
+           or paint change still fails this exact comparison. */
+        box: [box.left + window.scrollX, box.top + window.scrollY, box.width, box.height].map(
+          (value) => Math.round(value * 1000) / 1000
+        ),
         markContent: getComputedStyle(handle, '::before').content
       };
     });

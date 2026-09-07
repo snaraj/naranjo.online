@@ -578,8 +578,16 @@ func TestUsageRefreshSkipsUnkeyedSourcesAndMerges(t *testing.T) {
 		// acquire the fetched one", and a source that took the fetched series
 		// satisfies "still has a series".
 		unkeyed := payload.Sources[1]
-		if unkeyed.Account == "" || len(unkeyed.Stats) == 0 || len(unkeyed.Insights) == 0 {
+		if unkeyed.Account == "" || len(unkeyed.Stats) == 0 {
 			t.Errorf("unkeyed source lost its recorded snapshot section: %+v", unkeyed)
+		}
+		if len(unkeyed.Insights) == 0 {
+			t.Errorf("unkeyed source lost its canonical unavailable insight rows")
+		}
+		for _, insight := range unkeyed.Insights {
+			if insight.Pct != nil || insight.Recorded {
+				t.Errorf("unkeyed source restored unsupported insight percentage: %+v", insight)
+			}
 		}
 		if unkeyed.Series == nil {
 			t.Fatalf("unkeyed source lost the recorded series it ships")

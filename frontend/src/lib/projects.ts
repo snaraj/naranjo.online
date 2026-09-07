@@ -127,7 +127,7 @@ export const projects: readonly Project[] = [
     pushedAt: '2026-08-29T07:02:14Z'
   },
   {
-    name: 'website-infrastructure',
+    name: 'platform',
     description:
       'My infrastructure for self-hosting scalable and secure applications using Kubernetes',
     commits: 105,

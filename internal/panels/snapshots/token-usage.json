@@ -82,13 +82,6 @@
             "value": 7,
             "unit": "days",
             "recorded": true
-          },
-          {
-            "key": "longest-task",
-            "label": "Longest session",
-            "value": 150900,
-            "unit": "seconds",
-            "recorded": true
           }
         ],
         "series": {
@@ -115,23 +108,23 @@
         "insights": [
           {
             "label": "Opus 5",
-            "pct": 58.7,
-            "recorded": true
+            "pct": null,
+            "recorded": false
           },
           {
             "label": "Fable 5",
-            "pct": 27.1,
-            "recorded": true
+            "pct": null,
+            "recorded": false
           },
           {
             "label": "Sonnet 5",
-            "pct": 8.7,
-            "recorded": true
+            "pct": null,
+            "recorded": false
           },
           {
             "label": "Opus 4.8",
-            "pct": 5.5,
-            "recorded": true
+            "pct": null,
+            "recorded": false
           }
         ]
       },
@@ -155,27 +148,6 @@
             "recorded": true
           },
           {
-            "key": "chats",
-            "label": "Chats",
-            "value": 663,
-            "unit": "count",
-            "recorded": true
-          },
-          {
-            "key": "skills-explored",
-            "label": "Skills explored",
-            "value": 6,
-            "unit": "count",
-            "recorded": true
-          },
-          {
-            "key": "skills-used",
-            "label": "Skills used",
-            "value": 108,
-            "unit": "count",
-            "recorded": true
-          },
-          {
             "key": "current-streak",
             "label": "Current streak",
             "value": 5,
@@ -187,13 +159,6 @@
             "label": "Longest streak",
             "value": 5,
             "unit": "days",
-            "recorded": true
-          },
-          {
-            "key": "longest-task",
-            "label": "Longest chat",
-            "value": 80940,
-            "unit": "seconds",
             "recorded": true
           }
         ],
@@ -221,13 +186,13 @@
         "insights": [
           {
             "label": "Max reasoning",
-            "pct": 62,
-            "recorded": true
+            "pct": null,
+            "recorded": false
           },
           {
             "label": "Fast mode",
-            "pct": 2,
-            "recorded": true
+            "pct": null,
+            "recorded": false
           }
         ]
       }
