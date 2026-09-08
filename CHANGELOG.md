@@ -7,6 +7,13 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.81] - 2026-09-07
+
+### Security
+
+- Analyze Python release and security tooling with CodeQL, and require its
+  successful exact-source job before publication (issue #309).
+
 ## [0.1.80] - 2026-09-07
 
 ### Changed
