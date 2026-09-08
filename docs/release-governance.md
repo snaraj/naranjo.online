@@ -65,8 +65,8 @@ pull-request condition is gone, and the inventory refuses that run rather than
 authorizing a release against a changed gate.
 Workflow-level success alone is insufficient. In the same bounded authorization
 window it resolves the separate `codeql.yml` `push` run for that exact source
-SHA, then requires exactly the two completed/success matrix jobs `analyze (go,
-manual)` and `analyze (javascript-typescript, none)`. Missing, duplicate,
+SHA, then requires the completed/success matrix jobs `analyze (go, manual)`,
+`analyze (javascript-typescript, none)`, and `analyze (python, none)`. Missing, duplicate,
 foreign, skipped, failed, cancelled, wrong-SHA, or still-pending records fail
 closed before publication authority exists.
 

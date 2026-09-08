@@ -159,6 +159,7 @@ EXPECTED_MAIN_JOBS = {
 EXPECTED_CODEQL_JOBS = {
     "analyze (go, manual)": "success",
     "analyze (javascript-typescript, none)": "success",
+    "analyze (python, none)": "success",
 }
 OCI_INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
 OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
@@ -1085,7 +1086,7 @@ def validate_codeql_jobs_record(
     expected_run_id: int,
     expected_source_sha: str,
 ) -> str:
-    """Require both exact CodeQL matrix jobs to complete successfully."""
+    """Require every exact CodeQL matrix job to complete successfully."""
     if isinstance(expected_run_id, bool) or expected_run_id <= 0:
         raise ContractError("CodeQL jobs run ID must be positive")
     source_sha = require_sha(expected_source_sha, "CodeQL jobs source SHA")

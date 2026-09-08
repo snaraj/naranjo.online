@@ -1082,7 +1082,7 @@ class MainJobBindingTests(unittest.TestCase):
 class CodeQLAuthorizationTests(unittest.TestCase):
     SHA = "a" * 40
 
-    def test_exact_source_run_and_both_matrix_jobs_are_accepted(self):
+    def test_exact_source_run_and_all_matrix_jobs_are_accepted(self):
         run = codeql_run_record(self.SHA)
         self.assertEqual(
             RC.classify_codeql_run_record(
@@ -1176,13 +1176,27 @@ class CodeQLAuthorizationTests(unittest.TestCase):
         extra["jobs"].append(copy.deepcopy(extra["jobs"][0]))
         extra["jobs"][-1]["id"] = 99
         extra["jobs"][-1]["name"] = "foreign"
-        extra["total_count"] = 3
+        extra["total_count"] = len(extra["jobs"])
         mutations.append(extra)
         for index, changed in enumerate(mutations):
             with self.subTest(codeql_job_mutant=index), self.assertRaises(RC.ContractError):
                 RC.validate_codeql_jobs_record(
                     changed, expected_run_id=456, expected_source_sha=self.SHA
                 )
+
+    def test_python_analysis_is_present_and_cannot_be_missing_or_skipped(self):
+        workflow = (ROOT / ".github/workflows/codeql.yml").read_text(encoding="utf-8")
+        matrix = re.findall(r"- language: ([\w-]+)\s+build-mode: (\w+)", workflow)
+        self.assertIn(("python", "none"), matrix)
+        exact = codeql_jobs_record(self.SHA)
+        python_job = next(job for job in exact["jobs"] if job["name"] == "analyze (python, none)")
+        python_job["conclusion"] = "skipped"
+        with self.assertRaises(RC.ContractError):
+            RC.validate_codeql_jobs_record(exact, expected_run_id=456, expected_source_sha=self.SHA)
+        exact["jobs"].remove(python_job)
+        exact["total_count"] = len(exact["jobs"])
+        with self.assertRaises(RC.ContractError):
+            RC.validate_codeql_jobs_record(exact, expected_run_id=456, expected_source_sha=self.SHA)
 
 
 class RawSBOMBindingTests(unittest.TestCase):
