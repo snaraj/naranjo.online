@@ -4453,10 +4453,29 @@ class ModelStatsTest(unittest.TestCase):
         emitted = self.rows(section)[self.member]
         self.assertEqual(emitted, {"input": 10, "output": 5, "cache-read": 100})
         self.assertIn(emitted, [shape["totals"] for shape in shapes["admitted"]])
-        # And the producer can never emit a refused shape: every class it
-        # names is in the closed vocabulary, every figure a positive integer.
+        # The producer's own emission rules, applied to every shape in the
+        # file — this is what makes its suite a fourth voice on shapes it never
+        # emits itself (round 2 found the fixture pinning shapes and not the
+        # vocabulary; a producer test that checked only its own emission was
+        # green for a reasoning shape or a nought shape listed on the wrong
+        # side). It emits a class only from the closed vocabulary, only as a
+        # positive integer, and never a member with no class: every admitted
+        # shape is one it COULD emit and no refused shape is, and every class
+        # the vocabulary names is exercised by some admitted shape.
+        def emittable(totals):
+            return bool(totals) and all(
+                name in capture_usage_series.CATEGORY_KEYS and type(value) is int and value > 0
+                for name, value in totals.items()
+            )
+        for shape in shapes["admitted"]:
+            self.assertTrue(emittable(shape["totals"]), "%s: admitted but never emittable" % shape["name"])
         for shape in shapes["refused"]:
-            self.assertNotEqual(emitted, shape["totals"])
+            self.assertFalse(emittable(shape["totals"]), "%s: refused but emittable" % shape["name"])
+        self.assertEqual(
+            {name for shape in shapes["admitted"] for name in shape["totals"]},
+            set(capture_usage_series.CATEGORY_KEYS),
+            "some class of the vocabulary is exercised by no admitted shape",
+        )
 
     def test_an_unnamed_identifier_lands_on_the_residual(self):
         # A legitimate member here, not a defect: model churn is constant and
