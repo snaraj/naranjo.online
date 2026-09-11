@@ -767,10 +767,26 @@ test('the project roster is derived from the account listing, never enumerated i
     Array.isArray(fetchConfig.codingProjects.exclude),
     'curation must be an explicit exclusion list — data, not a whitelist'
   );
+  // The credentialed document is what carries the released version and the
+  // all-time closed pull-request tally (issue #317); the open-work search
+  // document it replaced left with the two columns it fed.
+  assert.equal(
+    fetchConfig.codingProjects.pullsEndpoint,
+    undefined,
+    'the open-work search document left with the columns it fed; a URL nothing reads is egress nobody asked for'
+  );
   assert.ok(
-    typeof fetchConfig.codingProjects.pullsEndpoint === 'string' &&
-      fetchConfig.codingProjects.pullsEndpoint.length > 0,
-    'config names no pullsEndpoint, so every row’s open-work counts would be a permanent dash'
+    typeof fetchConfig.codingProjects.repositories?.query === 'string' &&
+      fetchConfig.codingProjects.repositories.query.includes('latestRelease') &&
+      fetchConfig.codingProjects.repositories.query.includes('pullRequests'),
+    'config names no repository query, so every row’s version and closed-pull tally would be a permanent dash'
+  );
+  // The pinned set rides the SAME document (owner directive, 2026-09-11): a
+  // second round trip for six names would be a request per refresh for a fact
+  // that changes a few times a year.
+  assert.ok(
+    fetchConfig.codingProjects.repositories.query.includes('pinnedItems'),
+    'the repository query does not ask for the pinned set, so no row could ever be marked'
   );
   // The listing endpoint bounds its own answer as data: a page-size
   // parameter is what justifies the byte cap beside it.

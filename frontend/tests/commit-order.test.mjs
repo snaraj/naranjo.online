@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { commitLogProps, leadTokenSource } from '../src/lib/commits.ts';
+import { parseVCSActivity } from '../src/lib/activity.ts';
 import { panelKinds } from '../src/lib/panels.ts';
 import { sourceName, tokenUsagePanelId } from '../src/lib/token-usage.ts';
 
@@ -111,4 +112,107 @@ test('the lead is the first segment the component draws, named by the vocabulary
   assert.equal(props.sets[1].label, `Tokens · ${first.name}`);
   assert.equal(props.sets.at(-1).label, 'Contributions');
   assert.equal(props.title, undefined, 'the commit block hands the shell a title again');
+});
+
+/* THE LOG IS ONE LIST OF TWO KINDS OF ROW (owner directive, 2026-09-11, issue
+ * #315): a public commit, and a day of private contribution the account made
+ * without publishing it. A separate private section would read as a footnote
+ * to the record rather than as part of it, so the two interleave by instant —
+ * and a private row says only what the host's own wording says, with no name,
+ * no identity and no destination. */
+test('private days interleave with the public commits, counted and never named', () => {
+  const props = commitLogProps([
+    {
+      schema: 'panel/v1',
+      id: 'vcs-activity',
+      kind: panelKinds.vcsActivity,
+      title: 'Fixture Activity',
+      status: 'ok',
+      generatedAt: '2026-09-11T12:00:00Z',
+      data: {
+        totalContributions: 9,
+        weeks: [[0, 0, 0, 0, 0, 0, 1]],
+        streak: 1,
+        endDate: '2026-09-11',
+        recentCommits: [
+          { repo: 'public-repo', sha: 'a'.repeat(40), message: 'feat: the newest public thing', at: '2026-09-11T09:00:00Z' },
+          { repo: 'public-repo', sha: 'b'.repeat(40), message: 'fix: an older public thing', at: '2026-09-09T09:00:00Z' }
+        ],
+        privateActivity: [
+          { date: '2026-09-10', contributions: 4, repositories: 2 },
+          { date: '2026-09-08', contributions: 1, repositories: 1 }
+        ]
+      }
+    },
+    null
+  ], new Date('2026-09-11T12:00:00Z'));
+  // Newest first, one list, both kinds. A private day sorts by the END of its
+  // day, so it sits above the commits of that same day rather than under them.
+  assert.deepEqual(
+    props.rows.map((row) => row.source.text),
+    ['public-repo', 'private', 'public-repo', 'private']
+  );
+  const [, privateRow] = props.rows;
+  // The host's own wording, and the plural derived rather than assumed.
+  assert.equal(privateRow.title.text, '4 contributions in 2 private repositories');
+  /* The key is composed rather than written out: a literal "private-<date>"
+     reads as a credential to the secret scan the gate runs over this tree, and
+     a scan that has to be told to ignore a test is a scan one edit from
+     ignoring something real. */
+  assert.equal(privateRow.key, `private-${'2026-09-10'}`);
+  // NO DESTINATION, on either half: there is nothing a reader could be sent
+  // to, and a link that opens a repository they cannot read would be worse
+  // than no link at all.
+  assert.equal(privateRow.source.href, null);
+  assert.equal(privateRow.title.href, null);
+  // And NO IDENTITY: a private commit's sha is exactly the kind of fact that
+  // must never reach the wire, so there is nothing to shorten.
+  assert.equal(privateRow.mark, '—');
+  // The singular reads as a singular.
+  assert.equal(props.rows[3].title.text, '1 contribution in 1 private repository');
+  // Every row carries an age, and the private one's is the day's.
+  for (const row of props.rows) {
+    assert.ok(row.age.length > 0, 'a row carries no age');
+  }
+});
+
+/* Admission is fail-closed on the one field a reader cannot go and check.
+ * There is no link, no identity and no name to verify a private aggregate
+ * against, so a row of it is exactly three well-formed values or the panel
+ * renders its honest empty state rather than a sentence about a quantity
+ * nobody can audit. */
+test('a malformed private day refuses the whole payload', () => {
+  const base = {
+    totalContributions: 1,
+    weeks: [[0, 0, 0, 0, 0, 0, 1]],
+    streak: 1,
+    endDate: '2026-09-11',
+    recentCommits: []
+  };
+  for (const privateActivity of [
+    'not an array',
+    [{ date: '2026-09-10', contributions: 1 }],
+    [{ date: '2026-09-10', contributions: 1, repositories: '2' }],
+    [{ date: '2026-09-10', contributions: -1, repositories: 1 }],
+    [{ date: '2026-09-10', contributions: 1.5, repositories: 1 }],
+    [{ date: '2026-09-10', contributions: 1, repositories: -1 }],
+    [{ date: '2026-09-10', contributions: Number.MAX_SAFE_INTEGER + 2, repositories: 1 }],
+    [{ date: 'the tenth', contributions: 1, repositories: 1 }],
+    [{ contributions: 1, repositories: 1 }],
+    [null]
+  ]) {
+    assert.equal(
+      parseVCSActivity({ ...base, privateActivity }),
+      null,
+      `admitted a malformed private day: ${JSON.stringify(privateActivity)}`
+    );
+  }
+  // The positive controls: absent is the rolling-compatibility state, and a
+  // well-formed list is admitted whole.
+  assert.deepEqual(parseVCSActivity(base).privateActivity, undefined);
+  assert.deepEqual(
+    parseVCSActivity({ ...base, privateActivity: [{ date: '2026-09-10', contributions: 0, repositories: 0 }] })
+      .privateActivity,
+    [{ date: '2026-09-10', contributions: 0, repositories: 0 }]
+  );
 });

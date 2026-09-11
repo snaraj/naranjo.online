@@ -408,11 +408,12 @@ func TestUsageRefreshNarratesSkipsFailuresAndFallback(t *testing.T) {
 	})
 }
 
-// TestCommitSourceFailureWarnsWithRepoLabel pins the commit half: a failed
-// commit document degrades the round instead of propagating, so its WARN —
-// carrying the configured repo label and the host-naming error — must be
-// written where the degrade happens.
-func TestCommitSourceFailureWarnsWithRepoLabel(t *testing.T) {
+// TestCommitRoundFailureWarnsWhereItDegrades pins the commit half: a failed
+// round degrades the panel instead of propagating, so its WARN — carrying the
+// host-naming error and no URL — must be written where the degrade happens.
+// Since issue #315 there is no per-repository label to carry: the round is two
+// documents about the whole account, so the narrative names the round.
+func TestCommitRoundFailureWarnsWhereItDegrades(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	source, err := NewFetchSource(
@@ -422,30 +423,59 @@ func TestCommitSourceFailureWarnsWithRepoLabel(t *testing.T) {
 			Endpoint:    "https://api.example.test/contributions",
 			Headers:     map[string]string{"Accept": "text/html"},
 			ContentType: "text/html",
-			Commits: &vcsCommitsFetchSpec{
-				Headers:     map[string]string{"Accept": "application/json"},
-				ContentType: "application/json",
-				Max:         4,
-				Sources:     []vcsCommitSourceSpec{{Repo: "fixture-repo", Endpoint: "https://api.example.test/repos/fixture/commits"}},
-			},
+			Commits:     commitLoggingSpec(""),
 		}},
 	)
 	if err != nil {
 		t.Fatalf("NewFetchSource() error = %v", err)
 	}
 	source.setLogger(slog.New(slog.NewJSONHandler(&out, nil)))
-	rows, _, attempted, fresh := source.commitSection(t.Context(), &scriptedDoer{}, func(string) string { return "" }, source.specs.vcs.Commits, time.Now().UTC())
+	rows, _, _, attempted, fresh := source.commitSection(t.Context(), &scriptedDoer{}, func(string) string { return "fixture-credential" }, source.specs.vcs.Commits, time.Now().UTC())
 	if !attempted || fresh || len(rows) != 0 {
 		t.Fatalf("commitSection with a failing transport = %d rows, attempted %t, fresh %t; want an attempted, degraded round", len(rows), attempted, fresh)
 	}
-	record := findRecord(refreshLogRecords(t, out.String()), "commit source failed")
+	record := findRecord(refreshLogRecords(t, out.String()), "commit round failed")
 	if record == nil {
-		t.Fatalf("no commit-source WARN in %q", out.String())
+		t.Fatalf("no commit-round WARN in %q", out.String())
 	}
-	if record["level"] != "WARN" || record["repo"] != "fixture-repo" {
-		t.Errorf("commit failure record = level %v repo %v, want WARN/fixture-repo", record["level"], record["repo"])
+	if record["level"] != "WARN" {
+		t.Errorf("commit failure record = level %v, want WARN", record["level"])
+	}
+	if errText, _ := record["error"].(string); !strings.Contains(errText, "commit contributions") {
+		t.Errorf("commit failure record error = %v, want the failing document named", record["error"])
 	}
 	assertNoUpstreamURL(t, out.String())
+}
+
+// commitLoggingSpec is the commit producer these logging scenarios drive. The
+// query parameter is appended to the discovery endpoint so the *url.Error
+// disclosure shape has a query-bearing URL to leak, which is exactly what the
+// sanitizer must not let through.
+func commitLoggingSpec(query string) *vcsCommitsFetchSpec {
+	endpoint := "https://api.example.test/graphql"
+	if query != "" {
+		endpoint += "?account=" + query
+	}
+	return &vcsCommitsFetchSpec{
+		Owner:                           "fixture-owner",
+		KeyEnvName:                      "FIXTURE_COMMITS_TOKEN",
+		KeyHeader:                       "Authorization",
+		KeyPrefix:                       "Bearer ",
+		AuthenticatedMinIntervalMinutes: 1,
+		Max:                             4,
+		Contributions: &graphQLDocumentSpec{
+			Endpoint:    endpoint,
+			Query:       "query($from: DateTime!, $to: DateTime!) { contributions }",
+			Headers:     map[string]string{"Accept": "application/json", "Content-Type": "application/json"},
+			ContentType: "application/json",
+		},
+		History: &graphQLDocumentSpec{
+			Endpoint:    "https://api.example.test/graphql",
+			Query:       "query($ids: [ID!]!, $author: ID!) { history }",
+			Headers:     map[string]string{"Accept": "application/json", "Content-Type": "application/json"},
+			ContentType: "application/json",
+		},
+	}
 }
 
 // TestUsageSourceWarnSurvivesProductionURLError injects the exact
@@ -489,16 +519,7 @@ func TestCommitSourceWarnSurvivesProductionURLError(t *testing.T) {
 			Endpoint:    "https://api.example.test/contributions",
 			Headers:     map[string]string{"Accept": "text/html"},
 			ContentType: "text/html",
-			Commits: &vcsCommitsFetchSpec{
-				Headers:                         map[string]string{"Accept": "application/json"},
-				KeyEnvName:                      "FIXTURE_COMMITS_TOKEN",
-				KeyHeader:                       "Authorization",
-				KeyPrefix:                       "Bearer ",
-				AuthenticatedMinIntervalMinutes: 1,
-				ContentType:                     "application/json",
-				Max:                             4,
-				Sources:                         []vcsCommitSourceSpec{{Repo: "fixture-repo", Endpoint: "https://api.example.test/repos/fixture/commits?account=" + urlErrorQuerySecret}},
-			},
+			Commits:     commitLoggingSpec(urlErrorQuerySecret),
 		}},
 	)
 	if err != nil {
@@ -506,13 +527,13 @@ func TestCommitSourceWarnSurvivesProductionURLError(t *testing.T) {
 	}
 	source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	const credential = "commit-credential-sentinel-eeee"
-	_, _, attempted, fresh := source.commitSection(t.Context(), urlErrorDoer{}, func(string) string { return credential }, source.specs.vcs.Commits, time.Now().UTC())
+	_, _, _, attempted, fresh := source.commitSection(t.Context(), urlErrorDoer{}, func(string) string { return credential }, source.specs.vcs.Commits, time.Now().UTC())
 	if !attempted || fresh {
 		t.Fatalf("commitSection = attempted %t, fresh %t; want an attempted, degraded round", attempted, fresh)
 	}
-	record := findRecord(refreshLogRecords(t, out.String()), "commit source failed")
+	record := findRecord(refreshLogRecords(t, out.String()), "commit round failed")
 	if record == nil {
-		t.Fatalf("no commit-source WARN in %q", out.String())
+		t.Fatalf("no commit-round WARN in %q", out.String())
 	}
 	errText, _ := record["error"].(string)
 	if !strings.Contains(errText, "fetch api.example.test") || !strings.Contains(errText, "connection reset by peer") {

@@ -36,7 +36,6 @@ export type IconName =
   | 'chevron-left'
   | 'source'
   | 'star'
-  | 'issue'
   | 'pull'
   | 'clock'
   | 'commit'
@@ -83,10 +82,6 @@ export const icons: Record<IconName, readonly IconPart[]> = {
   /* projects */
   'star': [
     { tag: 'path', attrs: { d: 'M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 17l-5.3 2.7 1.1-5.9-4.3-4.1 5.9-.8z' } }
-  ],
-  'issue': [
-    { tag: 'circle', attrs: { cx: '12', cy: '12', r: '8.5' } },
-    { tag: 'circle', attrs: { cx: '12', cy: '12', r: '2.25' }, solid: true }
   ],
   'pull': [
     { tag: 'circle', attrs: { cx: '6', cy: '5', r: '2' } },

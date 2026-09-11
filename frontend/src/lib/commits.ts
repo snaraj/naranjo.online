@@ -51,8 +51,7 @@ import {
   commitTitleLink,
   contributionsLabel,
   isValidCommitSha,
-  parseVCSActivity,
-  shownEntryRows
+  parseVCSActivity
 } from './activity.ts';
 import type { CommitLogProps, CommitLogRow, CommitLogSet } from './blocks.ts';
 import {
@@ -64,7 +63,13 @@ import {
   seriesCells
 } from './grid.ts';
 import { panelAge, panelKinds, panelStaleNote } from './panels.ts';
-import type { PanelEnvelope, TokenUsageSource, VCSActivityData } from './panels';
+import type {
+  PanelEnvelope,
+  TokenUsageSource,
+  VCSActivityData,
+  VCSCommit,
+  VCSPrivateDay
+} from './panels';
 import {
   sourceName,
   tokenUsagePanelId,
@@ -178,6 +183,106 @@ export function commitMark(sha: string): string {
   return isValidCommitSha(sha) ? sha.slice(0, shownShaLength) : noMark;
 }
 
+/* The word a PRIVATE row wears where a public row wears its repository name.
+ * It is the host's own word for the same thing, and it is deliberately not a
+ * link: there is nothing a reader could be sent to, and a link to a
+ * repository they cannot open would be worse than no link at all. */
+export const privateRowLabel = 'private';
+
+/* What one private day says, in the host's own wording (owner directive,
+ * 2026-09-11, issue #315): how many contributions, across how many
+ * repositories, and not one word more. No name, no identity, no subject —
+ * the aggregate IS the row, and a plural that reads "1 contributions" is the
+ * kind of small lie a page tells when nobody says its sentences out loud. */
+export function privateRowText(day: VCSPrivateDay): string {
+  const contributions = `${formatWhole(day.contributions)} ${day.contributions === 1 ? 'contribution' : 'contributions'}`;
+  const repositories = `${formatWhole(day.repositories)} private ${day.repositories === 1 ? 'repository' : 'repositories'}`;
+  return `${contributions} in ${repositories}`;
+}
+
+/* THE LOG IS ONE LIST, newest first, of two kinds of row (issue #315): a
+ * public commit, and a day of private contribution the account made without
+ * publishing it. Interleaving them is the whole of the owner's ruling — a
+ * separate private section would read as a footnote to the record rather than
+ * as part of it — and the merge is a plain two-pointer walk over two lists
+ * that each already arrive newest first, so nothing here sorts and nothing
+ * here can reorder a row its producer dated.
+ *
+ * A private day is dated at the END of its day (23:59:59Z) rather than at its
+ * start, so a day's private work sits above the public commits of that same
+ * day rather than under the oldest of them. It is the only instant this module
+ * invents, it is invented from the row's own date, and it decides ORDER only —
+ * the row itself prints a day-granular age because a day is all the aggregate
+ * knows.
+ *
+ * NOTHING IS SLICED HERE ANY MORE. The log used to hand the component exactly
+ * the rows its box could hold; the box is now a RESERVE that scrolls (owner
+ * ruling, 2026-09-11), so every row the wire carried renders and the wire's own
+ * cap is what bounds the list. A cap in this function would be the page
+ * quietly deciding the record stops at ten. */
+function logRows(activity: VCSActivityData, now: Date): CommitLogRow[] {
+  const commits = activity.recentCommits;
+  const days = activity.privateActivity ?? [];
+  const rows: CommitLogRow[] = [];
+  let commit = 0;
+  let day = 0;
+  while (commit < commits.length || day < days.length) {
+    const nextCommit = commits[commit];
+    const nextDay = days[day];
+    const takeDay =
+      nextCommit === undefined ||
+      (nextDay !== undefined && privateInstant(nextDay) > nextCommit.at);
+    if (takeDay && nextDay !== undefined) {
+      rows.push(privateRow(nextDay, now));
+      day += 1;
+      continue;
+    }
+    if (nextCommit === undefined) {
+      break;
+    }
+    rows.push(publicRow(nextCommit, commit, now));
+    commit += 1;
+  }
+  return rows;
+}
+
+/* The instant a private day is ORDERED by: the last second of the day it
+ * covers, in the same shape every commit instant arrives in, so the comparison
+ * is a string comparison over two RFC 3339 instants and never a Date. */
+function privateInstant(day: VCSPrivateDay): string {
+  return `${day.date}T23:59:59Z`;
+}
+
+function privateRow(day: VCSPrivateDay, now: Date): CommitLogRow {
+  const text = privateRowText(day);
+  return {
+    key: `private-${day.date}`,
+    age: panelAge(privateInstant(day), now),
+    /* No href on either half: a private row has no destination this page may
+       offer, and an anchor pointing nowhere is a promise the page cannot
+       keep. The component renders plain text for a null href. */
+    source: { text: privateRowLabel, href: null, label: privateRowLabel },
+    title: { text, href: null, label: text },
+    /* And no identity. A private commit's sha is exactly the kind of fact
+       that must never reach the wire, so there is nothing to shorten. */
+    mark: noMark
+  };
+}
+
+function publicRow(commit: VCSCommit, index: number, now: Date): CommitLogRow {
+  return {
+    key: `${commit.repo}-${commit.sha}-${index}`,
+    age: panelAge(commit.at, now),
+    source: {
+      text: commit.repo,
+      href: commitRepoUrl(commit.repo),
+      label: commitRepoLinkLabel(commit.repo)
+    },
+    title: commitTitleLink(commit),
+    mark: commitShaUrl(commit) === null ? noMark : commitMark(commit.sha)
+  };
+}
+
 export function commitLogProps(
   envelopes: readonly (PanelEnvelope | null)[],
   now: Date = new Date()
@@ -248,20 +353,7 @@ export function commitLogProps(
     contributions
   ];
 
-  const rows: CommitLogRow[] =
-    activity === null
-      ? []
-      : activity.recentCommits.slice(0, shownEntryRows).map((commit, index) => ({
-          key: `${commit.repo}-${commit.sha}-${index}`,
-          age: panelAge(commit.at, now),
-          source: {
-            text: commit.repo,
-            href: commitRepoUrl(commit.repo),
-            label: commitRepoLinkLabel(commit.repo)
-          },
-          title: commitTitleLink(commit),
-          mark: commitShaUrl(commit) === null ? noMark : commitMark(commit.sha)
-        }));
+  const rows: CommitLogRow[] = activity === null ? [] : logRows(activity, now);
 
   return {
     status: activityEnvelope?.status ?? 'unavailable',

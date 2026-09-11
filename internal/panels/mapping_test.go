@@ -631,12 +631,17 @@ func TestLoadFetchConfigFailsClosed(t *testing.T) {
 	}
 }
 
-// TestInfrastructureCommitSourceUsesCurrentRepositoryName pins the rename at
-// the producer boundary. GitHub may redirect an old repository URL, but a
-// redirect is not a source contract: it can suppress a credential, change a
-// final URL, or disappear, and the public row would still wear a retired
-// label. Both the label and endpoint therefore name the current object.
-func TestInfrastructureCommitSourceUsesCurrentRepositoryName(t *testing.T) {
+// TestNoRepositoryListSurvivesInConfiguration is what replaced the rename pin
+// (issue #315). The old test existed because the commit producer spelled three
+// repository names in configuration, and a rename left a row wearing a retired
+// label; the owner's ruling deleted the list, so the invariant to hold is the
+// stronger one — NO repository name is written in this file at all, for any
+// producer, so no rename can ever strand a row again.
+//
+// The account login stays, and stays exactly one word: it is the pin that
+// decides which repositories may be NAMED on the page, and a producer without
+// one would list whatever an upstream handed it.
+func TestNoRepositoryListSurvivesInConfiguration(t *testing.T) {
 	t.Parallel()
 	document, _, err := loadFetchConfig(fetchConfigBytes)
 	if err != nil {
@@ -645,20 +650,26 @@ func TestInfrastructureCommitSourceUsesCurrentRepositoryName(t *testing.T) {
 	if document.VCSActivity == nil || document.VCSActivity.Commits == nil {
 		t.Fatal("shipped config carries no commit producer")
 	}
-	found := false
-	for _, source := range document.VCSActivity.Commits.Sources {
-		if source.Repo == "website-infrastructure" || strings.Contains(source.Endpoint, "/website-infrastructure/") {
-			t.Errorf("commit source still names the retired repository: %+v", source)
-		}
-		if source.Repo == "platform" {
-			found = true
-			if source.Endpoint != "https://api.github.com/repos/snaraj/platform/commits?per_page=3" {
-				t.Errorf("platform endpoint = %q", source.Endpoint)
-			}
+	commits := document.VCSActivity.Commits
+	// The retired names, and the retired shape that carried them. A config
+	// that spells any repository is a config a rename can strand.
+	for _, retired := range []string{"website-infrastructure", "naranjo.online", "lidersea.com", "/repos/"} {
+		if strings.Contains(string(fetchConfigBytes), retired) {
+			t.Errorf("the fetch config still spells %q; issue #315 deleted the repository list so a rename can never strand a row", retired)
 		}
 	}
-	if !found {
-		t.Error("commit producer carries no platform source")
+	if commits.Owner != document.CodingProjects.Account {
+		t.Errorf("the commit producer pins account %q while the projects producer pins %q; one account, one spelling", commits.Owner, document.CodingProjects.Account)
+	}
+	// Both documents are posted to the SAME endpoint, which is the property
+	// that makes "an upstream cannot choose where this process connects" true
+	// of a producer whose roster is discovered rather than configured.
+	if commits.Contributions.Endpoint != commits.History.Endpoint {
+		t.Errorf("the two commit documents post to different endpoints (%q, %q); the reachable-URL set must stay one config literal",
+			commits.Contributions.Endpoint, commits.History.Endpoint)
+	}
+	if document.CodingProjects.Repositories != nil && document.CodingProjects.Repositories.Endpoint != commits.Contributions.Endpoint {
+		t.Errorf("the repository query posts to %q, not the one query endpoint %q", document.CodingProjects.Repositories.Endpoint, commits.Contributions.Endpoint)
 	}
 }
 
@@ -911,13 +922,29 @@ func TestMapContributionsFailsClosedOnDrift(t *testing.T) {
 	}
 }
 
-// TestShippedActivitySnapshotAgreesWithTheCapture cross-checks the two data
-// files the way the boss-log pin does. The snapshot covers the full year and
-// the fixture only its final weeks, so the week COUNTS legitimately differ —
-// but every contribution in the year falls inside those weeks, so the totals,
-// the streak, and the end date must agree exactly. A hand-edited snapshot
-// drifting back toward invented numbers fails here.
-func TestShippedActivitySnapshotAgreesWithTheCapture(t *testing.T) {
+// TestShippedActivitySnapshotIsSelfConsistent is what the cross-check against
+// the captured calendar fixture became, and the reason it had to move is the
+// owner's ruling rather than a convenience.
+//
+// The old pin compared the SHIPPED SNAPSHOT's total, streak and end date to
+// the numbers the `testdata` calendar fixture maps to. That held exactly while
+// the snapshot was a capture of that same public document and was never
+// refreshed again. It is now captured through the CREDENTIALED producer (issue
+// #315), which reports the account holder's whole record — private
+// repositories included, which is the entire reason that producer exists — so
+// the two files count different things, over different windows, dated months
+// apart. Equality between them was never going to be true again, and asserting
+// it would have meant either freezing the snapshot forever or writing numbers
+// by hand, which is precisely the drift the pin was built to catch.
+//
+// So the checks move from "agrees with that file" to "agrees with itself",
+// which catches the same hand-edit and catches it in more places: a total that
+// does not equal the sum of the days, a streak that does not recompute from
+// those days, an end date that does not line up with the week grid, or a
+// coverage word the vocabulary does not know. Every one of those fails the
+// moment somebody types a number into the file. The clause about the CAPTURE
+// is unchanged below, because that one is about the mapper, not the snapshot.
+func TestShippedActivitySnapshotIsSelfConsistent(t *testing.T) {
 	t.Parallel()
 	mapped, err := mapContributions(contributionsFixture(t))
 	if err != nil {
@@ -935,14 +962,34 @@ func TestShippedActivitySnapshotAgreesWithTheCapture(t *testing.T) {
 	if err := decodeStrict(loaded.data, &shipped); err != nil {
 		t.Fatalf("decode the shipped snapshot: %v", err)
 	}
-	if shipped.TotalContributions != fromCapture.TotalContributions {
-		t.Errorf("snapshot total = %d, capture total = %d", shipped.TotalContributions, fromCapture.TotalContributions)
+	daily := make([]int, 0, len(shipped.Weeks)*daysPerWeek)
+	summed := 0
+	for _, week := range shipped.Weeks {
+		for _, day := range week {
+			daily = append(daily, day)
+			summed += day
+		}
 	}
-	if shipped.Streak != fromCapture.Streak {
-		t.Errorf("snapshot streak = %d, capture streak = %d", shipped.Streak, fromCapture.Streak)
+	if summed != shipped.TotalContributions {
+		t.Errorf("snapshot total = %d but its days sum to %d; a figure nobody can derive from the grid beside it is a figure somebody typed", shipped.TotalContributions, summed)
 	}
-	if shipped.EndDate != fromCapture.EndDate {
-		t.Errorf("snapshot endDate = %q, capture endDate = %q", shipped.EndDate, fromCapture.EndDate)
+	// The streak is recomputed from the snapshot's own days by the same rule
+	// the producer applies, over the days the window actually covers — the
+	// trailing padding past endDate is not quiet days, it is days the window
+	// does not reach, and counting them would end every streak at zero.
+	end, err := time.Parse(dayLayout, shipped.EndDate)
+	if err != nil {
+		t.Fatalf("snapshot endDate = %q: %v", shipped.EndDate, err)
+	}
+	covered := len(daily) - (daysPerWeek - 1 - int(end.Weekday()))
+	if covered < 1 || covered > len(daily) {
+		t.Fatalf("snapshot endDate %s does not line up with its %d week columns", shipped.EndDate, len(shipped.Weeks))
+	}
+	if got := int(contributionStreak(daily[:covered])); got != shipped.Streak {
+		t.Errorf("snapshot streak = %d but its own days give %d", shipped.Streak, got)
+	}
+	if shipped.Coverage != CoveragePublic && shipped.Coverage != CoverageComplete {
+		t.Errorf("snapshot coverage = %q, want one of the closed vocabulary: a figure whose coverage nobody recognises is a claim nobody can word", shipped.Coverage)
 	}
 	if len(shipped.Weeks) < 50 {
 		t.Errorf("snapshot ships %d weeks, want the full year the producer fetches", len(shipped.Weeks))
@@ -984,15 +1031,15 @@ func assertShippedCommitsAreRefreshable(t *testing.T, shipped VCSActivityData) {
 	if err != nil {
 		t.Fatalf("load the fetch config: %v", err)
 	}
-	configured := map[string]bool{}
-	if document.VCSActivity != nil && document.VCSActivity.Commits != nil {
-		for _, source := range document.VCSActivity.Commits.Sources {
-			configured[source.Repo] = true
-		}
+	if document.VCSActivity == nil || document.VCSActivity.Commits == nil {
+		t.Fatal("the fetch config names no commit producer; the refreshability pin has nothing to compare against")
 	}
-	if len(configured) == 0 {
-		t.Fatal("the fetch config names no commit sources; the refreshability pin has nothing to compare against")
-	}
+	// Since issue #315 there is no configured repository list to compare a
+	// snapshot row against: the roster is discovered from the account's own
+	// record, so ANY repository the owner commits to is refreshable and the
+	// old "names a repository no source produces" pin has no subject. What
+	// survives is the shape check below — a row that cannot be produced by
+	// the live mapper could never be replaced by one.
 	var newest, previous time.Time
 	for index, commit := range shipped.RecentCommits {
 		// Reported, never skipped: a row that bailed out here would leave the
@@ -1001,8 +1048,8 @@ func assertShippedCommitsAreRefreshable(t *testing.T, shipped VCSActivityData) {
 		if commit.Repo == "" || commit.Message == "" {
 			t.Errorf("snapshot commit row %d is incomplete: %+v", index, commit)
 		}
-		if commit.Repo != "" && !configured[commit.Repo] {
-			t.Errorf("snapshot commit row %d names repository %q, which no configured commit source produces; a refresh could never replace it", index, commit.Repo)
+		if commit.Repo != "" && !isRepositoryName(commit.Repo) {
+			t.Errorf("snapshot commit row %d names %q, which the live mapper would refuse; a refresh could never replace it", index, commit.Repo)
 		}
 		at, err := time.Parse(time.RFC3339, commit.At)
 		if err != nil {
@@ -1154,11 +1201,8 @@ func TestMapContributionsRequiresSundayColumns(t *testing.T) {
 // than against a clock that moves under the suite.
 var commitFixtureNow = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 
-// commitRow builds one upstream commit row with an explicit identity, subject,
-// and instant. It carries the authorship name and email address the real
-// document carries — the fields the projection deliberately does not model —
-// so these scenarios prove the projection reads the REAL shape rather than a
-// trimmed one, and that neither field can reach a served row.
+// commitNode builds one upstream commit node with an explicit identity,
+// subject, and instant.
 //
 // The subject is encoded with the JSON marshaler rather than with Go's %q,
 // and that detail is load-bearing rather than cosmetic. Go quoting renders a
@@ -1168,43 +1212,41 @@ var commitFixtureNow = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 // six-character u-escape instead, which is legal JSON carrying a real control
 // character, so the control-character refusal is the only thing that can
 // reject it.
-func commitRow(sha, message, date string) string {
-	encoded, err := json.Marshal(message)
+func commitNode(oid, headline, date string) string {
+	encoded, err := json.Marshal(headline)
 	if err != nil {
 		panic("commit fixture subject cannot be encoded: " + err.Error())
 	}
-	return fmt.Sprintf(
-		`{"sha":%q,"node_id":"fixture","commit":{"author":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},`+
-			`"committer":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},"message":%s,`+
-			`"tree":{"sha":%q,"url":"https://api.example.test/t"},"url":"https://api.example.test/c","comment_count":0,`+
-			`"verification":{"verified":true,"reason":"valid","signature":null,"payload":null}},`+
-			`"url":"https://api.example.test/c","html_url":"https://api.example.test/h","comments_url":"https://api.example.test/cc",`+
-			`"author":null,"committer":null,"parents":[{"sha":%q,"url":"https://api.example.test/p"}]}`,
-		sha, date, date, encoded, sha, sha,
-	)
+	return fmt.Sprintf(`{"oid":%q,"messageHeadline":%s,"committedDate":%q}`, oid, encoded, date)
+}
+
+// historyDocument wraps commit nodes into one repository's history answer.
+func historyDocument(name string, nodes ...string) string {
+	return fmt.Sprintf(`{"data":{"nodes":[{"name":%q,"defaultBranchRef":{"target":{"history":{"nodes":[%s]}}}}]}}`,
+		name, strings.Join(nodes, ","))
 }
 
 // fixtureSHA renders a distinct valid commit identity.
 func fixtureSHA(n int) string { return fmt.Sprintf("%040x", n) }
 
-// TestMapCommitsReadsARealisticDocument is the mapper's happy path: the real
-// upstream row shape in, exactly four served facts out — and the repo label
-// is the CALLER's, so a document that tried to name a repository could not.
-// SHA is asserted explicitly (issue 157 follow-up): mapCommits already
-// validated entry.SHA through isCommitIdentity a few lines above where this
-// row is built, and the row must actually carry that value rather than
-// silently drop it the way it did before the frontend needed a commit-URL
-// fallback — a regression here would be invisible to every check above
-// because none of them reads got.SHA.
-func TestMapCommitsReadsARealisticDocument(t *testing.T) {
+// fixtureRepos is the admitted roster one history answer is read against: the
+// caller's own list, in the order the request asked, which is what makes the
+// row label the CALLER's rather than the document's.
+var fixtureRepos = []contributionRepo{{id: "R_fixture", name: "fixture-repo", at: commitFixtureNow}}
+
+// TestMapCommitHistoriesReadsARealisticDocument is the mapper's happy path:
+// the real upstream node shape in, exactly four served facts out — and the
+// repo label is the CALLER's, so a document that tried to name a different
+// repository could not relabel a row, it would refuse the document.
+func TestMapCommitHistoriesReadsARealisticDocument(t *testing.T) {
 	t.Parallel()
-	document := "[" + strings.Join([]string{
-		commitRow(fixtureSHA(1), "feat(panels): a subject line\n\na body paragraph the panel never shows", "2026-08-23T09:00:00Z"),
-		commitRow(fixtureSHA(2), "fix(panels): another subject", "2026-08-22T09:00:00-07:00"),
-	}, ",") + "]"
-	rows, err := mapCommits([]byte(document), "fixture-repo", commitFixtureNow)
+	document := historyDocument("fixture-repo",
+		commitNode(fixtureSHA(1), "feat(panels): a subject line", "2026-08-23T09:00:00Z"),
+		commitNode(fixtureSHA(2), "fix(panels): another subject", "2026-08-22T09:00:00-07:00"),
+	)
+	rows, err := mapCommitHistories([]byte(document), fixtureRepos, commitFixtureNow)
 	if err != nil {
-		t.Fatalf("a realistic commit document was refused: %v", err)
+		t.Fatalf("a realistic history document was refused: %v", err)
 	}
 	if len(rows) != 2 {
 		t.Fatalf("mapped %d rows, want 2", len(rows))
@@ -1220,76 +1262,84 @@ func TestMapCommitsReadsARealisticDocument(t *testing.T) {
 	if got := rows[1].row.At; got != "2026-08-22T16:00:00Z" {
 		t.Errorf("row 1 instant = %q, want the UTC normalization of the offset form", got)
 	}
-	// The authorship name and email in the document reached nothing: the
-	// served rows carry four fields (repo, sha, message, at) and none of
-	// them is a contact detail.
+	// The document asks for three fields per commit and the served row carries
+	// exactly those; the author name and EMAIL the upstream would gladly
+	// return were never requested, so they can never be held or served.
 	marshaled, err := json.Marshal([]VCSCommit{rows[0].row, rows[1].row})
 	if err != nil {
 		t.Fatalf("marshal served rows: %v", err)
 	}
-	for _, leak := range []string{"fixture@example.invalid", "Fixture Author", "node_id", "verification"} {
+	for _, leak := range []string{"@", "author", "defaultBranchRef"} {
 		if bytes.Contains(marshaled, []byte(leak)) {
 			t.Errorf("the served rows carry %q from the upstream document: %s", leak, marshaled)
 		}
 	}
+	// An empty repository — no default branch — contributes no rows and is
+	// not an error: that is a real state, not drift.
+	empty := `{"data":{"nodes":[{"name":"fixture-repo","defaultBranchRef":null}]}}`
+	if rows, err := mapCommitHistories([]byte(empty), fixtureRepos, commitFixtureNow); err != nil || len(rows) != 0 {
+		t.Errorf("an empty repository = %d rows, %v; want no rows and no error", len(rows), err)
+	}
 }
 
-// TestMapCommitsFailsClosedOnEveryDrift is the projection's whole gate. The
-// decoder is deliberately tolerant of unknown fields — see commitListEntry for
-// why that is the stronger privacy posture — so the value checks below are
-// what stands between a drifted or hostile document and a confidently wrong
-// panel. Every case must be REFUSED, not partially mapped: a commit list that
+// TestMapCommitHistoriesFailsClosedOnEveryDrift is the mapper's whole gate.
+// Every case must be REFUSED, not partially mapped: a commit list that
 // half-parses looks exactly like a quiet week.
 //
 // The replacement-rune case is how invalid UTF-8 arrives in practice: the JSON
 // decoder substitutes U+FFFD for every byte sequence that is not valid UTF-8,
 // so refusing that rune refuses a mis-encoded document end to end.
-func TestMapCommitsFailsClosedOnEveryDrift(t *testing.T) {
+func TestMapCommitHistoriesFailsClosedOnEveryDrift(t *testing.T) {
 	t.Parallel()
-	oversizedRows := make([]string, 0, maxCommitDocumentItems+1)
+	oversized := make([]string, 0, maxCommitDocumentItems+1)
 	for index := range maxCommitDocumentItems + 1 {
-		oversizedRows = append(oversizedRows, commitRow(fixtureSHA(index+1), "feat: row", "2026-08-23T09:00:00Z"))
+		oversized = append(oversized, commitNode(fixtureSHA(index+1), "feat: row", "2026-08-23T09:00:00Z"))
 	}
 	for name, document := range map[string]string{
-		"not an array at all":             `{"sha":"` + fixtureSHA(1) + `"}`,
-		"malformed json":                  `[{"sha":`,
-		"an empty list":                   `[]`,
-		"an unrelated array":              `[{"unrelated":"shape"}]`,
-		"a null row":                      `[null]`,
-		"more rows than the bound":        "[" + strings.Join(oversizedRows, ",") + "]",
-		"a row with no identity":          "[" + commitRow("", "feat: row", "2026-08-23T09:00:00Z") + "]",
-		"a truncated identity":            "[" + commitRow("abc123", "feat: row", "2026-08-23T09:00:00Z") + "]",
-		"an uppercase identity":           "[" + commitRow(strings.ToUpper(fixtureSHA(255)), "feat: row", "2026-08-23T09:00:00Z") + "]",
-		"a non-hex identity":              "[" + commitRow(strings.Repeat("z", shaHexDigits), "feat: row", "2026-08-23T09:00:00Z") + "]",
-		"an empty subject":                "[" + commitRow(fixtureSHA(1), "", "2026-08-23T09:00:00Z") + "]",
-		"a whitespace-only subject":       "[" + commitRow(fixtureSHA(1), "   \n body", "2026-08-23T09:00:00Z") + "]",
-		"a subject carrying a control":    "[" + commitRow(fixtureSHA(1), "feat: row\abell", "2026-08-23T09:00:00Z") + "]",
-		"a subject carrying a delete":     "[" + commitRow(fixtureSHA(1), "feat: row\x7fdel", "2026-08-23T09:00:00Z") + "]",
-		"a subject that is not utf-8":     "[" + commitRow(fixtureSHA(1), "feat: row�broken", "2026-08-23T09:00:00Z") + "]",
-		"an unparseable instant":          "[" + commitRow(fixtureSHA(1), "feat: row", "yesterday") + "]",
-		"an empty instant":                "[" + commitRow(fixtureSHA(1), "feat: row", "") + "]",
-		"an instant from the future":      "[" + commitRow(fixtureSHA(1), "feat: row", "2027-01-01T00:00:00Z") + "]",
-		"an instant older than the bound": "[" + commitRow(fixtureSHA(1), "feat: row", "2020-01-01T00:00:00Z") + "]",
-		"one good row and one drifted": "[" + commitRow(fixtureSHA(1), "feat: good", "2026-08-23T09:00:00Z") +
-			"," + commitRow("short", "feat: bad", "2026-08-23T09:00:00Z") + "]",
+		"not an object at all":            `[]`,
+		"malformed json":                  `{"data":`,
+		"an unrelated payload":            `{"data":{"unrelated":"shape"}}`,
+		"an upstream error array":         `{"errors":[{"message":"bad credentials"}]}`,
+		"no data at all":                  `{}`,
+		"fewer entries than asked":        `{"data":{"nodes":[]}}`,
+		"more entries than asked":         `{"data":{"nodes":[null,null]}}`,
+		"a null entry":                    `{"data":{"nodes":[null]}}`,
+		"an entry under another name":     historyDocument("somebody-elses-repo", commitNode(fixtureSHA(1), "feat: row", "2026-08-23T09:00:00Z")),
+		"more rows than the bound":        historyDocument("fixture-repo", oversized...),
+		"a row with no identity":          historyDocument("fixture-repo", commitNode("", "feat: row", "2026-08-23T09:00:00Z")),
+		"a truncated identity":            historyDocument("fixture-repo", commitNode("abc123", "feat: row", "2026-08-23T09:00:00Z")),
+		"an uppercase identity":           historyDocument("fixture-repo", commitNode(strings.ToUpper(fixtureSHA(255)), "feat: row", "2026-08-23T09:00:00Z")),
+		"a non-hex identity":              historyDocument("fixture-repo", commitNode(strings.Repeat("z", shaHexDigits), "feat: row", "2026-08-23T09:00:00Z")),
+		"an empty subject":                historyDocument("fixture-repo", commitNode(fixtureSHA(1), "", "2026-08-23T09:00:00Z")),
+		"a whitespace-only subject":       historyDocument("fixture-repo", commitNode(fixtureSHA(1), "   ", "2026-08-23T09:00:00Z")),
+		"a subject carrying a control":    historyDocument("fixture-repo", commitNode(fixtureSHA(1), "feat: row\abell", "2026-08-23T09:00:00Z")),
+		"a subject carrying a delete":     historyDocument("fixture-repo", commitNode(fixtureSHA(1), "feat: row\x7fdel", "2026-08-23T09:00:00Z")),
+		"a subject that is not utf-8":     historyDocument("fixture-repo", commitNode(fixtureSHA(1), "feat: row\ufffdbroken", "2026-08-23T09:00:00Z")),
+		"an unparseable instant":          historyDocument("fixture-repo", commitNode(fixtureSHA(1), "feat: row", "yesterday")),
+		"an empty instant":                historyDocument("fixture-repo", commitNode(fixtureSHA(1), "feat: row", "")),
+		"an instant from the future":      historyDocument("fixture-repo", commitNode(fixtureSHA(1), "feat: row", "2027-01-01T00:00:00Z")),
+		"an instant older than the bound": historyDocument("fixture-repo", commitNode(fixtureSHA(1), "feat: row", "2020-01-01T00:00:00Z")),
+		"one good row and one drifted": historyDocument("fixture-repo",
+			commitNode(fixtureSHA(1), "feat: good", "2026-08-23T09:00:00Z"),
+			commitNode("short", "feat: bad", "2026-08-23T09:00:00Z")),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if rows, err := mapCommits([]byte(document), "fixture-repo", commitFixtureNow); err == nil {
-				t.Fatalf("a drifted commit document was accepted as %+v", rows)
+			if rows, err := mapCommitHistories([]byte(document), fixtureRepos, commitFixtureNow); err == nil {
+				t.Fatalf("a drifted history document was accepted as %+v", rows)
 			}
 		})
 	}
 	// The positive control: exactly the bound's worth of rows is fine, so the
 	// refusals above are about the drift and not about the fixture builder.
-	atBound := oversizedRows[:maxCommitDocumentItems]
-	if _, err := mapCommits([]byte("["+strings.Join(atBound, ",")+"]"), "fixture-repo", commitFixtureNow); err != nil {
+	atBound := historyDocument("fixture-repo", oversized[:maxCommitDocumentItems]...)
+	if _, err := mapCommitHistories([]byte(atBound), fixtureRepos, commitFixtureNow); err != nil {
 		t.Errorf("a document exactly at the row bound was refused: %v", err)
 	}
 	// And clock skew inside the tolerance is accepted: refusing it would make
 	// the panel fail whenever an upstream's clock ran a few minutes fast.
-	skewed := commitFixtureNow.Add(maxCommitFutureSkew / 2).Format(time.RFC3339)
-	if _, err := mapCommits([]byte("["+commitRow(fixtureSHA(1), "feat: row", skewed)+"]"), "fixture-repo", commitFixtureNow); err != nil {
+	skewed := historyDocument("fixture-repo", commitNode(fixtureSHA(1), "feat: row", commitFixtureNow.Add(maxCommitFutureSkew/2).Format(time.RFC3339)))
+	if _, err := mapCommitHistories([]byte(skewed), fixtureRepos, commitFixtureNow); err != nil {
 		t.Errorf("an instant inside the skew tolerance was refused: %v", err)
 	}
 }

@@ -189,10 +189,29 @@ The game hiscores need none and have none: their configuration carries no
 field a credential could be written into, and the one general escape hatch —
 the static request-header map — admits exactly one header name.
 
-The **repository metadata** and the **public per-repository commit lists** are
-public documents that read perfectly well anonymously; a credential buys them
-only rate headroom, so an unset variable changes nothing about what they
-serve.
+The **repository metadata** has two producers and the difference is what they
+can SAY. Anonymous, it reads the account's public repository listing, which
+carries a description, a star tally and a last-push instant. Credentialed, it
+reads one query document that additionally carries the released version, the
+all-time closed pull-request tally and the account's own pinned set — none of
+which the listing has a field for, and none of which is worth one request per
+repository per refresh. A round with no credential serves rows without those
+figures and the page draws a dash: "not known", which is true, rather than a
+zero that would claim a repository has never released.
+
+The **commit log** is credentialed outright, and that is a change of kind
+rather than of rate. It used to read a hand-written list of three repositories'
+public commit documents; it now reads TWO query documents per round — one
+asking which repositories the account committed to over the log window, the
+second asking those repositories for the commits the account authored — so a
+repository the owner starts today appears without an edit here. The roster
+comes from the record rather than from a list somebody maintains, which is the
+whole of it. Private repositories are counted and never named: they reach the
+page as one aggregate row per day ("N contributions in M private
+repositories"), and no name, URL, identity or subject of a private repository
+enters the payload, the snapshot or a log line. Without a credential both
+documents have nothing to ask — they are about the credential's own account —
+so the log serves no rows rather than inventing any.
 
 The **contribution calendar** has two producers, and which one answers changes
 what the number MEANS. Anonymous, it reads the public contribution document,
@@ -200,10 +219,17 @@ which reports only what an anonymous reader may see. Credentialed, it reads
 the account holder's own record through a query API — private repositories
 included, which is the whole point. Both are live, so the payload declares its
 coverage and the page words the figure accordingly rather than letting one
-number quietly stand in for the other. This is also the one producer that
-POSTs: the query travels in a request body this package builds from config
-data and its own clock, never from any part of any upstream answer, and the
-method follows the presence of that body rather than any configurable field.
+number quietly stand in for the other.
+
+Every credentialed producer POSTs: the query travels in a request body this
+package builds from the config's own literal document plus variables it
+supplies, and the method follows the presence of that body rather than any
+configurable field. The commit log's second document is the one place a
+variable comes from an upstream answer, and the narrowing is the whole of it —
+the repositories travel as opaque node identifiers in a typed variable list,
+never concatenated into the document and never anywhere near the request line,
+so the set of ADDRESSES this process can reach is still fixed by configuration
+before the first request.
 
 The **token-usage** producers need credentials outright. A source whose
 credential is absent is simply skipped — never an error, never a fabricated
@@ -221,7 +247,8 @@ budget is spent per ATTEMPT rather than per success, so a failing upstream is
 retried no faster than a healthy one is polled. Credentialed GitHub producers
 use the one-minute authenticated budget; an absent credential falls back
 before reservation to the conservative public budgets (a quarter hour for the
-calendar and repository metadata, ten minutes for commit lists). Game
+calendar and repository metadata; the commit log makes no anonymous request at
+all). Game
 hiscores stay at a quarter hour and dormant credentialed usage sources at five
 minutes. Tests compute both anonymous and authenticated worst-case hourly cost
 from that configuration and fail before either reviewed budget is approached.
@@ -309,13 +336,33 @@ walk is over records the producer must read anyway), but they are the
 difference between the enforced boundary and a wider claim, and the wider
 claim is not made.
 
-**The recent commit list.** The rows are public commits from the repositories
-`internal/panels/config/fetch.json` already names as commit sources, read the
-way the live producer reads them and written newest first, with `commitsAt`
-recording the instant they were read. Nothing beyond the public repository
-name, the subject line, and the commit instant is captured. A shipped row
-naming a repository no configured source produces would be a row no refresh
-could ever replace, and the panel's own suite refuses one.
+**The recent commit list.** The rows are public commits from whichever
+repositories the account committed to over the log window — discovered from
+the record rather than from a configured list — read the way the live producer
+reads them and written newest first, with `commitsAt` recording the instant
+they were read. Nothing beyond the public repository name, the subject line,
+the commit identity and the commit instant is captured, and a private
+repository contributes a counted day and nothing else.
+
+Both embedded snapshots are refreshed through the producers themselves rather
+than by hand, so a captured payload is one the same admission gate admitted:
+
+```sh
+env GITHUB_PANELS_TOKEN="$(gh auth token)" PANELS_CAPTURE=vcs-activity \
+  go test ./internal/panels -run TestCaptureSnapshot -count=1
+```
+
+`PANELS_CAPTURE` names the panel (`vcs-activity` or `coding-projects`); with it
+unset the capture path is skipped, so the ordinary suite never egresses. The
+credential is read from the environment by the producer itself, exactly as it
+is in a cluster — no test ever sees its value.
+
+One clause of one captured description is trimmed by hand and it is the only
+hand edit in either file: the owner's own repository text names the
+deployment's edge provider, and requirement 6 admits a provider name nowhere
+under `internal/`. The LIVE payload carries whatever the host currently says,
+which is the owner's text on the owner's origin and not this repository's tree
+at all.
 
 The contribution calendar half keeps its own capture instant and its own
 fixture (`internal/panels/testdata/contributions-fragment.html`); a suite pin

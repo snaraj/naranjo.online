@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -817,25 +818,134 @@ func (d *routingDoer) total() int {
 const activityFixtureSnapshot = `{"generatedAt":"2026-08-01T00:00:00Z","data":{"totalContributions":1,` +
 	`"weeks":[[0,0,0,0,0,0,1]],"streak":1,"endDate":"2026-08-01","recentCommits":[]}}`
 
-// commitDocument builds one repository's public commit document. It carries
-// the FULL upstream row — including the authorship name and email address the
-// projection deliberately does not model — so these scenarios prove the
-// projection tolerates the real document rather than a trimmed one.
-func commitDocument(rows ...[2]string) string {
-	entries := make([]string, 0, len(rows))
-	for index, row := range rows {
-		sha := fmt.Sprintf("%040x", index+1)
-		entries = append(entries, fmt.Sprintf(
-			`{"sha":%q,"node_id":"fixture","commit":{"author":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},`+
-				`"committer":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},"message":%q,`+
-				`"tree":{"sha":%q,"url":"https://api.example.test/tree"},"url":"https://api.example.test/commit",`+
-				`"comment_count":0,"verification":{"verified":true,"reason":"valid","signature":null,"payload":null}},`+
-				`"url":"https://api.example.test/commit","html_url":"https://api.example.test/c","comments_url":"https://api.example.test/cc",`+
-				`"author":null,"committer":null,"parents":[]}`,
-			sha, row[1], row[1], row[0], sha,
-		))
+// contributionsAnswer builds the commit producer's DISCOVERY answer: one entry
+// per repository, each with its own dated buckets, and a collection total that
+// is the honest sum unless total overrides it — which is how the cross-field
+// integrity check is driven both ways.
+func contributionsAnswer(repos []fixtureContributionRepo, total *int) string {
+	entries := make([]map[string]any, 0, len(repos))
+	sum := 0
+	for _, repo := range repos {
+		nodes := make([]map[string]any, 0, len(repo.days))
+		for _, day := range repo.days {
+			nodes = append(nodes, map[string]any{"occurredAt": day.at, "commitCount": day.count})
+			sum += day.count
+		}
+		owner := repo.owner
+		if owner == "" {
+			owner = "fixture-owner"
+		}
+		entries = append(entries, map[string]any{
+			"repository": map[string]any{
+				"id": repo.id, "name": repo.name, "isPrivate": repo.private,
+				"owner": map[string]any{"login": owner},
+			},
+			"contributions": map[string]any{"nodes": nodes},
+		})
 	}
-	return "[" + strings.Join(entries, ",") + "]"
+	reported := sum
+	if total != nil {
+		reported = *total
+	}
+	document := map[string]any{"data": map[string]any{"viewer": map[string]any{
+		"id": "U_fixture-viewer",
+		"contributionsCollection": map[string]any{
+			"totalCommitContributions":        reported,
+			"commitContributionsByRepository": entries,
+		},
+	}}}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+// fixtureContributionRepo is one repository's share of a discovery answer.
+type fixtureContributionRepo struct {
+	id      string
+	name    string
+	owner   string
+	private bool
+	days    []fixtureContributionDay
+}
+
+// fixtureContributionDay is one dated bucket.
+type fixtureContributionDay struct {
+	at    string
+	count int
+}
+
+// historyAnswer builds the commit producer's SECOND answer: one entry per
+// repository asked about, in the order they were asked, each carrying the
+// commits given for it. A repository with no rows answers a null default
+// branch, which is what an empty repository really reports.
+func historyAnswer(repos ...fixtureHistoryRepo) string {
+	nodes := make([]any, 0, len(repos))
+	for _, repo := range repos {
+		if len(repo.commits) == 0 {
+			nodes = append(nodes, map[string]any{"name": repo.name, "defaultBranchRef": nil})
+			continue
+		}
+		commits := make([]map[string]any, 0, len(repo.commits))
+		for index, commit := range repo.commits {
+			commits = append(commits, map[string]any{
+				"oid":             fmt.Sprintf("%040x", index+1+repo.shaOffset),
+				"messageHeadline": commit[0],
+				"committedDate":   commit[1],
+			})
+		}
+		nodes = append(nodes, map[string]any{
+			"name": repo.name,
+			"defaultBranchRef": map[string]any{
+				"target": map[string]any{"history": map[string]any{"nodes": commits}},
+			},
+		})
+	}
+	encoded, err := json.Marshal(map[string]any{"data": map[string]any{"nodes": nodes}})
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+// fixtureHistoryRepo is one repository's answer inside a history document.
+type fixtureHistoryRepo struct {
+	name      string
+	shaOffset int
+	commits   [][2]string
+}
+
+// commitQuerySpec is the fixture commit producer: two query documents on the
+// allowlisted fixture host. Their PATHS differ only so the path-routing test
+// doers can tell one answer from the other; production posts both to the one
+// configured endpoint, which is what the config pins prove.
+func commitQuerySpec(minutes int) *vcsCommitsFetchSpec {
+	return &vcsCommitsFetchSpec{
+		Owner:              "fixture-owner",
+		KeyEnvName:         "FIXTURE_COMMITS_TOKEN",
+		KeyHeader:          "Authorization",
+		KeyPrefix:          "Bearer ",
+		MinIntervalMinutes: minutes,
+		Max:                4,
+		Contributions: &graphQLDocumentSpec{
+			Endpoint: "https://api.example.test/graphql/contributions",
+			Query:    "query($from: DateTime!, $to: DateTime!) { contributions }",
+			Headers:  map[string]string{"Accept": "application/json", "Content-Type": "application/json"},
+			// A tighter cap than the shared bound, so the oversized-body
+			// canary exercises the per-endpoint limit rather than the shared
+			// one.
+			MaxBytes:    64 << 10,
+			ContentType: "application/json",
+		},
+		History: &graphQLDocumentSpec{
+			Endpoint:    "https://api.example.test/graphql/history",
+			Query:       "query($ids: [ID!]!, $author: ID!) { history }",
+			Headers:     map[string]string{"Accept": "application/json", "Content-Type": "application/json"},
+			MaxBytes:    64 << 10,
+			ContentType: "application/json",
+		},
+	}
 }
 
 // activityFetchRegistry builds a one-panel registry whose version-control
@@ -851,20 +961,7 @@ func activityFetchRegistry(t *testing.T, minutes int) (*Registry, *panelState) {
 			Headers:            map[string]string{"Accept": "text/html"},
 			ContentType:        "text/html",
 			MinIntervalMinutes: minutes,
-			Commits: &vcsCommitsFetchSpec{
-				Headers:            map[string]string{"Accept": "application/json"},
-				ContentType:        "application/json",
-				MinIntervalMinutes: minutes,
-				// A tighter cap than the shared bound, so the oversized-body
-				// canary below exercises the per-endpoint limit rather than
-				// the shared one.
-				MaxBytes: 64 << 10,
-				Max:      4,
-				Sources: []vcsCommitSourceSpec{
-					{Repo: "first-repo", Endpoint: "https://api.example.test/repos/first/commits"},
-					{Repo: "second-repo", Endpoint: "https://api.example.test/repos/second/commits"},
-				},
-			},
+			Commits:            commitQuerySpec(minutes),
 		}},
 	)
 	if err != nil {
@@ -885,13 +982,34 @@ func activityAnswers(t *testing.T) map[string]cannedAnswer {
 	}
 	return map[string]cannedAnswer{
 		"/contributions": {contentType: "text/html; charset=utf-8", body: string(raw)},
-		"/repos/first/commits": {contentType: "application/json; charset=utf-8", body: commitDocument(
-			[2]string{"feat(panels): the newest thing\n\nbody text", "2026-08-23T09:00:00Z"},
-			[2]string{"fix(panels): the older thing", "2026-08-21T09:00:00Z"},
+		"/graphql/contributions": {contentType: "application/json; charset=utf-8", body: contributionsAnswer([]fixtureContributionRepo{
+			{id: "R_first", name: "first-repo", days: []fixtureContributionDay{{at: "2026-08-23T07:00:00Z", count: 2}}},
+			{id: "R_second", name: "second-repo", days: []fixtureContributionDay{{at: "2026-08-22T07:00:00Z", count: 1}}},
+		}, nil)},
+		"/graphql/history": {contentType: "application/json; charset=utf-8", body: historyAnswer(
+			fixtureHistoryRepo{name: "first-repo", commits: [][2]string{
+				{"feat(panels): the newest thing", "2026-08-23T09:00:00Z"},
+				{"fix(panels): the older thing", "2026-08-21T09:00:00Z"},
+			}},
+			fixtureHistoryRepo{name: "second-repo", shaOffset: 10, commits: [][2]string{
+				{"docs: the middle thing", "2026-08-22T09:00:00Z"},
+			}},
 		)},
-		"/repos/second/commits": {contentType: "application/json; charset=utf-8", body: commitDocument(
-			[2]string{"docs: the middle thing", "2026-08-22T09:00:00Z"},
-		)},
+	}
+}
+
+// activityEnv is the environment every activity scenario runs under: the
+// commit producer's credential and nothing else. Both of its documents ask
+// about the credential's own account (issue #315), so a round without one asks
+// nothing at all — which is a different scenario, driven separately.
+func activityEnv(t *testing.T) func(string) string {
+	t.Helper()
+	return func(key string) string {
+		if key == "FIXTURE_COMMITS_TOKEN" {
+			return "fixture-commit-credential"
+		}
+		t.Errorf("a producer read the environment for %q", key)
+		return ""
 	}
 }
 
@@ -915,10 +1033,7 @@ func decodeActivity(t *testing.T, registry *Registry) (Envelope, VCSActivityData
 func TestActivityRefreshServesLiveCommits(t *testing.T) {
 	t.Parallel()
 	registry, state := activityFetchRegistry(t, 0)
-	env := func(key string) string {
-		t.Errorf("a public producer read the environment for %q", key)
-		return ""
-	}
+	env := activityEnv(t)
 
 	if _, cold := decodeActivity(t, registry); len(cold.RecentCommits) != 0 || cold.CommitsAt != "" {
 		t.Fatalf("cold start already reports commits: %+v", cold)
@@ -932,14 +1047,12 @@ func TestActivityRefreshServesLiveCommits(t *testing.T) {
 	if envelope.Status != StatusOK {
 		t.Fatalf("status = %q, want ok with both producers healthy", envelope.Status)
 	}
-	// commitDocument assigns each repository's rows sha 0x1, 0x2, … in the
-	// order passed to it (see its definition below); first-repo's two rows
-	// and second-repo's one row each start that count over at 1, so the
-	// SHAs below mirror the fixture rather than assert something the
-	// fixture builder does not actually produce.
+	// historyAnswer numbers each repository's rows from its own shaOffset
+	// (see its definition above), so the identities below mirror the fixture
+	// rather than assert something the fixture builder does not produce.
 	want := []VCSCommit{
 		{Repo: "first-repo", SHA: fixtureSHA(1), Message: "feat(panels): the newest thing", At: "2026-08-23T09:00:00Z"},
-		{Repo: "second-repo", SHA: fixtureSHA(1), Message: "docs: the middle thing", At: "2026-08-22T09:00:00Z"},
+		{Repo: "second-repo", SHA: fixtureSHA(11), Message: "docs: the middle thing", At: "2026-08-22T09:00:00Z"},
 		{Repo: "first-repo", SHA: fixtureSHA(2), Message: "fix(panels): the older thing", At: "2026-08-21T09:00:00Z"},
 	}
 	if len(payload.RecentCommits) != len(want) {
@@ -966,13 +1079,14 @@ func TestActivityRefreshServesLiveCommits(t *testing.T) {
 	if got := doer.headers["/contributions"]; got != "text/html" {
 		t.Errorf("calendar Accept = %q, want text/html", got)
 	}
-	if got := doer.headers["/repos/first/commits"]; got != "application/json" {
+	if got := doer.headers["/graphql/contributions"]; got != "application/json" {
 		t.Errorf("commit Accept = %q, want application/json", got)
 	}
-	// No authorization of any kind rode along. The producers are public, and
-	// the environment lookup above already fails the test if one is read.
+	// THREE requests for the whole round and never more: the public calendar,
+	// then the commit producer's two documents. A producer that fanned out per
+	// repository would make this grow with the roster (issue #315).
 	if doer.total() != 3 {
-		t.Errorf("the round took %d requests, want one per configured endpoint", doer.total())
+		t.Errorf("the round took %d requests, want the calendar plus two query documents", doer.total())
 	}
 }
 
@@ -983,23 +1097,28 @@ func TestActivityRefreshServesLiveCommits(t *testing.T) {
 // stale, and commitsAt still names when that list was really read.
 func TestHostileCommitUpstreamsKeepTheLastGoodList(t *testing.T) {
 	t.Parallel()
-	oversized := commitDocument([2]string{strings.Repeat("a", 300000), "2026-08-23T09:00:00Z"})
+	healthyBody := contributionsAnswer([]fixtureContributionRepo{
+		{id: "R_first", name: "first-repo", days: []fixtureContributionDay{{at: "2026-08-23T07:00:00Z", count: 2}}},
+	}, nil)
+	oversized := contributionsAnswer([]fixtureContributionRepo{
+		{id: "R_first", name: strings.Repeat("a", 300000), days: []fixtureContributionDay{{at: "2026-08-23T07:00:00Z", count: 1}}},
+	}, nil)
 	for name, hostile := range map[string]cannedAnswer{
-		"an error status":                {status: http.StatusInternalServerError, contentType: "application/json", body: "[]"},
-		"a rate-limit refusal":           {status: http.StatusTooManyRequests, contentType: "application/json", body: "[]"},
-		"a quota refusal":                {status: http.StatusForbidden, contentType: "application/json", body: "[]"},
-		"markup where json was due":      {contentType: "text/html; charset=utf-8", body: commitDocument([2]string{"anything", "2026-08-23T09:00:00Z"})},
-		"no declared document type":      {body: commitDocument([2]string{"anything", "2026-08-23T09:00:00Z"})},
+		"an error status":                {status: http.StatusInternalServerError, contentType: "application/json", body: "{}"},
+		"a rate-limit refusal":           {status: http.StatusTooManyRequests, contentType: "application/json", body: "{}"},
+		"a quota refusal":                {status: http.StatusForbidden, contentType: "application/json", body: "{}"},
+		"markup where json was due":      {contentType: "text/html; charset=utf-8", body: healthyBody},
+		"no declared document type":      {body: healthyBody},
 		"a body over the byte bound":     {contentType: "application/json", body: oversized},
-		"malformed json":                 {contentType: "application/json", body: `[{"sha":`},
-		"an unrelated json document":     {contentType: "application/json", body: `[{"unrelated":"shape"}]`},
-		"an empty commit list":           {contentType: "application/json", body: `[]`},
+		"malformed json":                 {contentType: "application/json", body: `{"data":`},
+		"an unrelated json document":     {contentType: "application/json", body: `{"data":{"unrelated":"shape"}}`},
+		"an upstream error array":        {contentType: "application/json", body: `{"errors":[{"message":"bad credentials"}]}`},
 		"a transport that never answers": {transport: http.ErrHandlerTimeout},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			registry, state := activityFetchRegistry(t, 0)
-			env := func(string) string { return "" }
+			env := activityEnv(t)
 			healthy := newRoutingDoer(activityAnswers(t))
 			if err := registry.refreshPanel(t.Context(), state, healthy, env); err != nil {
 				t.Fatalf("seed refresh error = %v", err)
@@ -1010,8 +1129,7 @@ func TestHostileCommitUpstreamsKeepTheLastGoodList(t *testing.T) {
 			}
 
 			answers := activityAnswers(t)
-			answers["/repos/first/commits"] = hostile
-			answers["/repos/second/commits"] = hostile
+			answers["/graphql/contributions"] = hostile
 			if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), env); err != nil {
 				t.Fatalf("the calendar half still mapped, so the round must succeed: %v", err)
 			}
@@ -1082,7 +1200,7 @@ func TestHostileCalendarUpstreamsKeepTheLastGoodPanel(t *testing.T) {
 func TestRateBudgetHoldsTheOriginBackFromItsUpstreams(t *testing.T) {
 	t.Parallel()
 	registry, state := activityFetchRegistry(t, 15)
-	env := func(string) string { return "" }
+	env := activityEnv(t)
 	doer := newRoutingDoer(activityAnswers(t))
 	if err := registry.refreshPanel(t.Context(), state, doer, env); err != nil {
 		t.Fatalf("first pass error = %v", err)
@@ -1135,12 +1253,7 @@ func TestTheCalendarDatesThePayloadEvenWhenOnlyCommitsRefresh(t *testing.T) {
 			// carries none, so a second immediate round has exactly one of
 			// the two producers due.
 			MinIntervalMinutes: 30,
-			Commits: &vcsCommitsFetchSpec{
-				Headers:     map[string]string{"Accept": "application/json"},
-				ContentType: "application/json",
-				Max:         4,
-				Sources:     []vcsCommitSourceSpec{{Repo: "first-repo", Endpoint: "https://api.example.test/repos/first/commits"}},
-			},
+			Commits:            commitQuerySpec(0),
 		}},
 	)
 	if err != nil {
@@ -1150,7 +1263,7 @@ func TestTheCalendarDatesThePayloadEvenWhenOnlyCommitsRefresh(t *testing.T) {
 		{id: "vcs-activity", kind: KindVCSActivity, title: "Version-control activity", source: source},
 	})
 	state := registry.byID["vcs-activity"]
-	env := func(string) string { return "" }
+	env := activityEnv(t)
 
 	doer := newRoutingDoer(activityAnswers(t))
 	if err := registry.refreshPanel(t.Context(), state, doer, env); err != nil {
@@ -1161,8 +1274,13 @@ func TestTheCalendarDatesThePayloadEvenWhenOnlyCommitsRefresh(t *testing.T) {
 	// The second round advances the commit list. A different newest commit
 	// makes the advance observable rather than inferred.
 	answers := activityAnswers(t)
-	answers["/repos/first/commits"] = cannedAnswer{contentType: "application/json", body: commitDocument(
-		[2]string{"feat(panels): a commit that landed since", "2026-08-23T11:00:00Z"},
+	answers["/graphql/contributions"] = cannedAnswer{contentType: "application/json", body: contributionsAnswer([]fixtureContributionRepo{
+		{id: "R_first", name: "first-repo", days: []fixtureContributionDay{{at: "2026-08-23T07:00:00Z", count: 1}}},
+	}, nil)}
+	answers["/graphql/history"] = cannedAnswer{contentType: "application/json", body: historyAnswer(
+		fixtureHistoryRepo{name: "first-repo", commits: [][2]string{
+			{"feat(panels): a commit that landed since", "2026-08-23T11:00:00Z"},
+		}},
 	)}
 	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), env); err != nil {
 		t.Fatalf("second round error = %v", err)
@@ -1287,7 +1405,7 @@ func TestTheLoopKeepsItsCadenceWhileABudgetIsSpent(t *testing.T) {
 func TestRateBudgetCountsAttemptsNotSuccesses(t *testing.T) {
 	t.Parallel()
 	registry, state := activityFetchRegistry(t, 15)
-	env := func(string) string { return "" }
+	env := activityEnv(t)
 	answers := activityAnswers(t)
 	answers["/contributions"] = cannedAnswer{status: http.StatusBadGateway, contentType: "text/html", body: "<html></html>"}
 	doer := newRoutingDoer(answers)
@@ -1314,10 +1432,8 @@ func TestNeverFetchedCommitsAreNeverPresentedAsFresh(t *testing.T) {
 	t.Parallel()
 	registry, state := activityFetchRegistry(t, 0)
 	answers := activityAnswers(t)
-	dead := cannedAnswer{transport: http.ErrHandlerTimeout}
-	answers["/repos/first/commits"] = dead
-	answers["/repos/second/commits"] = dead
-	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), func(string) string { return "" }); err != nil {
+	answers["/graphql/contributions"] = cannedAnswer{transport: http.ErrHandlerTimeout}
+	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), activityEnv(t)); err != nil {
 		t.Fatalf("refreshPanel() error = %v", err)
 	}
 	envelope, payload := decodeActivity(t, registry)
@@ -1351,7 +1467,7 @@ func TestAGatedCommitProducerThatNeverAnsweredIsStillStale(t *testing.T) {
 	if !state.fetch.reserve(roleVCSCommits, time.Now(), time.Hour) {
 		t.Fatal("the commit budget was already spent")
 	}
-	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(activityAnswers(t)), func(string) string { return "" }); err != nil {
+	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(activityAnswers(t)), activityEnv(t)); err != nil {
 		t.Fatalf("refreshPanel() error = %v", err)
 	}
 	envelope, payload := decodeActivity(t, registry)
@@ -1382,15 +1498,15 @@ func TestARateLimitRefusalBuysMoreQuietThanTheOrdinaryCadence(t *testing.T) {
 		wantSecondTry bool
 	}{
 		"an ordinary failure is retried on the ordinary cadence": {
-			first:         cannedAnswer{status: http.StatusInternalServerError, contentType: "application/json", body: "[]"},
+			first:         cannedAnswer{status: http.StatusInternalServerError, contentType: "application/json", body: "{}"},
 			wantSecondTry: true,
 		},
 		"a rate-limit refusal is not": {
-			first:         cannedAnswer{status: http.StatusTooManyRequests, contentType: "application/json", body: "[]"},
+			first:         cannedAnswer{status: http.StatusTooManyRequests, contentType: "application/json", body: "{}"},
 			wantSecondTry: false,
 		},
 		"a quota refusal is not either": {
-			first:         cannedAnswer{status: http.StatusForbidden, contentType: "application/json", body: "[]"},
+			first:         cannedAnswer{status: http.StatusForbidden, contentType: "application/json", body: "{}"},
 			wantSecondTry: false,
 		},
 	} {
@@ -1400,22 +1516,21 @@ func TestARateLimitRefusalBuysMoreQuietThanTheOrdinaryCadence(t *testing.T) {
 			// attempt the commit endpoints again, so a skipped second round
 			// can only be the rate-limit backoff.
 			registry, state := activityFetchRegistry(t, 0)
-			env := func(string) string { return "" }
+			env := activityEnv(t)
 			answers := activityAnswers(t)
-			answers["/repos/first/commits"] = tc.first
-			answers["/repos/second/commits"] = tc.first
+			answers["/graphql/contributions"] = tc.first
 			first := newRoutingDoer(answers)
 			if err := registry.refreshPanel(t.Context(), state, first, env); err != nil {
 				t.Fatalf("first round error = %v", err)
 			}
-			if got := first.countOf("/repos/first/commits"); got != 1 {
+			if got := first.countOf("/graphql/contributions"); got != 1 {
 				t.Fatalf("first round made %d commit attempts, want 1", got)
 			}
 			second := newRoutingDoer(activityAnswers(t))
 			if err := registry.refreshPanel(t.Context(), state, second, env); err != nil {
 				t.Fatalf("second round error = %v", err)
 			}
-			tried := second.countOf("/repos/first/commits") > 0
+			tried := second.countOf("/graphql/contributions") > 0
 			if tried != tc.wantSecondTry {
 				t.Errorf("second round attempted the commit endpoint = %v, want %v", tried, tc.wantSecondTry)
 			}
@@ -1428,29 +1543,42 @@ func TestARateLimitRefusalBuysMoreQuietThanTheOrdinaryCadence(t *testing.T) {
 	}
 }
 
-// TestPartialCommitRoundIsHonestlyStale covers the middle case the canary
-// matrix does not: one repository answers and another does not. The rows that
-// arrived are served — losing them would be worse — but the panel says stale,
-// because the list a reader sees is not the complete one.
-func TestPartialCommitRoundIsHonestlyStale(t *testing.T) {
+// TestAHistoryAnswerThatLosesARepositoryKeepsTheLastGoodList replaces the
+// partial-round scenario the retired per-repository producer had. There is no
+// half-succeeding round any more: ONE answer covers every repository, so an
+// answer that does not line up with what was asked is drift, and drift keeps
+// the last good list rather than serving a shortened one that looks like a
+// quiet week.
+func TestAHistoryAnswerThatLosesARepositoryKeepsTheLastGoodList(t *testing.T) {
 	t.Parallel()
 	registry, state := activityFetchRegistry(t, 0)
+	env := activityEnv(t)
+	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(activityAnswers(t)), env); err != nil {
+		t.Fatalf("seed refresh error = %v", err)
+	}
+	_, seeded := decodeActivity(t, registry)
+	if len(seeded.RecentCommits) != 3 {
+		t.Fatalf("the seed round served %d commits, want 3", len(seeded.RecentCommits))
+	}
+
 	answers := activityAnswers(t)
-	answers["/repos/second/commits"] = cannedAnswer{status: http.StatusInternalServerError, contentType: "application/json", body: "[]"}
-	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), func(string) string { return "" }); err != nil {
-		t.Fatalf("refreshPanel() error = %v", err)
+	answers["/graphql/history"] = cannedAnswer{contentType: "application/json", body: historyAnswer(
+		fixtureHistoryRepo{name: "first-repo", commits: [][2]string{
+			{"feat(panels): the newest thing", "2026-08-23T09:00:00Z"},
+		}},
+	)}
+	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), env); err != nil {
+		t.Fatalf("the calendar half still mapped, so the round must succeed: %v", err)
 	}
 	envelope, payload := decodeActivity(t, registry)
 	if envelope.Status != StatusStale {
-		t.Errorf("status = %q, want stale for an incomplete round", envelope.Status)
+		t.Errorf("status = %q, want stale: the commit half is not live", envelope.Status)
 	}
-	if len(payload.RecentCommits) != 2 {
-		t.Fatalf("served %d commits, want the 2 that did arrive: %+v", len(payload.RecentCommits), payload.RecentCommits)
+	if len(payload.RecentCommits) != len(seeded.RecentCommits) {
+		t.Fatalf("served %d commits, want the %d retained ones", len(payload.RecentCommits), len(seeded.RecentCommits))
 	}
-	for _, commit := range payload.RecentCommits {
-		if commit.Repo != "first-repo" {
-			t.Errorf("commit from %q survived a failed source: %+v", commit.Repo, commit)
-		}
+	if payload.CommitsAt != seeded.CommitsAt {
+		t.Errorf("commitsAt = %q, want the retained %q: a stale list must not claim a fresh read", payload.CommitsAt, seeded.CommitsAt)
 	}
 }
 
@@ -1461,6 +1589,14 @@ func TestPartialCommitRoundIsHonestlyStale(t *testing.T) {
 func TestSlowCommitUpstreamIsBoundedByTheAttemptTimeout(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The body is DRAINED before the stall, and that is a fixture
+		// requirement rather than decoration: an HTTP/1.1 server only starts
+		// the background read that notices a disconnected client once the
+		// request body is consumed, so a handler that stalls on an unread
+		// POST body never sees its own request context cancel and the test
+		// server cannot close. The production behaviour under test — one
+		// attempt timeout and no more — is unchanged either way.
+		_, _ = io.Copy(io.Discard, r.Body)
 		<-r.Context().Done()
 	}))
 	t.Cleanup(server.Close)
@@ -1492,12 +1628,7 @@ func TestSlowCommitUpstreamIsBoundedByTheAttemptTimeout(t *testing.T) {
 			Endpoint:    calendar.URL + "/contributions",
 			Headers:     map[string]string{"Accept": "text/html"},
 			ContentType: "text/html",
-			Commits: &vcsCommitsFetchSpec{
-				Headers:     map[string]string{"Accept": "application/json"},
-				ContentType: "application/json",
-				Max:         4,
-				Sources:     []vcsCommitSourceSpec{{Repo: "stalled-repo", Endpoint: server.URL + "/commits"}},
-			},
+			Commits:     stalledCommitSpec(server.URL),
 		}},
 	)
 	if err != nil {
@@ -1508,7 +1639,7 @@ func TestSlowCommitUpstreamIsBoundedByTheAttemptTimeout(t *testing.T) {
 	})
 	state := registry.byID["vcs-activity"]
 	started := time.Now()
-	if err := registry.refreshPanel(t.Context(), state, loopbackDoer(server, calendar), func(string) string { return "" }); err != nil {
+	if err := registry.refreshPanel(t.Context(), state, loopbackDoer(server, calendar), activityEnv(t)); err != nil {
 		t.Fatalf("the calendar mapped, so the round must succeed: %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > 4*config.Timeout {
@@ -1524,4 +1655,14 @@ func TestSlowCommitUpstreamIsBoundedByTheAttemptTimeout(t *testing.T) {
 	if len(payload.RecentCommits) != 0 || payload.CommitsAt != "" {
 		t.Errorf("a stalled producer produced commits: %+v", payload)
 	}
+}
+
+// stalledCommitSpec points both query documents at the stalled loopback
+// server, so the round costs exactly one attempt timeout on the FIRST of them
+// and never reaches the second.
+func stalledCommitSpec(origin string) *vcsCommitsFetchSpec {
+	spec := commitQuerySpec(0)
+	spec.Contributions.Endpoint = origin + "/graphql"
+	spec.History.Endpoint = origin + "/graphql"
+	return spec
 }

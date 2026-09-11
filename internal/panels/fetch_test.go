@@ -37,6 +37,27 @@ func validFetchConfig() FetchConfig {
 	}
 }
 
+// The two fixture query documents the commit producer's specs are built from.
+// They declare exactly the variables the validator requires and nothing else,
+// so a test that removes one variable is testing the validator rather than a
+// typo. The text is deliberately NOT the shipped query: a fixture that had to
+// track production would make every config edit a test edit.
+const (
+	contributionsFixtureQuery = "query($from: DateTime!, $to: DateTime!) { fixture }"
+	historyFixtureQuery       = "query($ids: [ID!]!, $author: ID!) { fixture }"
+)
+
+// fixtureQueryDocument wraps one of those into a complete document spec on the
+// baseline config's host.
+func fixtureQueryDocument(query string) *graphQLDocumentSpec {
+	return &graphQLDocumentSpec{
+		Endpoint:    "https://api.example.test/graphql",
+		Query:       query,
+		Headers:     map[string]string{"Accept": "application/json", "Content-Type": "application/json"},
+		ContentType: "application/json",
+	}
+}
+
 // validBossSpec is a baseline boss-log spec on the baseline config's host.
 func validBossSpec() *bossLogFetchSpec {
 	return &bossLogFetchSpec{
@@ -330,15 +351,13 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 		t.Fatal("embedded config configures no commit producer; the version-control panel would report no recent commits forever, which is the defect issue #79 exists to close")
 	}
 	endpoints := []string{document.BossLog.Endpoint, document.VCSActivity.Endpoint}
-	for _, source := range document.VCSActivity.Commits.Sources {
-		endpoints = append(endpoints, source.Endpoint)
-	}
+	endpoints = append(endpoints, document.VCSActivity.Commits.Contributions.Endpoint, document.VCSActivity.Commits.History.Endpoint)
 	if document.CodingProjects == nil {
 		t.Fatal("embedded config configures no coding-projects producer")
 	}
 	endpoints = append(endpoints, document.CodingProjects.ListingEndpoint)
-	if document.CodingProjects.PullsEndpoint != "" {
-		endpoints = append(endpoints, document.CodingProjects.PullsEndpoint)
+	if document.CodingProjects.Repositories != nil {
+		endpoints = append(endpoints, document.CodingProjects.Repositories.Endpoint)
 	}
 	for _, source := range document.TokenUsage.Sources {
 		endpoints = append(endpoints, source.Endpoint)
@@ -394,7 +413,8 @@ func TestProductionHostAllowlistIsPinned(t *testing.T) {
 	caps := map[string]int64{
 		"boss-log":        document.BossLog.MaxBytes,
 		"vcs-activity":    document.VCSActivity.MaxBytes,
-		"vcs-commits":     document.VCSActivity.Commits.MaxBytes,
+		"vcs-commits":     document.VCSActivity.Commits.Contributions.MaxBytes,
+		"vcs-history":     document.VCSActivity.Commits.History.MaxBytes,
 		"coding-projects": document.CodingProjects.MaxBytes,
 	}
 	for _, source := range document.TokenUsage.Sources {
@@ -455,21 +475,16 @@ func ownedEndpoints(t *testing.T, document fetchConfigDocument) []ownedEndpoint 
 		{"boss-log", hostOf(t, document.BossLog.Endpoint), document.BossLog.ContentType, document.BossLog.MinIntervalMinutes},
 		{"vcs-calendar", hostOf(t, document.VCSActivity.Endpoint), document.VCSActivity.ContentType, document.VCSActivity.MinIntervalMinutes},
 	}
-	commits := document.VCSActivity.Commits
-	for _, source := range commits.Sources {
-		owned = append(owned, ownedEndpoint{
-			"vcs-commits:" + source.Repo, hostOf(t, source.Endpoint), commits.ContentType, commits.MinIntervalMinutes,
-		})
-	}
+	// The commit producer is NOT here any more, and its absence is a fact
+	// about the shipped configuration rather than an omission (issue #315):
+	// both of its documents ask about the credential's own account, so an
+	// unset credential runs no request at all and the producer can never
+	// spend the anonymous budget this arithmetic bounds. It is exactly the
+	// two-request-per-round accounting the credentialed sources get.
 	projects := document.CodingProjects
 	owned = append(owned, ownedEndpoint{
 		"coding-projects:listing", hostOf(t, projects.ListingEndpoint), projects.ContentType, projects.MinIntervalMinutes,
 	})
-	if projects.PullsEndpoint != "" {
-		owned = append(owned, ownedEndpoint{
-			"coding-projects:pulls", hostOf(t, projects.PullsEndpoint), projects.ContentType, projects.MinIntervalMinutes,
-		})
-	}
 	return owned
 }
 
@@ -575,11 +590,18 @@ func TestAuthenticatedGitHubCadencesKeepWideRateHeadroom(t *testing.T) {
 			t.Fatalf("%s declares no authenticated cadence", name)
 		}
 	}
-	graphqlPerHour := requestsPerHour(t, "authenticated calendar", calendar.AuthenticatedMinIntervalMinutes, 0)
-	restPerHour := len(commits.Sources)*requestsPerHour(t, "authenticated commits", commits.AuthenticatedMinIntervalMinutes, 0) +
-		requestsPerHour(t, "authenticated projects listing", projects.AuthenticatedMinIntervalMinutes, 0)
-	if projects.PullsEndpoint != "" {
-		restPerHour += requestsPerHour(t, "authenticated projects pulls", projects.AuthenticatedMinIntervalMinutes, 0)
+	// The commit producer moved from REST to TWO query documents per round
+	// (issue #315), and the projects producer from one REST listing to ONE
+	// query document (issue #317), so both now cost the GraphQL budget rather
+	// than the REST one. The arithmetic is what makes "two documents, never
+	// one per repository" a pin rather than a promise: a producer that fanned
+	// out per repository would multiply this figure by the roster.
+	const documentsPerCommitRound = 2
+	graphqlPerHour := requestsPerHour(t, "authenticated calendar", calendar.AuthenticatedMinIntervalMinutes, 0) +
+		documentsPerCommitRound*requestsPerHour(t, "authenticated commits", commits.AuthenticatedMinIntervalMinutes, 0)
+	restPerHour := requestsPerHour(t, "authenticated projects listing", projects.AuthenticatedMinIntervalMinutes, 0)
+	if projects.Repositories != nil {
+		graphqlPerHour += requestsPerHour(t, "authenticated projects query", projects.AuthenticatedMinIntervalMinutes, 0)
 	}
 	const tenthOfAuthenticatedBudget = 500
 	if graphqlPerHour > tenthOfAuthenticatedBudget {
@@ -653,10 +675,34 @@ func TestPublicStaticHeadersCannotSmuggleACredential(t *testing.T) {
 			t.Parallel()
 			spec := *document.VCSActivity
 			commits := *spec.Commits
-			commits.Headers = map[string]string{header: "fixture-sentinel-eeee"}
+			doc := *commits.Contributions
+			doc.Headers = map[string]string{header: "fixture-sentinel-eeee"}
+			commits.Contributions = &doc
 			spec.Commits = &commits
 			if _, err := NewFetchSource(fallback, bounds, panelFetchSpecs{vcs: &spec}); err == nil {
 				t.Fatalf("the commit producer accepted a static %s header; credentials only travel through the attempt-time field", name)
+			}
+		})
+		t.Run("history document refuses "+name, func(t *testing.T) {
+			t.Parallel()
+			spec := *document.VCSActivity
+			commits := *spec.Commits
+			doc := *commits.History
+			doc.Headers = map[string]string{header: "fixture-sentinel-eeee"}
+			commits.History = &doc
+			spec.Commits = &commits
+			if _, err := NewFetchSource(fallback, bounds, panelFetchSpecs{vcs: &spec}); err == nil {
+				t.Fatalf("the history document accepted a static %s header; credentials only travel through the attempt-time field", name)
+			}
+		})
+		t.Run("repository query refuses "+name, func(t *testing.T) {
+			t.Parallel()
+			projects := *document.CodingProjects
+			query := *projects.Repositories
+			query.Headers = map[string]string{header: "fixture-sentinel-eeee"}
+			projects.Repositories = &query
+			if _, err := NewFetchSource(SnapshotSource{Name: "snapshots/coding-projects.json"}, bounds, panelFetchSpecs{projects: &projects}); err == nil {
+				t.Fatalf("the repository query accepted a static %s header; credentials only travel through the attempt-time field", name)
 			}
 		})
 	}
@@ -945,11 +991,13 @@ func TestCommitProducerSpecFailsClosed(t *testing.T) {
 	fallback := SnapshotSource{Name: "snapshots/vcs-activity.json"}
 	base := func(mutate func(*vcsCommitsFetchSpec)) *vcsActivityFetchSpec {
 		commits := vcsCommitsFetchSpec{
-			Headers:            map[string]string{"Accept": "application/json"},
-			ContentType:        "application/json",
+			Owner:              "fixture-owner",
+			KeyEnvName:         "FIXTURE_KEY",
+			KeyHeader:          "Authorization",
 			MinIntervalMinutes: 10,
 			Max:                4,
-			Sources:            []vcsCommitSourceSpec{{Repo: "fixture-repo", Endpoint: "https://api.example.test/repos/fixture/commits"}},
+			Contributions:      fixtureQueryDocument(contributionsFixtureQuery),
+			History:            fixtureQueryDocument(historyFixtureQuery),
 		}
 		if mutate != nil {
 			mutate(&commits)
@@ -966,25 +1014,46 @@ func TestCommitProducerSpecFailsClosed(t *testing.T) {
 		t.Fatalf("the complete two-producer spec was refused: %v", err)
 	}
 	for name, mutate := range map[string]func(*vcsCommitsFetchSpec){
-		"no sources at all":            func(c *vcsCommitsFetchSpec) { c.Sources = nil },
-		"a source with no repo label":  func(c *vcsCommitsFetchSpec) { c.Sources[0].Repo = "" },
-		"a source with no endpoint":    func(c *vcsCommitsFetchSpec) { c.Sources[0].Endpoint = "" },
-		"a source off the allowlist":   func(c *vcsCommitsFetchSpec) { c.Sources[0].Endpoint = "https://evil.example.test/commits" },
-		"a source over plain http":     func(c *vcsCommitsFetchSpec) { c.Sources[0].Endpoint = "http://api.example.test/commits" },
-		"a source carrying userinfo":   func(c *vcsCommitsFetchSpec) { c.Sources[0].Endpoint = "https://user@api.example.test/commits" },
-		"a body cap wider than shared": func(c *vcsCommitsFetchSpec) { c.MaxBytes = validFetchConfig().MaxBytes + 1 },
-		"no row cap":                   func(c *vcsCommitsFetchSpec) { c.Max = 0 },
-		"a row cap past the ceiling":   func(c *vcsCommitsFetchSpec) { c.Max = maxServedCommits + 1 },
-		"a cadence below the floor":    func(c *vcsCommitsFetchSpec) { c.MinIntervalMinutes = 0 - 1 },
-		"a cadence past the ceiling":   func(c *vcsCommitsFetchSpec) { c.MinIntervalMinutes = int(maxEndpointInterval/time.Minute) + 1 },
-		"an authenticated cadence without a credential": func(c *vcsCommitsFetchSpec) {
-			c.AuthenticatedMinIntervalMinutes = 1
+		"no discovery document at all": func(c *vcsCommitsFetchSpec) { c.Contributions = nil },
+		"no history document at all":   func(c *vcsCommitsFetchSpec) { c.History = nil },
+		"a document with no endpoint":  func(c *vcsCommitsFetchSpec) { c.Contributions.Endpoint = "" },
+		"a document with no query":     func(c *vcsCommitsFetchSpec) { c.History.Query = "" },
+		"a document with no media type": func(c *vcsCommitsFetchSpec) {
+			c.Contributions.ContentType = ""
 		},
-		"a credential with no header": func(c *vcsCommitsFetchSpec) {
-			c.KeyEnvName = "FIXTURE_KEY"
+		"a discovery query that drops the window start": func(c *vcsCommitsFetchSpec) {
+			c.Contributions.Query = strings.ReplaceAll(contributionsFixtureQuery, calendarFromVariable, "$other")
 		},
+		"a discovery query that drops the window end": func(c *vcsCommitsFetchSpec) {
+			c.Contributions.Query = strings.ReplaceAll(contributionsFixtureQuery, calendarToVariable, "$other")
+		},
+		"a history query that drops the author filter": func(c *vcsCommitsFetchSpec) {
+			c.History.Query = strings.ReplaceAll(historyFixtureQuery, historyAuthorVariable, "$other")
+		},
+		"a history query that drops the identity list": func(c *vcsCommitsFetchSpec) {
+			c.History.Query = strings.ReplaceAll(historyFixtureQuery, historyIDsVariable, "$other")
+		},
+		"a document off the allowlist": func(c *vcsCommitsFetchSpec) {
+			c.History.Endpoint = "https://evil.example.test/graphql"
+		},
+		"a document over plain http": func(c *vcsCommitsFetchSpec) {
+			c.Contributions.Endpoint = "http://api.example.test/graphql"
+		},
+		"a document carrying userinfo": func(c *vcsCommitsFetchSpec) {
+			c.Contributions.Endpoint = "https://user@api.example.test/graphql"
+		},
+		"a body cap wider than shared": func(c *vcsCommitsFetchSpec) {
+			c.History.MaxBytes = validFetchConfig().MaxBytes + 1
+		},
+		"no account pin":              func(c *vcsCommitsFetchSpec) { c.Owner = "" },
+		"an account pin off grammar":  func(c *vcsCommitsFetchSpec) { c.Owner = "not a login" },
+		"no credential at all":        func(c *vcsCommitsFetchSpec) { c.KeyEnvName = "" },
+		"a credential with no header": func(c *vcsCommitsFetchSpec) { c.KeyHeader = "" },
+		"no row cap":                  func(c *vcsCommitsFetchSpec) { c.Max = 0 },
+		"a row cap past the ceiling":  func(c *vcsCommitsFetchSpec) { c.Max = maxServedCommits + 1 },
+		"a cadence below the floor":   func(c *vcsCommitsFetchSpec) { c.MinIntervalMinutes = 0 - 1 },
+		"a cadence past the ceiling":  func(c *vcsCommitsFetchSpec) { c.MinIntervalMinutes = int(maxEndpointInterval/time.Minute) + 1 },
 		"an authenticated cadence below the floor": func(c *vcsCommitsFetchSpec) {
-			c.KeyEnvName, c.KeyHeader = "FIXTURE_KEY", "Authorization"
 			c.AuthenticatedMinIntervalMinutes = -1
 		},
 	} {
@@ -1086,69 +1155,34 @@ func TestBuiltinFetchPanelsComeFromTheConstructor(t *testing.T) {
 	}
 }
 
-// The measured upstream reality behind issue #185. Every figure below was
-// captured from the three CONFIGURED repositories' own public commit
-// documents on 2026-08-25 — 280 commits of real history, 274 three-commit
-// windows — and is wire-accurate: the upstream serves compact JSON, and
-// re-serializing the decoded documents reproduced the measured transfer sizes
-// to within 0.4%. The bound these numbers justify is data
-// (config/fetch.json), so THIS is where raising it stays a conscious edit
-// with a reason, exactly as the shared bound's ratchet above is.
+// The measured upstream reality behind the commit producer's byte caps. The
+// retired figures belonged to issue #185's REST commit documents, which issue
+// #315 deleted along with the per-repository endpoints that served them; these
+// are the two QUERY documents that replaced them, measured against the owner's
+// own account on 2026-09-11.
 //
-// What the measurement found, and why the answer is a raised bound rather
-// than a narrowed request:
+// What the measurement found:
 //
-//   - The retired 131072 cap is genuinely outgrown, not marginally: 9 of the
-//     274 windows exceed it and the worst reaches 209808 bytes, 1.60× the
-//     cap. That is the intermittent degrade the issue reported.
-//   - The cause is not upstream API growth. It is this platform's own
-//     rich-history commit contract (median message 2417 characters, longest
-//     56659) doubled by the upstream embedding the entire raw commit object
-//     in its verification payload — that duplication plus the detached
-//     signature is ~48% of every largest-observed entry.
-//   - Narrowing the request cannot fix it. There is no field selector on the
-//     list-commits API (five Accept media types were probed; all returned the
-//     byte-identical 44078-byte document), the item count is already minimal
-//     for what the panel serves (3 sources × per_page 3 = the 9 rows `max`
-//     merges), and the arithmetic is decisive anyway: one single commit entry
-//     measured 120414 bytes, so even per_page=1 would sit at 92% of the
-//     retired cap with no headroom, and per_page=2's worst window (188281)
-//     still exceeds it.
-//   - 262144 is the smallest reviewed step that clears the measurement: zero
-//     of the 274 windows reach it, it stays HALF the 524288 cap the same
-//     panel's calendar endpoint already carries, and it changes no memory
-//     posture — the process's worst-case transient read was already governed
-//     by that larger sibling bound.
+//   - The discovery document answered 5,707 bytes for eight repositories over
+//     the thirty-day window, and its size is bounded by structure rather than
+//     by content: at most maxContributionRepositories entries, each carrying a
+//     name, a flag, two identities and at most maxContributionDays small dated
+//     buckets. There is no free-text field in it at all.
+//   - The history document answered 12,833 bytes for seven repositories at ten
+//     commits each. It DOES carry free text — one subject line per commit — so
+//     its bound is what stops a pathological subject from costing memory: the
+//     shipped 262144 leaves roughly two kilobytes per subject at the full
+//     maxHistoryRepositories × ten shape, against a 71-character longest
+//     subject measured.
 //
-// Honest residual: three consecutive commits each as large as the largest
-// ever observed (3 × 120414 = 361242) would still exceed 262144. That
-// refusal is the fail-closed direction — the panel keeps its last good list
-// and says stale — and it self-heals as the window moves.
-const (
-	// measuredWorstCommitWindowBytes is the largest three-commit document
-	// observed across all three configured repositories.
-	measuredWorstCommitWindowBytes = 209808
-	// measuredWorstCommitEntryBytes is the largest SINGLE commit entry
-	// observed: the reason no per_page value fits under the retired cap.
-	measuredWorstCommitEntryBytes = 120414
-	// retiredCommitDocumentCap is the bound issue #185 reported degrading the
-	// commit source to stale. It stays named here as the refusal side of the
-	// proof below: the measured document must be admitted by the shipped cap
-	// and refused by this one, or the raise was cosmetic.
-	retiredCommitDocumentCap = 131072
-	// shippedCommitDocumentCap is the reviewed replacement config must carry.
-	shippedCommitDocumentCap = 262144
-	// commitSourcePageSize is the item count every configured commit endpoint
-	// requests. The cap above is justified against THIS shape, so the shape is
-	// pinned with it: raising per_page without re-measuring would silently
-	// invalidate the bound's justification.
-	commitSourcePageSize = 3
-)
+// Both caps stay at 262144: exactly HALF the shared bound, unchanged from the
+// bound the retired REST documents carried, so this producer's worst-case
+// transient read did not grow when its shape changed.
+const shippedQueryDocumentCap = 262144
 
-// TestCommitDocumentBoundMatchesTheMeasuredUpstream pins the issue #185
-// decision as data: the reviewed cap, the request shape it was measured
-// against, and the direction of every relationship around it.
-func TestCommitDocumentBoundMatchesTheMeasuredUpstream(t *testing.T) {
+// TestCommitQueryCapsMatchTheMeasuredUpstream pins those caps as data, with
+// the direction of every relationship around them.
+func TestCommitQueryCapsMatchTheMeasuredUpstream(t *testing.T) {
 	t.Parallel()
 	document, bounds, err := loadFetchConfig(fetchConfigBytes)
 	if err != nil {
@@ -1158,73 +1192,49 @@ func TestCommitDocumentBoundMatchesTheMeasuredUpstream(t *testing.T) {
 	if commits == nil {
 		t.Fatal("embedded config configures no commit producer")
 	}
-	if commits.MaxBytes != shippedCommitDocumentCap {
-		t.Errorf("commit document cap = %d, want the reviewed %d; changing it is a re-measurement, not an edit", commits.MaxBytes, shippedCommitDocumentCap)
+	if document.CodingProjects == nil || document.CodingProjects.Repositories == nil {
+		t.Fatal("embedded config configures no credentialed repository document")
 	}
-	// The raise stays a TIGHTENING of the shared bound, never a widening of
-	// it: validateBodyCap admits a per-endpoint cap only at or below shared,
-	// and the shared bound itself is untouched by issue #185.
-	if commits.MaxBytes > bounds.MaxBytes {
-		t.Errorf("commit cap %d exceeds the shared bound %d", commits.MaxBytes, bounds.MaxBytes)
-	}
-	if commits.MaxBytes > bounds.MaxBytes/2 {
-		t.Errorf("commit cap %d is over half the shared bound %d; the endpoint's own limit must stay the tighter of the two", commits.MaxBytes, bounds.MaxBytes)
-	}
-	// Headroom over what the upstream really produces, stated as the
-	// measurement rather than as a feeling.
-	if commits.MaxBytes <= measuredWorstCommitWindowBytes {
-		t.Errorf("commit cap %d does not clear the measured worst document %d", commits.MaxBytes, measuredWorstCommitWindowBytes)
-	}
-	// The request shape the cap was measured against. Both halves matter: the
-	// per-source item count sets how many entries a document can carry, and
-	// `max` is what the merged list serves from them.
-	if len(commits.Sources) == 0 {
-		t.Fatal("the commit producer configures no source")
-	}
-	for _, source := range commits.Sources {
-		parsed, err := url.Parse(source.Endpoint)
-		if err != nil {
-			t.Fatalf("parse configured endpoint for %s: %v", source.Repo, err)
+	for what, spec := range map[string]*graphQLDocumentSpec{
+		"contributions": commits.Contributions,
+		"history":       commits.History,
+		"repositories":  document.CodingProjects.Repositories,
+	} {
+		if spec.MaxBytes != shippedQueryDocumentCap {
+			t.Errorf("%s document cap = %d, want the reviewed %d; changing it is a re-measurement, not an edit", what, spec.MaxBytes, shippedQueryDocumentCap)
 		}
-		if got := parsed.Query().Get("per_page"); got != strconv.Itoa(commitSourcePageSize) {
-			t.Errorf("source %s requests per_page=%q, want %d — the cap above is measured against that shape", source.Repo, got, commitSourcePageSize)
+		// The cap stays a TIGHTENING of the shared bound, never a widening:
+		// validateBodyCap admits a per-endpoint cap only at or below shared.
+		if spec.MaxBytes > bounds.MaxBytes/2 {
+			t.Errorf("%s cap %d is over half the shared bound %d; the endpoint's own limit must stay the tighter of the two", what, spec.MaxBytes, bounds.MaxBytes)
 		}
 	}
-	if want := len(commits.Sources) * commitSourcePageSize; commits.Max != want {
-		t.Errorf("merged commit limit = %d, want %d (%d sources × per_page %d): asking for rows the merge discards is wasted egress, and asking for fewer than it serves silently shortens the panel", commits.Max, want, len(commits.Sources), commitSourcePageSize)
+	// The shape the history cap is measured against: at most this many
+	// repositories, at most this many commits each. Both are code bounds, and
+	// the merged row cap has to fit inside their product or the producer would
+	// be asking for rows the merge discards.
+	if commits.Max > maxHistoryRepositories*maxCommitDocumentItems {
+		t.Errorf("merged commit limit %d exceeds what %d repositories × %d rows can produce", commits.Max, maxHistoryRepositories, maxCommitDocumentItems)
 	}
-	// A document may still carry no more entries than the mapper's own row
-	// bound, whatever configuration asks for.
-	if commits.Max > maxServedCommits || commitSourcePageSize > maxCommitDocumentItems {
-		t.Errorf("configured shape (max %d, per_page %d) escapes the mapper's bounds (%d served, %d per document)", commits.Max, commitSourcePageSize, maxServedCommits, maxCommitDocumentItems)
+	if commits.Max > maxServedCommits {
+		t.Errorf("configured row cap %d escapes the mapper's %d bound", commits.Max, maxServedCommits)
 	}
 }
 
-// TestCommitDocumentCapAdmitsTheMeasuredUpstream is issue #185's regression,
-// run over a real loopback socket so the bytes under test really cross a
-// connection: the shipped cap admits a realistically shaped document at the
-// worst size ever measured, the retired cap refuses that same document, and
-// every existing refusal — one byte over, truncated, malformed — still
-// refuses. Nothing here relaxes a check; the over-cap direction is asserted
-// on the SHIPPED cap, so a document too large is still discarded whole and
-// the panel keeps its last good list.
-func TestCommitDocumentCapAdmitsTheMeasuredUpstream(t *testing.T) {
+// TestQueryDocumentCapRefusesAnOversizeAnswer is the byte-bound regression run
+// over a real loopback socket, so the bytes under test really cross a
+// connection: an answer at the cap is admitted and maps, one byte over is
+// refused whole, and a truncated answer still fails the mapper rather than
+// half-parsing into a quiet week.
+func TestQueryDocumentCapRefusesAnOversizeAnswer(t *testing.T) {
 	t.Parallel()
-	document, bounds, err := loadFetchConfig(fetchConfigBytes)
-	if err != nil {
-		t.Fatalf("embedded fetch config refused: %v", err)
-	}
-	shipped := document.VCSActivity.Commits.MaxBytes
 	now := time.Now().UTC()
-	measured := realisticCommitDocument(t, commitSourcePageSize, measuredWorstCommitWindowBytes, now)
-
+	const bound = 8192
+	atBound := historyAnswerOfSize(t, bound, now)
 	bodies := map[string]string{
-		"/measured":  measured,
-		"/lone":      realisticCommitDocument(t, 1, measuredWorstCommitEntryBytes, now),
-		"/at-bound":  realisticCommitDocument(t, commitSourcePageSize, int(shipped), now),
-		"/one-over":  realisticCommitDocument(t, commitSourcePageSize, int(shipped)+1, now),
-		"/truncated": measured[:len(measured)/2],
-		"/malformed": `[{"sha":`,
+		"/at-bound":  atBound,
+		"/one-over":  historyAnswerOfSize(t, bound+1, now),
+		"/truncated": atBound[:len(atBound)/2],
 	}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, ok := bodies[r.URL.Path]
@@ -1237,150 +1247,79 @@ func TestCommitDocumentCapAdmitsTheMeasuredUpstream(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	_, config := loopbackConfig(t, server.URL)
-	// The SHARED bound is the shipped one, so every refusal below is the
-	// per-endpoint cap doing the work rather than the wider limit.
-	config.MaxBytes = bounds.MaxBytes
 	source := &FetchSource{config: config, gates: map[string]time.Time{}}
 	doer := loopbackDoer(server)
-	fetch := func(path string, cap int64) ([]byte, error) {
+	fetch := func(path string) ([]byte, error) {
 		return source.fetchDocument(t.Context(), doer, fetchRequest{
 			source:      roleVCSCommits,
 			endpoint:    server.URL + path,
 			headers:     map[string]string{"Accept": "application/json"},
-			maxBytes:    cap,
+			maxBytes:    bound,
 			contentType: "application/json",
+			payload:     []byte(`{"query":"fixture"}`),
 		})
 	}
+	repos := []contributionRepo{{id: "R_fixture", name: "fixture-repo", at: now}}
 
-	t.Run("the shipped cap admits the worst document ever measured", func(t *testing.T) {
-		body, err := fetch("/measured", shipped)
+	t.Run("an answer exactly at the bound is admitted and maps", func(t *testing.T) {
+		body, err := fetch("/at-bound")
 		if err != nil {
-			t.Fatalf("the shipped cap refused a %d byte document: %v", len(measured), err)
+			t.Fatalf("an answer at the bound was refused: %v", err)
 		}
-		if len(body) != measuredWorstCommitWindowBytes {
-			t.Fatalf("read %d bytes, want the measured %d", len(body), measuredWorstCommitWindowBytes)
-		}
-		// Admission is not enough: the document must still MAP, or a cap that
-		// admits bytes nothing can read would pass this test.
-		rows, err := mapCommits(body, "fixture-repo", now)
+		rows, err := mapCommitHistories(body, repos, now)
 		if err != nil {
-			t.Fatalf("the admitted document did not map: %v", err)
+			t.Fatalf("the admitted answer did not map: %v", err)
 		}
-		if len(rows) != commitSourcePageSize {
-			t.Fatalf("mapped %d rows, want %d", len(rows), commitSourcePageSize)
-		}
-	})
-
-	t.Run("the retired cap refuses that same document", func(t *testing.T) {
-		// The load-bearing half of the regression: restore 131072 in
-		// config/fetch.json and the admission case above goes red for
-		// exactly the reason issue #185 reported.
-		if _, err := fetch("/measured", retiredCommitDocumentCap); err == nil {
-			t.Fatal("the retired cap admitted the measured document; the raise would then be cosmetic")
-		} else if !strings.Contains(err.Error(), "exceeds the") {
-			t.Fatalf("error = %v, want the byte-bound refusal", err)
+		if len(rows) == 0 {
+			t.Fatal("the admitted answer mapped no rows; a cap that admits bytes nothing can read would pass this test")
 		}
 	})
 
-	t.Run("one measured entry already leaves the retired cap no headroom", func(t *testing.T) {
-		// Why narrowing the request is not the alternative fix: a per_page=1
-		// document carrying the largest entry ever observed still fits the
-		// retired cap, but with so little room left that the next verbose
-		// commit takes it — so no page size makes 131072 a working bound.
-		body, err := fetch("/lone", retiredCommitDocumentCap)
+	t.Run("one byte over the bound is refused", func(t *testing.T) {
+		if _, err := fetch("/one-over"); err == nil {
+			t.Fatal("an answer over the bound was admitted")
+		} else if !strings.Contains(err.Error(), strconv.Itoa(bound)) {
+			t.Fatalf("error = %v, want the refusal to name the %d byte bound", err, bound)
+		}
+	})
+
+	t.Run("a truncated answer is still refused by the mapper", func(t *testing.T) {
+		body, err := fetch("/truncated")
 		if err != nil {
-			t.Fatalf("the retired cap refused even ONE measured entry: %v", err)
+			t.Fatalf("the fetch refused an under-cap body before the mapper saw it: %v", err)
 		}
-		if spare := float64(retiredCommitDocumentCap-len(body)) / retiredCommitDocumentCap; spare > 0.10 {
-			t.Errorf("one measured entry leaves %.1f%% spare under the retired cap; the 'even per_page=1 has no headroom' claim needs re-measuring", spare*100)
-		}
-		if _, err := fetch("/lone", shipped); err != nil {
-			t.Fatalf("the shipped cap refused a single measured entry: %v", err)
+		if _, err := mapCommitHistories(body, repos, now); err == nil {
+			t.Fatal("a truncated answer mapped; a byte cap may never soften what the mapper refuses")
 		}
 	})
-
-	t.Run("a document exactly at the bound is admitted", func(t *testing.T) {
-		if _, err := fetch("/at-bound", shipped); err != nil {
-			t.Fatalf("a document at the bound was refused: %v", err)
-		}
-	})
-
-	t.Run("one byte over the bound is still refused", func(t *testing.T) {
-		if _, err := fetch("/one-over", shipped); err == nil {
-			t.Fatal("a document over the shipped bound was admitted")
-		} else if !strings.Contains(err.Error(), strconv.FormatInt(shipped, 10)) {
-			t.Fatalf("error = %v, want the refusal to name the %d byte bound", err, shipped)
-		}
-		// And it is the ENDPOINT's cap refusing, not the shared one: the body
-		// is comfortably inside the shared bound.
-		if int64(len(bodies["/one-over"])) >= bounds.MaxBytes {
-			t.Fatalf("the over-cap fixture is %d bytes, at or over the shared %d bound; this case would then prove the wrong refusal", len(bodies["/one-over"]), bounds.MaxBytes)
-		}
-	})
-
-	for name, path := range map[string]string{
-		"a truncated document": "/truncated",
-		"a malformed document": "/malformed",
-	} {
-		t.Run(name+" is still refused by the mapper", func(t *testing.T) {
-			body, err := fetch(path, shipped)
-			if err != nil {
-				t.Fatalf("the fetch refused an under-cap body before the mapper saw it: %v", err)
-			}
-			if _, err := mapCommits(body, "fixture-repo", now); err == nil {
-				t.Fatalf("%s mapped; a raised byte cap may never soften what the mapper refuses", name)
-			}
-		})
-	}
 }
 
-// realisticCommitDocument builds a commit document of an EXACT byte size with
-// the upstream's real proportions. The shape matters as much as the size: the
-// verification block carries a payload that repeats the whole commit message
-// and a detached signature beside it, which together are about half of every
-// large entry measured — a fixture with those fields null (as the mapper's
-// other fixtures carry them, since they test the projection rather than the
-// bound) is a document a byte cap has never had to admit.
-//
-// Size is hit in two passes so the padding lands where the real bytes are:
-// message padding first, which costs two bytes per character because the
-// payload repeats it, then a few signature characters for the remainder.
-func realisticCommitDocument(t *testing.T, entries, totalBytes int, now time.Time) string {
+// historyAnswerOfSize builds a history answer of an EXACT byte size with the
+// upstream's real proportions: one repository, commits of forty-hex identities
+// with dated subjects, the last subject padded to land on the requested total.
+func historyAnswerOfSize(t *testing.T, totalBytes int, now time.Time) string {
 	t.Helper()
-	build := func(messagePad, signaturePad int) string {
-		rows := make([]string, 0, entries)
-		for index := range entries {
-			sha := fmt.Sprintf("%040x", index+1)
-			at := now.Add(-time.Duration(index+1) * time.Hour).Format(time.RFC3339)
-			message := fmt.Sprintf("fix(panels): fixture subject %d\n\nevidence body\n%s", index+1, strings.Repeat("A", messagePad))
-			// The upstream's payload is the raw commit object, message and
-			// all; reproducing that duplication is the point of this fixture.
-			payload := fmt.Sprintf("tree %s\nauthor Fixture Author <fixture@example.invalid>\n\n%s", sha, message)
-			signature := "-----BEGIN SSH SIGNATURE-----\n" + strings.Repeat("Zm", 256)
-			if index == entries-1 {
-				signature += strings.Repeat("Z", signaturePad)
+	build := func(pad int) string {
+		rows := make([]string, 0, maxCommitDocumentItems)
+		for index := range maxCommitDocumentItems {
+			subject := fmt.Sprintf("fix(panels): fixture subject %d", index+1)
+			if index == maxCommitDocumentItems-1 {
+				subject += strings.Repeat("A", pad)
 			}
-			signature += "\n-----END SSH SIGNATURE-----"
-			rows = append(rows, fmt.Sprintf(
-				`{"sha":%q,"node_id":"fixture","commit":{"author":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},`+
-					`"committer":{"name":"Fixture Author","email":"fixture@example.invalid","date":%q},"message":%q,`+
-					`"tree":{"sha":%q,"url":"https://api.example.test/tree"},"url":"https://api.example.test/commit",`+
-					`"comment_count":0,"verification":{"verified":true,"reason":"valid","signature":%q,"payload":%q}},`+
-					`"url":"https://api.example.test/commit","html_url":"https://api.example.test/c","comments_url":"https://api.example.test/cc",`+
-					`"author":null,"committer":null,"parents":[]}`,
-				sha, at, at, message, sha, signature, payload,
-			))
+			rows = append(rows, fmt.Sprintf(`{"oid":%q,"messageHeadline":%q,"committedDate":%q}`,
+				fmt.Sprintf("%040x", index+1), subject,
+				now.Add(-time.Duration(index+1)*time.Hour).Format(time.RFC3339)))
 		}
-		return "[" + strings.Join(rows, ",") + "]"
+		return `{"data":{"nodes":[{"name":"fixture-repo","defaultBranchRef":{"target":{"history":{"nodes":[` +
+			strings.Join(rows, ",") + `]}}}}]}}`
 	}
-	extra := totalBytes - len(build(0, 0))
-	if extra < 0 {
-		t.Fatalf("a %d-entry document cannot be built as small as %d bytes", entries, totalBytes)
+	pad := totalBytes - len(build(0))
+	if pad < 0 {
+		t.Fatalf("a %d byte target is smaller than the fixture's own structure", totalBytes)
 	}
-	messagePad := extra / (2 * entries)
-	built := build(messagePad, extra-2*messagePad*entries)
-	if len(built) != totalBytes {
-		t.Fatalf("fixture is %d bytes, want exactly %d", len(built), totalBytes)
+	answer := build(pad)
+	if len(answer) != totalBytes {
+		t.Fatalf("fixture is %d bytes, want exactly %d", len(answer), totalBytes)
 	}
-	return built
+	return answer
 }

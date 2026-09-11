@@ -12,7 +12,7 @@
 import type { ActivityLink } from './blocks.ts';
 import { addDays, type GridCell } from './grid.ts';
 
-import type { VCSActivityData, VCSCoverage } from './panels';
+import type { VCSActivityData, VCSCoverage, VCSPrivateDay } from './panels';
 import { projectHost, projectHostLabel } from './projects.ts';
 
 /* The registry identifier the activity strip loads; the one place the id is
@@ -25,6 +25,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+/* A non-negative WHOLE count. Stricter than isCount on purpose: the calendar's
+ * cells are counts the grid only ever compares, while a private-day figure is
+ * printed as a numeral in a sentence, and "2.5 contributions" is a sentence no
+ * producer can have meant. */
+function isWholeCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 /* parseVCSActivity admits only payloads carrying the exact shape the strip
@@ -96,6 +104,30 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
       return null;
     }
   }
+  /* privateActivity is admitted by SHAPE and refuses the whole payload on any
+   * drift (issue #315). It is the one field on this payload that describes
+   * work the reader cannot go and check — there is no link, no identity and no
+   * name to verify it against — so a row of it must be exactly three
+   * well-formed numbers-and-a-date or the panel renders its honest empty state
+   * rather than a sentence about a quantity nobody can audit. Absent is the
+   * rolling-compatibility state, normalized away exactly as an absent sha is. */
+  const { privateActivity } = document;
+  if (privateActivity !== undefined) {
+    if (!Array.isArray(privateActivity)) {
+      return null;
+    }
+    for (const day of privateActivity) {
+      if (
+        !isRecord(day) ||
+        typeof day.date !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(day.date) ||
+        !isWholeCount(day.contributions) ||
+        !isWholeCount(day.repositories)
+      ) {
+        return null;
+      }
+    }
+  }
   const activity: VCSActivityData = {
     totalContributions,
     weeks: weeks as number[][],
@@ -112,6 +144,13 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
   }
   if (coverage !== undefined) {
     activity.coverage = coverage;
+  }
+  if (privateActivity !== undefined) {
+    activity.privateActivity = (privateActivity as VCSPrivateDay[]).map((day) => ({
+      date: day.date,
+      contributions: day.contributions,
+      repositories: day.repositories
+    }));
   }
   return activity;
 }
@@ -300,9 +339,13 @@ export function commitShaLinkLabel(message: string, sha: string): string {
  * and is imported from there.
  * ------------------------------------------------------------------------ */
 
-/* The log shows at most this many rows; the payload may carry more and the
- * rest simply do not render. */
-export const shownEntryRows = 5;
+/* How many rows the log RESERVES, and the number the box's height is computed
+ * from. Raised from five to ten by the owner's ruling (2026-09-11, issue
+ * #315): the log lists every contribution now, and five rows of it was one
+ * morning. Rows past this one still render — the box scrolls — so this is the
+ * reserve rather than a cap, and the wire's own cap (maxServedCommits) is what
+ * bounds how many there can be. */
+export const shownEntryRows = 10;
 
 /* contributionsLabel words the headline figure against the coverage the
  * payload declared, and it exists because the two producers count different

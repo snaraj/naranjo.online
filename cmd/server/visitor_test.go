@@ -149,6 +149,10 @@ type visitorPanelEnvelope struct {
 	Data        json.RawMessage `json:"data"`
 }
 
+// visitorReleaseTag is the shape a served version word must have, pinned here
+// as an independent expected value rather than imported from internal/panels.
+var visitorReleaseTag = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
 // decodeVisitorJSON strictly decodes one API body into v, so a served field
 // the pinned shape does not know fails the scenario instead of hiding.
 func decodeVisitorJSON(t *testing.T, body []byte, v any) {
@@ -662,6 +666,19 @@ type visitorActivityPayload struct {
 	// calendar's generatedAt could claim to have been read before the commits
 	// in it happened.
 	CommitsAt string `json:"commitsAt"`
+	// Coverage names WHICH producer answered, because the two count different
+	// things while both being live and both being true.
+	Coverage string `json:"coverage"`
+	// PrivateActivity is the account's private contribution days, counted and
+	// never named (issue #315): a visitor reads how much work happened, never
+	// which repository it happened in.
+	PrivateActivity []visitorPrivateDay `json:"privateActivity"`
+}
+
+type visitorPrivateDay struct {
+	Date          string `json:"date"`
+	Contributions int    `json:"contributions"`
+	Repositories  int    `json:"repositories"`
 }
 
 type visitorActivityCommit struct {
@@ -745,8 +762,9 @@ func TestVisitorReadsTheProjectFeed(t *testing.T) {
 				Description string `json:"description"`
 				Stars       *int64 `json:"stars"`
 				PushedAt    string `json:"pushedAt"`
-				OpenIssues  *int64 `json:"openIssues"`
-				OpenPulls   *int64 `json:"openPulls"`
+				ClosedPulls *int64 `json:"closedPulls"`
+				Release     string `json:"release"`
+				Pinned      bool   `json:"pinned"`
 				Recorded    bool   `json:"recorded"`
 			} `json:"repos"`
 		}
@@ -774,14 +792,18 @@ func TestVisitorReadsTheProjectFeed(t *testing.T) {
 			if !repo.Recorded {
 				t.Errorf("%s claims a freshness this boot cannot have", repo.Name)
 			}
-			// The open-work pair (issue 252) arrives and leaves TOGETHER, so a
-			// row carrying one figure and not the other is the state this
-			// producer refuses to construct — and one it must never serve.
-			if (repo.OpenIssues == nil) != (repo.OpenPulls == nil) {
-				t.Errorf("%s serves half of a derived pair: issues=%v pulls=%v", repo.Name, repo.OpenIssues, repo.OpenPulls)
+			// The all-time closed pull-request tally (issue #317) is read live
+			// or not at all, and the captured snapshot carries one for every
+			// row it ships: a dash here would mean the capture lost a figure
+			// it really read.
+			if repo.ClosedPulls == nil {
+				t.Errorf("%s serves no closed pull-request tally where the snapshot records one", repo.Name)
 			}
-			if repo.OpenIssues == nil {
-				t.Errorf("%s serves no open-work tallies where the snapshot records both", repo.Name)
+			// A release tag is printed verbatim in a cell, so a served one must
+			// sit inside the host's own tag grammar. An EMPTY one is the honest
+			// state of a repository that has never released.
+			if repo.Release != "" && !visitorReleaseTag.MatchString(repo.Release) {
+				t.Errorf("%s serves %q where a version belongs", repo.Name, repo.Release)
 			}
 			if repo.Stars == nil {
 				t.Errorf("%s serves a null tally where the snapshot records one", repo.Name)

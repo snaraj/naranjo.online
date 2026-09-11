@@ -729,12 +729,12 @@ test('the strip owns fixed geometry and its own overflow', () => {
      The caption under the grid is the figures row's successor and holds the
      same line's height. */
   assert.match(sheet, /\.commit-caption \{[^}]*min-block-size: 1\.25rem/);
-  // Five rows at the 44px touch floor (issue 157): every entry row can carry
-  // two real links, so the fixed reservation grew from 5.625rem to
-  // 13.75rem (5 * 2.75rem) rather than staying a decorative-text height. The
-  // reservation is written as that multiplication, and this pin recomputes it
-  // from shownEntryRows and the row's own floor — so the box and the number
-  // of rows the adapter hands it cannot drift apart.
+  // TEN rows at the 44px touch floor (owner directive, 2026-09-11, issue
+  // #315; five since issue 157): every entry row can carry two real links, so
+  // the reservation is a multiplication of the reserve by the row's own floor
+  // rather than a decorative-text height, and this pin recomputes it from
+  // shownEntryRows — so the box and the number of rows it holds open cannot
+  // drift apart.
   const rowFloorRem = 2.75;
   /* The reserve is DERIVED from the row's own pitch rather than restated, and
      the pitch is a token because a phone row is taller — the repository stacks
@@ -755,8 +755,8 @@ test('the strip owns fixed geometry and its own overflow', () => {
   assert.ok(pitches[1] > pitches[0], 'the phone pitch must be the taller one');
   assert.ok(pitches[0] >= rowFloorRem, 'the row pitch dropped under the touch floor');
   // The row separator is an INSET SHADOW, never a border (owner directive,
-  // 2026-08-25): a border would add its pixel to every row's box and five of
-  // them would push the last row out of a reservation that is exactly five
+  // 2026-08-25): a border would add its pixel to every row's box and ten of
+  // them would push the last row out of a reservation that is exactly ten
   // rows tall — the zero-CLS reserve turned into a clipped row.
   assert.match(sheet, /\.commit-row \{[^}]*box-shadow: inset 0 -1px 0 var\(--ledger-rule/);
   assert.match(sheet, /\.commit-row:last-child \{[^}]*box-shadow: none/);
@@ -765,9 +765,18 @@ test('the strip owns fixed geometry and its own overflow', () => {
     /\.commit-row \{[^}]*border-block-end/,
     'a row separator drawn as a border grows the row box the reservation is built on'
   );
-  // The reservation and the row cap agree by construction: the adapter shows
-  // at most the rows the fixed box holds.
-  assert.equal(shownEntryRows, 5);
+  // THE RESERVE IS NOT A CAP (owner directive, 2026-09-11, issue #315). The
+  // adapter used to hand the component exactly the rows the box could hold;
+  // the box scrolls now, so every row the wire carried renders and the WIRE's
+  // own cap is what bounds the list. A cap in the adapter would be the page
+  // quietly deciding the record stops at ten, which is the defect the owner
+  // reported in the first place.
+  assert.equal(shownEntryRows, 10);
+  assert.match(sheet, /\.commit-rows \{[^}]*overflow-y: auto/);
+  // And the box's HEIGHT is the thing that never moves: a reserve that grew
+  // with its rows would push every section under it down the moment a payload
+  // landed.
+  assert.doesNotMatch(sheet, /\.commit-rows \{[^}]*min-block-size/);
   const overfull = commitLogProps([
     {
       schema: 'panel/v1',
@@ -777,7 +786,7 @@ test('the strip owns fixed geometry and its own overflow', () => {
       status: 'ok',
       data: {
         ...goodActivity,
-        recentCommits: Array.from({ length: 9 }, (_, index) => ({
+        recentCommits: Array.from({ length: 30 }, (_, index) => ({
           repo: 'fixture-repo',
           message: `fixture: subject ${index}`,
           at: '2026-08-11T00:12:00Z'
@@ -786,7 +795,7 @@ test('the strip owns fixed geometry and its own overflow', () => {
     },
     null
   ]);
-  assert.equal(overfull.rows.length, 5, 'the payload may carry more rows; the rest do not render');
+  assert.equal(overfull.rows.length, 30, 'every row the wire carried renders; the box scrolls for the rest');
   // A wide window scrolls inside the strip, never the page.
   assert.match(grid, /\.grid-strip \{[^}]*overflow-x: auto/);
   // The panel is an ordinary block in the page's stack. It used to dock to

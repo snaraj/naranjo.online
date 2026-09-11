@@ -6,11 +6,14 @@
 package panels
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/snaraj/naranjo.online/internal/seal"
 )
@@ -243,4 +246,122 @@ func TestResponsesStayWithinTheOwnerBudgets(t *testing.T) {
 			t.Errorf("panel %s response is %d bytes, over the %d budget", definition.id, size, MaxPanelResponseBytes)
 		}
 	}
+}
+
+// TestActivityPayloadFitsTheOwnerBudget is the payload half of issue #315's
+// row-cap raise, measured rather than assumed — the same shape CapParityTest
+// gives the sealed usage document, and the reason docs/panels-invariants.md
+// carries the number.
+//
+// The MAXIMAL payload is built rather than sampled: a full year of week
+// columns at five-digit daily counts, maxServedCommits public rows each
+// carrying a forty-hex identity, the longest repository name the grammar
+// admits, and a subject at the truncation bound; plus one private aggregate
+// per day of the log window, at the widest figures those counts can reach.
+// Nothing a live round can produce is larger, because every term here is at
+// the bound its own admission enforces.
+func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
+	t.Parallel()
+	payload := VCSActivityData{
+		TotalContributions: 99999,
+		Streak:             999,
+		EndDate:            "2026-09-11",
+		CommitsAt:          "2026-09-11T23:08:18Z",
+		Coverage:           CoverageComplete,
+		Weeks:              make([][]int, 0, maxCalendarDays/daysPerWeek+1),
+		RecentCommits:      make([]VCSCommit, 0, maxServedCommits),
+		PrivateActivity:    make([]VCSPrivateDay, 0, commitLogWindowDays),
+	}
+	for range maxCalendarDays/daysPerWeek + 1 {
+		week := make([]int, daysPerWeek)
+		for day := range week {
+			// Five digits per cell: the owner's busiest measured day is three,
+			// so this is two orders of magnitude of headroom on the term that
+			// dominates the payload.
+			week[day] = 99999
+		}
+		payload.Weeks = append(payload.Weeks, week)
+	}
+	name := strings.Repeat("r", maxRepositoryNameRunes)
+	subject := strings.Repeat("s", maxCommitMessageRunes) + "…"
+	for index := range maxServedCommits {
+		payload.RecentCommits = append(payload.RecentCommits, VCSCommit{
+			Repo:    name,
+			SHA:     fmt.Sprintf("%040x", index+1),
+			Message: subject,
+			At:      "2026-09-11T23:08:18Z",
+		})
+	}
+	for index := range commitLogWindowDays {
+		payload.PrivateActivity = append(payload.PrivateActivity, VCSPrivateDay{
+			Date:          time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -index).Format(dayLayout),
+			Contributions: 9999,
+			Repositories:  maxContributionRepositories,
+		})
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal the maximal payload: %v", err)
+	}
+	envelope, err := json.Marshal(Envelope{
+		Schema: EnvelopeSchema, ID: "vcs-activity", Kind: KindVCSActivity,
+		Title: "A title as long as any this registry configures", GeneratedAt: "2026-09-11T23:08:20Z",
+		Status: StatusOK, Data: data,
+	})
+	if err != nil {
+		t.Fatalf("marshal the maximal envelope: %v", err)
+	}
+	// The measured figure, recorded in docs/panels-invariants.md. It is
+	// asserted as a CEILING with its headroom named rather than as an equality,
+	// because a payload that shrinks is not a regression — but one that grows
+	// past this without somebody re-measuring is.
+	const measured = 15000
+	if len(envelope) > measured {
+		t.Errorf("the maximal activity envelope is %d bytes, over the %d recorded in docs/panels-invariants.md; re-measure before raising it", len(envelope), measured)
+	}
+	if len(envelope) > MaxPanelResponseBytes {
+		t.Errorf("the maximal activity envelope is %d bytes, over the owner's %d budget", len(envelope), MaxPanelResponseBytes)
+	}
+	t.Logf("maximal vcs-activity envelope: %d bytes, %d under the %d budget", len(envelope), MaxPanelResponseBytes-len(envelope), MaxPanelResponseBytes)
+}
+
+// TestProjectsPayloadFitsTheOwnerBudget is the same measurement for the
+// repository table's payload after issue #317 added two fields to every row.
+func TestProjectsPayloadFitsTheOwnerBudget(t *testing.T) {
+	t.Parallel()
+	stars := int64(maxCountValue)
+	pulls := int64(maxCountValue)
+	payload := CodingProjectsData{Repos: make([]CodingProject, 0, maxCodingProjectSources)}
+	for range maxCodingProjectSources {
+		payload.Repos = append(payload.Repos, CodingProject{
+			Name:        strings.Repeat("r", maxRepositoryNameRunes),
+			Description: strings.Repeat("d", maxProjectDescriptionRunes) + "…",
+			Stars:       &stars,
+			PushedAt:    "2026-09-11T22:46:22Z",
+			ClosedPulls: &pulls,
+			Release:     strings.Repeat("v", maxReleaseTagRunes),
+			Pinned:      true,
+			Recorded:    true,
+		})
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal the maximal payload: %v", err)
+	}
+	envelope, err := json.Marshal(Envelope{
+		Schema: EnvelopeSchema, ID: "coding-projects", Kind: KindCodingProjects,
+		Title: "A title as long as any this registry configures", GeneratedAt: "2026-09-11T23:07:45Z",
+		Status: StatusOK, Data: data,
+	})
+	if err != nil {
+		t.Fatalf("marshal the maximal envelope: %v", err)
+	}
+	const measured = 8000
+	if len(envelope) > measured {
+		t.Errorf("the maximal projects envelope is %d bytes, over the %d recorded in docs/panels-invariants.md; re-measure before raising it", len(envelope), measured)
+	}
+	if len(envelope) > MaxPanelResponseBytes {
+		t.Errorf("the maximal projects envelope is %d bytes, over the owner's %d budget", len(envelope), MaxPanelResponseBytes)
+	}
+	t.Logf("maximal coding-projects envelope: %d bytes, %d under the %d budget", len(envelope), MaxPanelResponseBytes-len(envelope), MaxPanelResponseBytes)
 }

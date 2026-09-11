@@ -400,7 +400,7 @@ func validateVCSCalendarSpec(spec *vcsCalendarFetchSpec) error {
 	if spec.ContentType == "" {
 		return errors.New("vcs-calendar fetch spec: contentType is required")
 	}
-	if err := validateHeaderAllowlist("vcs-calendar fetch spec", spec.Headers, vcsCalendarHeaderAllowlist); err != nil {
+	if err := validateHeaderAllowlist("vcs-calendar fetch spec", spec.Headers, graphQLHeaderAllowlist); err != nil {
 		return err
 	}
 	return validateAuthenticatedRefreshInterval("vcs-calendar fetch spec", spec.AuthenticatedMinIntervalMinutes, true)
@@ -446,33 +446,49 @@ func validateCodingProjectsSpec(spec *codingProjectsFetchSpec) error {
 	if err := validateHeaderAllowlist("coding-projects fetch spec", spec.Headers, vcsActivityHeaderAllowlist); err != nil {
 		return err
 	}
+	if spec.Repositories != nil {
+		// The credentialed document declares no variables: it asks the
+		// credential's own account for the repositories it owns, so the whole
+		// question is in the literal text and nothing varies per round.
+		if err := validateQueryDocument("coding-projects repositories document", spec.Repositories); err != nil {
+			return err
+		}
+		if spec.KeyEnvName == "" {
+			return errors.New("coding-projects fetch spec: the repositories document requires a configured credential")
+		}
+	}
 	if err := validateRefreshInterval("coding-projects fetch spec", spec.MinIntervalMinutes); err != nil {
 		return err
 	}
 	return validateAuthenticatedRefreshInterval("coding-projects fetch spec", spec.AuthenticatedMinIntervalMinutes, spec.KeyEnvName != "")
 }
 
-// validateVCSCommitsSpec applies the same static-header rules to the commit
-// half, plus paired optional credential fields, bounded public/authenticated
-// cadences, a bounded row count, and a labeled endpoint for every source. An
-// absent spec is valid — the panel simply serves no commit list.
+// validateVCSCommitsSpec holds the commit half to its two credentialed query
+// documents, the account every named row must belong to, the credential both
+// documents ride on, bounded cadences, and a bounded row count. An absent spec
+// is valid — the panel simply serves no commit list.
+//
+// The variable checks are the load-bearing ones, exactly as the calendar's
+// are. A discovery document that does not declare the window would be answered
+// over the upstream's own default range, and a history document that does not
+// declare BOTH the author and the identity list would be answered with
+// everybody's commits or nobody's — each a silently wrong log rather than a
+// failed read, so each is refused at construction instead of sent.
 func validateVCSCommitsSpec(spec *vcsCommitsFetchSpec) error {
 	if spec == nil {
 		return nil
 	}
-	if len(spec.Sources) == 0 {
-		return errors.New("vcs-commits fetch spec: no sources")
-	}
-	for _, source := range spec.Sources {
-		if source.Repo == "" || source.Endpoint == "" {
-			return errors.New("vcs-commits fetch spec: every source needs a repo label and an endpoint")
-		}
-	}
-	if err := validateVCSHeaders("vcs-commits fetch spec", spec.Headers); err != nil {
+	if err := validateQueryDocument("vcs-commits contributions document", spec.Contributions, calendarFromVariable, calendarToVariable); err != nil {
 		return err
 	}
-	if (spec.KeyEnvName == "") != (spec.KeyHeader == "") {
-		return errors.New("vcs-commits fetch spec: keyEnvName and keyHeader are declared together or not at all")
+	if err := validateQueryDocument("vcs-commits history document", spec.History, historyAuthorVariable, historyIDsVariable); err != nil {
+		return err
+	}
+	if !isAccountLogin(spec.Owner) {
+		return fmt.Errorf("vcs-commits fetch spec: %q is not an account login", spec.Owner)
+	}
+	if spec.KeyEnvName == "" || spec.KeyHeader == "" {
+		return errors.New("vcs-commits fetch spec: keyEnvName and keyHeader are both required")
 	}
 	if spec.Max <= 0 || spec.Max > maxServedCommits {
 		return fmt.Errorf("vcs-commits fetch spec: max %d is outside (0, %d]", spec.Max, maxServedCommits)
@@ -480,7 +496,29 @@ func validateVCSCommitsSpec(spec *vcsCommitsFetchSpec) error {
 	if err := validateRefreshInterval("vcs-commits fetch spec", spec.MinIntervalMinutes); err != nil {
 		return err
 	}
-	return validateAuthenticatedRefreshInterval("vcs-commits fetch spec", spec.AuthenticatedMinIntervalMinutes, spec.KeyEnvName != "")
+	return validateAuthenticatedRefreshInterval("vcs-commits fetch spec", spec.AuthenticatedMinIntervalMinutes, true)
+}
+
+// validateQueryDocument is the shared gate over one credentialed query
+// document: it must be fully described, may carry only the query producers'
+// own two static headers, and must DECLARE every variable this package
+// supplies for it. A document that silently ignores a variable is answered
+// over the upstream's own defaults — a wrong answer rather than a failed one —
+// which is why this is a construction-time refusal rather than a runtime
+// check.
+func validateQueryDocument(what string, spec *graphQLDocumentSpec, variables ...string) error {
+	if spec == nil {
+		return fmt.Errorf("%s: is required", what)
+	}
+	if spec.Endpoint == "" || spec.Query == "" || spec.ContentType == "" {
+		return fmt.Errorf("%s: endpoint, query, and contentType are all required", what)
+	}
+	for _, variable := range variables {
+		if !strings.Contains(spec.Query, variable) {
+			return fmt.Errorf("%s: the query does not declare %s, so it would be answered over the upstream's own defaults", what, variable)
+		}
+	}
+	return validateHeaderAllowlist(what, spec.Headers, graphQLHeaderAllowlist)
 }
 
 // validateAuthenticatedRefreshInterval keeps a fast path inseparable from

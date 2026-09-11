@@ -4024,10 +4024,13 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
       );
     }
   }
-  /* And the reservation is still exactly the five rows the adapter caps at,
-     unchanged by the rule the rows now carry — five of the row the page
-     declares, and every drawn row IS that declared row, so the token is what
-     is drawn rather than a coincidence the reserve happens to match. */
+  /* And the reservation is still exactly the TEN rows the box holds open
+     (owner directive, 2026-09-11, issue #315; five until then), unchanged by
+     the rule the rows carry — ten of the row the page declares, and every
+     drawn row IS that declared row, so the token is what is drawn rather than
+     a coincidence the reserve happens to match. The box now holds MORE rows
+     than that and scrolls for them, which the lane below measures; what this
+     one pins is that the reserve did not become a minimum. */
   expect(observed.rowToken, 'the commit rows declare no row height to reserve against').toBeGreaterThanOrEqual(
     touchFloorPx - subPixel
   );
@@ -4037,8 +4040,8 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
       `commit row ${index} is ${row.height}px against a declared ${observed.rowToken}px row`
     ).toBeCloseTo(observed.rowToken, 0);
   }
-  expect(observed.listHeight, 'the five-row reservation changed size').toBeCloseTo(
-    5 * observed.rowToken,
+  expect(observed.listHeight, 'the ten-row reservation changed size').toBeCloseTo(
+    10 * observed.rowToken,
     0
   );
 });
@@ -6411,7 +6414,11 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
     ).toBeVisible();
     const shape = await measure();
     for (const [index, row] of shape.entries()) {
-      expect(row.counts.length, `at ${width}px row ${index} lost a counter`).toBe(3);
+      /* FOUR counters per row since issue #317: pull requests closed, the
+         released version, stars, and the age — which is drawn as a counter
+         like the three beside it rather than as a bare number, because that
+         is what keeps its numerals in a column with theirs. */
+      expect(row.counts.length, `at ${width}px row ${index} lost a counter`).toBe(4);
       /* ONE LINE: every cell shares the row's own band. */
       for (const [name, cell] of [
         ['description', row.summary],
@@ -6479,7 +6486,11 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
       `at ${width}px the table took the document sideways (${document.scrollWidth} > ${document.clientWidth})`
     ).toBeLessThanOrEqual(document.clientWidth + subPixel);
     for (const [index, row] of shape.entries()) {
-      expect(row.counts.length, `at ${width}px row ${index} lost a counter`).toBe(3);
+      /* FOUR counters per row since issue #317: pull requests closed, the
+         released version, stars, and the age — which is drawn as a counter
+         like the three beside it rather than as a bare number, because that
+         is what keeps its numerals in a column with theirs. */
+      expect(row.counts.length, `at ${width}px row ${index} lost a counter`).toBe(4);
       /* STACKED, not squeezed: the description sits on its own line under the
          name rather than beside it. A row that merely narrowed keeps them on
          one line and fails here. */
@@ -11437,3 +11448,178 @@ test('the keyboard still walks the chrome row: the wordmark, the five nav links,
     'Reading mode'
   );
 });
+
+/* THE TABLE'S HEAD IS MARKS AND ITS NUMERALS ARE A COLUMN (owner directive,
+ * 2026-09-11, issue #317).
+ *
+ * Two measurements, and the reason each is a lane rather than a source pin is
+ * the same: both are claims about BOXES the engine laid out, and a stylesheet
+ * that declares two grid tracks proves nothing about where the engine put
+ * them. The head's mark has to sit over the marks under it, and no numeral may
+ * move between rows — which is issue 188's own claim, one level down: a figure
+ * that pushed its own mark sideways would make the column of marks ragged
+ * exactly as a figure that pushed its neighbours made the cluster ragged.
+ *
+ * Measured at BOTH viewports, because the phone restacks and a claim proved
+ * only at 1440 is a claim about half the readers. */
+for (const width of [1440, 390]) {
+  test(`the projects table aligns its marks and its numerals at ${width}px (owner 2026-09-11, issue #317)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await visit(page);
+    const measured = await page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
+      const rows = [...window.document.querySelectorAll('.table-row')];
+      const head = window.document.querySelector('.table-head');
+      const headVisible = head !== null && head.getBoundingClientRect().height > 0;
+      const columns = rows.map((row) =>
+        [...row.querySelectorAll('.table-count')].map((cell) => {
+          const mark = cell.querySelector('.icon');
+          const figure = cell.querySelector('.table-figure');
+          return {
+            markLeft: mark === null ? null : round(mark.getBoundingClientRect().left),
+            markWidth: mark === null ? null : round(mark.getBoundingClientRect().width),
+            figureRight: figure === null ? null : round(figure.getBoundingClientRect().right),
+            figureLeft: figure === null ? null : round(figure.getBoundingClientRect().left),
+            text: figure === null ? '' : figure.textContent.trim(),
+          };
+        })
+      );
+      return {
+        rows: rows.length,
+        headVisible,
+        headMarks: headVisible
+          ? [...head.querySelectorAll('.icon')].map((mark) =>
+              round(mark.getBoundingClientRect().left)
+            )
+          : [],
+        headWords: headVisible
+          ? [...head.querySelectorAll('.table-clipped')].map((word) => word.textContent.trim())
+          : [],
+        columns,
+      };
+    });
+    expect(
+      measured.rows,
+      'the projects table drew no rows; the measurement below would prove nothing'
+    ).toBeGreaterThan(1);
+    // Every row draws the same number of counters, or "a column" is not a
+    // thing this measurement can be about.
+    const widths = new Set(measured.columns.map((row) => row.length));
+    expect(widths.size, `rows draw different numbers of counters: ${[...widths]}`).toBe(1);
+    for (let column = 0; column < measured.columns[0].length; column += 1) {
+      const marks = measured.columns.map((row) => row[column].markLeft);
+      const texts = measured.columns.map((row) => row[column].text);
+      expect(
+        new Set(marks).size,
+        `column ${column}'s marks sit at ${[...new Set(marks)]} across rows reading ${texts}`
+      ).toBe(1);
+      /* The numerals form a column too, and WHICH EDGE of them lines up is a
+         property of the width rather than a compromise. Wide, the figure is
+         pushed to its track's end edge so a column of tallies reads down its
+         last digit; on a phone each counter has a whole track of its own and
+         the figure reads hard against its own mark, so the edge that lines up
+         is the leading one. Either way no numeral moves between rows, which is
+         the claim. */
+      const edge = measured.columns.map((row) =>
+        row[column][width === 1440 ? 'figureRight' : 'figureLeft']
+      );
+      expect(
+        new Set(edge).size,
+        `column ${column}'s numerals sit at ${[...new Set(edge)]} across rows reading ${texts}`
+      ).toBe(1);
+      // Every mark really drew: a zero-width box would satisfy the alignment
+      // above by drawing nothing at all.
+      for (const row of measured.columns) {
+        expect(row[column].markWidth, 'a table mark drew no box').toBeGreaterThan(0);
+      }
+    }
+    if (width === 1440) {
+      // The head row is visible at this width, its marks stand over the
+      // marks under them, and each one still carries its word for a reader
+      // who cannot see the drawing.
+      expect(measured.headVisible, 'the head row vanished at a desktop width').toBe(true);
+      expect(measured.headMarks).toEqual(measured.columns[0].map((cell) => cell.markLeft));
+      expect(measured.headWords).toEqual([
+        'Repository',
+        'Description',
+        'PRs closed',
+        'Version',
+        'Stars',
+        'Updated',
+      ]);
+    } else {
+      // The phone drops the head row entirely — every cell repeats its own
+      // word — which is the restack the sheet already declares.
+      expect(measured.headVisible, 'the head row survived the phone restack').toBe(false);
+    }
+  });
+}
+
+/* THE LOG RESERVES TEN ROWS AND SCROLLS FOR THE REST (owner directive,
+ * 2026-09-11, issue #315), and the reserve is a HEIGHT the engine gave the box
+ * rather than a number in a stylesheet. The claim is the zero-CLS one: the box
+ * is exactly as tall as its reserve whether it holds three rows or thirty, so
+ * a payload landing after first paint moves nothing under the reader.
+ *
+ * Measured at both viewports because the row pitch is taller on a phone — the
+ * repository stacks over the subject there — and a reserve computed from one
+ * width while the rows are drawn at another is a box that clips its own last
+ * row. */
+for (const width of [1440, 390]) {
+  test(`the commit log holds its reserve and scrolls inside it at ${width}px (owner 2026-09-11, issue #315)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await visit(page);
+    const measured = await page.evaluate(() => {
+      const box = window.document.querySelector('.commit-rows');
+      if (box === null) {
+        return null;
+      }
+      const rows = [...box.querySelectorAll('.commit-row')];
+      const pitch = parseFloat(
+        getComputedStyle(window.document.documentElement).getPropertyValue('--commit-row-height')
+      );
+      const rem = parseFloat(getComputedStyle(window.document.documentElement).fontSize);
+      return {
+        clientHeight: Math.round(box.clientHeight),
+        scrollHeight: Math.round(box.scrollHeight),
+        overflowY: getComputedStyle(box).overflowY,
+        rows: rows.length,
+        rowHeights: [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))],
+        reserve: Math.round(pitch * rem * 10),
+        /* The box's own right edge against the card's: a scrollbar may take
+           width from the row, and must never push the box past its column. */
+        boxRight: Math.round(box.getBoundingClientRect().right),
+        cardRight: Math.round(box.parentElement.getBoundingClientRect().right),
+      };
+    });
+    expect(measured, 'the commits section drew no log box').not.toBeNull();
+    // THE RESERVE: ten rows at the pitch this viewport draws them at.
+    expect(
+      measured.clientHeight + (measured.overflowY === 'auto' ? 0 : 0),
+      `the log box is ${measured.clientHeight}px, want the ${measured.reserve}px ten-row reserve`
+    ).toBe(measured.reserve);
+    expect(measured.overflowY, 'the log box does not scroll for the rows past its reserve').toBe(
+      'auto'
+    );
+    // Every row is drawn at the pitch the reserve is computed from, or the
+    // box and its contents are two different measurements.
+    expect(
+      measured.rowHeights,
+      `rows are drawn at ${measured.rowHeights}px, not the ${measured.reserve / 10}px pitch`
+    ).toEqual([measured.reserve / 10]);
+    // And the box never widens past the card it sits in, whatever the engine
+    // charged for its scrollbar.
+    expect(measured.boxRight).toBeLessThanOrEqual(measured.cardRight);
+    // The shipped snapshot carries more rows than the reserve holds, which is
+    // what makes the scroll real rather than theoretical.
+    expect(
+      measured.rows,
+      `the log drew ${measured.rows} rows; the reserve holds ten, so fewer would not exercise the scroll`
+    ).toBeGreaterThan(10);
+    expect(measured.scrollHeight).toBeGreaterThan(measured.clientHeight);
+  });
+}

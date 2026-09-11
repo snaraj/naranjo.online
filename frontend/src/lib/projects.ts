@@ -32,14 +32,13 @@
  * What changed is which side of the origin does the reading, not whether the
  * browser leaves it.
  *
- * Two figures stay recorded, and both say so on the page:
- *
- *   - Commit totals. The repository API reports no total, and deriving one
- *     would mean paginating a whole default branch on every refresh. The
- *     captured count stays captured and carries the provenance mark.
- *   - Every figure of a row whose live read failed. That row falls back to the
- *     values below and marks all of them, rather than borrowing the freshness
- *     of the rows beside it.
+ * ONE figure stays recorded: every figure of a row whose live read failed.
+ * That row falls back to the values below and marks all of them, rather than
+ * borrowing the freshness of the rows beside it. The captured COMMIT TOTAL
+ * that used to be the other one left with the column that drew it (owner
+ * directive, 2026-09-11, issue #317): the table's four metrics are pull
+ * requests closed, the released version, stars and the last push, and none of
+ * them is a figure only a capture can report.
  *
  * Vendor names are data. The host label lives in this module beside the rows
  * it describes, exactly as the panels keep theirs in config data, so the
@@ -51,13 +50,14 @@
  * internal/doctrine/provider_neutrality_test.go over this whole tree) admits a
  * provider name nowhere but the chart's values defaults. Splitting the word up
  * to slip past that scan would defeat a fail-closed pin rather than respect
- * it, so the clause is dropped and the omission is stated here. The LIVE row
- * carries whatever the host currently says, which is the owner's own text on
- * the owner's own origin and not this repository's tree at all. */
+ * it, so the clause is dropped and the omission is stated here. The embedded
+ * snapshot these rows mirror carries the same one-clause trim for the same
+ * reason, and for the same one row. The LIVE row carries whatever the host
+ * currently says, which is the owner's own text on the owner's own origin and
+ * not this repository's tree at all. */
 
 import { ageDetail, relativeAge } from './age.ts';
 import {
-  type EntryCount,
   type LedgerCount,
   type LedgerTableProps,
   type LedgerTableRow
@@ -73,8 +73,6 @@ export interface Project {
   readonly name: string;
   /* The repository's own description, verbatim (see the R9 note above). */
   readonly description: string;
-  /* Commits on the default branch at the capture date. */
-  readonly commits: number;
   /* Stars at the capture date. */
   readonly stars: number;
   /* The repository's last push, as the ISO instant GitHub reported at the
@@ -108,7 +106,7 @@ export const codingProjectsPanelId = 'coding-projects';
  * stays truthful without display: this constant exists so the date is
  * recorded somewhere durable, and the no-fetch guarantee it used to
  * accompany on the page is enforced structurally, not by announcing it. */
-export const projectsCapturedOn = '2026-08-29';
+export const projectsCapturedOn = '2026-09-11';
 
 /* The CAPTURED rows: the owner's public repositories as read on the capture
  * date above. Since issue 281 this list no longer fixes the roster — the
@@ -116,61 +114,93 @@ export const projectsCapturedOn = '2026-08-29';
  * from the payload alone. What these rows still are: the complete fallback
  * face when no payload has arrived or none was admitted (a true thing to
  * show, dated), and the only source of each repository's captured
- * commit total, which no listing endpoint reports. The order is a
- * MAINTENANCE order; the feed sorts by last push (issue 252). */
+ * repository. The order is a MAINTENANCE order — alphabetical, deliberately
+ * NOT the push order the feed sorts by, so a deleted sort fails a test rather
+ * than passing by luck (tests/sections.test.mjs). */
 export const projects: readonly Project[] = [
   {
-    name: 'naranjo.online',
-    description: 'Personal Website & Media Gallery',
-    commits: 127,
-    stars: 1,
-    pushedAt: '2026-08-29T07:02:14Z'
-  },
-  {
-    name: 'platform',
+    name: "dotfiles",
     description:
-      'My infrastructure for self-hosting scalable and secure applications using Kubernetes',
-    commits: 105,
-    stars: 1,
-    pushedAt: '2026-08-29T08:12:06Z'
-  },
-  {
-    name: 'lidersea.com',
-    description: 'The home of lidersea.com',
-    commits: 92,
-    stars: 1,
-    pushedAt: '2026-08-29T07:01:55Z'
-  },
-  {
-    name: 'dotfiles',
-    description: 'My dotfiles',
-    commits: 9,
+      "My dotfiles",
     stars: 0,
-    pushedAt: '2026-08-29T10:13:44Z'
+    pushedAt: "2026-09-11T15:27:59Z"
   },
   {
-    name: 'foobar2000-lyricsbuddy',
+    name: "foobar2000-library-visualizer",
     description:
-      'LyricsBuddy is a native x64 lyrics panel for foobar2000. It combines a Spotify-inspired reading experience with local-first lyric discovery, precise LRC synchronization, safe customization, and an extensible provider model.',
-    commits: 1,
+      "Library Visualizer is a highly customizable Foobar2000 Component that renders and displays selected music library.",
     stars: 2,
-    pushedAt: '2026-08-07T00:19:49Z'
+    pushedAt: "2026-08-07T00:16:32Z"
   },
   {
-    name: 'foobar2000-library-visualizer',
+    name: "foobar2000-lyricsbuddy",
     description:
-      'Library Visualizer is a highly customizable Foobar2000 Component that renders and displays selected music library.',
-    commits: 20,
+      "LyricsBuddy is a native x64 lyrics panel for foobar2000. It combines a Spotify-inspired reading experience with local-first lyric discovery, precise LRC synchronization, safe customization, and an extensible provider model.",
     stars: 2,
-    pushedAt: '2026-08-07T00:16:32Z'
+    pushedAt: "2026-08-07T00:19:49Z"
   },
   {
-    name: 'foobar2000-album-visualizer',
+    name: "lidersea.com",
     description:
-      'Album Visualizer is a highly customizable foobar2000 component that displays the complete track list for either the album currently playing or the album selected in a playlist or Media Library view.',
-    commits: 1,
-    stars: 2,
-    pushedAt: '2026-08-02T05:49:53Z'
+      "The home of lidersea.com",
+    stars: 1,
+    pushedAt: "2026-09-08T03:25:34Z"
+  },
+  {
+    name: "naranjo.online",
+    description:
+      "Personal Website & Media Gallery",
+    stars: 1,
+    pushedAt: "2026-09-11T20:58:39Z"
+  },
+  {
+    name: "obsync",
+    description:
+      "obsync: self-hosted, end-to-end encrypted live sync for Obsidian. One dependency-free Rust binary with a dashboard, plus an Obsidian plugin.",
+    stars: 1,
+    pushedAt: "2026-09-11T22:46:22Z"
+  },
+  {
+    name: "platform",
+    description:
+      "My infrastructure for self-hosting scalable and secure applications using Kubernetes",
+    stars: 1,
+    pushedAt: "2026-09-11T19:19:57Z"
+  },
+  {
+    name: "platform-k8s-infra",
+    description:
+      "Application GitOps composition for the homelab platform.",
+    stars: 1,
+    pushedAt: "2026-09-11T21:48:07Z"
+  },
+  {
+    name: "SpotiPlus",
+    description:
+      "Retired historical showcase. No longer maintained or supported.",
+    stars: 0,
+    pushedAt: "2026-09-08T01:52:09Z"
+  },
+  {
+    name: "theme",
+    description:
+      "Minimal, blazing fast CLI to manage the aesthethics of your terminal and desktop",
+    stars: 1,
+    pushedAt: "2026-09-11T22:22:14Z"
+  },
+  {
+    name: "Tiger-Book",
+    description:
+      "Retired historical showcase. No longer maintained or supported.",
+    stars: 0,
+    pushedAt: "2026-09-08T01:52:17Z"
+  },
+  {
+    name: "world",
+    description:
+      "Retired historical showcase. No longer maintained or supported.",
+    stars: 0,
+    pushedAt: "2026-09-08T01:51:36Z"
   }
 ];
 
@@ -202,75 +232,86 @@ function countDetail(label: string): TipDetail {
   return { name: label, rows: [] };
 }
 
-/* projectCounts renders one row's five figures against whatever the panel
- * could actually vouch for.
+/* projectColumns renders one row's FOUR figures — the owner's columns, in the
+ * owner's order (2026-09-11, issue #317): pull requests closed, the released
+ * version, stars, and how long since the last push. Open issues and open pull
+ * requests left the page with the same directive, and the origin stopped
+ * reading them at all.
  *
  * `live` is the panel's row when one arrived and was admitted; absent means
- * this row is serving its captured values. The commit count is captured either
- * way — no repository API reports a total — and the page says nothing about
+ * this row is serving its captured values, and the page says nothing about
  * provenance on any counter (owner directive, 2026-09-06, issue 299).
  *
- * EVERY FIGURE IS NOW TERSE (issue 268, owner directive): the visible channel
- * is the glyph and the bare number, and the WORD it counts moves into the
- * counter's clipped accessible name and into its detail. The dataviz floor is
- * unchanged — a value is carried by glyph plus number, never by the glyph
- * alone — and the plural is still derived rather than assumed, because "1
- * commits" is the kind of small lie a page tells when nobody executes its
- * labels and two of the seven rows genuinely are one commit today. The
- * derivation is executed by test against synthetic rows rather than resting on
- * whichever figures the tracked repositories carry this week.
+ * EVERY FIGURE IS TERSE (issue 268, owner directive): the visible channel is
+ * the mark and the bare figure, and the WORD it counts lives in the counter's
+ * clipped accessible name and in its detail. The dataviz floor is unchanged —
+ * a value is carried by mark plus number, never by the mark alone — and the
+ * plural is still derived rather than assumed, because "1 pull requests" is
+ * the kind of small lie a page tells when nobody reads its labels out loud.
  *
- * A star tally the host did not report renders as an explicit unknown, never
- * as a zero: those are different claims, and only one of them is true. */
-export function projectCounts(
+ * A figure the host did not report renders as an explicit unknown, never as a
+ * zero: those are different claims, and only one of them is true. */
+export function projectColumns(
   project: Project | undefined,
   live?: CodingProjectRow,
   now: number = Date.now()
-): EntryCount[] {
+): { readonly counts: LedgerCount[]; readonly updated: LedgerCount } {
   const recorded = live === undefined || live.recorded === true;
   const stars = recorded ? (project?.stars ?? null) : live.stars;
-  const pushedAt = effectivePushedAt(project, live);
   const starLabel =
     stars === null ? 'stars unknown' : `${formatWhole(stars)} ${stars === 1 ? 'star' : 'stars'}`;
-  const starFigure = stars === null ? unknownFigure : formatWhole(stars);
-  /* Cluster order per the owner's sketch (2026-08-31, issue 275): stars and
-   * freshness on the first row, the captured commit total and open issues on
-   * the second, open pulls on the last — the live figures lead and the one
-   * always-captured figure no longer fronts the card. */
-  return [
-    {
-      key: 'stars',
-      glyph: 'star',
-      label: starLabel,
-      value: starFigure,
-      detail: countDetail(starLabel)
-    },
-    updatedCount(pushedAt, now),
-    commitCount(project),
-    /* The two open-work counters (owner directive, issue 252 — the first two
-     * counters to go terse, and since issue 268 the shape every counter has).
-     *
-     * Both come from the panel or from nowhere. There is no captured fallback
-     * for them and there should not be: these are the fastest-moving figures
-     * on the card — an issue closes and the number is wrong — so a frozen one
-     * would be the least true thing in the section. Nothing to report renders
-     * as a dash, which says "not known"; a reported zero renders as 0, which
-     * says "nothing open". Those are different claims and the card makes only
-     * the one it can support. */
-    openWorkCount('issues', 'issue', live?.openIssues),
-    openWorkCount('pulls', 'pull', live?.openPulls)
-  ];
+  return {
+    counts: [
+      closedPullCount(live?.closedPulls),
+      releaseCount(live?.release),
+      {
+        key: 'stars',
+        glyph: 'star',
+        label: starLabel,
+        value: stars === null ? unknownFigure : formatWhole(stars),
+        detail: countDetail(starLabel)
+      }
+    ],
+    updated: updatedCount(effectivePushedAt(project, live), now)
+  };
 }
 
-/* How long since the last update (owner directive, 0.1.52; live since issue
- * 268), computed from the instant against the reader's own clock rather than
- * shipped as frozen words. `since` is what tells the log to keep recomputing
- * it: the value and label here are the FIRST rendering, and the component
- * re-derives both on every minute-aligned tick, so a card open on a desk
- * stays true. An instant nobody reported — representable since a payload row
- * may omit pushedAt and a dynamic row has no captured fallback — renders as
- * the honest dash, never as an age of nothing. */
-function updatedCount(pushedAt: string | undefined, now: number): EntryCount {
+/* The closed pull-request column. There is no captured fallback for it and
+ * there should not be: it is the figure the panel reads live or not at all, so
+ * nothing to report renders as a dash — "not known" — while a reported zero
+ * renders as 0, which says "none ever". Those are different claims and the
+ * table makes only the one it can support. */
+function closedPullCount(tally: number | undefined): LedgerCount {
+  if (tally === undefined) {
+    const label = 'closed pull requests not reported';
+    return { key: 'pulls', glyph: 'pull', label, value: unknownFigure, detail: countDetail(label) };
+  }
+  const figure = formatWhole(tally);
+  const label = `${figure} closed pull ${tally === 1 ? 'request' : 'requests'}`;
+  return { key: 'pulls', glyph: 'pull', label, value: figure, detail: countDetail(label) };
+}
+
+/* The version column: the release tag exactly as the host names it. A
+ * repository that has never released and a read that could not report one both
+ * render the dash, because both are "no version to show" — and inventing one,
+ * or printing a zero, would be the fabrication the honest-states floor
+ * forbids. */
+function releaseCount(release: string | undefined): LedgerCount {
+  if (release === undefined || release === '') {
+    const label = 'no released version';
+    return { key: 'release', glyph: 'tag', label, value: unknownFigure, detail: countDetail(label) };
+  }
+  const label = `version ${release}`;
+  return { key: 'release', glyph: 'tag', label, value: release, detail: countDetail(label) };
+}
+
+/* How long since the last update (owner directive, 0.1.52), computed from the
+ * instant against the reader's own clock rather than shipped as frozen words.
+ * The table is redrawn from a fresh envelope on the panels' own 60-second
+ * cadence, so the age advances by the delivery rather than by a second clock
+ * inside the component. An instant nobody reported renders as the honest dash,
+ * never as an age of nothing. */
+function updatedCount(pushedAt: string | undefined, now: number): LedgerCount {
   if (pushedAt === undefined) {
     const label = 'last update not reported';
     return {
@@ -287,60 +328,7 @@ function updatedCount(pushedAt: string | undefined, now: number): EntryCount {
     glyph: 'clock',
     label: age.phrase,
     value: age.compact,
-    since: pushedAt,
     detail: ageDetail(pushedAt, now)
-  };
-}
-
-/* The captured commit total — no listing reports one — or the honest dash
- * for a repository the module list has no capture for, which is every
- * repository discovered after the capture date (issue 281). */
-function commitCount(project: Project | undefined): EntryCount {
-  if (project === undefined) {
-    const label = 'commit total not recorded';
-    return {
-      key: 'commits',
-      glyph: 'node',
-      label,
-      value: unknownFigure,
-      detail: countDetail(label)
-    };
-  }
-  const figure = formatWhole(project.commits);
-  const label = `${figure} ${project.commits === 1 ? 'commit' : 'commits'}`;
-  return {
-    key: 'commits',
-    glyph: 'node',
-    label,
-    value: figure,
-    detail: countDetail(label)
-  };
-}
-
-/* One open-work counter: the terse glyph-and-figure pair, or a dash when the
- * panel reported no figure. The accessible sentence is always complete and
- * always plural-correct, because "1 open issues" is the kind of small lie a
- * page tells when nobody reads its labels out loud. */
-function openWorkCount(key: string, glyph: 'issue' | 'pull', tally: number | undefined): EntryCount {
-  const noun = glyph === 'issue' ? 'issue' : 'pull request';
-  if (tally === undefined) {
-    const label = `open ${noun}s not reported`;
-    return {
-      key,
-      glyph,
-      label,
-      value: unknownFigure,
-      detail: countDetail(label)
-    };
-  }
-  const figure = formatWhole(tally);
-  const label = `${figure} open ${tally === 1 ? noun : `${noun}s`}`;
-  return {
-    key,
-    glyph,
-    label,
-    value: figure,
-    detail: countDetail(label)
   };
 }
 
@@ -364,15 +352,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/* An open-work tally is absent or a non-negative whole number. Absent is the
- * only "unknown" this field has: the producer omits the key rather than
- * writing null, which is what makes the pair additive, so an explicit null is
- * drift and refused with everything else. */
+/* A tally is absent or a non-negative whole number. Absent is the only
+ * "unknown" this field has: the producer omits the key rather than writing
+ * null, which is what makes it additive, so an explicit null is drift and
+ * refused with everything else. */
 function isOptionalTally(value: unknown): boolean {
   return (
     value === undefined ||
     (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
   );
+}
+
+/* The release-tag grammar, the frontend's half of the gate the origin's
+ * isReleaseTag applies (issue #317). The cell prints the tag verbatim, so this
+ * is what stops a payload printing a sentence, a path or a control character
+ * where a version belongs — the same layering the repository name already
+ * has. */
+const releaseTagPattern = /^[A-Za-z0-9._-]{1,64}$/;
+
+function isReleaseTag(tag: string): boolean {
+  return tag !== '.' && tag !== '..' && releaseTagPattern.test(tag);
 }
 
 /* The repository-name grammar, the frontend's half of the identity gate the
@@ -407,7 +406,7 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
     if (!isRecord(entry)) {
       return null;
     }
-    const { name, description, stars, pushedAt, openIssues, openPulls, recorded } = entry;
+    const { name, description, stars, pushedAt, closedPulls, release, pinned, recorded } = entry;
     if (typeof name !== 'string' || !isRepositoryName(name) || typeof description !== 'string') {
       return null;
     }
@@ -420,7 +419,13 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
     if (pushedAt !== undefined && typeof pushedAt !== 'string') {
       return null;
     }
-    if (!isOptionalTally(openIssues) || !isOptionalTally(openPulls)) {
+    if (!isOptionalTally(closedPulls)) {
+      return null;
+    }
+    if (release !== undefined && (typeof release !== 'string' || !isReleaseTag(release))) {
+      return null;
+    }
+    if (pinned !== undefined && typeof pinned !== 'boolean') {
       return null;
     }
     if (recorded !== undefined && typeof recorded !== 'boolean') {
@@ -430,11 +435,14 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
     if (typeof pushedAt === 'string') {
       row.pushedAt = pushedAt;
     }
-    if (typeof openIssues === 'number') {
-      row.openIssues = openIssues;
+    if (typeof closedPulls === 'number') {
+      row.closedPulls = closedPulls;
     }
-    if (typeof openPulls === 'number') {
-      row.openPulls = openPulls;
+    if (typeof release === 'string') {
+      row.release = release;
+    }
+    if (pinned === true) {
+      row.pinned = true;
     }
     if (recorded === true) {
       row.recorded = true;
@@ -517,10 +525,10 @@ export function projectsStaleNote(
 export const projectTableHeads: readonly string[] = [
   'Repository',
   'Description',
+  'PRs closed',
+  'Version',
   'Stars',
-  'Open',
-  'PRs',
-  'Pushed'
+  'Updated'
 ];
 
 /* How many rows the table shows. The owner asked for the four most recent
@@ -533,59 +541,6 @@ export const projectsEmptyNote = 'no repositories reported';
  * carry: an empty cell reads as a rendering fault, and this reads as what it
  * is. */
 const noDescription = '—';
-
-/* The three counters the table draws, out of the five the card drew. The two
- * that do not appear are not lost, they moved: the age has a column of its
- * own, and the captured commit total left with the card that had room for it
- * (owner directive, 2026-09-03 — the table's columns are the owner's list, and
- * the commit total is not on it). Each keeps the glyph, the bare figure and
- * the clipped words the terse-counter rule (issue 268) gave it. */
-function tableCount(count: EntryCount, glyph: LedgerCount['glyph']): LedgerCount {
-  const row: LedgerCount = {
-    key: count.key,
-    glyph,
-    value: count.value,
-    label: count.label,
-    detail: count.detail
-  };
-  return row;
-}
-
-function tableCounts(counts: readonly EntryCount[]): LedgerCount[] {
-  const glyphs: readonly LedgerCount['glyph'][] = ['star', 'issue', 'pull'];
-  const rows: LedgerCount[] = [];
-  for (const glyph of glyphs) {
-    const found = counts.find((count) => count.glyph === glyph);
-    if (found !== undefined) {
-      rows.push(tableCount(found, glyph));
-    }
-  }
-  return rows;
-}
-
-/* The age column, taken from the same counter the card rendered — one
- * derivation, two presentations, so the figure, its words, its provenance and
- * the absolute instant behind it all stay the ones projectCounts built. An
- * instant nobody reported keeps the honest dash it already had.
- *
- * The one thing that did NOT come across is the live minute tick the card's
- * counter carried (`since`, issue 268): the card was a long-lived surface a
- * reader could leave open with a frozen "3h" on it, and the table is redrawn
- * from a fresh envelope on the panels' own 60-second cadence — the same
- * minute the tick was re-deriving against — so the age advances by the
- * delivery rather than by a second clock inside the component. */
-function tableUpdated(counts: readonly EntryCount[]): LedgerCount {
-  const found = counts.find((count) => count.glyph === 'clock');
-  return found === undefined
-    ? {
-        key: 'updated',
-        glyph: 'clock',
-        value: unknownFigure,
-        label: 'last update not reported',
-        detail: { name: 'last update not reported', rows: [] }
-      }
-    : tableCount(found, 'clock');
-}
 
 export function projectTableProps(envelope: PanelEnvelope | null, now?: number): LedgerTableProps {
   const payload =
@@ -601,7 +556,7 @@ export function projectTableProps(envelope: PanelEnvelope | null, now?: number):
   const rows: LedgerTableRow[] = ordered.slice(0, shownProjectRows).map(([project, live]) => {
     const name = project?.name ?? live?.name ?? '';
     const recorded = live === undefined || live.recorded === true;
-    const counts = projectCounts(project, live, now);
+    const columns = projectColumns(project, live, now);
     const description = recorded
       ? (project?.description ?? live?.description ?? '')
       : live.description;
@@ -613,8 +568,8 @@ export function projectTableProps(envelope: PanelEnvelope | null, now?: number):
         label: projectLinkLabel({ name })
       },
       summary: description.length > 0 ? description : noDescription,
-      updated: tableUpdated(counts),
-      counts: tableCounts(counts)
+      updated: columns.updated,
+      counts: columns.counts
     };
   });
   /* No title: the section head "02 / Projects" already names this table, and

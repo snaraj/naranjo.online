@@ -294,7 +294,11 @@ export type LedgerLogProps = {
  * them), and the detail every figure on this page carries. */
 export type LedgerCount = {
   readonly key: string;
-  readonly glyph: 'star' | 'issue' | 'pull' | 'clock';
+  /* The mark drawn in place of the word, named from the Hairline family
+   * (lib/icons.ts). The union is narrow rather than the family's whole name
+   * list because these four are the columns the owner asked for (issue #317):
+   * a fifth mark in a table cell is a fifth column, not a spelling. */
+  readonly glyph: 'pull' | 'tag' | 'star' | 'clock';
   readonly value: string;
   readonly label: string;
   readonly detail: TipDetail;
@@ -681,38 +685,3 @@ export type MediaGalleryProps = {
   readonly tiles?: number;
 };
 
-/* --- Counters --------------------------------------------------------------- */
-
-/* One counter beside a linked entry's title: a small drawn glyph, the bare
- * figure it counts, and the detail that spells the whole thing out.
- *
- * TERSE IS NOW THE ONLY SHAPE (issue 268, owner directive: "just remove it",
- * of the label text and the inline provenance mark alike). Issue 252 made two
- * of these counters terse; the owner extended that to every one of them, so
- * `value` is required rather than optional and the words no longer have a
- * visible branch to come back through. They have not left the DOM: `label` is
- * the counter's whole meaning in words, rendered into a clipped span every
- * screen reader still reads, and it is what `detail` shows a sighted reader on
- * hover, touch or focus. The dataviz floor is intact — a value here is carried
- * by glyph PLUS number, never by the glyph alone — and so is the accessible
- * name.
- *
- * `detail` is the same primitive and the same grammar the stat tiles use
- * (DetailTip, issue 136 rule 1): the detail's NAME is the full phrase, and its
- * rows carry whatever else the counter can vouch for — the absolute instant
- * behind a live age. The page prints no provenance sentence (owner directive,
- * 2026-09-06, issue 299); provenance stays in the payload's `recorded` flags. */
-export type EntryCount = {
-  readonly key: string;
-  readonly glyph: 'node' | 'star' | 'clock' | 'issue' | 'pull';
-  readonly label: string;
-  readonly value: string;
-  readonly detail: TipDetail;
-  /* An ISO instant this counter is a LIVE AGE of (issue 268). Its presence is
-   * the whole discriminator: a counter that declares one has its figure, its
-   * words and its detail re-derived against the reader's own clock on a
-   * minute-aligned tick, so "3h" becomes "4h" while the page is open instead
-   * of freezing at whatever the render happened to catch. A counter without
-   * one renders exactly the value, label and detail the adapter built. */
-  readonly since?: string;
-};

@@ -1,535 +1,662 @@
 {
-  "generatedAt": "2026-08-20T09:50:34Z",
+  "generatedAt": "2026-09-11T23:08:20Z",
   "data": {
-    "totalContributions": 499,
-    "weeks": [
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
+      "totalContributions": 1519,
+      "weeks": [
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          2
+        ],
+        [
+          3,
+          0,
+          0,
+          0,
+          10,
+          0,
+          6
+        ],
+        [
+          19,
+          151,
+          117,
+          80,
+          11,
+          10,
+          0
+        ],
+        [
+          0,
+          0,
+          76,
+          0,
+          88,
+          36,
+          58
+        ],
+        [
+          38,
+          54,
+          69,
+          21,
+          52,
+          47,
+          49
+        ],
+        [
+          36,
+          64,
+          73,
+          8,
+          23,
+          81,
+          21
+        ],
+        [
+          23,
+          67,
+          30,
+          19,
+          11,
+          64,
+          0
+        ]
       ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
+      "endDate": "2026-09-11",
+      "streak": 23,
+      "recentCommits": [
+        {
+          "repo": "theme",
+          "sha": "78f8bdd4693aa1c91896fe06d42344127d8b039a",
+          "message": "Formula: v0.3.10 (#89) (#92)",
+          "at": "2026-09-11T22:22:12Z"
+        },
+        {
+          "repo": "theme",
+          "sha": "0b0cdc9c5512061ba91f055d9cfc58be75c809d0",
+          "message": "Release authorizer: the CI inventory is the workflow's three jobs (#9…",
+          "at": "2026-09-11T21:50:06Z"
+        },
+        {
+          "repo": "platform-k8s-infra",
+          "sha": "8b3890d655ac52e83907f87d508b40f059e41c78",
+          "message": "chore: update verified application releases (#27)",
+          "at": "2026-09-11T21:44:57Z"
+        },
+        {
+          "repo": "platform-k8s-infra",
+          "sha": "34858efe14ffe03d236b8bdd28d87dcf5235e9e1",
+          "message": "Keep proposal fixtures valid across native release selections (#24)",
+          "at": "2026-09-11T21:26:40Z"
+        },
+        {
+          "repo": "obsync",
+          "sha": "ae1f3727cd238396381a80f96725480543957fb3",
+          "message": "Give the native plugin a distinct installation identity (#42)",
+          "at": "2026-09-11T21:26:21Z"
+        },
+        {
+          "repo": "theme",
+          "sha": "382e7acd37599295dd4c9ca365298fb9679270c6",
+          "message": "kitty_e2e: locate the band only after the prompt (#88)",
+          "at": "2026-09-11T21:26:10Z"
+        },
+        {
+          "repo": "theme",
+          "sha": "494d938ef67413cfe9f6e6d832d6cc6bf249c402",
+          "message": "browse: keys navigate; the key path is proven in a real Kitty on CI (…",
+          "at": "2026-09-11T20:58:56Z"
+        },
+        {
+          "repo": "naranjo.online",
+          "sha": "2da0dc7b44ad4b278caf5af7ce583164851bc134",
+          "message": "Lifelong tracker ledger and the six-card Token usage board (v0.1.82) …",
+          "at": "2026-09-11T20:56:00Z"
+        },
+        {
+          "repo": "obsync",
+          "sha": "8baec28a5d144dd34258aef261c4f165af279518",
+          "message": "Prepare native installation, scoped sync and durable recovery (#39)",
+          "at": "2026-09-11T20:06:47Z"
+        },
+        {
+          "repo": "platform-k8s-infra",
+          "sha": "2e26b15055ff2b57985c3c0b5b2ca8ab10047efd",
+          "message": "Stage reserved storage and consume obsync native release evidence (#22)",
+          "at": "2026-09-11T20:05:53Z"
+        },
+        {
+          "repo": "theme",
+          "sha": "4b51631f3a136ea1d6f537cb5fd6ca53281fb1ad",
+          "message": "Gate the cold median with a floor and a decisive confirmation (#85)",
+          "at": "2026-09-11T20:05:40Z"
+        },
+        {
+          "repo": "platform",
+          "sha": "3b7a0532ba5fe2f10037023f3e26ec5876f8d191",
+          "message": "Admit a gated reserved-file ext4 storage profile - Codex (#368)",
+          "at": "2026-09-11T19:19:55Z"
+        },
+        {
+          "repo": "theme",
+          "sha": "0efc080e1220d278ddb8bb616b3f89667002116c",
+          "message": "Keep identical build artifacts distinct from timing regressions (#81)",
+          "at": "2026-09-11T17:45:20Z"
+        },
+        {
+          "repo": "theme",
+          "sha": "32ffd3b4c48562f14e209c9afab60ad16b87ab3c",
+          "message": "Fix v0.3.9 Homebrew release delivery (#79)",
+          "at": "2026-09-11T16:12:41Z"
+        },
+        {
+          "repo": "dotfiles",
+          "sha": "e82896432302e0528f5bb4a0f3b6a3b170bcb5c8",
+          "message": "feat(kitty): default to Iosevka Term with font alternatives (#12)",
+          "at": "2026-09-11T15:27:57Z"
+        },
+        {
+          "repo": "theme",
+          "sha": "36c2b7a730fc605c865bb1f65d27e10ecd1cd87d",
+          "message": "v0.3.9: Browse readable wallpapers and gate CLI performance (#77)",
+          "at": "2026-09-11T15:27:24Z"
+        },
+        {
+          "repo": "platform-k8s-infra",
+          "sha": "e85c7d827610b25cfdee1f747d2802868dc333b9",
+          "message": "chore: update verified application releases (#19)",
+          "at": "2026-09-11T01:53:50Z"
+        },
+        {
+          "repo": "obsync",
+          "sha": "8e4f501bf706c07957d40bdfdf9dc0d1e4c1c3b1",
+          "message": "v0.1.10: accept Kubernetes binary quantities for capacity, refuse dec…",
+          "at": "2026-09-10T23:21:26Z"
+        },
+        {
+          "repo": "platform-k8s-infra",
+          "sha": "b0e94169475d929e57715126838644dbe341a72f",
+          "message": "propose: name the declared application set in the generated body, not…",
+          "at": "2026-09-10T07:23:30Z"
+        },
+        {
+          "repo": "platform-k8s-infra",
+          "sha": "51dcc41ac0c940dffcff1f5d7ba58bb8a55da6a9",
+          "message": "chore: update verified application releases (#16)",
+          "at": "2026-09-10T06:31:16Z"
+        },
+        {
+          "repo": "obsync",
+          "sha": "7200f1f5d85d90fac09846a883137c518cb33e14",
+          "message": "v0.1.9: distroless base digest and setup-qemu-action 4.3.0, the two r…",
+          "at": "2026-09-10T05:50:20Z"
+        },
+        {
+          "repo": "platform-k8s-infra",
+          "sha": "3584d2b033c2043c86d7bbbf107d930fa25d3aa0",
+          "message": "chore: update verified application releases (#15)",
+          "at": "2026-09-09T21:15:40Z"
+        },
+        {
+          "repo": "platform-k8s-infra",
+          "sha": "736397b331264436f78f32b398c72d44d1de457d",
+          "message": "propose: bound the delta by the application set, not by two (#14)",
+          "at": "2026-09-09T20:33:13Z"
+        },
+        {
+          "repo": "obsync",
+          "sha": "e1fdb948b5b3736fdced1f3e726190382670fa52",
+          "message": "v0.1.8: a dismissal GitHub has stamped `fixed_at` is stale, not a ref…",
+          "at": "2026-09-09T18:01:08Z"
+        },
+        {
+          "repo": "obsync",
+          "sha": "f229a46c4395f1b07fe9df1aa8920229ec592f96",
+          "message": "v0.1.7: journal append recovery and watermark, errno fault tests, and…",
+          "at": "2026-09-09T15:14:27Z"
+        },
+        {
+          "repo": "obsync",
+          "sha": "e4aa059c671b872d3761440141ab841a7e89be50",
+          "message": "v0.1.6: CodeQL dispositions as code — the gate refuses uncovered aler…",
+          "at": "2026-09-09T06:02:43Z"
+        },
+        {
+          "repo": "obsync",
+          "sha": "f67b18d2fc2a7ef2639843c41c6824184e9fc6d7",
+          "message": "v0.1.5: refusal lines carry the I/O error kind; the smoke names disk …",
+          "at": "2026-09-09T04:41:04Z"
+        },
+        {
+          "repo": "platform",
+          "sha": "9cd79f1e69cfa00eb5467822831056101629c8f8",
+          "message": "Align private obsync activation with staged readiness - Codex (#366)",
+          "at": "2026-09-09T02:58:44Z"
+        },
+        {
+          "repo": "platform-k8s-infra",
+          "sha": "09557eeb5ee6342f959866cacb3977a3560a5ce3",
+          "message": "Activate obsync at the verified v0.1.4 chart and bind the real TLS pr…",
+          "at": "2026-09-09T01:50:42Z"
+        },
+        {
+          "repo": "obsync",
+          "sha": "de174ab9718b23c5d68173cd5571dc7d9eb664d7",
+          "message": "v0.1.4: deploymentReady gates the replica count (#18)",
+          "at": "2026-09-09T00:56:09Z"
+        }
       ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        2
-      ],
-      [
-        3,
-        0,
-        0,
-        0,
-        10,
-        0,
-        6
-      ],
-      [
-        19,
-        151,
-        117,
-        80,
-        11,
-        16,
-        0
-      ],
-      [
-        0,
-        0,
-        76,
-        0,
-        7,
-        0,
-        0
-      ]
-    ],
-    "endDate": "2026-08-20",
-    "streak": 1,
-    "recentCommits": [
-      {
-        "repo": "naranjo.online",
-        "message": "release(0.1.31): the experience batch, delivered linear (supersedes #131) (#132)",
-        "at": "2026-08-24T04:58:24Z"
-      },
-      {
-        "repo": "lidersea.com",
-        "message": "ci(rendering-lanes): stage-2 three-engine browser smoke + 0.1.28 (supersedes #106) (#108)",
-        "at": "2026-08-24T04:48:29Z"
-      },
-      {
-        "repo": "platform",
-        "message": "conventions: add lane-crossing declaration field to PR template (#94) (#207)",
-        "at": "2026-08-24T04:37:41Z"
-      },
-      {
-        "repo": "lidersea.com",
-        "message": "ci(test): classify-step isolation hardening + 0.1.27 (supersedes #105) (#107)",
-        "at": "2026-08-24T04:24:08Z"
-      },
-      {
-        "repo": "lidersea.com",
-        "message": "docs: correct review identity, package layout, and the retired ruleset (#104)",
-        "at": "2026-08-24T03:58:11Z"
-      },
-      {
-        "repo": "platform",
-        "message": "security(flux-rbac): repair anonymous release proof - Codex 5.6 Sol Ultra (#206)",
-        "at": "2026-08-23T21:15:44Z"
-      },
-      {
-        "repo": "platform",
-        "message": "security(flux-rbac): add release-bound convergence transaction - Codex 5.6 Sol Ultra (#205)",
-        "at": "2026-08-23T09:18:30Z"
-      },
-      {
-        "repo": "naranjo.online",
-        "message": "feat(panels): the token-usage detail the source tools report (#124)",
-        "at": "2026-08-22T22:58:33Z"
-      },
-      {
-        "repo": "naranjo.online",
-        "message": "The page becomes one centered tracker stack, and its controls stop drifting; release 0.1.29 (#119)",
-        "at": "2026-08-22T22:33:59Z"
-      }
-    ],
-    "commitsAt": "2026-08-24T05:46:03Z"
-  }
+      "commitsAt": "2026-09-11T23:08:18Z",
+      "coverage": "complete"
+    }
 }

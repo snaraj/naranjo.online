@@ -158,11 +158,15 @@ func NewFetchSource(fallback SnapshotSource, config FetchConfig, specs panelFetc
 			return nil, err
 		}
 		if commits := specs.vcs.Commits; commits != nil {
-			if err := validateBodyCap(commits.MaxBytes, config.MaxBytes); err != nil {
-				return nil, err
-			}
-			for _, source := range commits.Sources {
-				if err := validateEndpoint(source.Endpoint, config.Hosts); err != nil {
+			// Both query documents are reachable URLs and each gets the
+			// identical construction-time host and cap check, because the
+			// number of documents a producer posts is never a reason to check
+			// one of them less.
+			for _, document := range []*graphQLDocumentSpec{commits.Contributions, commits.History} {
+				if err := validateEndpoint(document.Endpoint, config.Hosts); err != nil {
+					return nil, err
+				}
+				if err := validateBodyCap(document.MaxBytes, config.MaxBytes); err != nil {
 					return nil, err
 				}
 			}
@@ -186,11 +190,14 @@ func NewFetchSource(fallback SnapshotSource, config FetchConfig, specs panelFetc
 		if err := validateEndpoint(specs.projects.ListingEndpoint, config.Hosts); err != nil {
 			return nil, err
 		}
-		// The tally document is a second reachable URL and gets the identical
-		// construction-time host check, because "optional" is about whether it
-		// is configured, never about whether it is checked.
-		if specs.projects.PullsEndpoint != "" {
-			if err := validateEndpoint(specs.projects.PullsEndpoint, config.Hosts); err != nil {
+		// The credentialed document is a second reachable URL and gets the
+		// identical construction-time checks, because "optional" is about
+		// whether it is configured, never about whether it is checked.
+		if document := specs.projects.Repositories; document != nil {
+			if err := validateEndpoint(document.Endpoint, config.Hosts); err != nil {
+				return nil, err
+			}
+			if err := validateBodyCap(document.MaxBytes, config.MaxBytes); err != nil {
 				return nil, err
 			}
 		}
@@ -632,7 +639,7 @@ func (s *FetchSource) refreshActivity(ctx context.Context, doer fetchDoer, env f
 	if err != nil {
 		return loadedPayload{}, err
 	}
-	commits, commitsAt, commitsDue, commitsFresh := s.commitSection(ctx, doer, env, spec.Commits, now)
+	commits, privateDays, commitsAt, commitsDue, commitsFresh := s.commitSection(ctx, doer, env, spec.Commits, now)
 	if !calendarDue && !commitsDue {
 		return loadedPayload{}, errNothingDue
 	}
@@ -641,6 +648,7 @@ func (s *FetchSource) refreshActivity(ctx context.Context, doer fetchDoer, env f
 		return loadedPayload{}, fmt.Errorf("contribution calendar: retained payload: %w", err)
 	}
 	payload.RecentCommits = commits
+	payload.PrivateActivity = privateDays
 	payload.CommitsAt = ""
 	if !commitsAt.IsZero() {
 		payload.CommitsAt = commitsAt.UTC().Format(time.RFC3339)
@@ -710,19 +718,9 @@ func (s *FetchSource) calendarSection(ctx context.Context, doer fetchDoer, env f
 func (s *FetchSource) readCalendar(ctx context.Context, doer fetchDoer, credential string, spec *vcsActivityFetchSpec, now time.Time) (json.RawMessage, error) {
 	if credentialed := spec.Calendar; credentialed != nil {
 		if credential != "" {
-			payload, err := calendarRequestBody(credentialed.Query, now)
-			if err != nil {
-				return nil, err
-			}
-			body, err := s.fetchDocument(ctx, doer, fetchRequest{
-				source:      roleVCSCalendar,
-				endpoint:    credentialed.Endpoint,
-				headers:     credentialed.Headers,
-				keyHeader:   credentialed.KeyHeader,
-				keyValue:    credentialed.KeyPrefix + credential,
-				maxBytes:    credentialed.MaxBytes,
-				contentType: credentialed.ContentType,
-				payload:     payload,
+			body, err := s.queryDocument(ctx, doer, roleVCSCalendar, credentialed.document(), credential, credentialed.KeyHeader, credentialed.KeyPrefix, queryVariables{
+				From: calendarWindowStart(now),
+				To:   now.UTC().Format(time.RFC3339),
 			})
 			if err != nil {
 				return nil, err
@@ -744,39 +742,56 @@ func (s *FetchSource) readCalendar(ctx context.Context, doer fetchDoer, credenti
 	return mapContributions(body)
 }
 
-// calendarQueryRequest is the request body posted to the credentialed
-// producer: the configured query document plus the window this package
-// computed. It is a package-owned struct so the body's shape is fixed in Go
-// and config supplies only the query text.
-type calendarQueryRequest struct {
-	Query     string                 `json:"query"`
-	Variables calendarQueryVariables `json:"variables"`
+// queryRequest is the request body posted to a credentialed producer: the
+// configured query document plus the variables this package supplies. It is a
+// package-owned struct so the body's shape is fixed in Go and config supplies
+// only the query text.
+type queryRequest struct {
+	Query     string         `json:"query"`
+	Variables queryVariables `json:"variables"`
 }
 
-// calendarQueryVariables carries the window the query asks over.
-type calendarQueryVariables struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+// queryVariables is the CLOSED set of variables this package will ever send.
+// Every field is omitted when empty, so each document receives exactly the
+// ones it declares — and a document cannot ask for a variable that is not
+// listed here, which is what bounds what config can make this process say.
+type queryVariables struct {
+	// From and To bound a window this package computed from its own clock.
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
+	// Author is the account's own node identity, read from the discovery
+	// answer and handed back so the history document filters to the owner's
+	// commits without naming anybody.
+	Author string `json:"author,omitempty"`
+	// IDs are the opaque repository identities the history document asks
+	// about, each admitted through isNodeIdentifier first.
+	IDs []string `json:"ids,omitempty"`
 }
 
-// calendarRequestBody builds that body for one round. The window ends now and
-// begins on the Sunday on or before calendarWindowDays ago — see that
-// constant for why the alignment is load-bearing rather than tidy.
-func calendarRequestBody(query string, now time.Time) ([]byte, error) {
-	to := now.UTC()
-	start := to.AddDate(0, 0, -calendarWindowDays)
-	from := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC).
-		AddDate(0, 0, -int(start.Weekday()))
-	body, err := json.Marshal(calendarQueryRequest{
-		Query:     query,
-		Variables: calendarQueryVariables{From: from.Format(time.RFC3339), To: to.Format(time.RFC3339)},
-	})
+// queryRequestBody builds one such body.
+func queryRequestBody(query string, variables queryVariables) ([]byte, error) {
+	body, err := json.Marshal(queryRequest{Query: query, Variables: variables})
 	if err != nil {
-		// Marshaling a package-owned struct of two strings cannot fail; the
+		// Marshaling a package-owned struct of strings cannot fail; the
 		// branch exists so a future field mistake is refused, not sent.
-		return nil, errors.New("calendar request: the query body could not be built")
+		return nil, errors.New("query request: the body could not be built")
 	}
 	return body, nil
+}
+
+// calendarWindowStart is the calendar window's first instant: the Sunday on or
+// before calendarWindowDays ago — see that constant for why the alignment is
+// load-bearing rather than tidy.
+func calendarWindowStart(now time.Time) string {
+	start := now.UTC().AddDate(0, 0, -calendarWindowDays)
+	return time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC).
+		AddDate(0, 0, -int(start.Weekday())).Format(time.RFC3339)
+}
+
+// windowInstant is a plain day-count lookback, which is all a window that is
+// not drawn as week columns needs.
+func windowInstant(now time.Time, days int) string {
+	return now.UTC().AddDate(0, 0, -days).Format(time.RFC3339)
 }
 
 // refreshProjects reads the account's public repository LISTING — one
@@ -811,22 +826,9 @@ func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env f
 		return loadedPayload{}, errNothingDue
 	}
 	logger := s.log()
-	request := fetchRequest{
-		source: roleCodingProjects, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
-		conditional: true,
-	}
-	if credential != "" {
-		request.keyHeader, request.keyValue = spec.KeyHeader, spec.KeyPrefix+credential
-	}
-	listingRequest := request
-	listingRequest.endpoint = spec.ListingEndpoint
-	body, err := s.fetchDocument(ctx, doer, listingRequest)
+	listed, refused, err := s.readProjects(ctx, doer, credential, spec, now)
 	if err != nil {
 		s.coolOnRateLimit(ctx, roleCodingProjects, now, err)
-		return loadedPayload{}, fmt.Errorf("repository listing: %w", err)
-	}
-	listed, refused, err := mapRepositoryListing(body, spec, now)
-	if err != nil {
 		return loadedPayload{}, err
 	}
 	for _, refusal := range refused {
@@ -837,15 +839,9 @@ func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env f
 		logger.LogAttrs(ctx, slog.LevelWarn, "repository row refused",
 			slog.String("repo", refusal.name), slog.Any("error", refusal.err))
 	}
-	pulls, talliesLive := s.openPullsByRepo(ctx, doer, request, spec, now)
 	payload := CodingProjectsData{Repos: make([]CodingProject, 0, len(listed))}
 	for _, entry := range listed {
-		row := entry.row
-		if talliesLive {
-			count := pulls[row.Name]
-			row.OpenIssues, row.OpenPulls = splitOpenWork(entry.combinedOpen, &count)
-		}
-		payload.Repos = append(payload.Repos, row)
+		payload.Repos = append(payload.Repos, entry.row)
 	}
 	status := StatusOK
 	if len(refused) > 0 {
@@ -854,115 +850,180 @@ func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env f
 	logger.LogAttrs(ctx, slog.LevelDebug, "coding projects refresh cycle",
 		slog.Int("repos_served", len(payload.Repos)),
 		slog.Int("rows_refused", len(refused)),
-		slog.Bool("tallies_live", talliesLive),
 	)
 	// Marshaling the package-owned payload cannot fail.
 	data, _ := json.Marshal(payload)
 	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, status: status}, nil
 }
 
-// openPullsByRepo reads the account-wide open pull-request search document
-// and attributes its matches per repository, or reports the tallies dead for
-// this round when the spec names no such document or the read does not hold
-// up.
+// readProjects picks THE repository producer for this round and maps its
+// answer, on exactly the rule readCalendar uses: the credentialed query when
+// the variable is set, the public listing otherwise.
 //
-// A false second answer is first-class rather than an error, and that is the
-// whole design of this second request: it can fail without costing the rows.
-// The caller still serves LIVE repository rows — description, stars, push
-// instant — and the two derived tallies simply are not there, which the
-// frontend draws as a dash. A repository the map has no entry for genuinely
-// has zero open pull requests, because the document vouches for the whole
-// account: the mapping refused it already if any match went unattributed.
-//
-// The credential rides on this request exactly as it does on the listing,
-// because it is the same host and the same rate budget; it is read from the
-// environment by the caller, flows into a header, and is neither stored nor
-// logged (requirement 12).
-func (s *FetchSource) openPullsByRepo(ctx context.Context, doer fetchDoer, request fetchRequest, spec *codingProjectsFetchSpec, now time.Time) (map[string]int64, bool) {
-	if spec.PullsEndpoint == "" {
-		return nil, false
-	}
-	attempt := request
-	attempt.endpoint = spec.PullsEndpoint
-	body, err := s.fetchDocument(ctx, doer, attempt)
-	if err == nil {
-		var counted map[string]int64
-		if counted, err = mapOpenPullsByRepo(body, spec.Account); err == nil {
-			return counted, true
+// The two differ in what they can SAY, not in whether they are live. The
+// listing document carries no release and no closed pull-request tally, so an
+// anonymous round serves rows without them and the page draws dashes — "not
+// known", which is true — rather than zeros, which would claim a repository
+// has never released and never closed a pull request. A credentialed FAILURE
+// does not fall through to the listing, for the identical reason the calendar's
+// does not: answering a transient fault by quietly serving a narrower answer
+// under the same heading is how a panel lies without anyone editing it.
+func (s *FetchSource) readProjects(ctx context.Context, doer fetchDoer, credential string, spec *codingProjectsFetchSpec, now time.Time) ([]listedProject, []refusedRow, error) {
+	if credentialed := spec.Repositories; credentialed != nil && credential != "" {
+		body, err := s.queryDocument(ctx, doer, roleCodingProjects, credentialed, credential, spec.KeyHeader, spec.KeyPrefix, queryVariables{})
+		if err != nil {
+			return nil, nil, fmt.Errorf("repository query: %w", err)
 		}
-	} else {
-		s.coolOnRateLimit(ctx, roleCodingProjects, now, err)
+		return mapRepositoryQuery(body, spec, now)
 	}
-	// Narrated HERE or nowhere: this is the end of the line for the error,
-	// and the chain names a host or a value fact at most; no URL.
-	s.log().LogAttrs(ctx, slog.LevelWarn, "open pull-request tally failed",
-		slog.Any("error", err))
-	return nil, false
+	request := fetchRequest{
+		source: roleCodingProjects, endpoint: spec.ListingEndpoint, headers: spec.Headers,
+		maxBytes: spec.MaxBytes, contentType: spec.ContentType, conditional: true,
+	}
+	if credential != "" {
+		request.keyHeader, request.keyValue = spec.KeyHeader, spec.KeyPrefix+credential
+	}
+	body, err := s.fetchDocument(ctx, doer, request)
+	if err != nil {
+		return nil, nil, fmt.Errorf("repository listing: %w", err)
+	}
+	return mapRepositoryListing(body, spec, now)
 }
 
-// commitSection returns the recent-commit rows to serve, the instant they
-// were read, whether this cycle attempted them at all, and whether the list
-// is live. A commit producer that is not configured serves an empty list and
-// never makes the panel stale: no producer, no claim.
-func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, env func(string) string, spec *vcsCommitsFetchSpec, now time.Time) ([]VCSCommit, time.Time, bool, bool) {
+// commitSection returns the recent-commit rows to serve, the private-day
+// aggregate beside them, the instant they were read, whether this cycle
+// attempted them at all, and whether the list is live. A commit producer that
+// is not configured serves an empty list and never makes the panel stale: no
+// producer, no claim.
+//
+// It is TWO documents per round and never more (issue #315): one asks which
+// repositories the account committed to over the window, the second asks those
+// repositories — by the node identities the first answer carried — for the
+// commits the account authored on their default branches. A third document,
+// or one per repository, is exactly the fan-out the ruling ruled out.
+//
+// An UNSET credential is not a failure and not a fallback. Both documents ask
+// about the credential's own account, so without one there is nothing to ask:
+// the round serves an empty list and says nothing, which is the honest empty
+// state, rather than inventing rows or reading a narrower public answer under
+// the same heading.
+func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, env func(string) string, spec *vcsCommitsFetchSpec, now time.Time) ([]VCSCommit, []VCSPrivateDay, time.Time, bool, bool) {
 	if spec == nil {
-		return []VCSCommit{}, time.Time{}, false, true
+		return []VCSCommit{}, nil, time.Time{}, false, true
 	}
-	credential := ""
-	if spec.KeyEnvName != "" {
-		credential = env(spec.KeyEnvName)
+	credential := env(spec.KeyEnvName)
+	if credential == "" {
+		// The variable NAME is config data and the value is absent, so there
+		// is nothing here that could leak; what a cluster log needs is the
+		// reason the log is empty.
+		s.log().LogAttrs(ctx, slog.LevelDebug, "commit producer skipped: credential unset; serving no commit rows")
+		return []VCSCommit{}, nil, time.Time{}, false, true
 	}
 	interval := s.config.endpointIntervalForCredential(spec.MinIntervalMinutes, spec.AuthenticatedMinIntervalMinutes, credential)
 	if !s.reserve(roleVCSCommits, now, interval) {
 		s.mu.Lock()
-		retained, at := s.commits, s.commitsAt
+		retained, days, at := s.commits, s.commitDays, s.commitsAt
 		s.mu.Unlock()
 		// Inside its budget a retained list IS the current answer, so the
 		// panel stays honest and ok. A list that was never fetched is not.
-		return retainedCommits(retained), at, false, !at.IsZero()
+		return retainedCommits(retained), days, at, false, !at.IsZero()
 	}
-	dated := make([]datedCommit, 0, len(spec.Sources)*maxCommitDocumentItems)
-	complete := true
-	for _, source := range spec.Sources {
-		request := fetchRequest{
-			source: roleVCSCommits, endpoint: source.Endpoint, headers: spec.Headers, maxBytes: spec.MaxBytes, contentType: spec.ContentType,
-			conditional: true,
-		}
-		if credential != "" {
-			request.keyHeader, request.keyValue = spec.KeyHeader, spec.KeyPrefix+credential
-		}
-		body, err := s.fetchDocument(ctx, doer, request)
-		if err != nil {
-			s.coolOnRateLimit(ctx, roleVCSCommits, now, err)
-			complete = false
-			// A failed commit document never propagates — the round degrades
-			// to stale instead — so its failure is narrated HERE or nowhere.
-			// The repo label is configuration data, and the error chain names
-			// the host at most; no URL.
-			s.log().LogAttrs(ctx, slog.LevelWarn, "commit source failed",
-				slog.String("repo", source.Repo), slog.Any("error", err))
-			continue
-		}
-		rows, err := mapCommits(body, source.Repo, now)
-		if err != nil {
-			complete = false
-			s.log().LogAttrs(ctx, slog.LevelWarn, "commit source failed",
-				slog.String("repo", source.Repo), slog.Any("error", err))
-			continue
-		}
-		dated = append(dated, rows...)
-	}
-	if len(dated) == 0 {
+	rows, days, err := s.readCommits(ctx, doer, credential, spec, now)
+	if err != nil {
+		s.coolOnRateLimit(ctx, roleVCSCommits, now, err)
 		s.mu.Lock()
-		retained, at := s.commits, s.commitsAt
+		retained, retainedDays, at := s.commits, s.commitDays, s.commitsAt
 		s.mu.Unlock()
-		return retainedCommits(retained), at, true, false
+		// A failed commit round never propagates — the panel degrades to
+		// stale instead — so its failure is narrated HERE or nowhere. The
+		// error chain names a host or a value fact at most; no URL.
+		s.log().LogAttrs(ctx, slog.LevelWarn, "commit round failed", slog.Any("error", err))
+		return retainedCommits(retained), retainedDays, at, true, false
 	}
-	merged := mergeCommits(dated, spec.Max)
 	s.mu.Lock()
-	s.commits, s.commitsAt = merged, now
+	s.commits, s.commitDays, s.commitsAt = rows, days, now
 	s.mu.Unlock()
-	return merged, now, true, complete
+	s.log().LogAttrs(ctx, slog.LevelDebug, "commit refresh cycle",
+		slog.Int("rows_served", len(rows)),
+		slog.Int("private_days", len(days)),
+	)
+	return rows, days, now, true, true
+}
+
+// readCommits runs one complete round: discovery, then history, then the
+// merge. Either document failing fails the ROUND rather than half of it —
+// there is no honest half here, because the discovery answer decides both
+// which repositories are asked about and what the private aggregate counts,
+// and a log built from one of the two would be a list that quietly lost
+// repositories.
+//
+// A window with no public repository at all skips the second document
+// entirely: a round with nothing to ask is not a round that asks anyway.
+func (s *FetchSource) readCommits(ctx context.Context, doer fetchDoer, credential string, spec *vcsCommitsFetchSpec, now time.Time) ([]VCSCommit, []VCSPrivateDay, error) {
+	body, err := s.queryDocument(ctx, doer, roleVCSCommits, spec.Contributions, credential, spec.KeyHeader, spec.KeyPrefix, queryVariables{
+		From: windowInstant(now, commitLogWindowDays),
+		To:   now.UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("commit contributions: %w", err)
+	}
+	author, repos, days, err := mapCommitContributions(body, spec.Owner, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(repos) == 0 {
+		return []VCSCommit{}, days, nil
+	}
+	ids := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		ids = append(ids, repo.id)
+	}
+	body, err = s.queryDocument(ctx, doer, roleVCSCommits, spec.History, credential, spec.KeyHeader, spec.KeyPrefix, queryVariables{
+		Author: author,
+		IDs:    ids,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("commit history: %w", err)
+	}
+	dated, err := mapCommitHistories(body, repos, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mergeCommits(dated, spec.Max), days, nil
+}
+
+// document reduces the calendar spec to the query document half of it. The
+// spec predates graphQLDocumentSpec and keeps its own flat shape so its
+// config block is unchanged; this is the one place the two meet.
+func (spec *vcsCalendarFetchSpec) document() *graphQLDocumentSpec {
+	return &graphQLDocumentSpec{
+		Endpoint:    spec.Endpoint,
+		Query:       spec.Query,
+		Headers:     spec.Headers,
+		MaxBytes:    spec.MaxBytes,
+		ContentType: spec.ContentType,
+	}
+}
+
+// queryDocument posts ONE credentialed query document and returns its bytes.
+// Every credentialed producer builds its request here, so the credential's
+// path — read from the environment by the caller, straight into one header,
+// never stored and never logged — is one path rather than one per document.
+func (s *FetchSource) queryDocument(ctx context.Context, doer fetchDoer, role string, spec *graphQLDocumentSpec, credential, keyHeader, keyPrefix string, variables queryVariables) ([]byte, error) {
+	payload, err := queryRequestBody(spec.Query, variables)
+	if err != nil {
+		return nil, err
+	}
+	return s.fetchDocument(ctx, doer, fetchRequest{
+		source:      role,
+		endpoint:    spec.Endpoint,
+		headers:     spec.Headers,
+		keyHeader:   keyHeader,
+		keyValue:    keyPrefix + credential,
+		maxBytes:    spec.MaxBytes,
+		contentType: spec.ContentType,
+		payload:     payload,
+	})
 }
 
 // retainedCommits hands back a non-nil list so the payload always carries a
@@ -1118,12 +1179,19 @@ type fetchRequest struct {
 	// it nil and is fetched exactly as it always was.
 	//
 	// A body is a capability, so where its bytes may come from is stated here
-	// rather than left to each caller: a payload is assembled from CONFIG data
-	// plus values this package computes from its own clock, never from any
-	// part of any upstream answer. That is what keeps the set of things this
-	// process can be made to ask unbounded by what it has been told — the same
-	// property complete literal endpoint URLs give the request LINE, extended
-	// to the request BODY.
+	// rather than left to each caller: a payload is assembled from the
+	// CONFIG's literal query document plus variables this package supplies,
+	// and the query text itself never carries a byte of any upstream answer.
+	//
+	// ONE producer's variables come from an upstream answer, and the narrowing
+	// that makes it safe is the whole of it (issue #315). The commit log's
+	// second document asks about repositories the FIRST document named, and
+	// they travel as a list of OPAQUE NODE IDENTIFIERS in a typed variable —
+	// admitted through isNodeIdentifier, never concatenated into the document,
+	// and never anywhere near the request LINE. So the set of ADDRESSES this
+	// process can reach is still fixed by config before the first request, and
+	// what an upstream can influence is bounded to which of the owner's own
+	// objects the next question is about.
 	payload []byte
 	// conditional opts this GET into validator revalidation: the last 200
 	// answer and its entity validator are retained per endpoint, the next

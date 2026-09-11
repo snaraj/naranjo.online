@@ -730,6 +730,16 @@
      row with a gap down one side of every entry. */
   --ledger-monogram: 1.75rem;
 
+  /* The three sizes a Hairline mark is drawn at (issue 313), named for the
+     SLOT the mark sits in rather than for a number at a call site: chrome is
+     the header row, row a list or control line, cell a table figure. A fourth
+     size would be a fourth token here, never a value written in a component.
+     --icon-gap is what a mark beside words spends. */
+  --icon-chrome: 1.125rem;
+  --icon-row: 1rem;
+  --icon-cell: 0.75rem;
+  --icon-gap: 0.375rem;
+
   /* The mono LABEL, which is the ledger's connective tissue: section numbers,
      column heads, sub-lines, the footer. One size, one tracking, everywhere. */
   --ledger-label-size: 0.6875rem;
@@ -2340,10 +2350,25 @@ h1 {
 
 /* --- 02 / the ruled table ------------------------------------------------ */
 
+/* The four figure tracks are sized to the LONGEST value each column can
+   print, not to a number somebody liked: a released version is the widest of
+   them (a ten-character tag at the figure size plus the mark slot and its
+   gap), the two tallies are four digits, and the age is a compact "12mo". A
+   track narrower than its own content is a numeral that ellipsizes, which is a
+   wrong figure rather than a tight one (issue 317).
+
+   THEIR SUM IS FIXED AT 20rem, and that is a page-level bound rather than an
+   aesthetic one. The row's fixed width — 15rem of name, five column gaps and
+   these four — is what the reading column can be narrowed to before the TABLE
+   pushes the document sideways: the column handle reaches 288px, the desktop
+   track list still applies at that column width (the restack is a viewport
+   decision, not a column one), and 680px of row is exactly what fits the
+   narrowest viewport the lanes drive. Widening one figure track means
+   narrowing another, or measuring the page's minimum again. */
 .table-head,
 .table-row {
   display: grid;
-  grid-template-columns: 15rem minmax(0, 1fr) 4.375rem 5.625rem 4.375rem 5.625rem;
+  grid-template-columns: 15rem minmax(0, 1fr) 4.5rem 6rem 4rem 5.5rem;
   align-items: center;
   gap: var(--ledger-column-gap);
   border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
@@ -2369,7 +2394,17 @@ h1 {
   color: var(--ledger-muted);
 }
 
+/* A MARKED head is laid out as its own cells are — the mark in a fixed slot at
+   the column's start, everything after it filling the rest — so the mark sits
+   directly over the marks under it and the head row cannot drift out of the
+   column it names (owner directive, 2026-09-11, issue 317). The two word
+   heads keep the old end alignment through the same rule, because a word with
+   no mark has nothing to line up with. */
 .table-label[data-table-align='end'] {
+  display: grid;
+  grid-template-columns: var(--icon-cell) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--icon-gap);
   text-align: end;
 }
 
@@ -2402,14 +2437,29 @@ h1 {
   font-size: var(--ledger-body-size);
 }
 
+/* THE MARK SLOT IS FIXED AND THE FIGURE FILLS THE REST (owner directive,
+   2026-09-11, issue 317). An inline row that packed mark and figure together
+   put the mark wherever the figure's own length left it, so a column of
+   four-digit tallies and a column of one-digit ones drew their marks at two
+   different x positions — the drift issue 188 already threw out for figures,
+   reaching the marks. Two declared tracks fix both ends at once: every mark
+   starts at its column's start edge, and every numeral ends at its end edge,
+   whatever either of them is that row. */
 .table-count {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: var(--icon-cell) minmax(0, 1fr);
   align-items: center;
-  justify-content: flex-end;
-  gap: 0.3125rem;
+  gap: var(--icon-gap);
   font-family: var(--font-mono);
   font-size: var(--ledger-figure-size);
   font-variant-numeric: tabular-nums;
+}
+
+.table-figure {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: end;
 }
 
 .table-glyph {
@@ -2440,9 +2490,6 @@ h1 {
 }
 
 .table-age {
-  font-family: var(--font-mono);
-  font-size: var(--ledger-figure-size);
-  text-align: end;
   color: var(--ledger-muted);
 }
 
@@ -2523,14 +2570,36 @@ h1 {
 }
 
 /* THE LOG'S BOX IS RESERVED (issue 285's reserve, kept through the redesign):
-   exactly as tall as the rows the adapter is allowed to hand it, so a payload
-   that lands a moment after first paint lands without moving the page. The
-   number is a multiplication of the row cap by the row's own touch floor
-   rather than a height somebody measured, and a frontend test recomputes it
-   from the adapter's own cap — so the box and the number of rows it holds
-   cannot drift apart. */
+   exactly as tall as the rows it holds open, so a payload that lands a moment
+   after first paint lands without moving the page. The number is a
+   multiplication of the reserve by the row's own touch floor rather than a
+   height somebody measured, and a frontend test recomputes it from the
+   adapter's own constant — so the box and the number of rows it holds cannot
+   drift apart.
+
+   IT SCROLLS FOR THE REST (owner directive, 2026-09-11, issue 315 — written
+   hashless because three digits after a hash read as a hex color to the
+   stylesheet's own color sweep). The log lists every contribution now, which
+   is more rows than any reserve should hold open; a box that GREW to fit them
+   would move every section under it the moment a payload landed, which is the
+   shift the reserve exists to prevent. So the box keeps its exact height
+   whatever arrives and the rows past it scroll inside it — the page's layout
+   is decided before the data, and stays decided.
+
+   There is deliberately NO `scrollbar-gutter` reservation here, and that is
+   this repository's own measured ruling rather than an omission: a reserved
+   gutter is charged on every platform, including the ones where a scrollbar
+   overlays the content and costs the layout nothing, and a frontend test
+   refuses the declaration anywhere in this sheet for exactly that reason (see
+   the modal lock above). Where an engine does draw a classic scrollbar it
+   takes its width from the row's own flexible subject column, inside a box
+   whose HEIGHT is fixed either way — so the page below it still does not
+   move. There is no hint text under the box and there must not be (the
+   no-reading-hints ruling): the scrollbar and the clipped row are the
+   affordance. */
 .commit-rows {
-  block-size: calc(5 * var(--commit-row-height));
+  block-size: calc(10 * var(--commit-row-height));
+  overflow-y: auto;
 }
 
 .commit-row {
@@ -3247,7 +3316,16 @@ h1 {
      keeps issue 188's claim true at this width as well: a figure sits where
      the table put it, never where its own length pushed it. */
   .table-row {
-    grid-template-columns: repeat(3, auto) minmax(0, 1fr);
+    /* THREE EQUAL TRACKS, not three content-sized ones (issue 317). `auto`
+       sized each counter track to the row's own figure, so a row reading 155
+       drew its neighbours' marks further right than a row reading 15 — the
+       ragged column issue 188 threw out, reaching the marks. Fractions of the
+       row make every row's tracks identical, so a mark sits where the table
+       put it at this width too — the AGE included, which is why all four are
+       fractions rather than three plus a content-sized one: an age track that
+       sized to "3h" on one row and "12mo" on the next moved the three tracks
+       beside it by the difference. */
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     grid-template-areas:
       'name name name age'
       'summary summary summary summary'
@@ -3286,8 +3364,15 @@ h1 {
     grid-area: third;
   }
 
+  /* At this width each counter has a whole track of its own, so the figure
+     reads better hard against its mark than pushed to a track edge the eye
+     has no column to compare against. */
   .table-count {
-    justify-content: flex-start;
+    grid-template-columns: var(--icon-cell) auto;
+  }
+
+  .table-count .table-figure {
+    text-align: start;
   }
 
   /* A narrow row stacks its source over its subject, so the pitch — and the
