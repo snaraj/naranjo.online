@@ -21,6 +21,17 @@ const modelVocabulary = JSON.parse(
   readFileSync(new URL('../../internal/panels/config/models.json', import.meta.url), 'utf8')
 );
 
+/* The SOURCE vocabulary, read the same way (issue #311). The wire carries a
+   machine key and the page prints the written name this file gives it, so a
+   lane that looks a source up on the page has to resolve the key the same way
+   the page does — and does it from the file rather than from a table typed
+   here. */
+const sourceVocabulary = JSON.parse(
+  readFileSync(new URL('../../internal/panels/config/sources.json', import.meta.url), 'utf8')
+);
+const sourceName = (key) =>
+  sourceVocabulary.sources.find((entry) => entry.key === key)?.name ?? key;
+
 // The narrowest viewport this site supports, and the sizes it must fit
 // between there and a large phone. 320 is the floor named in AGENTS.md;
 // 360/390/412 are widths ordinary Android and iPhone screens report.
@@ -1136,6 +1147,54 @@ async function stageUsagePayload(page, edit) {
   });
 }
 
+/* THE OWNER'S SIX-CARD BOARD, staged from the shipped vocabulary.
+ *
+ * The embedded snapshot this origin serves carries two sources with lifetime
+ * figures and daily series but no model split, so the board it draws is four
+ * cards — honest, and not the arrangement the geometry lanes are about. This
+ * gives each source a split (one through the lifetime accounting, one through
+ * the windowed partition, so BOTH kinds of models card are on the board), a
+ * window row and the session record, which is exactly the six the owner's
+ * drawing lays out three by two.
+ *
+ * Every key comes from the vocabulary files rather than from a list typed
+ * here, so the staged payload is one the origin could actually serve. */
+async function stageSixCards(page) {
+  const [group] = modelVocabulary.groups;
+  const [first, second, third] = group.members.map((member) => member.key);
+  await stageUsagePayload(page, (envelope) => {
+    const sources = envelope?.data?.sources ?? [];
+    expect(
+      sources.length,
+      'the origin serves fewer than two usage sources; this lane cannot lay out six cards'
+    ).toBeGreaterThan(1);
+    const [lead, follower] = sources;
+    lead.windows = [{ period: 'today', inputTokens: 12_900_000, outputTokens: 49_500 }];
+    lead.stats = [
+      ...(lead.stats ?? []),
+      { key: 'longest-session', label: 'Longest session', value: 150_900, unit: 'seconds' },
+    ];
+    lead.modelStats = [
+      { key: first, totals: { input: 2, output: 3, 'cache-read': 60, 'cache-write': 5 } },
+      { key: second, totals: { input: 1, output: 1, 'cache-read': 26, 'cache-write': 2 } },
+    ];
+    follower.windows = [{ period: 'week', inputTokens: 3_300_000_000, outputTokens: 4_300_000 }];
+    /* The SAME start as the lead's own series, so the two overlap and the
+       total card has a combined line to draw: the intersection rule is proven
+       in the unit suite, and a staged board that never overlapped would leave
+       this lane measuring a card with no chart on it. */
+    follower.series = {
+      startDate: lead.series?.startDate ?? '2026-08-10',
+      totals: [5, 8, 5, 9, 12, 7, 5],
+      recorded: true,
+      models: [
+        { key: third, totals: [4, 6, 4, 7, 9, 5, 4] },
+        { key: first, totals: [1, 2, 1, 2, 3, 2, 1] },
+      ],
+    };
+  });
+}
+
 /* A synthetic daily series of `days` days, ending today. Values ramp so the
  * five-level magnitude ramp has something to quantize; the shape is what the
  * lane is about, not the numbers. */
@@ -1197,7 +1256,7 @@ test('every set draws ONE calendar, and coverage moves the data rather than the 
     await stageUsagePayload(page, (envelope) => {
       const sources = envelope?.data?.sources ?? [];
       expect(sources.length, 'the origin serves fewer than two usage sources').toBeGreaterThan(1);
-      stagedLabel = sources[0].label;
+      stagedLabel = sourceName(sources[0].label);
       sources[0].series = syntheticSeries(days);
     });
     await visit(page);
@@ -1335,85 +1394,99 @@ test('every set draws ONE calendar, and coverage moves the data rather than the 
  * So this lane asks a real engine what it actually painted. Both directions,
  * because "no fill" alone is satisfied by a component that draws no bars for
  * anybody. */
-test('an insight with no measured share draws no bar, and a measured one still does', async ({
-  page,
-}) => {
-  await stageUsagePayload(page, (envelope) => {
-    const sources = envelope?.data?.sources ?? [];
-    expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
-    /* The frozen-insight path, which is the one that can carry a null: the
-       series' own model partition is what would otherwise derive the shares,
-       so it goes with it. */
-    delete sources[0].series;
-    sources[0].insights = [
-      { label: 'Unmeasured', pct: null },
-      { label: 'Measured', pct: 50 },
-    ];
-  });
-  await visit(page);
-  /* THE FIRST SOURCE'S SHARES, ON THE FRONT OF THE MODEL SQUARE (owner
-     directive, 2026-09-03, issue 287). The per-source usage cards are retired;
-     the shares are drawn as the board's bars now, and the board puts the first
-     source's on the square's front face and the second source's behind it —
-     which is what keeps this lane pointed at the source it actually restaged.
-     Only that square carries bars on its front at all, every other square
-     carrying a figure, so the front face IS the first-source scope the retired
-     `.usage-source` first() gave. The guard under test moved with the markup
-     and did not change shape: `{#if bar.fillPct !== null}` in
-     LedgerBoard.svelte. */
-  const rows = page.locator('.board-square [data-face="front"] .board-bar');
-  await expect(rows).toHaveCount(2);
-  const observed = await rows.evaluateAll((nodes) =>
-    nodes.map((node) => {
-      const fill = node.querySelector('.board-fill');
-      const track = node.querySelector('.board-track');
-      const width = (box) => (box === null ? null : Math.round(box.getBoundingClientRect().width * 100) / 100);
-      return {
-        label: node.querySelector('.board-bar-label').textContent.trim(),
-        reading: node.querySelector('.board-reading').textContent.trim(),
-        /* Presence FIRST, and width only if it is there. A zero-width fill
-           and no fill are different renderings of different claims, and the
-           whole point of the guard is that the second is the honest one. */
-        drawn: fill !== null,
-        fill: width(fill),
-        // The track is always present — it is the groove — so it is the
-        // control that proves the row rendered at all.
-        track: width(track),
+/* A MEMBER THAT CARRIED NOTHING IS NOT A ROW (owner directive, 2026-09-11).
+ *
+ * This lane used to measure the opposite half of the same rule: a share the
+ * data could not support drew no FILL, because a zero-width fill is
+ * pixel-identical to a measured 0%. The board no longer has that state to
+ * draw — the adapter drops a member with no tokens and the residual with it,
+ * so every row that reaches a card has a positive total and a fill it can
+ * honestly draw. The rule did not relax; it moved up, from a guard in the
+ * component to a state that cannot be constructed, and this is the measured
+ * half of THAT: what the engine actually drew for the rows that survived.
+ */
+test('every model row the card draws is a real member with a real rule', async ({ page }) => {
+  const [group] = modelVocabulary.groups;
+  const [big, small] = group.members.map((member) => member.key);
+  const classes = (count) => ({ input: count, output: 0, 'cache-read': 0, 'cache-write': 0 });
+  /* BOTH kinds of card, because they are two quantities (issue #267): a
+     source that reports its LIFETIME split per model (`modelStats`) shows
+     shares of that, and one that reports only the daily partition shows the
+     window summed per member. The served payload carries the first for its
+     first source, so a lane that staged the partition alone would be
+     measuring rows it never staged. Same two members, same 4:1, both ways. */
+  for (const lifetime of [true, false]) {
+    await stageUsagePayload(page, (envelope) => {
+      const sources = envelope?.data?.sources ?? [];
+      expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
+      envelope.data.sources = [sources[0]];
+      sources[0].series = {
+        startDate: '2026-06-01',
+        totals: [5, 5, 5],
+        recorded: true,
+        models: [
+          { key: big, totals: [4, 4, 4] },
+          { key: small, totals: [1, 1, 1] },
+        ],
       };
-    })
-  );
-  const [unmeasured, measured] = observed;
-  expect(unmeasured.label, 'the staged rows did not render in the order they were served').toBe(
-    'Unmeasured'
-  );
-  expect(unmeasured.reading, 'an unmeasured share printed a number instead of a dash').toBe('--');
-  expect(
-    unmeasured.track,
-    'the unmeasured row drew no track either; it must show its empty groove, not vanish'
-  ).toBeGreaterThan(0);
-  expect(
-    unmeasured.drawn,
-    'an unmeasured share painted a fill; a zero-width one is pixel-identical to a measured 0%, which is exactly the claim it must not make'
-  ).toBe(false);
-  expect(
-    measured.track,
-    'the insight track has no width to fill; this lane cannot tell a drawn bar from an undrawn one'
-  ).toBeGreaterThan(0);
-  expect(
-    measured.drawn,
-    'a measured share drew no fill either, so the assertion above proves nothing'
-  ).toBe(true);
-  expect(
-    measured.fill,
-    'a measured share painted no bar at all'
-  ).toBeGreaterThan(0);
-  expect(
-    measured.fill,
-    'a measured share painted past its own track'
-  ).toBeLessThanOrEqual(measured.track + subPixel);
-  await page.unrouteAll({ behavior: 'ignoreErrors' });
+      if (lifetime) {
+        sources[0].modelStats = [
+          { key: big, totals: classes(4) },
+          { key: small, totals: classes(1) },
+        ];
+      } else {
+        delete sources[0].modelStats;
+      }
+    });
+    await visit(page);
+    const rows = page.locator('.board-card .board-model');
+    await expect(rows, `${lifetime ? 'lifetime' : 'window'}: the card did not draw exactly the two staged members`).toHaveCount(2);
+    const observed = await rows.evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const fill = node.querySelector('.board-fill');
+        const track = node.querySelector('.board-track');
+        const width = (box) =>
+          box === null ? null : Math.round(box.getBoundingClientRect().width * 100) / 100;
+        return {
+          label: node.querySelector('.board-model-name').textContent.trim(),
+          reading: node.querySelector('.board-reading').textContent.trim(),
+          fill: width(fill),
+          // The track is always present — it is the groove — so it is the
+          // control that proves the row rendered at all.
+          track: width(track),
+        };
+      })
+    );
+    const [largest, lesser] = observed;
+    expect(largest.label, 'the rows did not render in the vocabulary order').toBe(
+      group.members[0].label
+    );
+    for (const row of observed) {
+      expect(row.track, `"${row.label}" drew no groove; this lane cannot tell a bar from nothing`).toBeGreaterThan(0);
+      expect(row.fill, `"${row.label}" painted no bar at all`).toBeGreaterThan(0);
+      expect(row.fill, `"${row.label}" painted past its own track`).toBeLessThanOrEqual(
+        row.track + subPixel
+      );
+      expect(row.reading, `"${row.label}" printed a nought share`).not.toBe('0%');
+      expect(row.reading.length, `"${row.label}" printed no reading beside its rule`).toBeGreaterThan(0);
+      /* The reading says WHICH quantity it is: a lifetime row is a share of
+         the whole, a window row is the member's own count — never a share of
+         a window dressed as a share of a lifetime. */
+      if (lifetime) {
+        expect(row.reading, `"${row.label}" printed no share of the lifetime`).toMatch(/%$/);
+      } else {
+        expect(row.reading, `"${row.label}" printed a window as if it were a lifetime share`).not.toMatch(/%$/);
+      }
+    }
+    /* THE LONGEST ROW RUNS THE CARD'S FULL WIDTH and the rest are read against
+       it, which is what makes the rules comparable without a scale. */
+    expect(largest.fill).toBeCloseTo(largest.track, 0);
+    expect(lesser.fill / lesser.track).toBeCloseTo(0.25, 1);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  }
 });
 
+/* A CARD THAT HIDES A ROW IS A CARD THAT LIES (owner directive,
 /* A SQUARE THAT HIDES A MODEL IS A SQUARE THAT LIES (owner directive,
  * 2026-09-03, issue 287).
  *
@@ -1425,251 +1498,347 @@ test('an insight with no measured share draws no bar, and a measured one still d
  * a box with room for about 2.7 of them, and two of the four models were
  * absent from a square that gave no sign of it.
  *
- * A count alone would not have caught it — all four bars were in the DOM. So
- * this measures what the box actually SHOWS: every face's own content must fit
- * inside the face, on both sides of every square, at a phone width and a
- * desktop one. The scroll height is the general statement and the per-bar walk
- * is the specific one, because a face can fit its own scroll height while one
- * child still lands outside the visible box.
+ * THE FIXED BOX IS GONE (owner directive, 2026-09-11): a card's height follows
+ * its content over a shared minimum, and a turn inverts the card's ink rather
+ * than rotating a second face into the same box. Both halves of the silence
+ * this lane was written for are therefore structurally harder to reach — and
+ * both are still measured, because "harder to reach" is not "impossible" and a
+ * clipping regression would be exactly as silent as it was. What the lane
+ * measures now is what the box actually SHOWS, in BOTH turned states, at a
+ * phone width and a desktop one: the card's scroll height against its own, and
+ * every row and fact inside it against the card's visible rectangle.
  */
-test('every board square shows all of its own content, front and back (owner 2026-09-03, issue 287)', async ({
+test('every board card shows all of its own content, turned or not (owner 2026-09-11)', async ({
   page,
 }) => {
+  await stageSixCards(page);
   await visit(page);
-  const readVisibility = () =>
+  const readCards = () =>
     page.evaluate(() =>
-      [...window.document.querySelectorAll('.board-square')].map((square) => ({
-        turned: square.getAttribute('data-turned'),
-        front: getComputedStyle(square.querySelector('[data-face="front"]')).visibility,
-        back: getComputedStyle(square.querySelector('[data-face="back"]')).visibility,
-      }))
-    );
-  const readFaces = (side) =>
-    page.evaluate((face) => {
-      return [...window.document.querySelectorAll('.board-square')].map((square) => {
-        const panel = square.querySelector(`[data-face="${face}"]`);
-        const box = panel.getBoundingClientRect();
-        const bars = [...panel.querySelectorAll('.board-bar')];
-        const facts = [...panel.querySelectorAll('.board-fact')];
+      [...window.document.querySelectorAll('.board-card')].map((card) => {
+        const box = card.getBoundingClientRect();
+        const rows = [...card.querySelectorAll('.board-model')];
+        const facts = [...card.querySelectorAll('.board-fact')];
         const inside = (node) => {
           const seat = node.getBoundingClientRect();
           return seat.bottom <= box.bottom + 1 && seat.right <= box.right + 1;
         };
         return {
-          label: panel.querySelector('.board-label')?.textContent.trim() ?? '',
-          overflow: getComputedStyle(panel).overflow,
-          scrollHeight: panel.scrollHeight,
-          clientHeight: panel.clientHeight,
-          bars: bars.length,
-          barsShown: bars.filter(inside).length,
+          label: card.querySelector('.board-label')?.textContent.trim() ?? '',
+          turned: card.getAttribute('data-turned'),
+          scrollHeight: card.scrollHeight,
+          clientHeight: card.clientHeight,
+          rows: rows.length,
+          rowsShown: rows.filter(inside).length,
+          rowsWhole: rows.filter((node) => node.scrollHeight <= node.clientHeight + 1).length,
           facts: facts.length,
           factsShown: facts.filter(inside).length,
         };
-      });
-    }, side);
+      })
+    );
 
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await settled(page);
-    const fronts = await readFaces('front');
-    expect(fronts.length, `the board drew no squares at ${width}px`).toBeGreaterThan(1);
-    /* THE BACK IS HIDDEN, NOT MERELY TURNED AWAY (owner 2026-09-03, issue
-       287). WebKit flattens 3D transforms inside a <button>, so a back face
-       that relied on backface-visibility alone drew mirrored over the front
-       on every Safari; the faces now swap `visibility` at the flip midpoint,
-       and this is the measured half of that rule: at rest every front is
-       visible and every back hidden, and a turned square is the reverse. The
-       swap is delayed half a flip, so each reading polls rather than reads. */
-    await expect
-      .poll(async () => (await readVisibility()).map((square) => `${square.front}/${square.back}`), {
-        message: `at rest at ${width}px every front must be visible and every back hidden`,
-      })
-      .toEqual(fronts.map(() => 'visible/hidden'));
-    /* The box really is a clipping box, which is what makes the rest of this
-       lane worth running: against an `overflow: visible` face every assertion
-       below would hold for free while the content spilled instead. */
-    for (const face of fronts) {
+    for (const pass of ['as composed', 'every card turned']) {
+      if (pass !== 'as composed') {
+        const cards = page.locator('.board-card');
+        const count = await cards.count();
+        for (let index = 0; index < count; index += 1) {
+          await cards.nth(index).click();
+        }
+      }
+      const observed = await readCards();
+      expect(observed.length, `the board drew no cards at ${width}px`).toBeGreaterThan(1);
+      for (const card of observed) {
+        const at = `at ${width}px, ${pass}`;
+        expect(
+          card.scrollHeight,
+          `"${card.label}" holds ${card.scrollHeight}px of content in a ${card.clientHeight}px card ${at}; the rest is hidden with no sign of it`
+        ).toBeLessThanOrEqual(card.clientHeight + 1);
+        expect(
+          card.rowsShown,
+          `"${card.label}" draws ${card.rows} model rows ${at} and shows ${card.rowsShown}`
+        ).toBe(card.rows);
+        expect(
+          card.rowsWhole,
+          `${card.rows - card.rowsWhole} of ${card.rows} rows clip their own name or groove ${at}`
+        ).toBe(card.rows);
+        expect(
+          card.factsShown,
+          `"${card.label}" draws ${card.facts} facts ${at} and shows ${card.factsShown}`
+        ).toBe(card.facts);
+      }
+      /* Non-vacuity: a board whose cards all held a single short figure would
+         satisfy everything above without ever exercising the shapes that
+         clipped. At least one card carries a real stack of model rows and at
+         least one a real fact ladder. */
       expect(
-        face.overflow,
-        `"${face.label}" is not a clipping box at ${width}px, so this lane proves nothing about it`
-      ).toBe('hidden');
+        Math.max(...observed.map((card) => card.rows)),
+        `no card draws model rows at ${width}px; the shape that clipped is not on the page`
+      ).toBeGreaterThan(1);
       expect(
-        face.scrollHeight,
-        `"${face.label}" holds ${face.scrollHeight}px of content in a ${face.clientHeight}px face at ${width}px; the rest is hidden with no sign of it`
-      ).toBeLessThanOrEqual(face.clientHeight + 1);
-      expect(
-        face.barsShown,
-        `"${face.label}" draws ${face.bars} model bars at ${width}px and shows ${face.barsShown}`
-      ).toBe(face.bars);
-      expect(
-        face.factsShown,
-        `"${face.label}" draws ${face.facts} facts at ${width}px and shows ${face.factsShown}`
-      ).toBe(face.facts);
+        Math.max(...observed.map((card) => card.facts)),
+        `no card draws a fact ladder at ${width}px`
+      ).toBeGreaterThan(1);
     }
-    /* Non-vacuity: a board whose faces all held a single short figure would
-       satisfy everything above without ever exercising the case that broke.
-       At least one front carries a real stack of bars. */
-    expect(
-      Math.max(...fronts.map((face) => face.bars)),
-      `no square draws model bars at ${width}px; the shape that clipped is not on the page`
-    ).toBeGreaterThan(1);
-
-    /* AND THE BACKS, which is where the flip puts a second face of content
-       into the SAME fixed box — so a back that overflows is exactly as silent
-       as a front that does. Every square is turned rather than a sample: the
-       backs carry different shapes from each other (a fact list, a bar stack,
-       a note) and only one of them has to be wrong. */
-    const squares = page.locator('.board-square');
-    const count = await squares.count();
+    /* Left as found, so the next width starts from the board the adapter
+       composed rather than from whatever the last pass pressed. */
+    const cards = page.locator('.board-card');
+    const count = await cards.count();
     for (let index = 0; index < count; index += 1) {
-      await squares.nth(index).click();
-    }
-    const backs = await readFaces('back');
-    await expect
-      .poll(async () => (await readVisibility()).map((square) => `${square.turned}:${square.front}/${square.back}`), {
-        message: `turned at ${width}px every back must be visible and every front hidden`,
-      })
-      .toEqual(backs.map(() => 'true:hidden/visible'));
-    for (const face of backs) {
-      expect(
-        face.scrollHeight,
-        `the back of "${face.label}" holds ${face.scrollHeight}px of content in a ${face.clientHeight}px face at ${width}px; the rest is hidden with no sign of it`
-      ).toBeLessThanOrEqual(face.clientHeight + 1);
-      expect(
-        face.barsShown,
-        `the back of "${face.label}" draws ${face.bars} model bars at ${width}px and shows ${face.barsShown}`
-      ).toBe(face.bars);
-      expect(
-        face.factsShown,
-        `the back of "${face.label}" draws ${face.facts} facts at ${width}px and shows ${face.factsShown}`
-      ).toBe(face.facts);
-    }
-    /* The backs are non-vacuous too: at least one of them carries a fact list,
-       which is the shape a fixed box is most likely to run out of room for. */
-    expect(
-      Math.max(...backs.map((face) => face.facts)),
-      `no square's back draws a fact list at ${width}px`
-    ).toBeGreaterThan(1);
-    /* Left as found, so the next width starts from the same closed board. */
-    for (let index = 0; index < count; index += 1) {
-      await squares.nth(index).click();
+      await cards.nth(index).click();
     }
   }
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-/* THE MODEL BLOCK IS HEADED BY ITS VENDOR GROUP, AND PRINTS EVERY ROW IT
- * CARRIES (issue #302).
+/* THE BOARD IS THE OWNER'S THREE-BY-TWO AND IT FILLS THE COLUMN (owner
+ * directive, 2026-09-11; the no-dead-space rule).
  *
- * Two claims the source pins cannot make, because both are about what the
- * ENGINE laid out. First the heading: the block reads the group's written
- * name from the vocabulary file, never the operator-typed source label the
- * capture came from. Second the geometry, which is the one that bites — the
- * larger vendor group declares seven named members, and with the residual
- * that is eight rows in a fixed square with `overflow: hidden`. The bars box
- * reserves its rows from the group's declared count, and this lane measures
- * whether the rows it reserved are actually SHOWN, at a phone width and a
- * desktop one, in every engine.
- *
- * The payload is built from the shipped vocabulary rather than from a list
- * typed here, so the widest block this site can serve is the one measured. */
-test('a vendor group heads its own block and prints every row it reserves (issue #302)', async ({
+ * Measured rather than declared, and measured the way the gallery's fill lane
+ * is: the board's own edges against the reading COLUMN's, and the cards'
+ * widths against each other, so no token value can satisfy it by moving
+ * expectation and behaviour together. The rows are equal-height bands, which
+ * is the half a grid gives for free and the half a later `align-items` change
+ * would silently take away.
+ */
+test('the board is three cards across in two equal rows, filling the column (owner 2026-09-11)', async ({
   page,
 }) => {
-  // The largest group is the demanding one: most members, tallest block.
-  const group = modelVocabulary.groups.reduce((widest, candidate) =>
-    candidate.members.length > widest.members.length ? candidate : widest
-  );
-  const keys = [modelVocabulary.residual.key, ...group.members.map((member) => member.key)];
-  const reserved = group.members.length + 1;
-  await stageUsagePayload(page, (envelope) => {
-    const [source] = envelope.data.sources;
-    envelope.data.sources = [source];
-    source.series = {
-      startDate: '2026-06-01',
-      totals: [keys.length, keys.length * 2, keys.length * 3],
-      recorded: true,
-      models: keys.map((key) => ({ key, totals: [1, 2, 3] })),
-    };
-  });
+  await stageSixCards(page);
   await visit(page);
-
-  const readBlock = () =>
-    page.evaluate(() => {
-      const square = [...window.document.querySelectorAll('.board-square')].find(
-        (candidate) =>
-          candidate.querySelector('[data-face="front"] .board-bar') !== null
-      );
-      if (square === undefined) {
-        return null;
-      }
-      const face = square.querySelector('[data-face="front"]');
-      const box = face.getBoundingClientRect();
-      const bars = [...face.querySelectorAll('.board-bar')];
-      const inside = (node) => {
-        const seat = node.getBoundingClientRect();
-        return seat.bottom <= box.bottom + 1 && seat.right <= box.right + 1;
-      };
+  for (const width of desktopWidths) {
+    await page.setViewportSize({ width, height: 1200 });
+    await settled(page);
+    const observed = await page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
+      const grid = window.document.querySelector('.board-grid').getBoundingClientRect();
+      const column = window.document.querySelector('main').getBoundingClientRect();
+      const cards = [...window.document.querySelectorAll('.board-card')].map((card) => {
+        const box = card.getBoundingClientRect();
+        const spark = card.querySelector('.spark');
+        return {
+          x: round(box.x),
+          y: round(box.y),
+          width: round(box.width),
+          height: round(box.height),
+          right: round(box.right),
+          spark: spark === null ? null : round(spark.getBoundingClientRect().width),
+          inner: round(box.width),
+        };
+      });
       return {
-        label: face.querySelector('.board-label').textContent.trim(),
-        declared: square.getAttribute('data-rows'),
-        rows: face.querySelector('.board-bars').style.getPropertyValue('--board-bar-rows').trim(),
-        bars: bars.length,
-        barsShown: bars.filter(inside).length,
-        /* Each ROW's own content, not just its box. A grid item is sized to
-           its track, so a row whose label and groove no longer fit still
-           reports a rect inside the face while quietly clipping itself —
-           which is the exact silence this whole lane exists to break. */
-        barsWhole: bars.filter((node) => node.scrollHeight <= node.clientHeight + 1).length,
-        readings: bars.map((node) => node.querySelector('.board-reading').textContent.trim()),
-        labels: bars.map((node) => node.querySelector('.board-bar-label').textContent.trim()),
-        scrollHeight: face.scrollHeight,
-        clientHeight: face.clientHeight,
+        left: round(grid.left - column.left),
+        right: round(column.right - grid.right),
+        cards,
+        rows: [...new Set(cards.map((card) => Math.round(card.y)))],
+        columns: [...new Set(cards.map((card) => Math.round(card.x)))].length,
       };
     });
+    const at = `at ${width}px`;
+    /* ONE PIXEL, and it is a rounding allowance rather than a tolerance for
+       dead space: the smallest gap this grid could leave from a real
+       regression is one whole track. */
+    expect(observed.right, `the board stops ${observed.right}px short of the column ${at}`).toBeLessThanOrEqual(1);
+    expect(observed.right, `the board runs past the column's right edge ${at}`).toBeGreaterThanOrEqual(-1);
+    expect(observed.left, `the board starts ${observed.left}px inside the column ${at}`).toBeLessThanOrEqual(1);
+    expect(observed.left, `the board starts ${observed.left}px outside the column ${at}`).toBeGreaterThanOrEqual(-1);
+    expect(observed.cards.length, `the board holds ${observed.cards.length} cards ${at}`).toBe(6);
+    expect(observed.columns, `the board draws ${observed.columns} columns ${at}`).toBe(3);
+    expect(observed.rows.length, `the six cards laid out on ${observed.rows.length} rows ${at}`).toBe(2);
+    const widths = observed.cards.map((card) => card.width);
+    for (const [index, card] of widths.entries()) {
+      expect(
+        card,
+        `card ${index + 1} is ${card}px against card 1's ${widths[0]}px ${at}; the tracks are not equal`
+      ).toBeCloseTo(widths[0], 0);
+    }
+    /* EQUAL ROW HEIGHTS WITHIN A ROW. Two bands, each one height, which is
+       what makes the board read as a sheet rather than as six boxes. */
+    for (const top of observed.rows) {
+      const band = observed.cards.filter((card) => Math.round(card.y) === top);
+      for (const card of band) {
+        expect(
+          card.height,
+          `a card in the row at y=${top} is ${card.height}px against ${band[0].height}px ${at}`
+        ).toBeCloseTo(band[0].height, 0);
+      }
+    }
+    /* AND THE LINE SPANS ITS CARD EDGE TO EDGE, which is the reason it is
+       drawn with no aspect ratio at all: a chart inset inside the card's
+       padding would be a chart whose length depends on the card's chrome. */
+    for (const card of observed.cards) {
+      if (card.spark === null) continue;
+      expect(
+        card.spark,
+        `a daily line is ${card.spark}px inside a ${card.inner}px card ${at}`
+      ).toBeGreaterThanOrEqual(card.inner - 3);
+      expect(card.spark, `a daily line runs past its own card ${at}`).toBeLessThanOrEqual(card.inner);
+    }
+  }
+  /* ...and ONE column on the phone artboard, with nothing taking the document
+     sideways. */
+  await page.setViewportSize({ width: 390, height: 900 });
+  await settled(page);
+  const phone = await page.evaluate(() => {
+    const cards = [...window.document.querySelectorAll('.board-card')];
+    const root = window.document.documentElement;
+    return {
+      columns: [...new Set(cards.map((card) => Math.round(card.getBoundingClientRect().x)))].length,
+      rows: [...new Set(cards.map((card) => Math.round(card.getBoundingClientRect().y)))].length,
+      scrollWidth: root.scrollWidth,
+      clientWidth: root.clientWidth,
+    };
+  });
+  expect(phone.columns, 'the phone board is not a single column').toBe(1);
+  expect(phone.rows, 'the phone board stacked its cards on top of each other').toBe(6);
+  expect(
+    phone.scrollWidth,
+    `the board takes the document ${phone.scrollWidth - phone.clientWidth}px sideways at 390px`
+  ).toBeLessThanOrEqual(phone.clientWidth + 1);
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
 
-  for (const width of [390, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    await settled(page);
-    const block = await readBlock();
-    expect(block, `no square drew model bars at ${width}px`).not.toBeNull();
+/* NO RED ANYWHERE (owner directive, 2026-09-11).
+ *
+ * The sheet's one chromatic mark used to be a red that belonged to no palette
+ * — the same value on paper as on near-black. It is now each reading mode's
+ * OWN fourth green, the darkest full step of the calendar ramp that mode
+ * already paints, mapped once in the token layer so every surface that spends
+ * the mark moves with one declaration. Not the ramp's peak: the mark is
+ * always TEXT, and the light peak measures under 2:1 on the page. The busiest
+ * calendar day keeps the peak, so this lane measures BOTH greens in the
+ * engine, after the whole fallback chain has run — the only place a stale
+ * literal could still show — and proves they are two steps of one ramp.
+ */
+test('the page spends its one mark on its own fourth green, in every reading mode (owner 2026-09-11)', async ({
+  page,
+}) => {
+  await visit(page);
+  for (const mode of ['light', 'dark', 'slate', 'sepia']) {
+    await page.evaluate((theme) => {
+      window.document.documentElement.setAttribute('data-theme', theme);
+    }, mode);
+    const observed = await page.evaluate(() => {
+      const root = window.document.documentElement;
+      const resolve = (token) => {
+        const probe = window.document.createElement('span');
+        probe.style.color = `var(${token})`;
+        root.appendChild(probe);
+        const value = getComputedStyle(probe).color;
+        probe.remove();
+        return value;
+      };
+      const peak = window.document.querySelector('.grid-cell[data-grid-peak="true"]');
+      const figure = window.document.querySelector('.ticker-item[data-peak="true"] .ticker-figure');
+      return {
+        peak: resolve('--grid-cell-peak'),
+        step: resolve('--color-grid-4'),
+        page: resolve('--color-surface'),
+        busiest: peak === null ? null : getComputedStyle(peak).backgroundColor,
+        ticker: figure === null ? null : getComputedStyle(figure).color,
+        highlight: resolve('--ledger-highlight'),
+      };
+    });
+    expect(observed.peak, `${mode}: the peak token resolves to nothing`).toMatch(/rgb/);
+    expect(observed.step, `${mode}: the fourth step resolves to nothing`).toMatch(/rgb/);
     expect(
-      block.label,
-      `the block is headed "${block.label}" at ${width}px; it must carry the vendor group's own written name`
-    ).toBe(`Models · ${group.label}`);
+      observed.busiest,
+      `${mode}: the calendar's busiest day is ${observed.busiest}, not the peak green`
+    ).toBe(observed.peak);
     expect(
-      block.rows,
-      `the bars box reserved ${block.rows} rows at ${width}px; the group declares ${reserved}`
-    ).toBe(String(reserved));
-    expect(block.declared, `the square did not declare its row count at ${width}px`).toBe(
-      String(reserved)
+      observed.ticker,
+      `${mode}: the ticker's own accent is ${observed.ticker}, not the fourth green`
+    ).toBe(observed.step);
+    expect(
+      observed.highlight,
+      `${mode}: the sheet's one mark is ${observed.highlight}, not the fourth green`
+    ).toBe(observed.step);
+    /* Non-vacuity, three ways: the mark is a GREEN — more green than red — so
+       a lane that measured three names for the same stale red would fail; it
+       is NOT the peak, so a repaint that collapsed the ramp's top two steps
+       into one value would fail; and it is legible as text on this mode's
+       page at the 3:1 floor, which the light peak does not reach. */
+    const [red, green] = channels(observed.step);
+    expect(green, `${mode}: the mark ${observed.step} is not a green at all`).toBeGreaterThan(red);
+    expect(observed.step, `${mode}: the mark and the busiest day are one value`).not.toBe(
+      observed.peak
     );
+    const ratio = contrastRatio(observed.step, observed.page);
     expect(
-      block.bars,
-      `the block drew ${block.bars} rows at ${width}px; the payload carried ${keys.length}`
-    ).toBe(keys.length);
-    expect(
-      block.barsShown,
-      `the block draws ${block.bars} rows at ${width}px and shows ${block.barsShown}; the rest are hidden with no sign of it`
-    ).toBe(block.bars);
-    expect(
-      block.barsWhole,
-      `${block.bars - block.barsWhole} of ${block.bars} rows clip their own label or groove at ${width}px; the reserve divides the box into rows the pitch no longer fits`
-    ).toBe(block.bars);
-    expect(
-      block.scrollHeight,
-      `the block holds ${block.scrollHeight}px of content in a ${block.clientHeight}px face at ${width}px`
-    ).toBeLessThanOrEqual(block.clientHeight + 1);
-    expect(
-      block.readings.filter((reading) => reading === '0%'),
-      `a row printed 0% at ${width}px; the origin refuses a member that carries nothing`
-    ).toEqual([]);
-    expect(
-      block.labels,
-      `the rows at ${width}px are not the members the envelope carried, in the order it served them`
-    ).toEqual([
-      modelVocabulary.residual.label,
-      ...group.members.map((member) => member.label),
-    ]);
+      ratio,
+      `${mode}: the mark ${observed.step} on the page ${observed.page} is ${ratio.toFixed(2)}:1`
+    ).toBeGreaterThanOrEqual(3);
+  }
+  await page.evaluate(() => window.document.documentElement.removeAttribute('data-theme'));
+});
+
+/* THE TURN IS A STATE, AND A READER WHO ASKED FOR LESS MOTION STILL GETS IT
+ * (owner directive, 2026-09-11).
+ *
+ * The squares this replaces animated a rotation, which is why they needed a
+ * midpoint visibility swap and why WebKit's flattened 3D context inside a
+ * button broke them. A card inverts its ink instead: under motion the paint
+ * crosses over, and with the preference reduced it changes instantly. Both
+ * halves are measured — the transition declared for one and absent for the
+ * other, and the STATE arriving either way, because "no animation" must never
+ * mean "no turn".
+ */
+test('a card turns in both motion preferences, and only animates in one (owner 2026-09-11)', async ({
+  browser,
+}) => {
+  for (const motion of ['no-preference', 'reduce']) {
+    const context = await browser.newContext({ reducedMotion: motion === 'reduce' ? 'reduce' : 'no-preference' });
+    const page = await context.newPage();
+    await visit(page);
+    const card = page.locator('.board-card').first();
+    const before = await card.evaluate((node) => ({
+      turned: node.getAttribute('data-turned'),
+      pressed: node.getAttribute('aria-pressed'),
+      transition: getComputedStyle(node).transitionProperty,
+      duration: getComputedStyle(node).transitionDuration,
+      background: getComputedStyle(node).backgroundColor,
+      ink: getComputedStyle(node).color,
+    }));
+    if (motion === 'reduce') {
+      expect(
+        before.duration.split(',').every((value) => Number.parseFloat(value) === 0),
+        `a card animates for ${before.duration} with the reader's motion reduced`
+      ).toBe(true);
+    } else {
+      expect(before.transition, 'a card declares no paint transition under motion').toContain(
+        'background'
+      );
+      expect(
+        before.duration.split(',').some((value) => Number.parseFloat(value) > 0),
+        'a card declares a paint transition with no duration'
+      ).toBe(true);
+    }
+    /* THE TURN ITSELF, in both: pressed state, data attribute, and the paint
+       really crossing over — a card whose ink and paper did not swap is a
+       card that announced a state it does not have. */
+    await card.click();
+    /* The pointer is moved off before the paint is read: a card under the
+       cursor is also a HOVERED card, and this lane is about the turn rather
+       than about the hover the click left behind. */
+    await page.mouse.move(0, 0);
+    await expect(card).toHaveAttribute('data-turned', 'true');
+    await expect(card).toHaveAttribute('aria-pressed', 'true');
+    await expect
+      .poll(async () => card.evaluate((node) => getComputedStyle(node).backgroundColor), {
+        message: `the card never repainted with motion ${motion}`,
+      })
+      .toBe(before.ink);
+    const after = await card.evaluate((node) => getComputedStyle(node).color);
+    expect(after, `the card's ink did not become its paper with motion ${motion}`).toBe(
+      before.background
+    );
+    /* And pressing again returns it, so the control is a toggle rather than a
+       one-way switch. */
+    await card.click();
+    await expect(card).toHaveAttribute('aria-pressed', 'false');
+    await context.close();
   }
 });
 
@@ -1936,7 +2105,7 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
     return {
       pwned: window.__pwned === undefined ? 'clean' : 'executed',
       injected: board.querySelectorAll('img, script, iframe, object, embed').length,
-      sources: board.querySelectorAll('.board-square').length,
+      sources: board.querySelectorAll('.board-card').length,
       /* The refused payload's own graph, named rather than counted: the
          commits section draws the version-control calendar from a DIFFERENT
          panel, and that one is unaffected and must keep drawing. What must
@@ -2390,12 +2559,14 @@ test('a seriesless source is offered no calendar and keeps its figures', async (
         series: Array.isArray(source?.series?.totals) && source.series.totals.length > 0,
       })),
       segments,
-      /* Every square head on the board, so "the source is still on the page"
-         is measured rather than assumed. */
-      squares: [...(board?.querySelectorAll('.board-square') ?? [])].map((square) => ({
-        label: square.querySelector('.board-label')?.textContent.trim() ?? '',
-        figure: square.querySelector('.board-figure')?.textContent.trim() ?? '',
-        bars: square.querySelectorAll('[data-face="front"] .board-bar').length,
+      /* Every card head on the board, so "the source is still on the page" is
+         measured rather than assumed. The head prints the source's WRITTEN
+         name (issue #311), so the lookup below resolves the wire key through
+         the same vocabulary file the page reads. */
+      cards: [...(board?.querySelectorAll('.board-card') ?? [])].map((card) => ({
+        label: card.querySelector('.board-label')?.textContent.trim() ?? '',
+        figure: card.querySelector('.board-figure')?.textContent.trim() ?? '',
+        rows: card.querySelectorAll('.board-model').length,
       })),
       /* Nothing anywhere is a placeholder or an empty-grid note while the
          contributions calendar is the one on screen. */
@@ -2420,29 +2591,29 @@ test('a seriesless source is offered no calendar and keeps its figures', async (
     /* NOTHING TO PRESS. No segment names it, so no grid is ever drawn on its
        behalf and no reserve is held for a capture that does not exist. */
     expect(
-      observed.segments.some((segment) => segment.includes(source.label)),
+      observed.segments.some((segment) => segment.includes(sourceName(source.label))),
       `"${source.label}" reports no series and is still offered a calendar segment`
     ).toBe(false);
     /* ...and it is still ON the page, with its figures. Offering no segment
        must never become dropping the source. */
-    const square = observed.squares.find((candidate) => candidate.label === source.label);
+    const card = observed.cards.find((candidate) => candidate.label === sourceName(source.label));
     expect(
-      square,
-      `"${source.label}" reports no series and lost its square as well as its calendar`
+      card,
+      `"${source.label}" reports no series and lost its card as well as its calendar`
     ).toBeDefined();
     expect(
-      square.figure,
-      `"${source.label}" kept its square and lost the figure on it`
+      card.figure,
+      `"${source.label}" kept its card and lost the figure on it`
     ).not.toBe('');
   }
 
   for (const source of drawn) {
     expect(
-      observed.segments.some((segment) => segment.includes(source.label)),
+      observed.segments.some((segment) => segment.includes(sourceName(source.label))),
       `"${source.label}" reports a series and is offered no calendar segment`
     ).toBe(true);
-    const square = observed.squares.find((candidate) => candidate.label === source.label);
-    expect(square, `"${source.label}" reports a series and renders no square`).toBeDefined();
+    const card = observed.cards.find((candidate) => candidate.label === sourceName(source.label));
+    expect(card, `"${source.label}" reports a series and renders no card`).toBeDefined();
   }
 
   /* The contributions calendar is the one on screen, and it is a real one:
@@ -5788,7 +5959,7 @@ test('the token panel detail card reads a human period phrase for the one lens t
   await stageUsagePayload(page, (envelope) => {
     const sources = envelope?.data?.sources ?? [];
     expect(sources.length, 'the origin serves no usage sources; this lane cannot stage one').toBeGreaterThan(0);
-    stagedLabel = sources[0].label;
+    stagedLabel = sourceName(sources[0].label);
     sources[0].series = syntheticSeries(120);
   });
   await visit(page);
@@ -7256,9 +7427,9 @@ test('the token board offers no display control, and every reported source still
     radiogroups: node.querySelectorAll('[role="radiogroup"]').length,
     radios: node.querySelectorAll('[role="radio"]').length,
     pills: node.querySelectorAll('.usage-view').length,
-    squares: node.querySelectorAll('.board-square').length,
+    cards: node.querySelectorAll('.board-card').length,
     buttons: [...node.querySelectorAll('button')].map((button) => ({
-      square: button.classList.contains('board-square'),
+      card: button.classList.contains('board-card'),
       name: (button.getAttribute('aria-label') ?? button.textContent ?? '').trim(),
     })),
   }));
@@ -7268,17 +7439,17 @@ test('the token board offers no display control, and every reported source still
   expect(controls.radiogroups, 'a radio group is back in the token panel').toBe(0);
   expect(controls.radios, 'a radio is back in the token panel').toBe(0);
   expect(controls.pills, 'a display pill is back').toBe(0);
-  expect(controls.squares, 'the board drew no squares').toBeGreaterThan(1);
-  const strangers = controls.buttons.filter((button) => !button.square);
+  expect(controls.cards, 'the board drew no cards').toBeGreaterThan(1);
+  const strangers = controls.buttons.filter((button) => !button.card);
   expect(
     strangers.map((button) => button.name),
-    `the token board grew a control that is not a square: ${strangers.map((button) => button.name).join(', ')}`
+    `the token board grew a control that is not a card: ${strangers.map((button) => button.name).join(', ')}`
   ).toEqual([]);
-  /* And every square's own control says what it does, so "they are all
-     squares" is a statement about controls a reader can understand rather
-     than about a class name. */
+  /* And every card's own control says what it does, so "they are all cards" is
+     a statement about controls a reader can understand rather than about a
+     class name. */
   for (const button of controls.buttons) {
-    expect(button.name, 'a board square offers a control with no accessible name').not.toBe('');
+    expect(button.name, 'a board card offers a control with no accessible name').not.toBe('');
   }
 
   /* Half two: every source the payload reports with a daily series still draws
@@ -7306,10 +7477,10 @@ test('the token board offers no display control, and every reported source still
   const segments = page.locator('.commit-segment');
   const drawn = [];
   for (const label of sets.reported) {
-    const segment = segments.filter({ hasText: label }).first();
+    const segment = segments.filter({ hasText: sourceName(label) }).first();
     await expect(
       segment,
-      `"${label}" reports a daily series and is offered no calendar segment`
+      `"${label}" reports a daily series and is offered no calendar segment named "${sourceName(label)}"`
     ).toHaveCount(1);
     await segment.click();
     drawn.push(
@@ -8455,7 +8626,7 @@ test('every width the handle can reach keeps every section intact', async ({ pag
         ),
         tickerPans: strip.scrollWidth > strip.clientWidth,
         tickerOverflow: getComputedStyle(strip).overflowX,
-        squares: window.document.querySelectorAll('.board-square').length,
+        cards: window.document.querySelectorAll('.board-card').length,
         strips: window.document.querySelectorAll('.grid-strip').length,
         navLinks: window.document.querySelectorAll('.section-link').length,
         sections: window.document.querySelectorAll('.page-section').length,
@@ -8507,7 +8678,7 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     expect(state.tickerItems, `the ticker lost entries ${at}`).toBeGreaterThan(50);
     expect(state.tickerOverflow, `the ticker stopped being a scroller ${at}`).toBe('auto');
     expect(state.tickerPans, `the ticker has nothing left to pan ${at}`).toBe(true);
-    expect(state.squares, `the board squares disappeared ${at}`).toBeGreaterThan(0);
+    expect(state.cards, `the board cards disappeared ${at}`).toBeGreaterThan(0);
     expect(state.strips, `the heatmap strips disappeared ${at}`).toBeGreaterThan(0);
     expect(state.navLinks, `the nav lost links ${at}`).toBeGreaterThan(2);
     expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(2);

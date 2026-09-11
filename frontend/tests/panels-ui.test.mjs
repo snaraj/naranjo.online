@@ -107,7 +107,7 @@ const [
  * stays-current pin can sweep all three panel bindings. */
 const bindingSourceCache = {
   commits: await read('../src/lib/blocks/commitLog.ts'),
-  squares: await read('../src/lib/blocks/tokenSquares.ts'),
+  board: await read('../src/lib/blocks/tokenBoard.ts'),
   projects: await read('../src/lib/blocks/codingProjects.ts'),
 };
 
@@ -130,10 +130,10 @@ test('the manifest mounts exactly the two tracker blocks, in the stacked order',
      the version-control calendar left to lead its own COMMITS section, where a
      segmented control cycles it against each token source's daily series, and
      what stays here is what is still a tracker once the calendar has moved —
-     the board of token squares and the boss ticker, in that order. */
+     the board of token cards and the boss ticker, in that order. */
   assert.match(
     manifest,
-    /section\('trackers', 'Trackers', \[tokenSquares, bossTicker\], \{ layout: 'stack' \}\)/,
+    /section\('trackers', 'Trackers', \[tokenBoard, bossTicker\], \{ layout: 'stack' \}\)/,
     'the trackers section must list exactly one entry per panel, in the order the page stacks them'
   );
   // ...and the calendar is mounted exactly once, in its own section.
@@ -917,7 +917,7 @@ test('every mounted panel stays current instead of painting once', () => {
   // And every tracker block is a panel binding, so all three ride that host.
   for (const [name, source] of Object.entries({
     bossBinding,
-    squaresBinding: bindingSourceCache.squares,
+    boardBinding: bindingSourceCache.board,
     projectsBinding: bindingSourceCache.projects,
   })) {
     assert.match(source, /panelBlock\(/, `${name} no longer binds through the panel host`);

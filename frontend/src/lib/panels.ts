@@ -110,6 +110,27 @@ export interface TokenUsageInsight {
   recorded?: boolean;
 }
 
+/* One model's LIFETIME accounting, by class — the figures a source's own
+ * tool reports rather than anything a daily series can define. It is what
+ * lets a models card print a share of a lifetime and the classes behind it,
+ * where the windowed series can only report the window it covers. Optional
+ * on the wire: a source that reports no such accounting simply has none, and
+ * its card reads its window totals instead. */
+export interface TokenUsageModelStat {
+  key: string;
+  totals: TokenUsageClassTotals;
+}
+
+/* The four accounting classes a model stat divides into. Named fields rather
+ * than a map, so a payload missing one is a refusal at the boundary instead
+ * of a missing figure that prints as a zero. */
+export interface TokenUsageClassTotals {
+  input: number;
+  output: number;
+  'cache-read': number;
+  'cache-write': number;
+}
+
 export interface TokenUsageSource {
   label: string;
   account?: string;
@@ -117,6 +138,7 @@ export interface TokenUsageSource {
   stats?: TokenUsageStat[];
   series?: TokenUsageSeries;
   insights?: TokenUsageInsight[];
+  modelStats?: TokenUsageModelStat[];
 }
 
 /* vcs-activity/v1 — contribution weeks, totals, streak, recent commits. */

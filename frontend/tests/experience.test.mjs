@@ -769,6 +769,73 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
   );
 });
 
+/* NO RED ANYWHERE (owner directive, 2026-09-11).
+ *
+ * The sheet's one chromatic mark — a hovered control, the boss the owner has
+ * killed most, a streak that has reached its own record — used to be ONE red
+ * across every reading mode, a printer's spot colour belonging to no palette.
+ * It is now each mode's OWN fourth green: the darkest full step of the
+ * calendar ramp that mode already paints, and not the ramp's peak, because
+ * every surface that spends the mark paints TEXT and the light peak measures
+ * under 2:1 on the page where the fourth step clears 4:1. The calendar's
+ * busiest day keeps the peak (--grid-cell-peak), so the mark and the busiest
+ * tile are two greens of one ramp rather than one value twice.
+ *
+ * Three properties, none satisfiable by another: every mode maps the mark
+ * onto its own fourth step, the mode-independent red literal is GONE, and the
+ * step each mode resolves to is a green legible as text on that mode's own
+ * surfaces — measured, so a repaint that put the peak back would fail here on
+ * contrast and not only on a name. The rendering lane measures what an
+ * engine resolved; this measures what the token layer declares, and neither
+ * replaces the other. */
+test('the sheet spends its one mark on each mode’s own fourth green, legible as text', () => {
+  for (const mode of ['light', 'dark', 'slate', 'sepia']) {
+    assert.match(
+      styles,
+      new RegExp(`--color-highlight: var\\(--palette-${mode}-grid-4\\);`),
+      `${mode} does not map the page's one mark onto its own fourth green`
+    );
+  }
+  /* The auto-dark branch too: a document with no stamped choice reads the
+     dark palette through the media query, and a mark left behind there would
+     be red for every reader who never opened the menu. */
+  assert.match(
+    stylesCode,
+    /prefers-color-scheme: dark\)\s*\{\s*:root:not\(\[data-theme\]\)\s*\{[\s\S]*?--color-highlight: var\(--palette-dark-grid-4\);/,
+    'the auto-dark mode keeps a mark of its own'
+  );
+  assert.doesNotMatch(
+    styles,
+    /--palette-highlight/,
+    'the mode-independent highlight literal is back; the mark is per palette now'
+  );
+  assert.doesNotMatch(
+    styles,
+    /--color-highlight: var\(--palette-[a-z]+-grid-peak\)/,
+    'a mode spends the mark on its peak again — text no light reader can see'
+  );
+  /* And it really is a legible GREEN, measured rather than asserted: more
+     green than red, and at least 3:1 — the floor every UI ink on this sheet
+     is held to — against both surfaces the mark is ever printed on. The light
+     peak lands at 1.8:1 here, which is the regression the floor exists for. */
+  const palette = paletteLiterals(styles);
+  for (const mode of ['light', 'dark', 'slate', 'sepia']) {
+    const step = palette[`--palette-${mode}-grid-4`];
+    assert.ok(step, `${mode} declares no fourth step for the mark to resolve to`);
+    const [red, green] = [1, 3].map((offset) => parseInt(step.slice(offset, offset + 2), 16));
+    assert.ok(green > red, `${mode}'s mark ${step} is not a green at all`);
+    for (const surface of ['surface', 'surface-raised']) {
+      const ground = palette[`--palette-${mode}-${surface}`];
+      assert.ok(ground, `${mode} declares no ${surface} to measure the mark against`);
+      const ratio = contrastRatio(step, ground);
+      assert.ok(
+        ratio >= 3,
+        `${mode}'s mark ${step} on its ${surface} ${ground} is ${ratio.toFixed(2)}:1, below 3:1`
+      );
+    }
+  }
+});
+
 // The registry and toggle are the client half of the wiki mechanism: named
 // modes, an instant data-theme swap, and the cookie the origin stamps future
 // documents from. The id list mirrors readingThemes in

@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 
 import {
+  boardEmptyNote,
+  boardReturnLabel,
+  boardTurnLabel,
   categoryLabel,
   categoryShares,
   categorySlot,
@@ -13,51 +16,60 @@ import {
   formatStatValue,
   formatTokenCount,
   formatUtilization,
+  lifetimeContext,
   meterFillPct,
   meterSeverity,
-  modelGroup,
-  modelGroupLabel,
-  modelGroupRows,
   modelLabel,
   modelShares,
   modelSlot,
-  boardEmptyNote,
-  boardReturnLabel,
-  boardTurnLabel,
   resetsIn,
-  tokenSquares,
-  tokenSquaresProps,
+  sessionsCardLabel,
+  sourceName,
+  tokenBoardProps,
+  tokenCards,
   tokenUsageEmptyNote,
   tokenUsageFallbackTitle,
   tokenUsagePanelId,
   tokenUsageSourceEmptyNote,
   tokenUsageSources,
+  totalCardLabel,
   unknownFigure,
   usageDataThrough,
   usageStaleAfterMs,
-  usageStaleNote
+  usageStaleNote,
+  windowTerm
 } from '../src/lib/token-usage.ts';
-import { commitLogProps } from '../src/lib/commits.ts';
-import { formatMagnitude, pendingWeeks } from '../src/lib/grid.ts';
+import { commitLogProps, tokenSetLabel } from '../src/lib/commits.ts';
+import {
+  formatMagnitude,
+  formatMagnitudeFixed,
+  formatWhole as formatWholeFigure,
+  pendingWeeks
+} from '../src/lib/grid.ts';
+import { sparkBox, sparkInset, sparklinePath } from '../src/lib/spark.ts';
 
-/* THE PANEL BECAME A BOARD (owner directive of 2026-09-03, issue 287): the
- * tile grid is five turnable squares in LedgerBoard.svelte, and the daily
- * graph the tracker used to draw moved into the commits section's cycling
- * calendar (CommitLog.svelte). Both are read here, because the pins this file
- * carries now live in two components rather than one — and the ABSENCE list
- * that keeps the retired display menu from coming back has to sweep both, or
- * it would only be guarding the door the menu did not use.
+/* THE PANEL BECAME A BOARD (owner directive of 2026-09-03, issue 287) AND
+ * THEN SIX CARDS (2026-09-11, issues 267 and 311): LedgerBoard.svelte draws a
+ * three-by-two grid whose cards invert when pressed, Sparkline.svelte draws
+ * the daily line back under the ones that have a series, and the contribution
+ * calendar the tracker used to own stayed in the commits section's cycler
+ * (CommitLog.svelte). All three are read here, because the pins this file
+ * carries live across them — and the ABSENCE list that keeps the retired
+ * display menu and the retired chrome from coming back has to sweep all of
+ * them, or it would only be guarding the door they did not use.
  *
- * styles.css joins them for the same reason: the board's grid and its category
- * swatches are page-level decisions the ledger's other sections share, so the
- * stylesheet is where they are stated and where they must be pinned. */
-const [component, commits, helper, manifest, binding, sheet] = await Promise.all([
+ * styles.css joins them for the same reason: the board's column ladder, its
+ * card roles and the turn's token remap are page-level decisions the ledger's
+ * other sections share, so the stylesheet is where they are stated and where
+ * they must be pinned. */
+const [component, commits, helper, manifest, binding, sheet, chart] = await Promise.all([
   readFile(new URL('../src/lib/components/LedgerBoard.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/components/CommitLog.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/token-usage.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/blocks/tokenSquares.ts', import.meta.url), 'utf8'),
-  readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
+  readFile(new URL('../src/lib/blocks/tokenBoard.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../src/styles.css', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/components/Sparkline.svelte', import.meta.url), 'utf8')
 ]);
 
 /* The model vocabulary, read as BYTES rather than through the module's own
@@ -69,6 +81,23 @@ const vocabulary = JSON.parse(
 const vocabularyMembers = vocabulary.groups.flatMap((group) =>
   group.members.map((member) => ({ ...member, group: group.key }))
 );
+
+/* The SOURCE vocabulary, read the same way and for the same reason (issue
+   #311). Every fixture below builds its source labels out of this file rather
+   than typing one, so this suite says something about the RULE — a wire key
+   becomes the written name the file gives it — instead of about two lists
+   that happen to agree today. It is also what keeps this file free of the
+   vendor spellings the sweep at the bottom forbids in production source. */
+/* A source with its COMMENTS REMOVED. Several sweeps below are about what a
+   component PRINTS, and a comment recording that a retired chip is retired
+   must not read as the chip coming back. */
+const rendered = (source) =>
+  source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/<!--[\s\S]*?-->/g, ' ');
+
+const sourceVocabulary = JSON.parse(
+  await readFile(new URL('../../internal/panels/config/sources.json', import.meta.url), 'utf8')
+);
+const [firstSource, secondSource] = sourceVocabulary.sources;
 
 /* One envelope carrying the shipped payload plus a token series, for driving
  * the commits block's own adapter the way its multi-panel host does: the
@@ -89,13 +118,14 @@ const envelopeFor = (data, overrides = {}) => ({
   ...overrides
 });
 
-// The exact payload shape internal/panels serves. The two
-// source labels are DATA — they appear here exactly as the origin ships them,
-// and the component itself is asserted vendor-free below.
+// The exact payload shape internal/panels serves. The two source labels are
+// DATA and they are READ FROM THE VOCABULARY FILE, which is exactly how the
+// origin ships them; the component and the adapter are asserted vendor-free
+// below.
 const shippedPayload = {
   sources: [
     {
-      label: 'anthropic',
+      label: firstSource.key,
       windows: [
         {
           period: 'session',
@@ -108,7 +138,7 @@ const shippedPayload = {
       ]
     },
     {
-      label: 'codex',
+      label: secondSource.key,
       windows: [{ period: 'week', inputTokens: 4180230, outputTokens: 1250770 }]
     }
   ]
@@ -130,8 +160,29 @@ describe('formatTokenCount', () => {
     // "627,742,457". One function is what makes those the same reading, so
     // this pin drives both names across the whole interesting range rather
     // than trusting the delegation to stay.
+    /* RE-AIMED at the spelling the board reads (owner directive, 2026-09-11):
+       formatTokenCount is formatMagnitudeFixed, which keeps the decimal place
+       a column of figures needs. The claim is unchanged and is asserted on the
+       property that matters — both names pick the SAME UNIT through the same
+       step walk, so one can never say millions while the other says billions,
+       and they differ in nothing but the trailing zero. */
     for (const value of [0, 999, 9999, 10_000, 12_900, 999_950, 627_742_457, 7.7e12]) {
-      assert.equal(formatTokenCount(value), formatMagnitude(value), `the two readings of ${value} diverged`);
+      assert.equal(
+        formatTokenCount(value),
+        formatMagnitudeFixed(value),
+        `the two readings of ${value} diverged`
+      );
+      const unit = (reading) => reading.replace(/[\d.,-]/g, '');
+      assert.equal(
+        unit(formatTokenCount(value)),
+        unit(formatMagnitude(value)),
+        `the two spellings of ${value} chose different units`
+      );
+      assert.equal(
+        Number(formatTokenCount(value).replace(/[^\d.-]/g, '')),
+        Number(formatMagnitude(value).replace(/[^\d.-]/g, '')),
+        `the two spellings of ${value} are different quantities, not one figure written twice`
+      );
     }
     assert.doesNotMatch(
       helper.replace(/\/\*[\s\S]*?\*\//g, ' '),
@@ -237,13 +288,12 @@ describe('tokenUsageSources admission', () => {
   });
 });
 
-describe('the board of squares: source contract', () => {
+describe('the board of cards: source contract', () => {
   it('renders inside the shared PanelShell with the envelope status, age, and no per-card control', () => {
     assert.match(component, /import PanelShell from '\.\/PanelShell\.svelte'/);
-    /* The shell now receives the data-through line as well (owner directive of
-       2026-09-03, issue 287): the board's body is a grid of fixed squares, so
-       the head is the one row a late line can appear in without moving
-       anything — the same arrangement the calendar already used. */
+    /* The shell receives the data-through line as well (owner directive of
+       2026-09-03, issue 287): the head is the one row a late line can appear
+       in without moving anything — the same arrangement the calendar uses. */
     assert.match(component, /<PanelShell \{title\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
     assert.match(component, /<\/PanelShell>/);
     // No panel offers a manual refresh any more (owner directive, issue 179):
@@ -254,68 +304,88 @@ describe('the board of squares: source contract', () => {
     assert.doesNotMatch(component, /\{refresh\}|const refresh =|watcher/);
     // The envelope facts ride the adapter into the shell unchanged, and the
     // empty-title fallback the unavailablePanel case needs is preserved.
-    const rendered = tokenSquaresProps(envelopeFor(shippedPayload));
+    const rendered = tokenBoardProps(envelopeFor(shippedPayload));
     assert.equal(rendered.title, 'Fixture Usage');
     assert.equal(rendered.status, 'ok');
     assert.equal(rendered.generatedAt, '2026-08-11T03:00:00Z');
-    assert.equal(tokenSquaresProps(envelopeFor(null, { title: '' })).title, tokenUsageFallbackTitle);
+    assert.equal(tokenBoardProps(envelopeFor(null, { title: '' })).title, tokenUsageFallbackTitle);
     assert.equal(tokenUsageFallbackTitle, 'Token usage');
     // Before the first envelope the block renders NOTHING — the same face the
     // retired component's {#if envelope} guard gave the page.
-    assert.equal(tokenSquaresProps(null), null);
+    assert.equal(tokenBoardProps(null), null);
   });
 
-  it('derives one square per payload source and takes every label from the data', () => {
-    /* The tile grid iterated `sections`; the board iterates `squares` (owner
-       directive of 2026-09-03, issue 287). The property that mattered is
-       unchanged and is asserted the same way: the SET of surfaces is derived
-       from the payload's own sources, in the payload's own order, so a third
-       source appearing tomorrow needs no edit in the adapter and none in the
-       component. */
-    assert.match(component, /\{#each squares as square \(square\.key\)\}/);
-    assert.match(component, /\{square\.label\}/);
-    const rendered = tokenSquaresProps(envelopeFor(shippedPayload));
-    const perSource = rendered.squares.filter((square) => square.key.startsWith('source-'));
+  it('derives one card per payload source and takes every name from the vocabulary', () => {
+    /* The SET of surfaces is derived from the payload's own sources, in the
+       payload's own order, so a third source appearing tomorrow needs no edit
+       in the adapter and none in the component. What the card is CALLED comes
+       from the vocabulary file rather than from the wire: the wire carries a
+       machine key, and the page prints the written name that key resolves
+       to. */
+    assert.match(component, /\{#each cards as card \(card\.key\)\}/);
+    assert.match(component, /\{card\.label\}/);
+    const rendered = tokenBoardProps(envelopeFor(shippedPayload));
+    const perSource = rendered.cards.filter((card) => card.key.startsWith('source-'));
     assert.deepEqual(
-      perSource.map((square) => square.label),
-      shippedPayload.sources.map((source) => source.label),
-      'every source square is labelled by the payload, in the payload\u2019s order'
+      perSource.map((card) => card.label),
+      shippedPayload.sources.map((source) => sourceName(source.label)),
+      'every source card is named by the vocabulary, in the payload\u2019s order'
+    );
+    assert.deepEqual(
+      perSource.map((card) => card.label),
+      [firstSource.name, secondSource.name],
+      'the written names are the ones the vocabulary file states'
     );
     // ...and the whole board is derived, never enumerated: a one-source
-    // payload produces one source square, a three-source payload three.
-    const three = tokenSquares([
+    // payload produces one source card, a three-source payload three.
+    const three = tokenCards([
       { label: 'a', windows: [] },
       { label: 'b', windows: [] },
       { label: 'c', windows: [] }
     ]);
-    assert.equal(three.filter((square) => square.key.startsWith('source-')).length, 3);
-    assert.deepEqual(tokenSquares([]), [], 'a payload with no sources draws no board at all');
-    // Vendor and tool names are payload data, never component or helper
-    // logic. The needles are assembled from fragments so this test file's
-    // own scan subject stays clean, mirroring the Go doctrine pin.
-    for (const [name, source] of Object.entries({ component, commits, helper })) {
-      const lowered = source.toLowerCase();
-      for (const mark of ['anthro' + 'pic', 'co' + 'dex', 'open' + 'ai']) {
-        assert.ok(!lowered.includes(mark), `${name} hardcodes the vendor name ${mark}`);
-      }
+    assert.equal(three.filter((card) => card.key.startsWith('source-')).length, 3);
+    assert.deepEqual(tokenCards([]), [], 'a payload with no sources draws no board at all');
+  });
+
+  it('resolves a source name through the vocabulary, and an unknown key honestly', () => {
+    for (const entry of sourceVocabulary.sources) {
+      assert.equal(sourceName(entry.key), entry.name, entry.key);
     }
+    /* AN UNKNOWN KEY RENDERS AS THE KEY. A source the vocabulary has not been
+       taught yet is still a source whose figures are true: inventing a name
+       would be a fabrication, and dropping the card would hide real data. */
+    assert.equal(sourceName('a-source-the-file-does-not-name'), 'a-source-the-file-does-not-name');
+    const card = tokenCards([{ label: 'a-source-the-file-does-not-name', windows: [] }]).find(
+      (candidate) => candidate.key === 'source-a-source-the-file-does-not-name'
+    );
+    assert.equal(card.label, 'a-source-the-file-does-not-name');
+    // The file is what the module reads, not a copy of it.
+    assert.match(helper, /config\/sources\.json/, 'the adapter transcribes the source vocabulary');
+    assert.equal(sourceVocabulary.schema, 'usage-sources/v1');
+  });
+
+  it('names the commits section\u2019s token segments through the same one function', () => {
+    /* One resolver, three surfaces (issue #311): the board's source card, the
+       models heading above its split, and the calendar segment a reader
+       presses all print the same words, because all three ask sourceName. */
+    assert.equal(tokenSetLabel(firstSource.key), `Tokens · ${firstSource.name}`);
+    assert.equal(tokenSetLabel('a-source-the-file-does-not-name'), 'Tokens · a-source-the-file-does-not-name');
   });
 
   it('never lets color carry the meter alone: the graphic is hidden, the value visible', () => {
-    /* THE METER SURVIVED THE REDESIGN (owner directive of 2026-09-03, issue
-       287). It sits under a source square\u2019s lifetime figure rather than in a
-       window row, and every property this pin protects is unchanged: the fill
-       is decorative, the true reading is printed beside it, the period it
+    /* THE METER SURVIVED BOTH REDESIGNS. It sits under a source card's
+       lifetime figure, and every property this pin protects is unchanged: the
+       fill is decorative, the true reading is printed beside it, the period it
        measures is printed under it, and the fill saturates while the reading
-       does not. Dropping the meter with the tiles would have been the redesign
-       quietly losing a capability rather than restyling one. */
-    assert.match(component, /class="board-meter" data-severity=\{square\.meter\.severity\}/);
-    assert.match(component, /class="board-meter-reading">\{square\.meter\.reading\}/);
-    assert.match(component, /class="board-meter-label">\{square\.meter\.label\}/);
+       does not. Dropping the meter with the squares would have been the
+       redesign quietly losing a capability rather than restyling one. */
+    assert.match(component, /class="board-meter" data-severity=\{card\.meter\.severity\}/);
+    assert.match(component, /class="board-meter-reading">\{card\.meter\.reading\}/);
+    assert.match(component, /class="board-meter-label">\{card\.meter\.label\}/);
     // The reading beside the fill is the true figure through the tested
     // renderer, and the fill saturates while the reading does not.
-    const squares = tokenSquaresProps(envelopeFor(shippedPayload)).squares;
-    const first = squares.find((square) => square.key === 'source-anthro' + 'pic');
+    const cards = tokenBoardProps(envelopeFor(shippedPayload)).cards;
+    const first = cards.find((card) => card.key === `source-${firstSource.key}`);
     assert.equal(first.meter.reading, formatUtilization(36.4));
     assert.equal(first.meter.severity, meterSeverity(36.4));
     assert.equal(first.meter.fillPct, meterFillPct(36.4));
@@ -324,84 +394,51 @@ describe('the board of squares: source contract', () => {
     // A source whose only window reports no utilization draws no meter at
     // all: a bar at zero and a bar for a figure nobody reported are the same
     // picture, and only one of them is true.
-    const second = squares.find((square) => square.key === 'source-co' + 'dex');
+    const second = cards.find((card) => card.key === `source-${secondSource.key}`);
     assert.equal(second.meter, undefined);
-    /* THE INPUT/OUTPUT SPLIT MOVED TO THE SQUARE\u2019S BACK (same directive): the
-       pair row became the per-day category composition, which says the same
-       thing with more of it — a written label, an exact count and a share for
-       each of input, output and the two cache classes. The words are never
-       replaced by a glyph here, so there is nothing to clip into the
-       accessibility tree and nothing to recover from a title attribute. */
-    const composed = tokenSquaresProps(
-      envelopeFor({
-        sources: [
-          {
-            label: 'fixture',
-            windows: [],
-            series: {
-              startDate: '2026-08-10',
-              totals: [10],
-              categories: [
-                { key: 'input', totals: [4] },
-                { key: 'output', totals: [6] }
-              ]
-            }
-          }
-        ]
-      })
-    ).squares.find((square) => square.key === 'source-fixture');
-    assert.deepEqual(
-      composed.back.facts.map((fact) => [fact.term, fact.value]),
-      [
-        ['input', `${formatTokenCount(4)} · ${formatShare(40)}`],
-        ['output', `${formatTokenCount(6)} · ${formatShare(60)}`]
-      ]
-    );
   });
 
-  it('renders honest empty states for a refused payload and for a sourceless square', () => {
-    /* Two empty faces, exactly as the tracker had two: the board\u2019s own note
-       for a payload that produced no squares, and a square\u2019s back note for a
-       source with nothing to turn over to. Both are ADAPTER words, so the
-       component states neither. */
+  it('renders honest empty states for a refused payload and for a sourceless card', () => {
+    /* Two empty faces: the board's own note for a payload that produced no
+       cards, and a card's own note for a source with nothing to say. Both are
+       ADAPTER words, so the component states neither. */
     assert.match(component, /<p class="board-note">\{emptyNote\}<\/p>/);
-    assert.match(component, /\{#if square\.back\.note\}<span class="board-sub">\{square\.back\.note\}<\/span>\{\/if\}/);
+    assert.match(component, /\{#if card\.note\}<span class="board-card-note">\{card\.note\}<\/span>\{\/if\}/);
     assert.equal(boardEmptyNote, tokenUsageEmptyNote);
     assert.equal(tokenUsageEmptyNote, 'No usage data available.');
-    assert.equal(tokenSquaresProps(envelopeFor(null)).squares.length, 0);
-    const bare = tokenSquares([{ label: 'bare', windows: [] }]);
-    const bareSource = bare.find((square) => square.key === 'source-bare');
-    assert.equal(bareSource.back.facts, undefined, 'a source with nothing to show must list no facts');
-    assert.equal(bareSource.back.note, tokenUsageSourceEmptyNote);
+    assert.equal(tokenBoardProps(envelopeFor(null)).cards.length, 0);
+    const bare = tokenCards([{ label: 'bare', windows: [] }]);
+    const bareSource = bare.find((card) => card.key === 'source-bare');
+    assert.equal(bareSource.facts, undefined, 'a source with nothing to show must list no facts');
+    assert.equal(bareSource.figure, unknownFigure);
+    assert.equal(bareSource.note, tokenUsageSourceEmptyNote);
     assert.equal(tokenUsageSourceEmptyNote, 'No usage recorded for this source yet.');
+    /* AND THE DASH IS THE PAGE'S ONE MARK, not two hyphens beside a column of
+       real figures (owner directive, 2026-09-11). */
+    assert.equal(unknownFigure, '\u2014');
   });
 
   it('reads every color from a custom property, and the severity ramp with no fallback at all', () => {
     assert.doesNotMatch(component, /#[0-9a-fA-F]{3,8}\b/, 'raw hex colors defeat theme overrides');
-    /* RE-AIMED at the roles this component actually paints (owner directive of
-       2026-09-03, issue 287): the board sits on the ledger\u2019s own sheet, so its
-       neutrals are --ledger-* rather than --panel-*, and the panel tokens are
-       read by the shell it renders inside. The claim is unchanged — every
-       colour here is a token read, so a reading mode restyles the board
-       without this file knowing a mode exists. */
-    for (const token of ['--ledger-', '--usage-meter-ok', '--usage-meter-warning', '--usage-meter-critical']) {
+    assert.doesNotMatch(chart, /#[0-9a-fA-F]{3,8}\b/, 'the daily line states a colour of its own');
+    /* The board sits on the ledger's own sheet, so its neutrals are the card's
+       own --board-* roles (declared in styles.css, remapped by the turn) and
+       the meter's three status inks. The claim is unchanged — every colour
+       here is a token read, so a reading mode restyles the board without this
+       file knowing a mode exists. */
+    for (const token of ['--board-', '--usage-meter-ok', '--usage-meter-warning', '--usage-meter-critical']) {
       assert.match(
         component,
         new RegExp(`var\\(\\s*${token}`),
-        `component styles must read var(${token}…) so themes can override it`
+        `component styles must read var(${token}\u2026) so themes can override it`
       );
     }
-    /* RE-AIMED, not relaxed (issues 222 and 229). This list used to include
-       --panel-status-ok, because the OK fill reached it through a fallback
-       chain — and that chain is exactly the defect the two issues name: the
-       warning fill's chain ended at --panel-accent (a BRAND mark standing in
-       for a status) and the critical fill's ended at a bare rgb() literal
-       inside this component. All three severities now read one declared meter
-       token each, so the ramp is a palette decision in styles.css rather than
-       a chain that quietly repaints itself when a link is missing. The three
-       reads must therefore carry NO comma: a fallback here would restore the
-       hiding place, since a fallback paints and so a missing declaration
-       looks like nothing at all. */
+    /* RE-AIMED, not relaxed (issues 222 and 229). All three severities read
+       one declared meter token each, so the ramp is a palette decision in
+       styles.css rather than a chain that quietly repaints itself when a link
+       is missing. The three reads must carry NO comma: a fallback would
+       restore the hiding place, since a fallback paints and so a missing
+       declaration looks like nothing at all. */
     for (const token of ['--usage-meter-ok', '--usage-meter-warning', '--usage-meter-critical']) {
       assert.match(
         component,
@@ -417,71 +454,141 @@ describe('the board of squares: source contract', () => {
   });
 
   it('sets every dynamic value through a custom property, never an inline style string', () => {
-    /* The CSP floor (default-src 'self' admits no style attribute), carried
-       into the board (owner directive of 2026-09-03, issue 287): a bar's fill
-       is the one genuinely dynamic length on this surface, and it reaches the
-       DOM as a custom property Svelte writes with setProperty rather than as a
-       style string. Everything else — which face is up, which severity paints,
-       which palette slot a category owns — is a closed-set data attribute. */
-    assert.match(component, /style:--board-fill=\{`\$\{bar\.fillPct\}%`\}/);
-    assert.match(component, /style:--board-fill=\{`\$\{square\.meter\.fillPct\}%`\}/);
-    assert.doesNotMatch(component, /\sstyle="/, 'a static style attribute is exactly what the CSP forbids');
-    assert.doesNotMatch(component, /style=\{/, 'a whole-attribute style expression is blocked by the CSP');
-    assert.doesNotMatch(component, /cssText/, 'cssText writes the same blocked attribute by another name');
+    /* The CSP floor (default-src 'self' admits no style attribute): a bar's
+       fill and the daily line's end mark are the genuinely dynamic lengths on
+       this surface, and each reaches the DOM as a custom property Svelte
+       writes with setProperty rather than as a style string. Everything else —
+       which card is turned, which severity paints, how many fact columns —
+       is a closed-set data attribute. */
+    assert.match(component, /style:--board-fill=\{`\$\{row\.fillPct\}%`\}/);
+    assert.match(component, /style:--board-fill=\{`\$\{card\.meter\.fillPct\}%`\}/);
+    assert.match(chart, /style:--spark-mark-x=\{`\$\{path\.last\.x\}%`\}/);
+    assert.match(chart, /style:--spark-mark-y=\{`\$\{path\.last\.y\}%`\}/);
+    for (const [name, source] of Object.entries({ component, chart })) {
+      assert.doesNotMatch(source, /\sstyle="/, `${name}: a static style attribute is exactly what the CSP forbids`);
+      assert.doesNotMatch(source, /style=\{/, `${name}: a whole-attribute style expression is blocked by the CSP`);
+      assert.doesNotMatch(source, /cssText/, `${name}: cssText writes the same blocked attribute by another name`);
+    }
   });
 
-  it('hides the face that is turned away, swapping at the flip midpoint, because WebKit flattens the 3D turn', () => {
-    /* The back face used to rely on backface-visibility alone, and on every
-       Safari it drew mirrored over the front: WebKit flattens 3D transforms
-       inside a <button>, so the property never applied (found by the browser
-       matrix, 2026-09-03, issue 287). The rule that fixed it is a
-       `visibility` swap — the back hidden at rest, the front hidden once the
-       square is turned — delayed half a flip so the swap lands while the
-       square is edge-on. Pinned here where it is declared; the rendering lane
-       "every board square shows all of its own content" measures the
-       computed visibility of both faces at rest and turned. */
+  it('turns by inverting one token set, with no second face left in the DOM', () => {
+    /* THE TURN IS AN INVERSION (owner directive, 2026-09-11). The two-face
+       machinery is gone with the reasons it existed: a rotated pivot, the
+       backface cull, the WebKit visibility swap, the aria-hidden on whichever
+       face was turned away, and the fixed box that clipped whatever the far
+       face could not fit. What replaces all of it is one [data-turned] rule
+       remapping the card's own paper and ink roles, so nothing is hidden and
+       nothing can be hidden by accident. */
+    for (const gone of ['board-pivot', 'board-face', 'data-face', 'rotateY', 'backface-visibility', 'perspective']) {
+      assert.ok(!component.includes(gone), `the component still carries ${gone}`);
+      assert.ok(!sheet.includes(gone), `the sheet still carries ${gone}`);
+    }
+    assert.ok(!sheet.includes('--flip-duration'), 'the flip duration outlived the flip');
     assert.match(
       sheet,
-      /\.board-face\[data-face='back'\],\s*\.board-square\[data-turned='true'\] \.board-face\[data-face='front'\] \{[^}]*visibility: hidden/,
-      'the back at rest and the front once turned must be hidden, not merely turned away'
+      /\.board-card \{[^}]*--board-paper: var\(--ledger-bg\);[\s\S]*?--board-ink: var\(--ledger-ink\)/,
+      'a resting card must declare the roles the turn swaps'
     );
     assert.match(
       sheet,
-      /\.board-square\[data-turned='true'\] \.board-face\[data-face='back'\] \{[^}]*visibility: visible/,
-      'the turned back must be the visible face'
+      /\.board-card\[data-turned='true'\] \{[^}]*--board-paper: var\(--ledger-ink\);[\s\S]*?--board-ink: var\(--ledger-bg\)/,
+      'the turn must be one token remap, not a rule per painted thing'
     );
+    /* And the inversion is a paint change under motion, never a transform: a
+       reader who asked for less motion gets the same two states instantly,
+       because the transition is declared inside the no-preference guard. */
     assert.match(
       sheet,
-      /\.board-face \{[^}]*transition: visibility 0s linear calc\(var\(--flip-duration\) \/ 2\)/,
-      'the swap must wait half a flip, or the new face pops in before the square is edge-on'
+      /@media \(prefers-reduced-motion: no-preference\)[\s\S]*?\.board-card \{\s*transition:\s*\n?\s*background/,
+      'the turn animates outside the motion guard'
     );
+  });
+
+  it('opens with the board the adapter composed, and remembers what the reader turned', () => {
+    /* EVERY SECOND SOURCE CARD OPENS INVERTED. It is the board's rhythm rather
+       than a fact about any source, which is what makes a third source join
+       that rhythm instead of needing a rule of its own. */
+    const cards = tokenBoardProps(envelopeFor(shippedPayload)).cards;
+    assert.deepEqual(
+      cards.filter((card) => card.key.startsWith('source-')).map((card) => card.turned === true),
+      [false, true]
+    );
+    const three = tokenCards([
+      { label: 'a', windows: [] },
+      { label: 'b', windows: [] },
+      { label: 'c', windows: [] }
+    ]);
+    assert.deepEqual(
+      three.filter((card) => card.key.startsWith('source-')).map((card) => card.turned === true),
+      [false, true, false]
+    );
+    assert.ok(
+      cards.filter((card) => !card.key.startsWith('source-')).every((card) => card.turned === undefined),
+      'only the source cards carry the board\u2019s alternating rhythm'
+    );
+    // The component seeds ONCE from the adapter and never reseeds: a refresh
+    // thirty seconds later must not fold a card the reader has just opened.
+    assert.match(
+      component,
+      /let turned = \$state\(new Set\(cards\.filter\(\(card\) => card\.turned\)\.map\(\(card\) => card\.key\)\)\);/
+    );
+    assert.doesNotMatch(component, /\$effect/, 'the opening state is re-applied after the reader has touched it');
   });
 
   it('is a control a finger and a keyboard can both reach', () => {
     /* The 44px touch floor and the announced state, on the one control this
-       surface has (owner directive of 2026-09-03, issue 287: "tap a square").
-       A real <button> is what brings keyboard operation and the pressed state
-       with it; the floor is declared on the class even though a square is far
-       larger, because a control sized only by its content is a control whose
-       size depends on its content. */
-    assert.match(component, /<button\s+class="board-square"/);
+       surface has. A real <button> is what brings keyboard operation and the
+       pressed state with it; the floor is declared on the class even though a
+       card is far larger, because a control sized only by its content is a
+       control whose size depends on its content. */
+    assert.match(component, /<button\s+class="board-card"/);
     assert.match(component, /aria-pressed=\{open\}/);
-    assert.match(sheet, /\.board-square \{[^}]*min-inline-size: var\(--control-target\)/);
-    assert.match(sheet, /\.board-square \{[^}]*min-block-size: var\(--control-target\)/);
+    assert.match(sheet, /\.board-card \{[^}]*min-inline-size: var\(--control-target\)/);
+    assert.match(sheet, /\.board-card \{[^}]*min-block-size: var\(--control-target\)/);
     assert.match(sheet, /--control-target: 2\.75rem;/);
     // The turn is announced in words the ADAPTER supplies, so the component
     // composes no sentence of its own.
-    assert.match(component, /aria-label=\{`\$\{open \? returnLabel : turnLabel\} \$\{square\.ariaLabel\}`\}/);
+    assert.match(component, /aria-label=\{`\$\{open \? returnLabel : turnLabel\} \$\{card\.ariaLabel\}`\}/);
     assert.equal(boardTurnLabel, 'Turn');
     assert.equal(boardReturnLabel, 'Turn back');
-    // The face turned away is hidden from assistive technology, so a square's
-    // front and back are never read as one run-on sentence.
-    assert.match(component, /data-face="front" aria-hidden=\{open\}/);
-    assert.match(component, /data-face="back" aria-hidden=\{!open\}/);
+    // Every card names itself, so the board never offers a nameless control.
+    for (const card of tokenBoardProps(envelopeFor(shippedPayload)).cards) {
+      assert.ok(card.ariaLabel.trim().length > 0, card.key);
+    }
+  });
+
+  it('prints no hint, no chip and no caption on the board or its shell', () => {
+    /* THE BOARD SAYS WHAT IT MEASURED AND NOTHING ELSE (owner directive,
+       2026-09-11): no turn hint beside the cards, no refresh or records or
+       categories chip, no caption under a chart, and no legend spelling the
+       accounting classes out a second time. Swept over the component, the
+       adapter and the sheet together, because a retired chrome word coming
+       back through any one of the three is the same regression. */
+    /* Read with the comments stripped: this file's subject is what the page
+       PRINTS, and a comment recording that a chip was retired is the opposite
+       of the chip coming back. */
+    for (const [name, source] of Object.entries({ component, helper, chart })) {
+      for (const chrome of [
+        'turnhint',
+        'turn-hint',
+        'press a card',
+        'refresh',
+        "'Records'",
+        "'Categories'",
+        'in · out · cache',
+        'both sources',
+        '72 days'
+      ]) {
+        assert.ok(
+          !rendered(source).toLowerCase().includes(chrome.toLowerCase()),
+          `${name} prints the retired chrome "${chrome}"`
+        );
+      }
+    }
   });
 
   it('stays local-origin like every shipped source file', () => {
-    for (const [name, source] of Object.entries({ component, commits, helper })) {
+    for (const [name, source] of Object.entries({ component, commits, helper, chart })) {
       // Protocol-relative origins still fail this; a line comment no longer
       // does. The lookahead and the reasoning behind it are documented once,
       // on the same sweep in tests/experience.test.mjs.
@@ -495,21 +602,22 @@ describe('manifest mount', () => {
     /* The fences retired with the table-of-contents App (issue 165): the
        manifest IS the mount list, so the per-panel pin moves to it. The block
        module was renamed with the component it binds (owner directive of
-       2026-09-03, issue 287): tokenUsage → tokenSquares, UsageTracker →
-       LedgerBoard. The PANEL ID is untouched, which is the half that matters —
-       the wire contract did not move, only the rendering did. The canonical
-       whole-section listing lives in panels-ui.test.mjs. */
-    const importLines = manifest.match(/^import \{ tokenSquares \} from '\.\/lib\/blocks\/tokenSquares\.ts';$/gm);
+       2026-09-03, issue 287, and again on 2026-09-11): tokenUsage →
+       tokenSquares → tokenBoard, UsageTracker → LedgerBoard. The PANEL ID is
+       untouched, which is the half that matters — the wire contract did not
+       move, only the rendering did. The canonical whole-section listing lives
+       in panels-ui.test.mjs. */
+    const importLines = manifest.match(/^import \{ tokenBoard \} from '\.\/lib\/blocks\/tokenBoard\.ts';$/gm);
     assert.equal(importLines?.length, 1, 'exactly one import line for the token block');
     const body = manifest.replace(/^import[^\n]*\n/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
     assert.equal(
-      (body.match(/\btokenSquares\b/g) ?? []).length,
+      (body.match(/\btokenBoard\b/g) ?? []).length,
       1,
       'the manifest lists the token block exactly once'
     );
     assert.match(
       binding,
-      /panelBlock\(\s*'token-squares',\s*LedgerBoard,\s*tokenUsagePanelId,\s*\(envelope\) => tokenSquaresProps\(envelope\)\s*\)/
+      /panelBlock\(\s*'token-board',\s*LedgerBoard,\s*tokenUsagePanelId,\s*\(envelope\) => tokenBoardProps\(envelope\)\s*\)/
     );
     assert.equal(tokenUsagePanelId, 'token-usage');
   });
@@ -534,9 +642,9 @@ describe('stat tiles', () => {
   it('renders an unreported figure as a dash, never as a zero', () => {
     // Zero and "not reported" are different claims, and a tile that
     // conflates them invents data.
-    assert.equal(formatStatValue(null, 'tokens'), '--');
-    assert.equal(formatStatValue(null, 'days'), '--');
-    assert.equal(formatStatValue(null, 'count'), '--');
+    assert.equal(formatStatValue(null, 'tokens'), unknownFigure);
+    assert.equal(formatStatValue(null, 'days'), unknownFigure);
+    assert.equal(formatStatValue(null, 'count'), unknownFigure);
     assert.equal(formatStatValue(0, 'tokens'), '0');
   });
 
@@ -634,13 +742,13 @@ describe('extended payload admission', () => {
   });
 });
 
-describe('the board of squares: live surface', () => {
+describe('the board of cards: live surface', () => {
   it('keeps itself current through the block host instead of painting once at mount', () => {
     // The subscription moved to the ONE host every panel block shares
     // (issue 165): Block.svelte runs watchPanel and re-runs this adapter on
     // every envelope, so a panel cannot drift into a one-shot read of its
     // own. The component itself fetches nothing.
-    for (const [name, source] of Object.entries({ component, commits })) {
+    for (const [name, source] of Object.entries({ component, commits, chart })) {
       assert.doesNotMatch(source, /onMount/, `${name}: a one-shot mount read is the bug this panel had`);
       assert.doesNotMatch(
         source,
@@ -650,19 +758,29 @@ describe('the board of squares: live surface', () => {
     }
   });
 
-  it("renders the owner's board: five squares, two to a phone row, an odd last one spanning", () => {
-    /* THE TILE GRID BECAME THE BOARD (owner directive of 2026-09-03, issue
-       287). The arrangement pin survives intact and moves to the stylesheet,
-       which is where the ledger's page-level geometry is stated: the desktop
-       row is one track per square and a phone gets two columns with an odd
-       final square taking the width rather than leaving a hole — the same
-       "final odd tile spans the row" rule the grid had, on the same reasoning.
-       The figure is still the tested renderer's, through the adapter. */
-    assert.match(sheet, /\.board-grid \{[^}]*grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
-    assert.match(sheet, /\.board-grid \{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
-    assert.match(sheet, /\.board-square:last-child:nth-child\(odd\) \{[^}]*grid-column:\s*1 \/ -1/);
-    assert.match(component, /class="board-figure">\{square\.figure\}/);
-    // The figure the square shows is the tested renderer's, via the adapter.
+  it("renders the owner's board: three across, folding to one on a phone", () => {
+    /* THE BOARD IS A LADDER OF THE SHEET'S OWN BREAKPOINTS (owner directive,
+       2026-09-11). One column is the base, two from the width the chrome row
+       stops being a phone's, three from the width the rails appear at — and
+       no new breakpoint, because a sheet with a second max-width boundary is
+       a sheet whose parts disagree about where a phone ends (the pin in
+       tests/sections.test.mjs states that in full).
+
+       The row height is the tallest card in the row and never less than the
+       declared minimum, which is what replaced the fixed square: a card that
+       has more to say is taller instead of clipping what it cannot fit. */
+    assert.match(sheet, /\.board-grid \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
+    assert.match(
+      sheet,
+      /@media \(min-width: 45\.0625rem\) \{\s*\.board-grid \{\s*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/
+    );
+    assert.match(
+      sheet,
+      /@media \(min-width: 67\.5rem\) \{\s*\.board-grid \{\s*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/
+    );
+    assert.match(sheet, /\.board-grid \{[^}]*grid-auto-rows: minmax\(var\(--board-card-min\), auto\)/);
+    assert.match(component, /class="board-figure">\{card\.figure\}/);
+    // The figure the card shows is the tested renderer's, via the adapter.
     const payload = {
       sources: [
         {
@@ -672,70 +790,55 @@ describe('the board of squares: live surface', () => {
         }
       ]
     };
-    const squares = tokenSquaresProps(envelopeFor(payload)).squares;
-    const source = squares.find((square) => square.key === 'source-fixture');
+    const cards = tokenBoardProps(envelopeFor(payload)).cards;
+    const source = cards.find((card) => card.key === 'source-fixture');
     assert.equal(source.figure, formatStatValue(22_700_000_000, 'tokens'));
     assert.equal(source.label, 'fixture');
     // The whole-board total is the same figure summed across sources, through
     // the same renderer — never a second formatter.
-    assert.equal(squares[0].figure, formatTokenCount(22_700_000_000));
-    assert.equal(squares[0].label, 'Tokens tracked');
+    assert.equal(cards[0].figure, formatTokenCount(22_700_000_000));
+    assert.equal(cards[0].label, totalCardLabel);
+    assert.equal(cards[0].ctx, lifetimeContext);
   });
 
-  it('draws every bar without a provenance mark, whatever the source mixes', () => {
-    /* The per-bar mark, and the sentence it used to decide, left the page with
+  it('draws every model row without a provenance mark, whatever the source mixes', () => {
+    /* The per-row mark, and the sentence it used to decide, left the page with
        the owner's directive of 2026-09-06 (issue 299): provenance stays in
        the payload's `recorded` flags and the board prints nothing for it. The
-       ungated forms this page retired earlier are still named exactly, in both
-       components, because either one returning is the regression. */
-    for (const [name, source] of Object.entries({ component, commits })) {
+       ungated forms this page retired earlier are still named exactly, in
+       every component, because any one of them returning is the regression. */
+    for (const [name, source] of Object.entries({ component, commits, chart })) {
       assert.doesNotMatch(source, /\{#if stat\.recorded\}|\{#if tile\.recorded\}/, name);
       assert.doesNotMatch(source, /\{#if insight\.recorded\}/, name);
     }
     // EXECUTED on the case that used to mark: a source mixing recorded and
-    // live figures yields bars that carry no mark at all — not `false`, no
+    // live figures yields rows that carry no mark at all — not `false`, no
     // such field — so a component could not render one even by accident.
-    const figure = (key, recorded) => ({ key, label: key, value: 1, unit: 'tokens', recorded });
-    const barsOf = (props) =>
-      props.squares.find((square) => square.key === 'models')?.bars ?? [];
-    const mixed = tokenSquaresProps(
+    const [member] = vocabulary.groups[0].members;
+    const rows = tokenBoardProps(
       envelopeFor({
         sources: [
           {
             label: 's',
             windows: [],
-            stats: [figure('a', true), figure('b', false)],
-            insights: [{ label: 'i', pct: 4, recorded: true }]
+            series: {
+              startDate: '2026-08-10',
+              totals: [4],
+              recorded: true,
+              models: [{ key: member.key, totals: [4] }]
+            }
           }
         ]
       })
-    );
-    assert.deepEqual(Object.keys(barsOf(mixed)[0]).sort(), ['fillPct', 'key', 'label', 'reading']);
-    // An unreported insight draws NO fill and reads as the explicit dash.
-    // Null rather than 0 is the whole point (owner directive, 2026-08-28): a
-    // zero-width bar is pixel-identical to a measured 0%, so a row whose
-    // denominator never existed used to draw the same picture as one that
-    // genuinely contributed nothing. The component honours it structurally:
-    // a null fill renders no fill element at all.
-    assert.match(component, /\{#if bar\.fillPct !== null\}/);
-    const dashed = tokenSquaresProps(
-      envelopeFor({ sources: [{ label: 's', windows: [], insights: [{ label: 'i', pct: null }] }] })
-    );
-    assert.equal(barsOf(dashed)[0].fillPct, null);
-    assert.equal(barsOf(dashed)[0].reading, unknownFigure);
-    assert.equal(unknownFigure, '--');
-    // ...and a MEASURED zero still draws its (empty) bar, because 0% of a real
-    // window is a measurement and must not be erased along with the unknowns.
-    const measured = tokenSquaresProps(
-      envelopeFor({ sources: [{ label: 's', windows: [], insights: [{ label: 'i', pct: 0 }] }] })
-    );
-    assert.equal(barsOf(measured)[0].fillPct, 0);
-    assert.equal(barsOf(measured)[0].reading, '0%');
-    // A figure the payload does not carry is the dash on the square's face
-    // too, never a zero.
-    const nothing = tokenSquares([{ label: 's', windows: [] }]);
-    assert.equal(nothing.find((square) => square.key === 'source-s').figure, unknownFigure);
-    assert.equal(nothing.find((square) => square.key === 'sessions').figure, unknownFigure);
+    ).cards.find((card) => card.key === 'models-s').models;
+    assert.deepEqual(Object.keys(rows[0]).sort(), ['detail', 'fillPct', 'key', 'label', 'reading']);
+    assert.equal(rows[0].detail, undefined);
+    // A figure the payload does not carry is the dash on the card's face,
+    // never a zero.
+    const nothing = tokenCards([{ label: 's', windows: [] }]);
+    assert.equal(nothing.find((card) => card.key === 'source-s').figure, unknownFigure);
+    assert.equal(nothing.find((card) => card.key === 'sessions').figure, unknownFigure);
+    assert.equal(nothing.find((card) => card.key === 'tracked').figure, unknownFigure);
   });
 
   it('draws ONE graph client-side over the whole delivered series', () => {
@@ -818,10 +921,10 @@ describe('the board of squares: live surface', () => {
       'a series carrying no days is the same permanent hole as no series at all'
     );
     /* The source is not ERASED, only its calendar: every figure it reports
-       still reaches the page through the board's own square, which is the
-       half of the ruling that keeps this from being a way to hide a source. */
+       still reaches the page through the board's own card, which is the half
+       of the ruling that keeps this from being a way to hide a source. */
     assert.ok(
-      tokenSquaresProps(
+      tokenBoardProps(
         {
           schema: 'panel/v1',
           id: 'token-usage',
@@ -831,15 +934,15 @@ describe('the board of squares: live surface', () => {
           data: { sources: [{ label: 's', windows: [] }] }
         },
         new Date('2026-08-27T12:00:00Z')
-      ).squares.some((square) => square.label.toLowerCase().includes('s')),
-      'a source with no series lost its square as well as its calendar'
+      ).cards.some((card) => card.label.toLowerCase().includes('s')),
+      'a source with no series lost its card as well as its calendar'
     );
     const drawn = commitLogProps(
       tokenOnly({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [1, 2, 3] } }] })
     );
     const set = drawn.sets.find((set) => set.key === 's');
     assert.equal(set.noun, 'token');
-    assert.equal(set.stripLabel, 's token calendar: daily totals, newest last');
+    assert.equal(set.stripLabel, `${sourceName('s')} token calendar: daily totals, newest last`);
     assert.ok(set.columns.length > 0, 'a real series draws its window');
     /* THE READING IS BUILT FROM THE DAYS THE PAYLOAD ACTUALLY CARRIES, never
        from a sentence an adapter guessed at (issue 158's finding, carried
@@ -847,10 +950,10 @@ describe('the board of squares: live surface', () => {
        covered are all measured from the same totals the grid draws. */
     assert.equal(set.caption, `${formatMagnitude(6)} tokens over 3 days · peak ${formatMagnitude(3)} · data through 2026-08-03`);
     // A windowless, statless source still states its honest empty face on its
-    // own square; a source with figures does not.
-    const board = tokenSquaresProps(envelopeFor({ sources: [{ label: 's', windows: [] }] }));
-    assert.equal(board.squares.find((square) => square.key === 'source-s').back.note, tokenUsageSourceEmptyNote);
-    const withWindows = tokenSquaresProps(envelopeFor(shippedPayload));
+    // own card; a source with figures does not.
+    const board = tokenBoardProps(envelopeFor({ sources: [{ label: 's', windows: [] }] }));
+    assert.equal(board.cards.find((card) => card.key === 'source-s').note, tokenUsageSourceEmptyNote);
+    const withWindows = tokenBoardProps(envelopeFor(shippedPayload));
     assert.equal(withWindows.emptyNote, 'No usage data available.');
   });
 
@@ -1053,45 +1156,28 @@ describe('category lens helpers', () => {
      question they answer. So the vocabulary the adapter delivers is pinned
      here against that surface, and the four behaviours the retired resolver's
      tests described are asserted against the path that ships. */
-  it('delivers the category breakdown the square turns over to, and nothing to resolve it with', () => {
-    const backOf = (payload) =>
-      tokenSquaresProps(envelopeFor(payload)).squares.find((square) => square.key === 'source-alpha')
-        .back;
-    const back = backOf({ sources: [{ label: 'alpha', windows: [], series }] });
+  it('keeps the breakdown a delivered reading, with nothing to resolve it with', () => {
+    /* The categories are the calendar's own breakdown now: the board's cards
+       print the four accounting classes as LIFETIME stats (the source card)
+       and as a model's own accounting (the models card), and neither is a
+       question a reader answers. The shares helper stays the one place a
+       served row becomes a proportion, and the retired resolver stays retired.
+
+       A named category reads its OWN dailies, summed from the served row:
+       cache-read is 9+18+27 of a 60-token series, input is 1+2+3. */
+    const shares = categoryShares(series);
     assert.deepEqual(
-      back.facts.map((fact) => fact.key),
-      ['input', 'cache-read'],
-      'the served order is the rendered order'
+      shares.map((share) => [share.key, share.total, share.pct]),
+      [
+        ['input', 6, 10],
+        ['cache-read', 54, 90]
+      ],
+      'the served order is the delivered order, and each row sums its own days'
     );
-    /* A named category reads its OWN dailies, summed from the served row —
-       the value the retired helper's second assertion measured. cache-read is
-       9+18+27 of a 60-token series, input is 1+2+3. */
-    const factFor = (key) => back.facts.find((fact) => fact.key === key);
-    assert.equal(factFor('cache-read').value, `${formatTokenCount(54)} · ${formatShare(90)}`);
-    assert.equal(factFor('input').value, `${formatTokenCount(6)} · ${formatShare(10)}`);
     /* A category this source does not report has no entry at all, which is
-       what keeps the face a statement about real data rather than a table of
-       zeroes for classes nobody used. */
-    assert.equal(factFor('reasoning'), undefined);
-    /* And a series with no breakdown at all turns over to the source's own
-       remaining stats instead — the second half of the same fallback, and the
-       reason a payload that reports only tiles still has something true
-       behind its square. */
-    const plain = backOf({
-      sources: [
-        {
-          label: 'alpha',
-          windows: [],
-          series: { startDate: '2026-08-10', totals: [5] },
-          stats: [{ key: 'chats', label: 'Chats', value: 4, unit: 'count' }]
-        }
-      ]
-    });
-    assert.deepEqual(
-      plain.facts.map((fact) => [fact.key, fact.value, fact.slot]),
-      [['chats', '4', undefined]],
-      'a source with no breakdown lists its own stats, and a stat owns no palette slot'
-    );
+       what keeps the reading a statement about real data rather than a table
+       of zeroes for classes nobody used. */
+    assert.equal(shares.find((share) => share.key === 'reasoning'), undefined);
     /* Neither the resolver nor its sentinel came back, and the adapter reads
        the served category directly rather than through one. */
     assert.doesNotMatch(helper, /lensValues/, 'the dead lens resolver is back');
@@ -1145,7 +1231,7 @@ describe('category lens helpers', () => {
     );
     // The composition strip renders the unknown as the shared dash rather
     // than as "0%".
-    assert.equal(formatShare(null), '--');
+    assert.equal(formatShare(null), unknownFigure);
     assert.equal(formatShare(0), '0%');
   });
 
@@ -1234,16 +1320,17 @@ describe('the model breakdown (token-usage/v2)', () => {
     );
   });
 
-  it('holds the model window to the ten-week budget the Go boundary enforces', () => {
+  it('holds the model window to the eight-week budget the Go boundary enforces', () => {
     // The same sixth rule the origin applies (maxModelDays in
     // internal/panels/types.go), mirrored per the 2026-08-27 adversarial
-    // review of PR #230 (finding 4). A 71-day series: the models section
-    // may cover its trailing 70 days, not all 71 — while the categories
+    // review of PR #230 (finding 4). A 57-day series: the models section
+    // may cover its trailing 56 days, not all 57 — while the categories
     // breakdown answers to the series bound alone, exactly as in Go. The
     // budget was a quarter until the vocabulary gained a second vendor group
-    // (issue #302): a row costs one integer per day per member, and the
-    // shared payload ceiling is not a lever.
-    const days = 71;
+    // (issue #302), and ten weeks until the sealed ceiling needed its further
+    // digit (issue #267): a row costs one integer per day per member, and the
+    // ceiling is never the lever; the window is.
+    const days = 57;
     const totals = Array.from({ length: days }, () => 2);
     const series = (extra) => ({
       sources: [
@@ -1259,7 +1346,7 @@ describe('the model breakdown (token-usage/v2)', () => {
       tokenUsageSources(
         series({ models: [{ key: 'opus-5', startDate: '2026-01-02', totals: windowed }] })
       )[0]?.series?.models?.[0]?.totals?.length,
-      70
+      56
     );
     assert.deepEqual(
       tokenUsageSources(series({ models: [{ key: 'opus-5', totals }] })),
@@ -1269,7 +1356,7 @@ describe('the model breakdown (token-usage/v2)', () => {
       tokenUsageSources(
         series({ categories: [{ key: 'input', totals }] })
       )[0]?.series?.categories?.[0]?.totals?.length,
-      71
+      57
     );
   });
 
@@ -1475,14 +1562,19 @@ describe('the model vocabulary is one data file', () => {
     for (const member of vocabularyMembers) {
       assert.equal(modelSlot(member.key), member.slot, member.key);
       assert.equal(modelLabel(member.key), member.label, member.key);
-      assert.equal(modelGroup(member.key), member.group, member.key);
     }
     assert.equal(modelSlot(vocabulary.residual.key), vocabulary.residual.slot);
     assert.equal(modelLabel(vocabulary.residual.key), vocabulary.residual.label);
-    /* The residual belongs to no vendor: it is the fold every source may
-       carry, and it rides the block of whichever group its source's named
-       members sit in. */
-    assert.equal(modelGroup(vocabulary.residual.key), '');
+    /* THE VENDOR GROUP IS NO LONGER READ ANYWHERE (owner directive,
+       2026-09-11): a models card is headed by the SOURCE whose split it
+       draws, so the group's written name, its declared row reserve and the
+       "which group is present" walk went with the blocks they headed. The
+       groups are still the file's own structure and still what gives each
+       member its slot; nothing on the page asks which one a member belongs
+       to, and nothing in this module can answer. */
+    for (const gone of ['modelGroup', 'modelGroupLabel', 'modelGroupRows', 'modelGroupKeys']) {
+      assert.ok(!helper.includes(`export function ${gone}`), `${gone} outlived the blocks it headed`);
+    }
   });
 
   it('keeps every named member on its own chromatic slot inside its group', () => {
@@ -1493,13 +1585,7 @@ describe('the model vocabulary is one data file', () => {
         slots.every((slot) => slot !== vocabulary.residual.slot),
         `${group.key} paints a member with the residual's neutral slot`
       );
-      assert.equal(modelGroupLabel(group.key), group.label);
-      /* The reserve is the group's declared members plus the residual, which
-         any source may carry into the block. */
-      assert.equal(modelGroupRows(group.key), group.members.length + 1);
     }
-    assert.equal(modelGroupLabel('a-group-that-does-not-exist'), '');
-    assert.equal(modelGroupRows('a-group-that-does-not-exist'), 0);
   });
 
   it('declares every reading mode a swatch for every slot it can hand out', () => {
@@ -1522,38 +1608,25 @@ describe('the model vocabulary is one data file', () => {
       );
     }
   });
-
-  it('gives every block size the vocabulary can produce a row rung in the sheet', () => {
-    /* The bars box divides its fixed height into the declared number of rows.
-       Past five rows the loose pitch does not print inside a square, so the
-       stylesheet tightens it — and a vendor group that grows past the last
-       rung must be a red build rather than a clipped square. */
-    for (const group of vocabulary.groups) {
-      const rows = modelGroupRows(group.key);
-      if (rows <= 5) {
-        continue;
-      }
-      assert.match(sheet, new RegExp(`\\.board-bars\\[data-rows='${rows}'\\]`), group.key);
-      assert.match(sheet, new RegExp(`\\.board-square\\[data-rows='${rows}'\\]`), group.key);
-    }
-    assert.match(sheet, /\.board-bars \{[^}]*grid-template-rows: repeat\(var\(--board-bar-rows/);
-    assert.match(component, /style:--board-bar-rows=\{square\.barRows \?\? square\.bars\.length\}/);
-  });
 });
 
-describe('the model split is blocked by vendor group', () => {
-  /* Issue #302. The block a reader sees is one VENDOR GROUP's shares, headed
-     by that group's own written name from the vocabulary file — never by the
-     source's operator-typed label, which names where the numbers were
-     captured rather than whose models they measure. Every fixture below
-     builds its members FROM the vocabulary, so these pins say something
-     about the rule rather than about a list transcribed twice. */
+describe('the models card is one card per source', () => {
+  /* Issues #302 and #311. A models card draws ONE SOURCE'S split, headed by
+     that source's written name from the vocabulary file. It used to be headed
+     by the VENDOR GROUP, on the reasoning that a group names whose models the
+     numbers measure while an operator-typed label names where they were
+     captured — and the source label is no longer operator-typed: it is a key
+     the vocabulary resolves, so the heading names a source the reader knows
+     by the same word the card above it uses.
+
+     Every fixture below builds its members FROM the vocabulary, so these pins
+     say something about the rule rather than about a list transcribed twice. */
 
   const keysOf = (group) => group.members.map((member) => member.key);
 
   /* A payload whose every member carries the same non-zero row, partitioning
      the series exactly. Rows of zeroes are refused (see below), so a fixture
-     cannot pad a block with placeholders even by accident. */
+     cannot pad a card with placeholders even by accident. */
   const carrying = (blocks) => ({
     sources: blocks.map(({ label, keys }) => ({
       label,
@@ -1567,93 +1640,187 @@ describe('the model split is blocked by vendor group', () => {
     }))
   });
 
-  const squaresOf = (payload) => tokenSquaresProps(envelopeFor(payload)).squares;
-  const modelSquares = (payload) =>
-    squaresOf(payload).filter((square) => square.key.startsWith('models'));
+  const cardsOf = (payload) => tokenBoardProps(envelopeFor(payload)).cards;
+  const modelCards = (payload) =>
+    cardsOf(payload).filter((card) => card.key.startsWith('models-'));
 
-  it('heads each block with its vendor group, not with the source label', () => {
+  it('heads each card with its source\u2019s written name, one card per source', () => {
     const [first, second] = vocabulary.groups;
-    const squares = modelSquares(
+    const cards = modelCards(
       carrying([
-        { label: 'a-capture-tool', keys: keysOf(first) },
-        { label: 'another-capture-tool', keys: keysOf(second) }
+        { label: firstSource.key, keys: keysOf(first) },
+        { label: secondSource.key, keys: keysOf(second) }
       ])
     );
-    assert.equal(squares.length, 1);
-    assert.equal(squares[0].label, `Models · ${first.label}`);
-    assert.equal(squares[0].back.label, `Models · ${second.label}`);
-    assert.equal(squares[0].ariaLabel, `Model shares for ${first.label}`);
-    /* Neither operator-typed label reaches the heading. */
-    for (const face of [squares[0].label, squares[0].back.label]) {
-      assert.doesNotMatch(face, /capture-tool/);
+    assert.equal(cards.length, 2, 'each source that has a split gets its own card');
+    assert.equal(cards[0].label, `Models · ${firstSource.name}`);
+    assert.equal(cards[1].label, `Models · ${secondSource.name}`);
+    assert.equal(cards[0].ariaLabel, `Model split for ${firstSource.name}`);
+    /* Neither the wire key nor the vendor group reaches the heading. */
+    for (const heading of cards.map((card) => card.label)) {
+      assert.doesNotMatch(heading, new RegExp(first.label));
+      assert.doesNotMatch(heading, new RegExp(second.label));
     }
   });
 
-  it('renders exactly the members the envelope carries, and never a nought row', () => {
+  it('renders exactly the members the envelope carries, in the vocabulary\u2019s order', () => {
     const [group] = vocabulary.groups;
-    const keys = keysOf(group).slice(0, 2);
-    const squares = modelSquares(carrying([{ label: 'a-capture-tool', keys }]));
-    assert.equal(squares[0].bars.length, keys.length);
+    /* Served BACKWARDS, so the order below is the vocabulary's rule rather
+       than the payload's accident. */
+    const keys = keysOf(group).slice(0, 3).reverse();
+    const [card] = modelCards(carrying([{ label: 'a-capture-tool', keys }]));
+    assert.equal(card.models.length, keys.length);
     assert.deepEqual(
-      squares[0].bars.map((bar) => bar.label),
-      keys.map(modelLabel)
+      card.models.map((row) => row.label),
+      keysOf(group).slice(0, 3).map(modelLabel),
+      'the rows are laid out in the vocabulary\u2019s serve order, not the payload\u2019s'
     );
-    for (const bar of squares[0].bars) {
-      assert.notEqual(bar.reading, '0%');
-      assert.ok(bar.fillPct === null || bar.fillPct > 0, bar.reading);
+    for (const row of card.models) {
+      assert.notEqual(row.reading, '0%');
+      assert.ok(row.fillPct > 0, row.reading);
     }
   });
 
-  it('reserves the box from the group the block belongs to, never from the payload', () => {
+  it('runs the longest row the card\u2019s full width and reads the rest against it', () => {
+    /* MEMBER AGAINST THE LARGEST MEMBER, on both kinds of card, so the longest
+       rule always spans the card and the number beside each row is what says
+       how much of the whole it was. */
     const [group] = vocabulary.groups;
-    const squares = modelSquares(
-      carrying([{ label: 'a-capture-tool', keys: keysOf(group).slice(0, 2) }])
-    );
-    /* Two members arrived; the box still holds every member the group
-       declares plus the residual, so an envelope that later carries more
-       moves nothing. */
-    assert.equal(squares[0].barRows, modelGroupRows(group.key));
-    assert.ok(squares[0].barRows > squares[0].bars.length);
+    const [big, small] = keysOf(group);
+    const [card] = modelCards({
+      sources: [
+        {
+          label: 'a-capture-tool',
+          windows: [],
+          series: {
+            startDate: '2026-08-10',
+            totals: [5],
+            recorded: true,
+            models: [
+              { key: big, totals: [4] },
+              { key: small, totals: [1] }
+            ]
+          }
+        }
+      ]
+    });
+    const rank = (key) => card.models.find((row) => row.key === key);
+    assert.equal(rank(big).fillPct, 100);
+    assert.equal(rank(small).fillPct, 25);
+    /* Without a lifetime accounting the reading is the WINDOW TOTAL, compact —
+       a share of a window is a different quantity from a share of a lifetime,
+       and printing them in the same units on two neighbouring cards would
+       invite exactly the comparison that is false. */
+    assert.equal(rank(big).reading, formatTokenCount(4));
+    assert.equal(rank(small).reading, formatTokenCount(1));
+    assert.equal(rank(big).detail, undefined);
   });
 
-  it('carries the residual in the block of the group its source measured', () => {
+  it('reads shares and the accounting behind them when the source reports lifetimes', () => {
+    const [group] = vocabulary.groups;
+    const [big, small] = keysOf(group);
+    const stat = (key, totals) => ({ key, totals });
+    const [card] = modelCards({
+      sources: [
+        {
+          label: 'a-capture-tool',
+          windows: [],
+          modelStats: [
+            stat(big, { input: 1, output: 2, 'cache-read': 60, 'cache-write': 7 }),
+            stat(small, { input: 1, output: 1, 'cache-read': 8, 'cache-write': 0 })
+          ]
+        }
+      ]
+    });
+    /* 70 and 10 of 80: the share is the member's own four classes against the
+       sum of every member's. */
+    assert.deepEqual(
+      card.models.map((row) => [row.label, row.reading, row.fillPct]),
+      [
+        [modelLabel(big), formatShare(87.5), 100],
+        [modelLabel(small), formatShare(12.5), (10 / 70) * 100]
+      ]
+    );
+    assert.equal(
+      card.models[0].detail,
+      `in ${formatTokenCount(1)} · out ${formatTokenCount(2)} · cache ${formatTokenCount(60)} / ${formatTokenCount(7)}`
+    );
+    // The lifetime accounting OUTRANKS the window when a source has both.
+    const both = modelCards({
+      sources: [
+        {
+          label: 'a-capture-tool',
+          windows: [],
+          modelStats: [stat(big, { input: 0, output: 0, 'cache-read': 1, 'cache-write': 0 })],
+          series: {
+            startDate: '2026-08-10',
+            totals: [9],
+            models: [{ key: small, totals: [9] }]
+          }
+        }
+      ]
+    });
+    assert.deepEqual(both[0].models.map((row) => row.label), [modelLabel(big)]);
+  });
+
+  it('drops the residual and every member that carried nothing', () => {
+    /* The residual is not an entity: it is the fold of every identifier the
+       vocabulary does not name, and a rule beside named models would read as
+       one more model. A member that carried NOTHING is dropped for the
+       opposite reason — a named entity drawn at nought beside entities that
+       were actually used is a row saying something the data never said.
+
+       Dropping the empty rows is also what makes the bar arithmetic total:
+       every remaining member has a positive total, so the largest is
+       positive, so no row can be handed a proportion it would have to decline
+       to draw. */
     const [group] = vocabulary.groups;
     const keys = [vocabulary.residual.key, ...keysOf(group).slice(0, 1)];
-    const squares = modelSquares(carrying([{ label: 'a-capture-tool', keys }]));
+    const [card] = modelCards(carrying([{ label: 'a-capture-tool', keys }]));
     assert.deepEqual(
-      squares[0].bars.map((bar) => bar.label),
-      [vocabulary.residual.label, modelLabel(keys[1])]
+      card.models.map((row) => row.label),
+      [modelLabel(keys[1])],
+      'the residual reached a card as though it were a model'
     );
-    assert.equal(squares[0].label, `Models · ${group.label}`);
+    // A lifetime accounting whose member carried nothing loses that row too.
+    const [hollow] = modelCards({
+      sources: [
+        {
+          label: 'a-capture-tool',
+          windows: [],
+          modelStats: [
+            { key: keys[1], totals: { input: 1, output: 0, 'cache-read': 0, 'cache-write': 0 } },
+            {
+              key: keysOf(group)[1],
+              totals: { input: 0, output: 0, 'cache-read': 0, 'cache-write': 0 }
+            }
+          ]
+        }
+      ]
+    });
+    assert.deepEqual(hollow.models.map((row) => row.key), [keys[1]]);
   });
 
-  it('renders no block at all when the residual is the only member', () => {
-    /* A block saying "all of it was something we cannot name" is the
-       aggregate above it with extra steps, and the producer already omits
-       the section for exactly this case. */
-    const squares = squaresOf(
-      carrying([{ label: 'a-capture-tool', keys: [vocabulary.residual.key] }])
-    );
+  it('renders no card at all when a source has nothing to split', () => {
+    /* A card saying "all of it was something we cannot name" is the aggregate
+       above it with extra steps, and the producer already omits the section
+       for exactly this case. */
+    const cards = cardsOf(carrying([{ label: 'a-capture-tool', keys: [vocabulary.residual.key] }]));
+    assert.deepEqual(cards.filter((card) => card.key.startsWith('models-')), []);
+    /* The rest of the board is untouched: this is a missing card, never a
+       missing panel. */
+    assert.ok(cards.length > 0);
+    // A source with neither a partition nor a lifetime accounting: same answer.
+    assert.deepEqual(modelCards({ sources: [{ label: 's', windows: [] }] }), []);
+    // And the frozen insight set is NOT a fallback any more (owner directive,
+    // 2026-09-11: ignore insights entirely).
     assert.deepEqual(
-      squares.filter((square) => square.key.startsWith('models')),
+      modelCards({
+        sources: [{ label: 's', windows: [], insights: [{ label: 'Frozen', pct: 100 }] }]
+      }),
       []
     );
-    /* The rest of the board is untouched: this is a missing block, never a
-       missing panel. */
-    assert.ok(squares.length > 0);
-  });
-
-  it('renders one block per group when a source ever carries two', () => {
-    const [first, second] = vocabulary.groups;
-    const keys = [...keysOf(first).slice(0, 1), ...keysOf(second).slice(0, 1)];
-    const squares = modelSquares(carrying([{ label: 'a-capture-tool', keys }]));
-    assert.equal(squares.length, 1);
-    assert.equal(squares[0].label, `Models · ${first.label}`);
-    assert.equal(squares[0].back.label, `Models · ${second.label}`);
-    assert.equal(squares[0].bars.length, 1);
-    assert.equal(squares[0].back.bars.length, 1);
-    assert.equal(squares[0].barRows, modelGroupRows(first.key));
-    assert.equal(squares[0].back.barRows, modelGroupRows(second.key));
+    assert.doesNotMatch(helper, /insightBar/, 'the insight row builder came back');
   });
 
   it('refuses a member that carries nothing across the window it covers', () => {
@@ -1685,210 +1852,185 @@ describe('the model split is blocked by vendor group', () => {
     );
   });
 
-  it('falls back to the shipped insights under the source that reported them', () => {
-    /* No model partition — an older document or a source that reports none.
-       The frozen insights belong to no vendor group, so the block is headed
-       by the source that reported them rather than by a group it is not a
-       partition of. */
-    const squares = modelSquares({
-      sources: [
-        {
-          label: 'a-capture-tool',
-          windows: [],
-          insights: [{ label: 'Frozen', pct: 100 }]
-        }
-      ]
-    });
-    assert.equal(squares[0].label, 'Models · a-capture-tool');
-    assert.deepEqual(
-      squares[0].bars.map((bar) => bar.label),
-      ['Frozen']
-    );
-    assert.equal(squares[0].barRows, 1);
-  });
-});
-
-describe('activity insights provenance', () => {
-  const sourceWith = (extra) => ({
-    label: 'alpha',
-    windows: [],
-    series: {
-      startDate: '2026-08-10',
-      totals: [10, 20, 30],
-      recorded: true,
-      models: [
-        { key: 'opus-5', startDate: '2026-08-11', totals: [20, 20] },
-        { key: 'fable-5', startDate: '2026-08-11', totals: [0, 10] }
-      ]
-    },
-    ...extra
-  });
-
-  /* The insight rows are the model split, and since the owner's directive of
-     2026-09-03 (issue 287) they are the bars on the board's "Models · <source>"
-     square: the first source's shares on the front, the second's behind it.
-     Every property these pins protected is a property of the ROWS, so they
-     read the bars the adapter builds rather than a region that no longer
-     exists. */
-  const modelBars = (payload, face = 'front') => {
-    const square = tokenSquaresProps(envelopeFor(payload)).squares.find(
-      (candidate) => candidate.key === 'models'
-    );
-    return (face === 'front' ? square?.bars : square?.back.bars) ?? [];
-  };
-
-  it('reads the rows from the live series when the payload carries models', () => {
-    const bars = modelBars({
-      sources: [sourceWith({ insights: [{ label: 'Frozen', pct: 99, recorded: true }] })]
-    });
-    assert.deepEqual(
-      bars.map((bar) => [bar.label, bar.reading]),
-      [
-        ['Opus 5', '80%'],
-        ['Fable 5', '20%']
-      ]
-    );
-    // The frozen release-time set is not merged in beside the measured one:
-    // two answers to one question is worse than the older answer alone.
-    assert.equal(bars.find((bar) => bar.label === 'Frozen'), undefined);
-    /* THE RANGE IS STILL MEASURED OVER THE WINDOW THE MODELS COVER, never the
-       whole series — the property the retired range note ANNOUNCED, and the
-       one that makes the percentages true. It is asserted here on the figures
-       themselves (80/20 over the two declared days, not over the three-day
-       series), and independently against modelShares in "takes shares over the
-       window the models cover, never the whole series". */
-    assert.deepEqual(
-      modelShares(sourceWith({}).series).map((share) => [share.key, share.pct]),
-      [
-        ['opus-5', 80],
-        ['fable-5', 20]
-      ]
-    );
-  });
-
-  it('falls back to the shipped insights when no model partition exists', () => {
-    const bars = modelBars({
-      sources: [
-        {
-          label: 'alpha',
-          windows: [],
-          series: { startDate: '2026-08-10', totals: [10] },
-          insights: [{ label: 'Frozen', pct: 99, recorded: true }]
-        }
-      ]
-    });
-    assert.deepEqual(bars.map((bar) => bar.label), ['Frozen']);
-    assert.equal(bars[0].reading, formatShare(99));
-  });
-
-  it("carries the second source's split on the back of the same square", () => {
-    /* The owner's drawing (2026-09-03, issue 287) puts one source's model
-       split on the front and the next source's behind it, so the two are read
-       by turning one square rather than by hunting two. A payload with a
-       single source turns over to its own honest note instead of an empty
-       chart. */
-    const both = {
-      sources: [
-        sourceWith({}),
-        {
-          label: 'beta',
-          windows: [],
-          series: { startDate: '2026-08-10', totals: [4], models: [{ key: 'sonnet-5', totals: [4] }] }
-        }
-      ]
-    };
-    assert.deepEqual(modelBars(both, 'back').map((bar) => bar.label), ['Sonnet 5']);
-    const alone = { sources: [sourceWith({})] };
-    assert.deepEqual(modelBars(alone, 'back'), []);
-    const square = tokenSquaresProps(envelopeFor(alone)).squares.find(
-      (candidate) => candidate.key === 'models'
-    );
-    assert.equal(square.back.note, tokenUsageSourceEmptyNote);
-  });
-
   it('never encodes a share by colour alone', () => {
-    /* The dataviz floor, carried onto the bars: every one of them prints its
-       own label and its own reading beside the fill, and the fill is the
-       redundant channel. */
-    assert.match(component, /class="board-bar-label">\{bar\.label\}/);
-    assert.match(component, /class="board-reading">\{bar\.reading\}/);
+    /* The dataviz floor, carried onto the rows: every one prints its own name
+       and its own reading beside the rule, and the rule is the redundant
+       channel. */
+    assert.match(component, /class="board-model-name">\{row\.label\}/);
+    assert.match(component, /class="board-reading">\{row\.reading\}/);
   });
 });
 
-describe('category breakdown surface', () => {
-  it("gates the breakdown on the source having one", () => {
-    /* RE-AIMED TWICE. The owner's 2026-08-28 reversal gated TWO things on a
-       source reporting categories — the lens in the display menu, and the
-       composition strip — and took the lens away. The directive of 2026-09-03
-       (issue 287) moved what remained onto the back of the source's own
-       square, which is the same distinction the owner drew then: delivered
-       data a reader reads, never a question they answer. So the gate that
-       remains is pinned here, and the retired one is pinned as an absence in
-       BOTH components so the lens cannot come back through either door. */
-    assert.match(component, /\{:else if square\.back\.facts\}/);
-    assert.match(component, /class="board-facts"/);
-    assert.match(component, /\{#each square\.back\.facts as fact \(fact\.key\)\}/);
-    for (const [name, source] of Object.entries({ component, commits })) {
-      assert.doesNotMatch(
-        source,
-        /activity\.categories|activeLensCategory/,
-        `${name} reads the category vocabulary again, which only the retired lens ever needed`
-      );
-    }
+describe('the lifetime model accounting is admitted strictly', () => {
+  /* The optional modelStats section (issue #311), held to the same
+     three-state contract every other section takes and to the same closed
+     membership the daily partition takes. */
+  const [member, other] = vocabulary.groups[0].members;
+  const full = { input: 1, output: 2, 'cache-read': 3, 'cache-write': 4 };
+  const withStats = (modelStats) => ({
+    sources: [{ label: 's', windows: [], modelStats }]
   });
 
-  it('never encodes a category by color alone', () => {
-    /* Every fact carries its category's name and its figures BESIDE the
-       swatch — built as data by the adapter, rendered verbatim by the
-       component — so the colour is the redundant channel and the swatch is
-       decorative to assistive technology. This is stronger than the retired
-       strip's arrangement, which put the exact figures in a title attribute
-       that no touch device could open (issue 219). */
-    assert.match(helper, /value: `\$\{formatTokenCount\(share\.total\)\} · \$\{formatShare\(share\.pct\)\}`/);
+  it('admits a well-formed section and carries it onto the source', () => {
+    const [source] = tokenUsageSources(withStats([{ key: member.key, totals: full }]));
+    assert.deepEqual(source.modelStats, [{ key: member.key, totals: full }]);
+  });
+
+  it('admits a payload written before the section existed', () => {
+    const [source] = tokenUsageSources({ sources: [{ label: 's', windows: [] }] });
+    assert.equal(source.modelStats, undefined);
+    assert.deepEqual(tokenUsageSources(withStats([])), [{ label: 's', windows: [] }]);
+  });
+
+  it('refuses every malformed corner rather than rendering part of it', () => {
+    const refusals = [
+      ['not an array', withStats({ [member.key]: full })],
+      ['a key outside the vocabulary', withStats([{ key: 'a-model-nobody-declared', totals: full }])],
+      ['a key twice', withStats([{ key: member.key, totals: full }, { key: member.key, totals: full }])],
+      ['a missing class', withStats([{ key: member.key, totals: { input: 1, output: 2, 'cache-read': 3 } }])],
+      ['a negative class', withStats([{ key: member.key, totals: { ...full, output: -1 } }])],
+      ['a fractional class', withStats([{ key: member.key, totals: { ...full, input: 1.5 } }])],
+      ['no totals at all', withStats([{ key: member.key }])],
+      ['a non-record row', withStats(['nope'])],
+      [
+        'a sum past the exact-representation boundary',
+        withStats([
+          {
+            key: member.key,
+            totals: { input: countBound, output: countBound, 'cache-read': 0, 'cache-write': 0 }
+          }
+        ])
+      ]
+    ];
+    for (const [why, payload] of refusals) {
+      assert.deepEqual(tokenUsageSources(payload), [], why);
+    }
+    // ...and the row count is bounded by the vocabulary's own size, exactly as
+    // the daily partition's is.
+    const every = [vocabulary.residual, ...vocabularyMembers].map((entry) => ({
+      key: entry.key,
+      totals: full
+    }));
+    assert.equal(tokenUsageSources(withStats(every)).length, 1, 'the whole vocabulary must fit');
+    assert.deepEqual(
+      tokenUsageSources(withStats([...every, { key: other.key, totals: full }])),
+      [],
+      'a section longer than the vocabulary is a section carrying a repeat'
+    );
+  });
+
+  it('bounds the row count BEFORE it reads a row', () => {
+    /* Closed membership already means an over-long section must repeat a key,
+       so the duplicate rule would refuse this document too — but only after
+       walking every entry in it. The bound is therefore a bound on WORK, and
+       the only way to tell the two apart is to hand it rows that cannot be
+       read at all: a section the bound refuses never touches one, and a
+       section it admits throws on the first.
+
+       This is the same reasoning admitBreakdown's own maxRows carries, made
+       observable rather than asserted. */
+    let reads = 0;
+    const unreadable = () => ({
+      get key() {
+        reads += 1;
+        throw new Error('a bounded section must be refused before its rows are read');
+      }
+    });
+    const overlong = Array.from({ length: vocabularyMembers.length + 2 }, unreadable);
+    assert.deepEqual(tokenUsageSources(withStats(overlong)), []);
+    assert.equal(reads, 0, 'the section was walked before its length was weighed');
+    // The control: a section INSIDE the bound really is walked, so the
+    // assertion above is about the bound rather than about a lazy admission.
+    assert.throws(() => tokenUsageSources(withStats([unreadable()])), /refused before its rows/);
+    assert.equal(reads, 1);
+  });
+});
+
+describe('the card surface renders payload strings as data', () => {
+  it('lists the accounting classes as ruled facts, in the sheet\u2019s own order', () => {
+    /* THE FOUR CLASSES ARE LIFETIME STATS ON A SOURCE CARD (owner directive,
+       2026-09-11). They used to be the per-day category composition on a
+       square's back face; the reading is the same division of the same
+       tokens, printed as ruled lines a reader sees without pressing anything.
+       The order is the sheet's own closed list, and a class the source does
+       not report is simply not a row — which is what keeps the card a
+       statement about real data rather than a ladder of dashes. */
+    const stat = (key, value) => ({ key, label: key, value, unit: 'tokens' });
+    const card = tokenCards([
+      {
+        label: 's',
+        windows: [{ period: 'week', inputTokens: 3, outputTokens: 4 }],
+        stats: [stat('cache-write', 40), stat('input', 10), stat('output', 20)]
+      }
+    ]).find((candidate) => candidate.key === 'source-s');
+    assert.deepEqual(
+      card.facts.map((fact) => [fact.key, fact.term, fact.value]),
+      [
+        ['input', 'input', formatTokenCount(10)],
+        ['output', 'output', formatTokenCount(20)],
+        ['cache-write', 'cache write', formatTokenCount(40)],
+        ['window-week', 'this week', `${formatTokenCount(3)} in · ${formatTokenCount(4)} out`]
+      ],
+      'the classes lead in the sheet\u2019s order and the windows follow'
+    );
+    assert.equal(card.factColumns, 2);
+    assert.equal(
+      card.facts.find((fact) => fact.key === 'cache-read'),
+      undefined,
+      'a class the source did not report became a row'
+    );
+  });
+
+  it('words the origin\u2019s closed window vocabulary, and an unknown period verbatim', () => {
+    /* The origin serves two window keys (usageSeriesWindowKeys in
+       internal/panels/types.go) and the page has a word for each. A period
+       outside them prints VERBATIM: an unknown window is still a real
+       reading, and the word the payload used says exactly what is known. */
+    assert.equal(windowTerm('today'), 'today');
+    assert.equal(windowTerm('week'), 'this week');
+    assert.equal(windowTerm('a-window-nobody-declared'), 'a-window-nobody-declared');
+  });
+
+  it('never encodes a fact by colour alone', () => {
+    /* Every fact carries its term and its figure as TEXT — built as data by
+       the adapter, rendered verbatim by the component — so nothing on a card
+       is readable only by looking. The one mark that remains is the record
+       the current streak has matched, and the figure it matched is printed on
+       the line directly above it. */
     assert.match(component, /class="board-term">\{fact\.term\}/);
     assert.match(component, /class="board-value">\{fact\.value\}/);
-    assert.match(component, /class="board-swatch" data-slot=\{fact\.slot\} aria-hidden="true"/);
+    assert.match(component, /data-peak=\{fact\.peak \? 'true' : 'false'\}/);
+    /* And the ladder's column count is the ADAPTER's, read off the card
+       rather than decided by the component: a fixed attribute here would
+       quietly flatten the accounting pairs into one column on every card. */
+    assert.match(component, /data-columns=\{card\.factColumns \?\? 1\}/);
+    assert.match(
+      sheet,
+      /\.board-facts\[data-columns='2'\] \{\s*--board-fact-columns: 2;/,
+      'the two-column ladder has no rule to select'
+    );
+    assert.match(
+      sheet,
+      /\.board-fact\[data-peak='true'\] \.board-value \{\s*color: var\(--ledger-highlight\)/
+    );
     assert.doesNotMatch(component, /\stitle=/, 'a title attribute has no touch trigger in any engine');
-    /* Figures wear the face's own ink, never a series colour. */
+    /* Figures wear the card's own ink, never a series colour. */
     assert.match(sheet, /\.board-value \{[^}]*font-variant-numeric: tabular-nums/);
-  });
-
-  it('separates the swatches from the values with the sheet gap (dataviz mark spec)', () => {
-    /* The retired strip stacked segments in one bar and needed a 2px surface
-       gap to keep adjacent categories apart. The board lists them as rows
-       instead (owner directive of 2026-09-03, issue 287), so the separation is
-       the row gap and the swatch's own box — a stronger separation than 2px,
-       and one that cannot collapse when two adjacent categories are close in
-       hue. */
-    assert.match(sheet, /\.board-facts \{[^}]*gap: 0\.25rem/);
-    assert.match(sheet, /\.board-swatch \{[^}]*inline-size: 0\.5rem/);
-    assert.match(sheet, /\.board-swatch \{[^}]*block-size: 0\.5rem/);
-  });
-
-  it('resolves every category color from a global token slot', () => {
-    /* The slot rules moved to styles.css with the rest of the board's
-       geometry (owner directive of 2026-09-03, issue 287), which is also what
-       keeps them CSP-safe: a closed set of attribute rules rather than a
-       per-element inline style, exactly as the heatmap's levels are. */
-    for (let slot = 0; slot <= 5; slot += 1) {
-      assert.match(sheet, new RegExp(`background: var\\(--usage-cat-${slot}\\)`));
-      assert.match(sheet, new RegExp(`--usage-cat-${slot}: var\\(--color-cat-${slot}\\)`));
+    /* AND THE SWATCHES ARE GONE with the face they sat on: the board prints
+       no category colour at all, so nothing on it can be read by hue. */
+    for (const gone of ['board-swatch', 'data-slot']) {
+      assert.ok(!component.includes(gone), `the component still draws ${gone}`);
+      assert.ok(!sheet.includes(gone), `the sheet still styles ${gone}`);
     }
-    /* The component draws whatever slot the adapter assigned; the adapter is
-       where the entity-owns-its-slot rule lives (categorySlot above). */
-    assert.match(component, /data-slot=\{fact\.slot\}/);
-    assert.match(helper, /slot: categorySlot\(share\.key\)/);
-    // No component declares a palette token of its own; it may only read one.
-    assert.doesNotMatch(component, /--usage-cat-\d\s*:/, 'a component declares a palette slot');
   });
 
   it('renders every payload string as text, never markup', () => {
     /* Svelte escapes text interpolation; what would break that promise is a
-       raw-HTML injection, so neither component may ever contain one. A hostile
+       raw-HTML injection, so no component may ever contain one. A hostile
        label in a payload therefore renders as inert text, and a hostile
-       category KEY cannot even reach the renderer (admission refuses it —
+       model KEY cannot even reach the renderer (admission refuses it —
        proven above). */
-    for (const [name, source] of Object.entries({ component, commits })) {
+    for (const [name, source] of Object.entries({ component, commits, chart })) {
       assert.doesNotMatch(source, /\{@html/, name);
     }
   });
@@ -2059,12 +2201,12 @@ describe('the stale data-through note', () => {
        — is the only place a late line can appear without moving anything.
        That is the identical arrangement the calendar has used since issue 285,
        so the page now has one home for this line rather than two. */
-    const props = tokenSquaresProps(
+    const props = tokenBoardProps(
       envelopeFor({ sources: seriesSources }, { generatedAt: '2026-08-25T12:00:00Z' }),
       now
     );
     assert.equal(props.staleNote, 'data through Aug 25, 2026 · last capture 7d ago');
-    const fresh = tokenSquaresProps(
+    const fresh = tokenBoardProps(
       envelopeFor({ sources: seriesSources }, { generatedAt: '2026-09-01T11:30:00Z' }),
       now
     );
@@ -2083,26 +2225,26 @@ describe('the stale data-through note', () => {
  * The board used to print "recorded out of band, not fetched live" on the
  * back of a square whose figures mixed provenance. The owner removed every
  * instance of it. The `recorded` flags stay in the payload for the envelope's
- * readers; the page says nothing about them, and the Sessions square lost its
+ * readers; the page says nothing about them, and the session card lost its
  * "N days active of M days tracked" line in the same directive. */
-describe('no square prints a provenance sentence or the days-tracked line', () => {
-  it('leaves the backs of recorded and live sources alike without a note', () => {
+describe('no card prints a provenance sentence or the days-tracked line', () => {
+  it('leaves recorded and live sources alike without a note', () => {
     const recordedStats = [
       { key: 'lifetime', label: 'Lifetime tokens', value: 10, unit: 'tokens', recorded: true },
       { key: 'input', label: 'Input', value: 4, unit: 'tokens', recorded: true }
     ];
     const liveStats = recordedStats.map(({ recorded: _dropped, ...stat }) => stat);
     for (const stats of [recordedStats, liveStats]) {
-      const [total, anthropic] = tokenSquares([{ label: 'anthropic', windows: [], stats }]);
-      assert.equal(anthropic.back.note, undefined);
-      assert.equal(total.back.note, undefined);
+      const [total, source] = tokenCards([{ label: firstSource.key, windows: [], stats }]);
+      assert.equal(source.note, undefined);
+      assert.equal(total.note, undefined);
     }
   });
 
   it('shows the session figure with no active-of-tracked line under it', () => {
-    const [, , sessions] = tokenSquares([
+    const cards = tokenCards([
       {
-        label: 'anthropic',
+        label: firstSource.key,
         windows: [],
         stats: [
           { key: 'sessions', label: 'Sessions', value: 26, unit: 'count', recorded: true },
@@ -2111,20 +2253,436 @@ describe('no square prints a provenance sentence or the days-tracked line', () =
         ]
       }
     ]);
-    assert.equal(sessions.key, 'sessions');
+    const sessions = cards.find((card) => card.key === 'sessions');
     assert.equal(sessions.figure, '26');
     assert.equal(sessions.sub, undefined, 'the days-tracked line came back');
+    assert.equal(
+      sessions.facts,
+      undefined,
+      'active-days and tracked-days became rows; the session card lists records, not coverage'
+    );
   });
 
-  it('renders the note on the back face, never on the front', () => {
-    assert.match(
-      component,
-      /data-face="back"[\s\S]*?\{#if square\.back\.note\}<span class="board-sub">\{square\.back\.note\}<\/span>\{\/if\}/,
-      'the provenance sentence has no rendered home on the board'
+  it('spells no provenance wording anywhere it could be rendered', () => {
+    for (const [name, source] of Object.entries({ component, helper, chart })) {
+      assert.ok(
+        !source.includes('recorded out of band'),
+        `${name} spells the retired provenance wording`
+      );
+    }
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * THE SIX CARDS (owner directive, 2026-09-11, issues 267 and 311)
+ *
+ * The board's composition, driven through the adapter with a payload shaped
+ * like the one the origin serves: every figure, every fact and every share is
+ * checked against arithmetic done here rather than against a number copied
+ * out of a drawing.
+ * ------------------------------------------------------------------------ */
+describe('the six-card board', () => {
+  const member = (index) => vocabulary.groups[0].members[index];
+
+  /* One payload that exercises every card: two sources, both with lifetimes,
+     both with a daily series, one with the lifetime model accounting and one
+     with only the windowed partition. */
+  const board = () => ({
+    sources: [
+      {
+        label: firstSource.key,
+        windows: [
+          { period: 'today', inputTokens: 12_900_000, outputTokens: 49_500 },
+          { period: 'week', inputTokens: 3_300_000_000, outputTokens: 4_300_000 }
+        ],
+        stats: [
+          { key: 'lifetime', label: 'Lifetime tokens', value: 44_900_000_000, unit: 'tokens' },
+          { key: 'input', label: 'Input', value: 3_200_000, unit: 'tokens' },
+          { key: 'output', label: 'Output', value: 129_000_000, unit: 'tokens' },
+          { key: 'cache-read', label: 'Cache read', value: 43_400_000_000, unit: 'tokens' },
+          { key: 'cache-write', label: 'Cache write', value: 1_400_000_000, unit: 'tokens' },
+          { key: 'sessions', label: 'Sessions', value: 54, unit: 'count' },
+          { key: 'longest-session', label: 'Longest session', value: 150_900, unit: 'seconds' },
+          { key: 'longest-streak', label: 'Longest streak', value: 27, unit: 'days' },
+          { key: 'current-streak', label: 'Current streak', value: 27, unit: 'days' }
+        ],
+        series: { startDate: '2026-08-10', totals: [1, 2, 3, 4], recorded: true },
+        modelStats: [
+          { key: member(0).key, totals: { input: 2, output: 3, 'cache-read': 60, 'cache-write': 5 } },
+          { key: member(1).key, totals: { input: 1, output: 1, 'cache-read': 26, 'cache-write': 2 } }
+        ]
+      },
+      {
+        label: secondSource.key,
+        windows: [{ period: 'today', inputTokens: 71_900_000, outputTokens: 169_400 }],
+        stats: [
+          { key: 'lifetime', label: 'Lifetime tokens', value: 53_500_000_000, unit: 'tokens' },
+          { key: 'current-streak', label: 'Current streak', value: 22, unit: 'days' },
+          { key: 'longest-session', label: 'Longest session', value: 80_940, unit: 'seconds' }
+        ],
+        series: {
+          startDate: '2026-08-11',
+          totals: [10, 20, 30],
+          recorded: true,
+          models: [{ key: member(2).key, totals: [10, 20, 30] }]
+        }
+      }
+    ]
+  });
+
+  const cardsOf = () => tokenBoardProps(envelopeFor(board())).cards;
+
+  it('composes the total, a card per source, the record, then a card per split', () => {
+    assert.deepEqual(
+      cardsOf().map((card) => card.key),
+      [
+        'tracked',
+        `source-${firstSource.key}`,
+        `source-${secondSource.key}`,
+        'sessions',
+        `models-${firstSource.key}`,
+        `models-${secondSource.key}`
+      ]
     );
+  });
+
+  it('totals every lifetime and prints the split beside the exact figure', () => {
+    const [total] = cardsOf();
+    const sum = 44_900_000_000 + 53_500_000_000;
+    assert.equal(total.figure, formatTokenCount(sum));
+    assert.deepEqual(total.sub, [formatWholeFigure(sum)]);
+    assert.equal(total.ctx, lifetimeContext);
+    assert.deepEqual(
+      total.facts.map((fact) => [fact.term, fact.value]),
+      [
+        [
+          `${firstSource.name} · ${secondSource.name}`,
+          `${formatShare((44_900_000_000 / sum) * 100)} · ${formatShare((53_500_000_000 / sum) * 100)}`
+        ]
+      ]
+    );
+    assert.equal(total.factColumns, 1);
+  });
+
+  it('builds no split row it cannot back with two reported lifetimes', () => {
+    /* One source's "100%" is the figure above it restated, and a share of a
+       sum of nothing is unknown rather than zero. */
+    const lone = tokenCards([
+      {
+        label: 's',
+        windows: [],
+        stats: [{ key: 'lifetime', label: 'L', value: 5, unit: 'tokens' }]
+      }
+    ]);
+    assert.equal(lone[0].facts, undefined);
+    const silent = tokenCards([{ label: 'a', windows: [] }, { label: 'b', windows: [] }]);
+    assert.equal(silent[0].figure, unknownFigure);
+    assert.equal(silent[0].facts, undefined);
+    assert.equal(silent[0].sub, undefined, 'an unmeasured total printed an exact figure anyway');
+    assert.equal(silent[0].note, boardEmptyNote);
+    // A total of zero real tokens is still a measurement; it just has no
+    // proportions to draw.
+    const zero = tokenCards([
+      { label: 'a', windows: [], stats: [{ key: 'lifetime', label: 'L', value: 0, unit: 'tokens' }] },
+      { label: 'b', windows: [], stats: [{ key: 'lifetime', label: 'L', value: 0, unit: 'tokens' }] }
+    ]);
+    assert.equal(zero[0].figure, formatTokenCount(0));
+    assert.equal(zero[0].facts, undefined);
+  });
+
+  it('draws the combined line over the days EVERY series carries, never a zero for a silence', () => {
+    /* A day one source lacks contributes that source's ABSENCE, not zero:
+       adding a silent source in at nought would draw a measured trough
+       exactly where the younger capture begins. The line therefore covers the
+       intersection — 2026-08-11 through 2026-08-13, three days of the first
+       source's four and all three of the second's. */
+    const [total] = cardsOf();
+    assert.deepEqual(total.spark.totals, [2 + 10, 3 + 20, 4 + 30]);
+    assert.equal(total.spark.ariaLabel, 'All sources daily tokens, 3 days');
+    // A source with NO series never narrows the window: it has no window to
+    // narrow it with, and a source that says nothing about any day cannot
+    // make a day unmeasurable.
+    const withSilent = tokenCards([
+      { label: 'a', windows: [], series: { startDate: '2026-08-10', totals: [1, 2] } },
+      { label: 'b', windows: [] }
+    ]);
+    assert.deepEqual(withSilent[0].spark.totals, [1, 2]);
+    // Windows that never overlap draw no combined line at all.
+    const apart = tokenCards([
+      { label: 'a', windows: [], series: { startDate: '2026-08-01', totals: [1] } },
+      { label: 'b', windows: [], series: { startDate: '2026-09-01', totals: [2] } }
+    ]);
+    assert.equal(apart[0].spark, undefined);
+    // And a board with no series at all draws none.
+    assert.equal(tokenCards([{ label: 'a', windows: [] }])[0].spark, undefined);
+  });
+
+  it('gives each source card its figure, its classes, its windows and its own line', () => {
+    const card = cardsOf().find((candidate) => candidate.key === `source-${firstSource.key}`);
+    assert.equal(card.label, firstSource.name);
+    assert.equal(card.figure, formatTokenCount(44_900_000_000));
+    assert.deepEqual(card.sub, ['27-day streak', `longest session ${formatDuration(150_900)}`]);
+    assert.deepEqual(
+      card.facts.map((fact) => [fact.term, fact.value]),
+      [
+        ['input', formatTokenCount(3_200_000)],
+        ['output', formatTokenCount(129_000_000)],
+        ['cache read', formatTokenCount(43_400_000_000)],
+        ['cache write', formatTokenCount(1_400_000_000)],
+        ['today', `${formatTokenCount(12_900_000)} in · ${formatTokenCount(49_500)} out`],
+        ['this week', `${formatTokenCount(3_300_000_000)} in · ${formatTokenCount(4_300_000)} out`]
+      ]
+    );
+    assert.deepEqual(card.spark.totals, [1, 2, 3, 4]);
+    assert.equal(card.spark.ariaLabel, `${firstSource.name} daily tokens, 4 days`);
+    /* The second source is the SAME shape read from different data: no class
+       stats to print, so no class rows — not four rows of dashes. */
+    const second = cardsOf().find((candidate) => candidate.key === `source-${secondSource.key}`);
+    assert.deepEqual(
+      second.facts.map((fact) => fact.term),
+      ['today'],
+      'a source with no accounting classes printed them anyway'
+    );
+    assert.deepEqual(second.sub, ['22-day streak', `longest session ${formatDuration(80_940)}`]);
+  });
+
+  it('reads the session record from whichever source keeps one, and marks a matched streak', () => {
+    const sessions = cardsOf().find((card) => card.key === 'sessions');
+    assert.equal(sessions.label, sessionsCardLabel);
+    assert.equal(sessions.figure, '54');
+    assert.equal(sessions.factColumns, 1);
+    assert.deepEqual(
+      sessions.facts.map((fact) => [fact.term, fact.value, fact.peak === true]),
+      [
+        ['longest session', formatDuration(150_900), false],
+        ['longest streak', '27 days', false],
+        ['current streak', '27 days', true]
+      ]
+    );
+    /* THE MARK IS A MEASUREMENT, not decoration: a streak short of the record
+       is not marked, and the record it is measured against is printed on the
+       line above either way. */
+    const behind = tokenCards([
+      {
+        label: 's',
+        windows: [],
+        stats: [
+          { key: 'sessions', label: 'Sessions', value: 3, unit: 'count' },
+          { key: 'longest-streak', label: 'Longest streak', value: 27, unit: 'days' },
+          { key: 'current-streak', label: 'Current streak', value: 2, unit: 'days' }
+        ]
+      }
+    ]).find((card) => card.key === 'sessions');
+    assert.equal(behind.facts.find((fact) => fact.key === 'current-streak').peak, false);
+    // A source that never reported a record is offered no row for it.
+    const bare = tokenCards([{ label: 's', windows: [] }]).find((card) => card.key === 'sessions');
+    assert.equal(bare.figure, unknownFigure);
+    assert.equal(bare.facts, undefined);
+    assert.equal(bare.note, tokenUsageSourceEmptyNote);
+  });
+
+  it('gives the sessions figure to the source that reports one, whichever it is', () => {
+    const keeper = tokenCards([
+      { label: 'a', windows: [] },
+      {
+        label: 'b',
+        windows: [],
+        stats: [{ key: 'sessions', label: 'Sessions', value: 9, unit: 'count' }]
+      }
+    ]).find((card) => card.key === 'sessions');
+    assert.equal(keeper.figure, '9');
+  });
+
+  it('never turns a card that is not a source card', () => {
+    for (const card of cardsOf()) {
+      if (card.key.startsWith('source-')) continue;
+      assert.equal(card.turned, undefined, card.key);
+    }
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * THE FORMATTERS, executed (owner directive, 2026-09-11)
+ * ------------------------------------------------------------------------ */
+describe('the board writes every figure one way', () => {
+  it('keeps the decimal place on a compact figure, so a column of them lines up', () => {
+    /* formatMagnitude TRIMS a trailing .0 and formatMagnitudeFixed keeps it,
+       and the board reads the second: a column that alternates "129M" with
+       "44.9B" is a column whose digits stop lining up. Both pick their unit
+       through one shared step walk, so the two spellings can never disagree
+       about whether a figure is millions or billions. */
+    assert.equal(formatTokenCount(98_400_189_458), '98.4B');
+    assert.equal(formatTokenCount(44_885_807_826), '44.9B');
+    assert.equal(formatTokenCount(129_000_000), '129.0M');
+    assert.equal(formatMagnitude(129_000_000), '129M', 'the calendar keeps the trimmed spelling');
+    assert.equal(formatTokenCount(3_200_000), '3.2M');
+    assert.equal(formatTokenCount(49_500), '49.5K');
+    // Below the grouping floor both spellings are the exact figure.
+    assert.equal(formatTokenCount(1284), '1,284');
+    assert.equal(formatTokenCount(1284), formatMagnitude(1284));
+    // The promotion is shared: 999,950 is "1.0M", never "1000.0K".
+    assert.equal(formatTokenCount(999_950), '1.0M');
+    assert.equal(formatMagnitudeFixed(999_950), formatTokenCount(999_950));
+  });
+
+  it('prints an exact figure with thousands groups, and a share to one decimal', () => {
+    assert.equal(formatWholeFigure(98_400_189_458), '98,400,189,458');
+    assert.equal(formatShare(54.32), '54.3%');
+    assert.equal(formatShare(46), '46%');
+    assert.equal(formatShare(null), unknownFigure);
+  });
+
+  it('reads a duration in the units a person thinks in, dropping the empty step', () => {
+    assert.equal(formatStatValue(150_900, 'seconds'), '1d 17h 55m');
+    assert.equal(formatStatValue(80_940, 'seconds'), '22h 29m');
+    assert.equal(formatStatValue(513_360, 'seconds'), '5d 22h 36m');
+    assert.equal(formatStatValue(90, 'seconds'), '1m');
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * THE DAILY LINE, as arithmetic (lib/spark.ts)
+ * ------------------------------------------------------------------------ */
+describe('sparklinePath', () => {
+  const box = { width: 100, height: 100 };
+
+  it('plots the series across the box, newest last', () => {
+    const path = sparklinePath([0, 5, 10], box);
+    assert.equal(path.plotted, 3);
+    assert.equal(path.line, 'M0 92 L50 50 L100 8');
+    assert.equal(path.area, 'M0 92 L50 50 L100 8 L100 100 L0 100 Z');
+    assert.deepEqual(path.last, { x: 100, y: 8 });
+  });
+
+  it('draws a single day across the whole box rather than as a dot in a corner', () => {
+    const path = sparklinePath([7], box);
+    assert.equal(path.line, 'M0 8 L100 8');
+    assert.deepEqual(path.last, { x: 100, y: 8 });
+    assert.equal(path.plotted, 1);
+  });
+
+  it('draws a window that recorded nothing along its own floor', () => {
+    /* A window of real zeros is a REAL SHAPE — the days were measured and
+       nothing was spent — and it is a different picture from a window nobody
+       measured, which draws nothing at all. */
+    const path = sparklinePath([0, 0, 0], box);
+    assert.equal(path.line, 'M0 92 L50 92 L100 92');
+    assert.equal(path.plotted, 3);
+  });
+
+  it('spends a null day’s place without drawing a point on its floor', () => {
+    /* The absence moves no ink downward, which a zero would, and its x
+       position is still spent, so a gap reads as a longer segment rather than
+       as a compressed series. */
+    const path = sparklinePath([10, null, 10], box);
+    assert.equal(path.line, 'M0 8 L100 8');
+    assert.equal(path.plotted, 2);
+    assert.notEqual(sparklinePath([10, 0, 10], box).line, path.line);
+  });
+
+  it('draws nothing at all for a series with nothing plottable', () => {
+    assert.equal(sparklinePath([], box), null);
+    assert.equal(sparklinePath([null, null], box), null);
+  });
+
+  it('scales with the box it is given, and the page draws in a percentage space', () => {
+    const wide = sparklinePath([0, 10], { width: 200, height: 50 });
+    assert.equal(wide.last.x, 200);
+    assert.deepEqual(sparkBox, { width: 100, height: 100 });
+  });
+
+  it('reserves its own mark, at the size the sheet gives it', () => {
+    /* THE DRAWING CONTAINS ITS MARK, and the two halves of that promise live
+       in different files: the reserve is a PERCENTAGE of the plot's height
+       (lib/spark.ts) and the mark is a LENGTH the sheet declares. A box that
+       shrank or a mark that grew would put half the dot outside the card —
+       measured on 2026-09-11 as two pixels of a card's content hidden behind
+       its own edge, which is exactly the silence the fits lane exists to
+       break — so the two are held against each other here rather than
+       rediscovered in an engine. */
+    const lengthOf = (token) => {
+      const declared = new RegExp(`${token}:\\s*([\\d.]+)(rem|px);`).exec(sheet);
+      assert.ok(declared, `${token} is not declared as a length`);
+      return Number(declared[1]) * (declared[2] === 'rem' ? 16 : 1);
+    };
+    const height = lengthOf('--spark-height');
+    const mark = lengthOf('--spark-mark-size');
+    assert.ok(height > 0 && mark > 0);
     assert.ok(
-      !component.includes('recorded out of band'),
-      'the component spells the provenance wording itself; it is one constant, carried as data'
+      (sparkInset / sparkBox.height) * height >= mark / 2,
+      `the plot reserves ${(sparkInset / sparkBox.height) * height}px at each end and the mark needs ${mark / 2}px`
     );
+    /* And the reserve is not so large that the line has nowhere to go. */
+    assert.ok(sparkInset * 2 < sparkBox.height / 2, 'the reserve eats the drawing');
+  });
+
+  it('is the only place the chart computes anything', () => {
+    assert.match(chart, /import \{ sparkBox, sparklinePath \} from '\.\.\/spark\.ts'/);
+    assert.match(chart, /preserveAspectRatio="none"/);
+    assert.match(chart, /role="img" aria-label=\{ariaLabel\}/);
+    /* The stroke keeps its own thickness through vector-effect, and the mark
+       on the newest reading is positioned OUTSIDE the squashed space — a
+       circle inside it would be an ellipse whose eccentricity is the card's
+       aspect ratio. */
+    assert.match(sheet, /\.spark-line \{[^}]*vector-effect: non-scaling-stroke/);
+    assert.match(sheet, /\.spark-line \{[^}]*stroke: var\(--grid-cell-peak\)/);
+    assert.match(sheet, /\.spark-area \{[^}]*fill: var\(--grid-cell-1\)/);
+    assert.match(sheet, /\.spark-mark \{[^}]*border-radius: 50%/);
+    // No axis, no caption, no legend: the figures above the line are the
+    // reading, and the drawing is the shape.
+    for (const chrome of ['<text', 'caption', 'legend', 'axis']) {
+      assert.ok(!rendered(chart).toLowerCase().includes(chrome), `the chart draws ${chrome}`);
+    }
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * NO PRODUCTION SOURCE SPELLS A SOURCE (issue #311)
+ *
+ * The twin of the model sweep in scripts/ci/test_capture_usage_series.py, for
+ * the vocabulary this lane added. The needles are built from the DATA FILE at
+ * run time, so this test file never spells a source name either.
+ * ------------------------------------------------------------------------ */
+describe('the source vocabulary is one data file', () => {
+  const spellings = sourceVocabulary.sources.flatMap((entry) => [entry.name, entry.vendor]);
+  const needles = spellings.flatMap((value) => [`'${value}'`, `"${value}"`, `\`${value}\``]);
+
+  it('has needles worth sweeping for', () => {
+    assert.ok(needles.length >= 6, 'the sweep has almost nothing to look for');
+  });
+
+  it('spells no source name or vendor in any production source', async () => {
+    const root = new URL('../src/', import.meta.url);
+    const swept = [];
+    const walk = async (dir) => {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const child = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dir);
+        if (entry.isDirectory()) {
+          await walk(child);
+        } else if (/\.(ts|svelte|css)$/.test(entry.name)) {
+          swept.push([child, await readFile(child, 'utf8')]);
+        }
+      }
+    };
+    await walk(root);
+    assert.ok(swept.length > 20, 'the sweep found almost no production source to read');
+    for (const [file, text] of swept) {
+      const found = needles.filter((needle) => text.includes(needle));
+      assert.deepEqual(
+        found,
+        [],
+        `${file.pathname} spells ${found.join(', ')}; a source's written name and its vendor live only in internal/panels/config/sources.json, which every consumer reads`
+      );
+    }
+  });
+
+  it('can actually fail', () => {
+    // Non-vacuity: a guard that cannot redden is decoration. A source that
+    // reintroduced a written name as a literal must be caught, and one that
+    // merely mentions the words in prose must not.
+    const hostile = `const table = [${needles[0]}];`;
+    assert.deepEqual(needles.filter((needle) => hostile.includes(needle)), [needles[0]]);
+    const prose = `/* every source keeps its own name in the file */`;
+    assert.deepEqual(needles.filter((needle) => prose.includes(needle)), []);
   });
 });
