@@ -462,6 +462,11 @@ export type SparklineProps = LedgerSpark & {
 export type LedgerCard = {
   readonly key: string;
   readonly label: string;
+  /* The mark that leads the label, when the canvas gave the card one (owner
+     design decision, 2026-09-11, issue 313: "Sessions — mark leads the
+     label"). Decided by the adapter as data, like everything else on the
+     card; the component draws what it is handed and names nothing. */
+  readonly mark?: IconName;
   /* The small label at the head's far edge: what the figure is OF. */
   readonly ctx?: string;
   /* The headline, when the card has one. */
@@ -526,6 +531,9 @@ export function scrubReading(
 
 export type LedgerBoardProps = {
   readonly title: string;
+  /* The mark that leads the panel's title (the same decision, for the
+     board's own name: "Token usage — panel title mark"). */
+  readonly mark?: IconName;
   readonly status: PanelStatus;
   readonly generatedAt?: string;
   readonly cards: readonly LedgerCard[];

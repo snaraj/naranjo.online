@@ -296,7 +296,7 @@ describe('the board of cards: source contract', () => {
     /* The shell receives the data-through line as well (owner directive of
        2026-09-03, issue 287): the head is the one row a late line can appear
        in without moving anything — the same arrangement the calendar uses. */
-    assert.match(component, /<PanelShell \{title\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
+    assert.match(component, /<PanelShell \{title\} \{mark\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
     assert.match(component, /<\/PanelShell>/);
     // No panel offers a manual refresh any more (owner directive, issue 179):
     // this panel hands its shell no refresher and holds no watcher handle of

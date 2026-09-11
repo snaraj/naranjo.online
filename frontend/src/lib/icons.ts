@@ -42,11 +42,10 @@ export type IconName =
   | 'commit'
   | 'tag'
   | 'chip'
+  | 'sessions'
   | 'photo'
   | 'film'
   | 'play'
-  | 'fullscreen'
-  | 'exit-fullscreen'
   | 'location'
   | 'work'
   | 'folder'
@@ -114,6 +113,7 @@ export const icons: Record<IconName, readonly IconPart[]> = {
     { tag: 'rect', attrs: { x: '10.5', y: '10.5', width: '3', height: '3' } },
     { tag: 'path', attrs: { d: 'M9.5 3v4M14.5 3v4M9.5 17v4M14.5 17v4M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4' } }
   ],
+  'sessions': [{ tag: 'rect', attrs: { x: '3', y: '4', width: '18', height: '16' } }, { tag: 'path', attrs: { d: 'M7 9l3 3-3 3M12 15h5' } }],
 
   /* gallery */
   'photo': [
@@ -126,8 +126,6 @@ export const icons: Record<IconName, readonly IconPart[]> = {
     { tag: 'path', attrs: { d: 'M7.5 4v16M16.5 4v16M3 9h4.5M3 15h4.5M16.5 9H21M16.5 15H21' } }
   ],
   'play': [{ tag: 'path', attrs: { d: 'M7.5 5.5v13l11-6.5z' }, solid: true }],
-  'fullscreen': [{ tag: 'path', attrs: { d: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5' } }],
-  'exit-fullscreen': [{ tag: 'path', attrs: { d: 'M9 4v5H4M15 4v5h5M20 15h-5v5M4 15h5v5' } }],
 
   /* sections */
   'location': [

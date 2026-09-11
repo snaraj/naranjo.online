@@ -2724,6 +2724,9 @@ h1 {
 }
 
 .board-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--icon-gap);
   font-family: var(--font-mono);
   font-size: var(--ledger-label-size);
   letter-spacing: var(--ledger-label-tracking);

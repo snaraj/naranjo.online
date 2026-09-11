@@ -1421,6 +1421,7 @@ function sessionsCard(sources: readonly TokenUsageSource[]): LedgerCard {
   return {
     key: 'sessions',
     label: sessionsCardLabel,
+    mark: 'sessions',
     figure,
     facts: facts.length === 0 ? undefined : facts,
     factColumns: 1,
@@ -1572,6 +1573,7 @@ export function tokenBoardProps(
   const sources = tokenUsageSources(envelope.data);
   return {
     title: envelope.title || tokenUsageFallbackTitle,
+    mark: 'chip',
     status: envelope.status,
     generatedAt: envelope.generatedAt,
     cards: tokenCards(sources),

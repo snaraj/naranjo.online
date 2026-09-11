@@ -29,10 +29,11 @@
 <script lang="ts">
   import { scrubReading, type LedgerBoardProps, type LedgerCard } from '../blocks.ts';
   import FeedCard from './FeedCard.svelte';
+  import Icon from './Icon.svelte';
   import PanelShell from './PanelShell.svelte';
   import Sparkline from './Sparkline.svelte';
 
-  let { title, status, generatedAt, cards, emptyNote, staleNote }: LedgerBoardProps = $props();
+  let { title, mark, status, generatedAt, cards, emptyNote, staleNote }: LedgerBoardProps = $props();
 
   /* WHICH CARD IS BEING READ, AND WHICH DAY OF IT. One cursor for the whole
      board rather than one per card: only one line can be under a pointer at a
@@ -65,7 +66,7 @@
   }
 </script>
 
-<PanelShell {title} {status} {generatedAt} note={staleNote}>
+<PanelShell {title} {mark} {status} {generatedAt} note={staleNote}>
   <FeedCard variant="board">
     {#if cards.length === 0}
       <p class="board-note">{emptyNote}</p>
@@ -83,7 +84,7 @@
             aria-label={card.ariaLabel}
             data-turned={card.turned ? 'true' : 'false'}>
             <span class="board-head">
-              <span class="board-label">{card.label}</span>
+              <span class="board-label">{#if card.mark}<Icon name={card.mark} slot="row" />{/if}{card.label}</span>
               {#if card.ctx}<span class="board-ctx">{card.ctx}</span>{/if}
             </span>
             {#if card.figure}

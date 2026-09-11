@@ -85,6 +85,8 @@ const literalNames = callSites
 const dataDrivenNames = {
   /* The five section marks, beside the labels they stand for. */
   '../src/page.ts': ['work', 'folder', 'commit', 'chip', 'photo'],
+  /* The board's title mark and the Sessions card's, decided by the adapter. */
+  '../src/lib/token-usage.ts': ['chip', 'sessions'],
   /* The strip's lead mark, in the binding layer where the domain lives. */
   '../src/lib/blocks/bossTicker.ts': ['sword'],
   /* The gallery segment's mark, derived from what the set holds. */
@@ -106,7 +108,7 @@ const dataDrivenNames = {
  * build, so it is dated and it is meant to die: when the table lands, delete
  * the five it covers, and either wire a fullscreen control or delete those two
  * glyphs from the module. */
-const trainReserved = ['star', 'issue', 'pull', 'clock', 'tag', 'fullscreen', 'exit-fullscreen'];
+const trainReserved = ['star', 'issue', 'pull', 'clock', 'tag'];
 
 test('every name a component draws exists, and every glyph shipped is drawn', async () => {
   assert.ok(callSites.length > 0, 'no component draws a mark at all; this suite has lost its subject');
