@@ -92,13 +92,6 @@
           "slot": 1,
           "ids": ["gpt-daybreak-blue-latest"],
           "prefixStrip": false
-        },
-        {
-          "key": "codex-auto-review",
-          "label": "Codex auto-review",
-          "slot": 7,
-          "ids": ["codex-auto-review"],
-          "prefixStrip": false
         }
       ]
     }

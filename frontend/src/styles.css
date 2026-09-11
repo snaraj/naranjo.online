@@ -806,6 +806,10 @@
   --spark-height: 3rem;
   --spark-stroke: 1.5px;
   --spark-mark-size: 0.375rem;
+  /* The scrubber's hairline: one device pixel of rule, because it marks a
+     POSITION and a thicker one would start reading as a measurement of its
+     own (owner directive, 2026-09-11, issue 316). */
+  --spark-guide-width: 1px;
   --ticker-icon: 22px;
   /* The item padding, stated per axis so the lead's mark can cancel the block
      half of it and stand the strip's full height (below). */
@@ -2673,44 +2677,36 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: var(--board-row-gap);
-  /* The touch floor, declared on the control rather than inherited from its
-     content — and it doubles as the fix for a grid item's automatic minimum,
-     which is MIN-CONTENT: an unbreakable row (a long model name, a wide
+  /* THE GRID ITEM'S AUTOMATIC MINIMUM IS MIN-CONTENT, and that is what this
+     stated floor replaces: an unbreakable row (a long model name, a wide
      figure) would otherwise refuse to shrink and drag the board past the
-     column, which the body then scrolls sideways to reveal. A stated minimum
-     replaces `auto`, so every card is exactly the track it was given and
-     anything genuinely too wide ellipsizes inside it. */
+     column, which the body then scrolls sideways to reveal. Stated, so every
+     card is exactly the track it was given and anything genuinely too wide
+     ellipsizes inside it. The value is the page's own smallest box rather
+     than a number invented here; the card is no longer a control (owner
+     directive, 2026-09-11, issue 316) and this is no longer a touch floor —
+     the one target on the board is the daily line, which is taller than the
+     floor and declares its own. */
   min-inline-size: var(--control-target);
   min-block-size: var(--control-target);
   padding: var(--square-pad);
   border: var(--ledger-hairline) solid var(--board-rule);
   background: var(--board-paper);
   color: var(--board-ink);
-  cursor: pointer;
-  font: inherit;
-  text-align: start;
 }
 
 .board-card > * {
   min-inline-size: 0;
 }
 
-.board-card:hover {
-  background: var(--board-raised);
-}
-
-.board-card:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-/* THE TURN IS AN INVERSION, and it is this rule and nothing else (owner
-   directive, 2026-09-11). Paper becomes ink, ink becomes paper, and the
-   muted role goes to full paper rather than to a dimmer one: on ink there is
-   no dimmer paper to be had that keeps a small mono line legible, and the
-   hierarchy is already carried by size and weight. The raised role takes the
-   muted ink, which is the only value on the sheet that reads as a groove
-   against ink the way --ledger-raised reads as one against paper. */
+/* THE INVERSION IS THE BOARD'S RHYTHM, and it is this rule and nothing else
+   (owner directive, 2026-09-11; issue 316 retired the press that used to
+   toggle it). Paper becomes ink, ink becomes paper, and the muted role goes
+   to full paper rather than to a dimmer one: on ink there is no dimmer paper
+   to be had that keeps a small mono line legible, and the hierarchy is
+   already carried by size and weight. The raised role takes the muted ink,
+   which is the only value on the sheet that reads as a groove against ink
+   the way --ledger-raised reads as one against paper. */
 .board-card[data-turned='true'] {
   --board-paper: var(--ledger-ink);
   --board-ink: var(--ledger-bg);
@@ -2771,13 +2767,26 @@ h1 {
 }
 
 /* The lines beside the figure: right-aligned, so a one-line sub and a
-   two-line one both hang off the same edge. */
+   two-line one both hang off the same edge.
+
+   AND IT KEEPS THE HEIGHT OF THE CARD'S OWN LINES WHATEVER IT IS PRINTING.
+   Scrubbing the daily line replaces these with ONE line (owner directive,
+   2026-09-11, issue 316), and without a reserve a two-line card would lose a
+   line's height the moment a pointer touched its chart — MEASURED as the
+   headline's box, which baseline alignment sizes from the taller of the
+   figure and this stack. The fact ladder under it is `flex: 1` with its rows
+   spread through the slack, so every one of them would move. The reserve is
+   the card's own line count, a dynamic length, and it therefore reaches this
+   sheet as a custom property rather than as a style string. `em` because the
+   unit that has to stay in step is this element's own line box: 1.4em is
+   exactly the line-height declared above it. */
 .board-sub {
   display: grid;
   justify-items: end;
   font-family: var(--font-mono);
   font-size: var(--ledger-label-size);
   line-height: 1.4;
+  min-block-size: calc(var(--board-sub-lines, 1) * 1.4em);
   color: var(--board-muted);
   min-inline-size: 0;
 }
@@ -2935,6 +2944,25 @@ h1 {
   margin-block-start: auto;
   margin-inline: calc(-1 * var(--square-pad));
   margin-block-end: calc(-1 * var(--square-pad));
+  /* THE LINE IS THE BOARD'S ONE TARGET (owner directive, 2026-09-11, issue
+     316): it scrubs, so it takes a cursor and a focus stop, and it is 3rem
+     tall against the 2.75rem touch floor before the card's padding is pulled
+     back around it.
+     `pan-y` HANDS THE PAGE ITS VERTICAL SCROLL and keeps only the axis this
+     reads, which is lib/gesture.ts's rule applied rather than re-argued: a
+     surface that swallowed both axes would be a chart a phone cannot scroll
+     past. Nothing here calls preventDefault on a pointer, so the declaration
+     is the whole promise. */
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+
+/* INSIDE ITS OWN EDGES, because the plot deliberately bleeds into the card's
+   padding on three sides — a ring drawn outside it would land on the card's
+   border and read as the card being focused rather than the chart. */
+.spark:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
 }
 
 .spark-plot {
@@ -2967,6 +2995,47 @@ h1 {
   position: absolute;
   inset-block-start: var(--spark-mark-y, 0%);
   inset-inline-start: var(--spark-mark-x, 0%);
+  inline-size: var(--spark-mark-size);
+  block-size: var(--spark-mark-size);
+  margin-block-start: calc(-0.5 * var(--spark-mark-size));
+  margin-inline-start: calc(-0.5 * var(--spark-mark-size));
+  border-radius: 50%;
+  background: var(--grid-cell-peak);
+}
+
+/* THE SCRUBBED DAY, MARKED TWICE: a hairline down the plot says WHICH day,
+   and a dot on the line says what it read. Both wear the chart's own family
+   rather than the sheet's one mark — the line and its end dot are already
+   --grid-cell-peak, and a cursor in a different ink would read as a second
+   quantity rather than as a position on the first.
+
+   Both are out of flow and neither takes pointer events: the reading must not
+   move the card (the zero-CLS floor) and the cursor must never stand between
+   the pointer and the chart it is reading. They are mounted at rest and
+   merely unlit, which is what lets the fade below have something to fade. */
+.spark-cursor,
+.spark-guide {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.spark-cursor[data-scrubbing='true'],
+.spark-guide[data-scrubbing='true'] {
+  opacity: 1;
+}
+
+.spark-guide {
+  inset-block: 0;
+  inset-inline-start: var(--spark-cursor-x, 0%);
+  inline-size: var(--spark-guide-width);
+  margin-inline-start: calc(-0.5 * var(--spark-guide-width));
+  background: var(--grid-cell-peak);
+}
+
+.spark-cursor {
+  inset-block-start: var(--spark-cursor-y, 0%);
+  inset-inline-start: var(--spark-cursor-x, 0%);
   inline-size: var(--spark-mark-size);
   block-size: var(--spark-mark-size);
   margin-block-start: calc(-0.5 * var(--spark-mark-size));
@@ -3346,16 +3415,17 @@ h1 {
     transform: rotate(180deg);
   }
 
-  /* THE TURN IS AN INK CHANGE (owner directive, 2026-09-11), so what moves is
-     the paint rather than the box: the card's background and every colour
-     that inherits from it cross over together. Nothing is transformed, so
-     there is no half-turned frame in which a reader could see the back of
-     anything, and a reader who asked for less motion gets the same inversion
-     with none of it — the swap is instant outside this block. */
-  .board-card {
-    transition:
-      background var(--ledger-hover) var(--ledger-ease),
-      color var(--ledger-hover) var(--ledger-ease);
+  /* THE SCRUBBER'S CURSOR ARRIVES AND LEAVES RATHER THAN BLINKING (owner
+     directive, 2026-09-11, issue 316). Opacity only, on two elements that are
+     already out of flow, so the zero-CLS floor is untouched by construction —
+     and a reader who asked for less motion gets the identical cursor at the
+     identical position with no travel, because the STATE is the data
+     attribute and this block only adds the crossing between its two values.
+     The position itself is never transitioned: a cursor that lagged the
+     pointer would be pointing at a day the reader has already left. */
+  .spark-cursor,
+  .spark-guide {
+    transition: opacity var(--ledger-hover) var(--ledger-ease);
   }
 
   .commit-grid {

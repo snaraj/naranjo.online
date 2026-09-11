@@ -1663,16 +1663,22 @@ test('every model row the card draws is a real member with a real rule', async (
  * absent from a square that gave no sign of it.
  *
  * THE FIXED BOX IS GONE (owner directive, 2026-09-11): a card's height follows
- * its content over a shared minimum, and a turn inverts the card's ink rather
- * than rotating a second face into the same box. Both halves of the silence
+ * its content over a shared minimum, and the inversion is a token remap rather
+ * than a second face rotated into the same box. Both halves of the silence
  * this lane was written for are therefore structurally harder to reach — and
  * both are still measured, because "harder to reach" is not "impossible" and a
  * clipping regression would be exactly as silent as it was. What the lane
- * measures now is what the box actually SHOWS, in BOTH turned states, at a
- * phone width and a desktop one: the card's scroll height against its own, and
- * every row and fact inside it against the card's visible rectangle.
+ * measures now is what the box actually SHOWS, at a phone width and a desktop
+ * one: the card's scroll height against its own, and every row and fact inside
+ * it against the card's visible rectangle.
+ *
+ * ONE PASS, because there is no longer a second state to walk into (owner
+ * directive, 2026-09-11, issue 316). The lane used to press every card and
+ * measure again; the press is gone, the inversion the adapter composed is
+ * already on the board when it arrives, and clicking six cards to observe the
+ * identical geometry twice would be a lane measuring its own no-op.
  */
-test('every board card shows all of its own content, turned or not (owner 2026-09-11)', async ({
+test('every board card shows all of its own content (owner 2026-09-11)', async ({
   page,
 }) => {
   await stageSixCards(page);
@@ -1704,55 +1710,43 @@ test('every board card shows all of its own content, turned or not (owner 2026-0
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await settled(page);
-    for (const pass of ['as composed', 'every card turned']) {
-      if (pass !== 'as composed') {
-        const cards = page.locator('.board-card');
-        const count = await cards.count();
-        for (let index = 0; index < count; index += 1) {
-          await cards.nth(index).click();
-        }
-      }
-      const observed = await readCards();
-      expect(observed.length, `the board drew no cards at ${width}px`).toBeGreaterThan(1);
-      for (const card of observed) {
-        const at = `at ${width}px, ${pass}`;
-        expect(
-          card.scrollHeight,
-          `"${card.label}" holds ${card.scrollHeight}px of content in a ${card.clientHeight}px card ${at}; the rest is hidden with no sign of it`
-        ).toBeLessThanOrEqual(card.clientHeight + 1);
-        expect(
-          card.rowsShown,
-          `"${card.label}" draws ${card.rows} model rows ${at} and shows ${card.rowsShown}`
-        ).toBe(card.rows);
-        expect(
-          card.rowsWhole,
-          `${card.rows - card.rowsWhole} of ${card.rows} rows clip their own name or groove ${at}`
-        ).toBe(card.rows);
-        expect(
-          card.factsShown,
-          `"${card.label}" draws ${card.facts} facts ${at} and shows ${card.factsShown}`
-        ).toBe(card.facts);
-      }
-      /* Non-vacuity: a board whose cards all held a single short figure would
-         satisfy everything above without ever exercising the shapes that
-         clipped. At least one card carries a real stack of model rows and at
-         least one a real fact ladder. */
+    const observed = await readCards();
+    expect(observed.length, `the board drew no cards at ${width}px`).toBeGreaterThan(1);
+    for (const card of observed) {
+      const at = `at ${width}px`;
       expect(
-        Math.max(...observed.map((card) => card.rows)),
-        `no card draws model rows at ${width}px; the shape that clipped is not on the page`
-      ).toBeGreaterThan(1);
+        card.scrollHeight,
+        `"${card.label}" holds ${card.scrollHeight}px of content in a ${card.clientHeight}px card ${at}; the rest is hidden with no sign of it`
+      ).toBeLessThanOrEqual(card.clientHeight + 1);
       expect(
-        Math.max(...observed.map((card) => card.facts)),
-        `no card draws a fact ladder at ${width}px`
-      ).toBeGreaterThan(1);
+        card.rowsShown,
+        `"${card.label}" draws ${card.rows} model rows ${at} and shows ${card.rowsShown}`
+      ).toBe(card.rows);
+      expect(
+        card.rowsWhole,
+        `${card.rows - card.rowsWhole} of ${card.rows} rows clip their own name or groove ${at}`
+      ).toBe(card.rows);
+      expect(
+        card.factsShown,
+        `"${card.label}" draws ${card.facts} facts ${at} and shows ${card.factsShown}`
+      ).toBe(card.facts);
     }
-    /* Left as found, so the next width starts from the board the adapter
-       composed rather than from whatever the last pass pressed. */
-    const cards = page.locator('.board-card');
-    const count = await cards.count();
-    for (let index = 0; index < count; index += 1) {
-      await cards.nth(index).click();
-    }
+    /* Non-vacuity, three ways: a board whose cards all held a single short
+       figure would satisfy everything above without exercising the shapes that
+       clipped, and a board with no inverted card would leave the token remap
+       unmeasured by the one lane that reads every card. */
+    expect(
+      Math.max(...observed.map((card) => card.rows)),
+      `no card draws model rows at ${width}px; the shape that clipped is not on the page`
+    ).toBeGreaterThan(1);
+    expect(
+      Math.max(...observed.map((card) => card.facts)),
+      `no card draws a fact ladder at ${width}px`
+    ).toBeGreaterThan(1);
+    expect(
+      observed.filter((card) => card.turned === 'true').length,
+      `no card on the board is inverted at ${width}px; the adapter's rhythm is not on the page`
+    ).toBe(1);
   }
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -1864,6 +1858,416 @@ test('the board is three cards across in two equal rows, filling the column (own
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
+/* THE DAILY LINE IS A SCRUBBER, AND READING IT MOVES NOTHING (owner directive,
+ * 2026-09-11, issue 316: "as I run the mouse through this hovering or
+ * clicking, I expected to see more information, like you can in Robinhood when
+ * looking at a stock price... the value should update accordingly also on the
+ * card").
+ *
+ * THE FIGURES ARE KNOWN WITHOUT A SECOND FORMATTER. stageSixCards gives the
+ * follower source a seven-day series of small integers, and every one of them
+ * is below the magnitude floor — so the page's compaction and its exact
+ * grouping are the same digits, and this lane can state the expected reading
+ * outright instead of re-implementing formatTokenCount and then proving
+ * nothing when both copies drift together.
+ *
+ * ZERO CLS IS MEASURED RATHER THAN DECLARED, and it is measured where a shift
+ * would actually land: the card's own two sub-lines become ONE scrubbed line,
+ * so without the reserved height the headline would lose a line and every fact
+ * below it would move. Every card, every fact row, every model row, the
+ * headline box itself and the document's own height are read before and during
+ * the scrub and must be identical.
+ *
+ * TWO BOXES ARE DELIBERATELY OUTSIDE THAT CLAIM, and saying so precisely is
+ * better than a sweep that quietly excuses them. The figure and the sub line
+ * ARE the reading: their text changes, so their boxes change width, and each
+ * is anchored to the edge its text is read from — the figure to the card's
+ * start, the sub to its end. Those two ANCHORED EDGES are asserted instead,
+ * which is the claim a reader can actually check with their eyes: nothing they
+ * are looking at moves. The scrubber's cursor and hairline are the reader's
+ * own pointer made visible and are excused for the same kind of reason.
+ *
+ * Chromium's layout-shift observer is read as a second channel where it
+ * exists, scoped to exactly the complement of those exclusions: any shift
+ * naming a node outside the headline and outside the chart is a real one, and
+ * deleting the sub area's height reserve produces exactly that — the fact
+ * ladder moving under a reader who only moved their mouse.
+ */
+const scrubbedDays = [
+  /* [day index, the figure that day reads] — from stageSixCards' own series
+     [5, 8, 5, 9, 12, 7, 5]. Two days apart on the line and carrying different
+     values, so a cursor stuck at one end reads as a failure rather than as a
+     coincidence. */
+  [1, '8'],
+  [5, '7'],
+];
+
+/* Everything on the board whose position a scrub could move, plus the page's
+ * own height. Rounded to a hundredth: an engine reports sub-pixel noise on a
+ * box it did not move. */
+function boardFrame(page) {
+  return page.evaluate(() => {
+    const round = (value) => Math.round(value * 100) / 100;
+    const boxes = (selector) =>
+      [...window.document.querySelectorAll(selector)].map((node) => {
+        const box = node.getBoundingClientRect();
+        return [round(box.x), round(box.y), round(box.width), round(box.height)];
+      });
+    return {
+      cards: boxes('.board-card'),
+      facts: boxes('.board-fact'),
+      models: boxes('.board-model'),
+      headlines: boxes('.board-headline'),
+      height: window.document.documentElement.scrollHeight,
+    };
+  });
+}
+
+/* The two edges a reader reads the headline from, to a hundredth of a pixel.
+ * The figure grows and shrinks from its START edge and the sub line from its
+ * END edge, so these are the numbers that say the reading stayed still. */
+function anchoredEdges(card) {
+  return card.evaluate((node) => {
+    const round = (value) => Math.round(value * 100) / 100;
+    const figure = node.querySelector('.board-figure').getBoundingClientRect();
+    const sub = node.querySelector('.board-sub').getBoundingClientRect();
+    return {
+      figureStart: round(figure.x),
+      figureTop: round(figure.y),
+      subEnd: round(sub.right),
+      subTop: round(sub.y),
+      subHeight: round(sub.height),
+    };
+  });
+}
+
+/* Chromium's own shift accounting, where the engine has it. Zero is the only
+ * passing answer and a missing observer is reported as such rather than as a
+ * zero — a lane that cannot see is not a lane that saw nothing.
+ *
+ * An entry is counted when ANY node it names sits outside the two boxes that
+ * are the reading itself (the headline's figure and sub line) and outside the
+ * chart (the cursor and its hairline, which track the pointer on purpose). A
+ * node the entry cannot name is counted too: an unattributable shift is the
+ * one most worth hearing about. The failure names what moved, so a red build
+ * is a diagnosis rather than a number. */
+async function watchShift(page) {
+  return page.evaluate(() => {
+    const supported =
+      typeof PerformanceObserver !== 'undefined' &&
+      (PerformanceObserver.supportedEntryTypes ?? []).includes('layout-shift');
+    if (!supported) {
+      window.__shift = null;
+      return false;
+    }
+    window.__shift = [];
+    const reading = (node) =>
+      node instanceof Element &&
+      (node.closest('.board-headline') !== null || node.closest('.spark') !== null);
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.hadRecentInput) continue;
+        const moved = [...(entry.sources ?? [])].filter((source) => !reading(source.node));
+        if (moved.length === 0 && (entry.sources ?? []).length > 0) continue;
+        window.__shift.push({
+          value: entry.value,
+          moved: moved.map(
+            (source) =>
+              `${source.node?.tagName?.toLowerCase() ?? 'unnamed'}.${source.node?.className ?? ''}`
+          ),
+        });
+      }
+    });
+    observer.observe({ type: 'layout-shift', buffered: false });
+    return true;
+  });
+}
+
+test('the daily line scrubs to a day and the card reads it, moving nothing (owner 2026-09-11, issue 316)', async ({
+  page,
+}) => {
+  await stageSixCards(page);
+  await visit(page);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await settled(page);
+    /* The follower source's own card: tokenCards composes the total, then one
+       card per source in wire order, so the second source's card is the third
+       on the board. It is also the one the adapter draws inverted, which is
+       why the scrub is exercised on ink rather than on paper. */
+    const card = page.locator('.board-card').nth(2);
+    const figure = card.locator('.board-figure');
+    const spark = card.locator('.spark');
+    await expect(spark).toBeVisible();
+    /* ON SCREEN BEFORE ANYTHING IS MEASURED: a pointer is driven in VIEWPORT
+       coordinates, and the board sits well below the fold at both widths — a
+       box read before scrolling names a point no pointer can reach. Scrolled
+       once, so every frame below is compared against the same origin. */
+    await spark.scrollIntoViewIfNeeded();
+    await expect(card).toHaveAttribute('data-turned', 'true');
+    const days = Number(await spark.getAttribute('aria-valuemax')) + 1;
+    expect(days, `the staged line is ${days} days rather than the seven this lane reads`).toBe(7);
+    const rest = (await figure.textContent()).trim();
+    expect(rest, 'the card carries no figure of its own to return to').not.toBe('');
+    const neighbour = (
+      await page.locator('.board-card').nth(1).locator('.board-figure').textContent()
+    ).trim();
+
+    const observed = await watchShift(page);
+    const before = await boardFrame(page);
+    const anchors = await anchoredEdges(card);
+    for (const [index, reading] of scrubbedDays) {
+      const box = await spark.boundingBox();
+      await page.mouse.move(box.x + (box.width * index) / (days - 1), box.y + box.height / 2);
+      await expect(
+        figure,
+        `the card's figure did not follow the pointer onto day ${index} at ${width}px`
+      ).toHaveText(reading);
+      /* And the sub area reads that day EXACTLY, with the date in it — one
+         line, replacing the card's own, and no added chrome. */
+      const line = card.locator('.board-sub-line');
+      await expect(line).toHaveCount(1);
+      await expect(line).toHaveText(new RegExp(`^${reading} · on [A-Z][a-z]{2} \\d{1,2}$`));
+      /* The chart says the same thing to a screen reader, once. */
+      await expect(spark).toHaveAttribute('aria-valuenow', String(index));
+      await expect(spark).toHaveAttribute(
+        'aria-valuetext',
+        new RegExp(`^on [A-Z][a-z]{2} \\d{1,2} ${reading}$`)
+      );
+      /* The cursor and its hairline are lit and sit on the plot. */
+      const cursor = await card.evaluate((node) => {
+        const box = node.querySelector('.spark').getBoundingClientRect();
+        const dot = node.querySelector('.spark-cursor');
+        const guide = node.querySelector('.spark-guide');
+        const dotBox = dot.getBoundingClientRect();
+        return {
+          dot: dot.getAttribute('data-scrubbing'),
+          guide: guide.getAttribute('data-scrubbing'),
+          opacity: getComputedStyle(dot).opacity,
+          inside:
+            dotBox.x >= box.x - dotBox.width &&
+            dotBox.right <= box.right + dotBox.width &&
+            dotBox.y >= box.y - dotBox.height &&
+            dotBox.bottom <= box.bottom + dotBox.height,
+        };
+      });
+      expect(cursor.dot, `the cursor is unlit while day ${index} is read`).toBe('true');
+      expect(cursor.guide, `the hairline is unlit while day ${index} is read`).toBe('true');
+      await expect
+        .poll(async () => card.locator('.spark-cursor').evaluate((node) => getComputedStyle(node).opacity), {
+          message: 'the cursor never became visible',
+        })
+        .toBe('1');
+      expect(cursor.inside, 'the cursor is drawn outside its own plot').toBe(true);
+      /* ONE CARD IS BEING READ, NEVER THE BOARD: the card above this one has
+         its own line and its own lifetime, and a cursor that named a day
+         rather than a card would put this day's figure on both. */
+      await expect(
+        page.locator('.board-card').nth(1).locator('.board-figure'),
+        `a second card followed the pointer onto day ${index} at ${width}px`
+      ).toHaveText(neighbour);
+      expect(
+        await boardFrame(page),
+        `the board moved while day ${index} was read at ${width}px`
+      ).toEqual(before);
+      /* THE TWO BOXES THAT DO CHANGE WIDTH STAY ANCHORED: the figure is read
+         from the card's start edge and the sub line from its end edge, so a
+         reader's eye has nothing to follow even though both boxes resize. */
+      expect(
+        await anchoredEdges(card),
+        `the reading moved off its own anchors while day ${index} was read at ${width}px`
+      ).toEqual(anchors);
+    }
+
+    /* AND IT GIVES THE CARD BACK. A reading that outlived the pointer would be
+       a card permanently showing one day of its own history as its lifetime. */
+    await page.mouse.move(0, 0);
+    await expect(figure).toHaveText(rest);
+    await expect(spark).toHaveAttribute('aria-valuenow', String(days - 1));
+    await expect(card.locator('.spark-cursor')).toHaveAttribute('data-scrubbing', 'false');
+    expect(await boardFrame(page), `the board moved when the pointer left at ${width}px`).toEqual(
+      before
+    );
+    expect(
+      await anchoredEdges(card),
+      `the reading did not come back to its own anchors at ${width}px`
+    ).toEqual(anchors);
+    if (observed) {
+      const shifts = await page.evaluate(() => window.__shift);
+      expect(
+        shifts,
+        `the engine measured layout shift outside the reading at ${width}px: ${shifts
+          .map((shift) => `${shift.value.toFixed(5)} (${shift.moved.join(', ')})`)
+          .join('; ')}`
+      ).toEqual([]);
+    }
+  }
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+test('the daily line walks its days from the keyboard, clamped at both ends (owner 2026-09-11, issue 316)', async ({
+  page,
+}) => {
+  await stageSixCards(page);
+  await visit(page);
+  const card = page.locator('.board-card').nth(2);
+  const figure = card.locator('.board-figure');
+  const spark = card.locator('.spark');
+  const rest = (await figure.textContent()).trim();
+  await spark.scrollIntoViewIfNeeded();
+  await spark.focus();
+  /* Focus alone announces nothing: the slider reports the newest day, which is
+     the one already marked, and its text is still the line's own name. */
+  await expect(spark).toHaveAttribute('aria-valuenow', '6');
+  await expect(figure).toHaveText(rest);
+
+  /* A cold first press opens on the newest day rather than jumping. */
+  await spark.press('ArrowRight');
+  await expect(spark).toHaveAttribute('aria-valuenow', '6');
+  await expect(figure).toHaveText('5');
+  await spark.press('ArrowLeft');
+  await expect(spark).toHaveAttribute('aria-valuenow', '5');
+  await expect(figure).toHaveText('7');
+  await spark.press('Home');
+  await expect(spark).toHaveAttribute('aria-valuenow', '0');
+  await expect(figure).toHaveText('5');
+  /* CLAMPED, NEVER WRAPPED: stepping back from the oldest day to the newest
+     would read as time running backwards. */
+  await spark.press('ArrowLeft');
+  await expect(spark).toHaveAttribute('aria-valuenow', '0');
+  await spark.press('End');
+  await expect(spark).toHaveAttribute('aria-valuenow', '6');
+  await spark.press('ArrowRight');
+  await expect(spark).toHaveAttribute('aria-valuenow', '6');
+  /* And Escape gives the card back without taking the key from the page when
+     there is nothing to dismiss. */
+  await spark.press('Escape');
+  await expect(figure).toHaveText(rest);
+  await expect(card.locator('.spark-cursor')).toHaveAttribute('data-scrubbing', 'false');
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+test('a refresh takes the reading with it rather than re-pointing it at a different day (owner 2026-09-11, issue 316)', async ({
+  page,
+}) => {
+  /* A READING IS A READ OF THE CURRENT PAYLOAD, NEVER A REMEMBERED ONE. The
+     page rebuilds every card on its own schedule — the thirty-second poll and
+     the visibility catch-up — and a cursor left pointing at index five would
+     silently become a different day, or no day at all when the new series is
+     shorter than the old one. Both halves are measured here, in one walk: the
+     card goes back to its own figure, and the CHART goes back to reporting the
+     newest day of the series it is actually drawing.
+
+     The catch-up is driven rather than waited for: the poll's own cadence is
+     half a minute, and a lane that slept for it would be the slowest in the
+     matrix for no extra claim. */
+  let days = 7;
+  await page.route('**/api/panels/token-usage', async (route) => {
+    let response;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    const envelope = await response.json();
+    const sources = envelope?.data?.sources ?? [];
+    expect(sources.length, 'the origin serves fewer than two usage sources').toBeGreaterThan(1);
+    const [lead, follower] = sources;
+    follower.series = {
+      startDate: lead.series?.startDate ?? '2026-08-10',
+      totals: Array.from({ length: days }, (_, day) => day + 1),
+      recorded: true,
+    };
+    delete follower.modelStats;
+    const body = JSON.stringify(envelope);
+    const headers = { ...response.headers() };
+    for (const name of Object.keys(headers)) {
+      if (name.toLowerCase() === 'content-length') delete headers[name];
+    }
+    await route.fulfill({ status: response.status(), headers, body });
+  });
+  await visit(page);
+  const card = page.locator('.board-card').nth(2);
+  const figure = card.locator('.board-figure');
+  const spark = card.locator('.spark');
+  await spark.scrollIntoViewIfNeeded();
+  await expect(spark).toHaveAttribute('aria-valuemax', '6');
+  const rest = (await figure.textContent()).trim();
+  const box = await spark.boundingBox();
+  await page.mouse.move(box.x + (box.width * 5) / 6, box.y + box.height / 2);
+  await expect(figure, 'the line did not scrub before the refresh').toHaveText('6');
+  await expect(spark).toHaveAttribute('aria-valuenow', '5');
+
+  /* A SHORTER SERIES: the day the cursor named no longer exists. */
+  days = 3;
+  await page.evaluate(() => window.document.dispatchEvent(new Event('visibilitychange')));
+  await expect(spark, 'the shorter series never arrived').toHaveAttribute('aria-valuemax', '2');
+  await expect(figure, 'the card kept a figure from a payload it no longer holds').toHaveText(rest);
+  await expect(
+    spark,
+    'the chart still reports a day its own series cannot answer'
+  ).toHaveAttribute('aria-valuenow', '2');
+  await expect(card.locator('.spark-cursor')).toHaveAttribute('data-scrubbing', 'false');
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+test('a finger taps a day and the answer stays, without taking the page its scroll (owner 2026-09-11, issue 316)', async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, 'this project emulates no touchscreen');
+  await stageSixCards(page);
+  await visit(page);
+  const card = page.locator('.board-card').nth(2);
+  const figure = card.locator('.board-figure');
+  const spark = card.locator('.spark');
+  await spark.scrollIntoViewIfNeeded();
+  const box = await spark.boundingBox();
+  await page.touchscreen.tap(box.x + (box.width * 5) / 6, box.y + box.height / 2);
+  /* A TOUCH POINTER IS DESTROYED THE INSTANT IT LIFTS, so an answer cleared on
+     leave would be readable for exactly as long as the finger covered it. */
+  await expect(figure, 'a tap on the daily line read no day').toHaveText('7');
+  await expect(spark).toHaveAttribute('aria-valuenow', '5');
+  /* THE PAGE KEEPS ITS OWN AXIS. The declaration is `pan-y` on the chart
+     alone, and this is the engine confirming it rather than the sheet
+     claiming it. */
+  const action = await spark.evaluate((node) => getComputedStyle(node).touchAction);
+  expect(action, `the daily line declares touch-action: ${action}`).toBe('pan-y');
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+test('the scrubbed state arrives with the reader’s motion reduced (owner 2026-09-11, issue 316)', async ({
+  browser,
+}) => {
+  /* THE STATE IS THE DATA ATTRIBUTE AND THE FADE IS THE UPGRADE. A reader who
+     asked for less motion gets the identical cursor at the identical position
+     with nothing travelling into place — which is the half a no-preference
+     lane can never prove, because "it works with the animation" and "the
+     animation IS the feature" look the same there. */
+  const context = await browser.newContext({ reducedMotion: 'reduce' });
+  const page = await context.newPage();
+  await stageSixCards(page);
+  await visit(page);
+  const card = page.locator('.board-card').nth(2);
+  const spark = card.locator('.spark');
+  await spark.scrollIntoViewIfNeeded();
+  const box = await spark.boundingBox();
+  await page.mouse.move(box.x + box.width / 6, box.y + box.height / 2);
+  await expect(card.locator('.board-figure')).toHaveText('8');
+  const painted = await card.evaluate((node) => {
+    const dot = getComputedStyle(node.querySelector('.spark-cursor'));
+    return { opacity: dot.opacity, duration: dot.transitionDuration };
+  });
+  expect(painted.opacity, 'the cursor never appeared with motion reduced').toBe('1');
+  expect(
+    painted.duration.split(',').every((value) => Number.parseFloat(value) === 0),
+    `the cursor fades for ${painted.duration} with the reader's motion reduced`
+  ).toBe(true);
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await context.close();
+});
+
 /* NO RED ANYWHERE (owner directive, 2026-09-11).
  *
  * The sheet's one chromatic mark used to be a red that belonged to no palette
@@ -1934,70 +2338,76 @@ test('the page spends its one mark on its own green, legible as text, in every r
   await page.evaluate(() => window.document.documentElement.removeAttribute('data-theme'));
 });
 
-/* THE TURN IS A STATE, AND A READER WHO ASKED FOR LESS MOTION STILL GETS IT
- * (owner directive, 2026-09-11).
+/* A CARD IS NOT A CONTROL, AND CLICKING ONE CHANGES NOTHING (owner directive,
+ * 2026-09-11, issue 316: "these shouldn't change colour when I click on
+ * them").
  *
- * The squares this replaces animated a rotation, which is why they needed a
- * midpoint visibility swap and why WebKit's flattened 3D context inside a
- * button broke them. A card inverts its ink instead: under motion the paint
- * crosses over, and with the preference reduced it changes instantly. Both
- * halves are measured — the transition declared for one and absent for the
- * other, and the STATE arriving either way, because "no animation" must never
- * mean "no turn".
+ * The lane this replaces pressed a card and proved the paint crossed over.
+ * That behaviour is gone, and the honest replacement is the same measurement
+ * with the opposite expectation — because "the feature was removed" and "the
+ * feature broke" look identical in a suite that simply stops asking. So the
+ * board is clicked exactly as it used to be, and every paint the press used to
+ * change is read before and after and must be IDENTICAL.
+ *
+ * The inversion itself is still measured, because removing the press must not
+ * quietly remove the rhythm with it: the card the adapter composed inverted
+ * really wears the swapped ink, in both motion preferences, with nothing
+ * animating it into place.
  */
-test('a card turns in both motion preferences, and only animates in one (owner 2026-09-11)', async ({
+test('a card never repaints when it is clicked, and the composed inversion is still painted (owner 2026-09-11, issue 316)', async ({
   browser,
 }) => {
   for (const motion of ['no-preference', 'reduce']) {
-    const context = await browser.newContext({ reducedMotion: motion === 'reduce' ? 'reduce' : 'no-preference' });
+    const context = await browser.newContext({
+      reducedMotion: motion === 'reduce' ? 'reduce' : 'no-preference',
+    });
     const page = await context.newPage();
+    await stageSixCards(page);
     await visit(page);
+    const readCard = (card) =>
+      card.evaluate((node) => ({
+        turned: node.getAttribute('data-turned'),
+        pressed: node.getAttribute('aria-pressed'),
+        tag: node.tagName.toLowerCase(),
+        background: getComputedStyle(node).backgroundColor,
+        ink: getComputedStyle(node).color,
+        cursor: getComputedStyle(node).cursor,
+      }));
     const card = page.locator('.board-card').first();
-    const before = await card.evaluate((node) => ({
-      turned: node.getAttribute('data-turned'),
-      pressed: node.getAttribute('aria-pressed'),
-      transition: getComputedStyle(node).transitionProperty,
-      duration: getComputedStyle(node).transitionDuration,
-      background: getComputedStyle(node).backgroundColor,
-      ink: getComputedStyle(node).color,
-    }));
-    if (motion === 'reduce') {
-      expect(
-        before.duration.split(',').every((value) => Number.parseFloat(value) === 0),
-        `a card animates for ${before.duration} with the reader's motion reduced`
-      ).toBe(true);
-    } else {
-      expect(before.transition, 'a card declares no paint transition under motion').toContain(
-        'background'
-      );
-      expect(
-        before.duration.split(',').some((value) => Number.parseFloat(value) > 0),
-        'a card declares a paint transition with no duration'
-      ).toBe(true);
-    }
-    /* THE TURN ITSELF, in both: pressed state, data attribute, and the paint
-       really crossing over — a card whose ink and paper did not swap is a
-       card that announced a state it does not have. */
+    const before = await readCard(card);
+    expect(before.tag, 'a board card is still a control element').toBe('div');
+    expect(before.pressed, 'a card still announces a pressed state').toBeNull();
+    expect(before.cursor, 'a card still offers a control cursor').not.toBe('pointer');
+
+    /* THE PRESS, and the paint that must not move. The pointer is taken off
+       the card before the second read, exactly as the retired lane did: a card
+       under the cursor would be a HOVERED card, and a hover paint left behind
+       would read here as the press having changed something. */
     await card.click();
-    /* The pointer is moved off before the paint is read: a card under the
-       cursor is also a HOVERED card, and this lane is about the turn rather
-       than about the hover the click left behind. */
     await page.mouse.move(0, 0);
-    await expect(card).toHaveAttribute('data-turned', 'true');
-    await expect(card).toHaveAttribute('aria-pressed', 'true');
-    await expect
-      .poll(async () => card.evaluate((node) => getComputedStyle(node).backgroundColor), {
-        message: `the card never repainted with motion ${motion}`,
-      })
-      .toBe(before.ink);
-    const after = await card.evaluate((node) => getComputedStyle(node).color);
-    expect(after, `the card's ink did not become its paper with motion ${motion}`).toBe(
+    await expect(card).toHaveAttribute('data-turned', before.turned);
+    const after = await readCard(card);
+    expect(after.background, `clicking a card repainted its paper with motion ${motion}`).toBe(
       before.background
     );
-    /* And pressing again returns it, so the control is a toggle rather than a
-       one-way switch. */
-    await card.click();
-    await expect(card).toHaveAttribute('aria-pressed', 'false');
+    expect(after.ink, `clicking a card repainted its ink with motion ${motion}`).toBe(before.ink);
+
+    /* AND THE COMPOSED INVERSION IS REAL. Non-vacuity for everything above: a
+       board that had lost the [data-turned] remap entirely would satisfy every
+       "nothing changed" assertion perfectly. */
+    const inverted = page.locator('.board-card[data-turned="true"]').first();
+    await expect(inverted, 'no card on the board is inverted').toBeVisible();
+    const paint = await readCard(inverted);
+    expect(paint.background, 'an inverted card wears the same paper as a plain one').not.toBe(
+      before.background
+    );
+    expect(paint.background, "an inverted card's paper is not the plain card's ink").toBe(
+      before.ink
+    );
+    expect(paint.ink, "an inverted card's ink is not the plain card's paper").toBe(
+      before.background
+    );
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
     await context.close();
   }
 });
@@ -7633,16 +8043,16 @@ test('the token board offers no display control, and every reported source still
   const board = page.locator('.panel-shell').filter({ has: page.locator('.board-grid') });
   await expect(board).toBeVisible();
 
-  /* Half one: nothing to press that CHOOSES A DISPLAY. Measured as the DOM the
-     reader gets, not as the source — a control rendered hidden would still be
-     a control.
-     
-     The board does hold buttons now (owner directive, 2026-09-03, issue 287):
-     every square turns over to show its own back. So the blanket "no buttons
-     at all" this lane used to assert would now fail on a feature rather than
-     on a regression, and the honest replacement is that every button the panel
-     holds IS a square's own turn control — which is checked by name, so a
-     display control wearing a new class cannot hide among them. */
+  /* Half one: nothing to press at all. Measured as the DOM the reader gets,
+     not as the source — a control rendered hidden would still be a control.
+
+     THE BLANKET CLAIM IS BACK (owner directive, 2026-09-11, issue 316). The
+     board grew turnable squares at issue 287 and this lane softened to "every
+     button IS a card"; the press is now gone, so the panel holds NO button
+     again and the strongest available statement is the true one. The one thing
+     a reader can operate is the daily line, which is a slider rather than a
+     button — named here so a display control cannot return wearing that role
+     either. */
   const controls = await board.evaluate((node) => ({
     triggers: node.querySelectorAll('.filter-trigger').length,
     popovers: node.querySelectorAll('.filter-popover').length,
@@ -7651,9 +8061,15 @@ test('the token board offers no display control, and every reported source still
     radios: node.querySelectorAll('[role="radio"]').length,
     pills: node.querySelectorAll('.usage-view').length,
     cards: node.querySelectorAll('.board-card').length,
-    buttons: [...node.querySelectorAll('button')].map((button) => ({
-      card: button.classList.contains('board-card'),
-      name: (button.getAttribute('aria-label') ?? button.textContent ?? '').trim(),
+    pressed: node.querySelectorAll('[aria-pressed]').length,
+    buttons: [...node.querySelectorAll('button, [role="button"]')].map((button) =>
+      (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
+    ),
+    sliders: [...node.querySelectorAll('[role="slider"]')].map((slider) => ({
+      spark: slider.classList.contains('spark'),
+      name: (slider.getAttribute('aria-label') ?? '').trim(),
+      now: slider.getAttribute('aria-valuenow'),
+      max: slider.getAttribute('aria-valuemax'),
     })),
   }));
   expect(controls.triggers, 'the display trigger is back').toBe(0);
@@ -7663,16 +8079,20 @@ test('the token board offers no display control, and every reported source still
   expect(controls.radios, 'a radio is back in the token panel').toBe(0);
   expect(controls.pills, 'a display pill is back').toBe(0);
   expect(controls.cards, 'the board drew no cards').toBeGreaterThan(1);
-  const strangers = controls.buttons.filter((button) => !button.card);
   expect(
-    strangers.map((button) => button.name),
-    `the token board grew a control that is not a card: ${strangers.map((button) => button.name).join(', ')}`
+    controls.buttons,
+    `the token board holds a button again: ${controls.buttons.join(', ')}`
   ).toEqual([]);
-  /* And every card's own control says what it does, so "they are all cards" is
-     a statement about controls a reader can understand rather than about a
-     class name. */
-  for (const button of controls.buttons) {
-    expect(button.name, 'a board card offers a control with no accessible name').not.toBe('');
+  expect(controls.pressed, 'something on the board announces a pressed state again').toBe(0);
+  /* And the one control that IS there is the chart, named and reporting a real
+     day — which is the non-vacuity half: a panel that had lost its lines
+     entirely would satisfy every count above. */
+  expect(controls.sliders.length, 'the board offers no daily line to read').toBeGreaterThan(0);
+  for (const slider of controls.sliders) {
+    expect(slider.spark, 'a slider on the board is not a daily line').toBe(true);
+    expect(slider.name, 'a daily line offers no accessible name').not.toBe('');
+    expect(Number(slider.max), 'a daily line reports no last day').toBeGreaterThan(0);
+    expect(Number(slider.now), 'a daily line reports no current day').toBeGreaterThanOrEqual(0);
   }
 
   /* Half two: every source the payload reports with a daily series still draws

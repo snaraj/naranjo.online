@@ -263,6 +263,64 @@ func TestTheKeyShapeAdmitsMachineKeysOnly(t *testing.T) {
 	}
 }
 
+// TestTheShippedSnapshotNamesOnlyVocabularyModels is the fail-closed half of a
+// vocabulary EDIT, and the direction the loader itself cannot cover.
+//
+// Adding a member is safe by construction: nothing already shipped names it.
+// REMOVING one is not, and issue #316 is the case — a feature identifier the
+// second tool records where a model id normally sits was rendering as a model
+// row, so the member left the file. The snapshot is a separate artifact that
+// was written while the member still existed, and every runtime reader refuses
+// a key outside the vocabulary: the origin's own orderModelStats and
+// admitBreakdown reject the document, and the browser refuses the whole
+// payload. A snapshot left behind by such an edit therefore ships a site whose
+// usage board is empty until somebody reads a log.
+//
+// Nothing else catches it. The snapshot is loaded and decoded by the tests
+// above without being admitted through the pushed-document path, so the drift
+// is silent at build time and loud in production — the exact inversion this
+// repository's fail-closed doctrine exists to prevent. Derived from the
+// shipped file rather than transcribed, so a later vocabulary edit moves this
+// pin instead of leaving it stale.
+func TestTheShippedSnapshotNamesOnlyVocabularyModels(t *testing.T) {
+	t.Parallel()
+	loaded, err := SnapshotSource{Name: "snapshots/token-usage.json"}.load(snapshotFiles, KindTokenUsageV2)
+	if err != nil {
+		t.Fatalf("load token snapshot: %v", err)
+	}
+	var payload TokenUsageData
+	if err := decodeStrict(loaded.data, &payload); err != nil {
+		t.Fatalf("decode token snapshot: %v", err)
+	}
+	named := make(map[string]bool, len(modelServeOrder))
+	for _, key := range modelServeOrder {
+		named[key] = true
+	}
+	checked := 0
+	for _, source := range payload.Sources {
+		for _, stat := range source.ModelStats {
+			checked++
+			if !named[stat.Key] {
+				t.Errorf("snapshot source %q carries a per-model lifetime row keyed %q, which %s no longer declares; every reader refuses a key outside the vocabulary", source.Label, stat.Key, modelsFilePath)
+			}
+		}
+		if source.Series == nil {
+			continue
+		}
+		for _, row := range source.Series.Models {
+			checked++
+			if !named[row.Key] {
+				t.Errorf("snapshot source %q carries a daily model row keyed %q, which %s no longer declares", source.Label, row.Key, modelsFilePath)
+			}
+		}
+	}
+	// Non-vacuity: a snapshot that had stopped carrying a model partition at
+	// all would satisfy every check above without proving anything.
+	if checked == 0 {
+		t.Fatal("the shipped snapshot names no model at all; this pin has nothing to check")
+	}
+}
+
 // TestTheShippedSourceVocabularyNamesEveryPushableSource is the fail-closed
 // half of issue #267's second data file: a source label can reach this origin
 // from exactly two places — the embedded snapshot the pushed document must

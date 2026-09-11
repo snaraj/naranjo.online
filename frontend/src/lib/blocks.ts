@@ -416,14 +416,37 @@ export type LedgerMeter = {
   readonly label: string;
 };
 
-/* The daily line under a card: the series itself and the accessible name the
- * adapter wrote for it. The figures printed above it are the non-colour
- * channel the dataviz floor asks for, so the drawing carries no axis, no
- * caption and no legend. A null day is a day nobody measured; lib/spark.ts
- * decides what that draws. */
+/* The daily line under a card: the series itself, the accessible name the
+ * adapter wrote for it, and every day's date and figures already worded. The
+ * figures printed above it are the non-colour channel the dataviz floor asks
+ * for, so the drawing carries no axis, no caption and no legend. A null day is
+ * a day nobody measured; lib/spark.ts decides what that draws.
+ *
+ * THE THREE DAY ARRAYS ARE PARALLEL TO `totals`, one entry per day, and they
+ * exist because the scrubber prints a day rather than drawing one (owner
+ * directive, 2026-09-11, issue 316): the component is handed the words and
+ * formats nothing, exactly as it computes nothing. A day nobody measured
+ * carries the page's own unknown mark in both figure columns and its DATE in
+ * the label, because the absence is still a fact about a real day. */
 export type LedgerSpark = {
   readonly totals: readonly (number | null)[];
   readonly ariaLabel: string;
+  /* "on Sep 3" — the page's one voice for a day (lib/grid.ts's cellPeriod). */
+  readonly dayLabels: readonly string[];
+  /* The day's reading, compacted the way the card's own figure is, so the
+     headline reads in one column of units whichever day is under the cursor. */
+  readonly dayFigures: readonly string[];
+  /* The same day exactly, grouped, for the line that replaces the sub area. */
+  readonly dayExact: readonly string[];
+};
+
+/* What the daily line is handed: its series plus the one thing it reports
+ * back. `onScrub` is called with the day index under the pointer, the finger
+ * or the keyboard cursor, and with null the moment the reading ends — the
+ * component owns no readout of its own, so the card decides what a scrubbed
+ * day does to it. */
+export type SparklineProps = LedgerSpark & {
+  readonly onScrub?: (index: number | null) => void;
 };
 
 /* One card of the board. Every region is optional and every one is drawn only
@@ -431,10 +454,11 @@ export type LedgerSpark = {
  * fixed template with blanks in it — and a card whose source said nothing
  * renders its own note rather than a zero.
  *
- * There is ONE face. Pressing a card inverts its ink and its paper through a
- * single token remap; the content does not change, so there is no second face
- * to keep in the DOM, nothing turned away from the reader, and no hint to
- * print (owner directive, 2026-09-11). */
+ * There is ONE face and NOTHING TO PRESS (owner directive, 2026-09-11, issue
+ * 316: "these shouldn't change colour when I click on them"). A card whose
+ * `turned` is set is drawn inverted through a single token remap and stays
+ * that way; the inversion is the board's own rhythm, decided by the adapter,
+ * and no reader can change it. */
 export type LedgerCard = {
   readonly key: string;
   readonly label: string;
@@ -462,11 +486,43 @@ export type LedgerCard = {
   readonly spark?: LedgerSpark;
   /* What the card says when it has nothing else to say. */
   readonly note?: string;
-  /* Whether the card opens inverted. The board's rhythm, decided by the
-     adapter over the sources it read, never by the component. */
+  /* Whether the card is drawn inverted. The board's rhythm, decided by the
+     adapter over the sources it read, never by the component and never by a
+     reader. */
   readonly turned?: boolean;
   readonly ariaLabel: string;
 };
+
+/* WHAT A SCRUBBED DAY SAYS ON ITS CARD, or null for "this card is at rest"
+ * (owner directive, 2026-09-11, issue 316). Pure, and here rather than in the
+ * component, for this repository's usual reason: a lookup a test can execute
+ * is a lookup whose hostile cases are decided once instead of being reasoned
+ * about in markup.
+ *
+ * TOTAL BY CONSTRUCTION. The three day arrays are parallel to the series the
+ * card is drawing RIGHT NOW, and the index came from a pointer over a chart
+ * that may since have been handed a different payload — a shorter series, or
+ * a card that lost its line entirely. Every one of those answers "no reading"
+ * rather than an undefined figure, which is the only honest answer available
+ * and the one that cannot reach the DOM as the word `undefined`. */
+export function scrubReading(
+  card: LedgerCard,
+  index: number
+): { readonly figure: string; readonly line: string } | null {
+  if (card.spark === undefined) {
+    return null;
+  }
+  const figure = card.spark.dayFigures[index];
+  const exact = card.spark.dayExact[index];
+  const label = card.spark.dayLabels[index];
+  if (figure === undefined || exact === undefined || label === undefined) {
+    return null;
+  }
+  /* The exact figure and the day, in that order: the figure is what the reader
+     came for and the date is what qualifies it — the same order the card's own
+     sub line already reads in. */
+  return { figure, line: `${exact} · ${label}` };
+}
 
 export type LedgerBoardProps = {
   readonly title: string;
@@ -475,9 +531,6 @@ export type LedgerBoardProps = {
   readonly cards: readonly LedgerCard[];
   readonly emptyNote: string;
   readonly staleNote?: string;
-  /* The words a card's own button carries in each state. */
-  readonly turnLabel: string;
-  readonly returnLabel: string;
 };
 
 /* One item of the scrolling strip: a small icon (or its initials fallback),
