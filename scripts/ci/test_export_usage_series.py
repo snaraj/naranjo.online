@@ -244,6 +244,17 @@ class ImportSurfaceTest(unittest.TestCase):
     deliberate widening — a review property, which is what a lint can
     honestly be.
 
+    The LEDGER it imports is the second in-repository module on this surface
+    (issue #267). It is admitted for the same reason the capture tool is —
+    the alternative is a second implementation of rules that already exist —
+    and it costs the same kind of widening: the ledger appends with
+    `os.open`/`os.fsync`, so `os` is reachable through it exactly as it is
+    reachable through the capture tool and through `pathlib`. That changes
+    nothing about the claim this class makes, because the class never claimed
+    capability absence; `test_the_ledger_surface_stays_reviewed` below pins
+    the ledger's OWN surface so the widening is bounded and named rather than
+    open-ended.
+
     The capture tool it imports is a documented EXCEPTION as of the
     2026-08-25 round-4 review (finding 4), widened by round 5 (finding 1).
     Round 4 admitted `os` for `O_NOFOLLOW` and a descriptor `fstat` on the
@@ -267,6 +278,7 @@ class ImportSurfaceTest(unittest.TestCase):
             "json",
             "pathlib",
             "sys",
+            "usage_ledger",
         }
     )
 
@@ -416,6 +428,40 @@ class ImportSurfaceTest(unittest.TestCase):
         )
         # And the exception is exactly one module wide, in exactly one file.
         self.assertNotIn("os", imported_roots(self.tree))
+
+    def test_the_ledger_surface_stays_reviewed(self):
+        # Issue #267: the ledger is the exporter's second in-repository
+        # import, so ITS surface is part of this program's reviewed surface
+        # too. `os` is the one refused module it may name — an append-only
+        # record needs O_APPEND and fsync, and Python exposes neither
+        # elsewhere — and everything that can spawn, connect, or load code
+        # stays refused there exactly as it is refused here.
+        ledger_tree = ast.parse(
+            (_MODULE_PATH.parent / "usage_ledger.py").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            imported_roots(ledger_tree) & self.REFUSED, frozenset({"os"})
+        )
+        self.assertEqual(
+            imported_roots(ledger_tree),
+            {
+                "__future__",
+                "argparse",
+                "capture_usage_series",
+                "csv",
+                "datetime",
+                "gzip",
+                "hashlib",
+                "json",
+                "os",
+                "pathlib",
+                "re",
+                "sqlite3",
+                "sys",
+            },
+            "the ledger's import surface is closed; widening it is a "
+            "conscious edit naming the module that got in",
+        )
 
 
 class SharedWalkTest(unittest.TestCase):

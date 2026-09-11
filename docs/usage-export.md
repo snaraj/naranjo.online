@@ -503,6 +503,132 @@ and enforces `Σ members ≤ each class tile`. It is `≤` and not `=` because t
 per-model accrual covers the days the walk owns while the class tile also
 accrues days the history store supplied.
 
+## The ledger — the append-only record (ledger/v1)
+
+Everything above this line is a WINDOW. The sealed document carries a bounded
+series, the history stores carry one best figure per day and forget how it was
+measured, and the dataset is rebuilt from scratch on every run. None of them
+can answer "what did this machine know, and when did it know it", and none of
+them holds a reading the panel never served. The owner's ruling (2026-09-11)
+is that the tracker is lifelong: a figure this workstation has once measured is
+written down once, kept forever, and never rewritten. The ledger is that
+record, and `scripts/usage_ledger.py` is the only program that writes it.
+
+**Layout**, under `LEDGER_DIR` (`$HISTORY_DIR/ledger` by default):
+
+```
+schema.json                        the streams, kinds, units and methods, declared for a reader with no code
+usage/<YYYY>.ndjson                one JSON object per line, appended, never rewritten
+sessions/<YYYY>.ndjson
+github/<YYYY>.ndjson
+projects/<YYYY>.ndjson
+osrs/<YYYY>.ndjson
+raw/usage/<day>/<key>.T<HHMMSS>Z.json.gz   the capture document a reading came from, kept 30 days
+raw/usage/<day>/<key>.last.json.gz         the day's latest, kept forever
+raw/<stream>/<day>.json.gz                 the panel envelope a reading came from
+exports/                                   derived SQLite and CSV, regenerated on demand
+```
+
+**One row is one reading**:
+
+```json
+{"schema":"ledger/v1","day":"2026-09-11","stream":"usage","source":"<source key>",
+ "kind":"model-category","key":"<member>/<class>","value":1183450221,"unit":"tokens",
+ "capturedAt":"2026-09-11T07:39:08Z","method":"capture","exporter":"abc1234",
+ "raw":"sha256:<digest of the archived document's uncompressed bytes>"}
+```
+
+`(day, source, kind, key)` names a figure and `value` is that figure as of
+`capturedAt`. `method` says where the reading came from — `capture` (the
+fresh capture document), `store` (the durable per-day store), `verified` (the
+owner's reading of the vendor surface), `baseline` (the one-time lifetime
+reading), `panel` (the nightly snapshot of this site's own panels),
+`backfill` (the owner-run GitHub reconstruction) — and `unit` is one of
+`tokens`, `count`, `seconds`, `xp`, `level`, `rank`, `stars`,
+`epoch-seconds`. Values are non-negative integers, days are the
+workstation's LOCAL calendar days exactly as everywhere else in this pipeline,
+and instants are UTC RFC 3339. `raw` is present only when an archive backs
+the reading; an absent digest says no document was kept, never a fabricated
+one.
+
+**Append rules**, and every one of them has a hostile test:
+
+1. A run builds an index of the LAST value written per identity by reading the
+   year files for the days it touches. Reading a whole year file each run is
+   the deliberate trade: a year of this pipeline's rows is a few megabytes, and
+   any index beside the file would be a second source of truth that can
+   disagree with the lines it indexes.
+2. Only rows whose value DIFFERS from that last one are appended. A run that
+   changes nothing appends nothing and rewrites nothing — the file grows with
+   information rather than with runs. A session row also compares its end and
+   its running total, because either can move while the duration does not.
+3. The write is `O_WRONLY|O_CREAT|O_APPEND` at mode 0600, one `os.write` of
+   every line, one `os.fsync`. Directories are 0700, including every one the
+   record creates on its way to them.
+4. A final line with no terminating newline is the one tolerated fault — an
+   interrupted append is the only thing that can produce it. It is truncated
+   back to the previous newline, reported on stderr, and the run continues.
+5. Every OTHER malformed line refuses the run naming its line number: bad
+   JSON, the wrong schema, a foreign stream, a negative or boolean value, a
+   day no calendar has, a kind outside its stream, a unit or method outside
+   its vocabulary, an unknown field. This is the history store's
+   "malformed refuses rather than forgets" rule, kept for its reason: a reader
+   that skips what it cannot parse turns corruption into silent data loss.
+
+**Resolution.** `resolve()` answers "what is the current figure" in one place,
+with the rule the rest of the pipeline already uses: a `verified` reading wins
+outright, and the latest one wins among those; otherwise the LARGEST figure
+wins, because every other method under-measures rather than over-measures —
+a retention-pruned tree, a roll-up that discarded a month, a panel that had
+not refreshed. Sessions resolve by latest capture instead: a session's figures
+move while it runs, so the newest reading is simply the current one. The
+SQLite export materialises exactly that as the `<stream>_current` tables.
+
+**The raw archive.** The day's `.last` document is replaced every run and kept
+forever, so the archive's size is bounded by days rather than by runs. A
+per-run copy is written only when the run MEASURED something — a document that
+differs from the last one solely in the instant it was taken is the same
+measurement read again — and those copies are pruned after 30 days. The
+pruner deletes only names it can generate itself, in day directories past the
+bound; a `.last` archive, an operator's file, and anything a future version of
+the program leaves there are never candidates.
+
+**The nightly panel snapshot.** Three of the five streams are measured by the
+ORIGIN rather than by this workstation — the contribution calendar, the
+repository listing, the game account — under credentials this machine
+deliberately does not hold, and the origin keeps no history of them.
+`scripts/ledger_snapshot.py` reads the public `panel/v1` envelopes once a
+night and records what they said. It runs OUTSIDE `producer.sb`, deliberately
+and unlike every other job here: it needs a network the profile denies, and it
+reads nothing private. Its bounds are the fetch's: https only, the resolved
+host must equal the configured site's, no redirect is followed, one 20-second
+timeout, one 512 KiB read. A panel whose envelope status is not `ok` is
+skipped with no rows at all — the status is the origin's own statement that
+the payload is stale, and a stale reading recorded as today's is a lie the
+record would keep forever.
+
+**The GitHub backfill.** `scripts/ledger_backfill_github.py` is owner-run and
+never scheduled: `--from 2016 [--to 2026]` walks the contribution calendar a
+year at a time and every owned repository's commits, through the owner's own
+authenticated `gh`, and records them with method `backfill`. The login comes
+from `gh api user` at run time, so no account name lives in this repository. A
+non-zero `gh` exit refuses the whole run; a rate-limited response is a wait,
+not a failure. It is idempotent by the append rule, so an interrupted backfill
+is safe to run again.
+
+**Exports.** `python3 -I -B scripts/usage_ledger.py export --ledger DIR`
+rebuilds `exports/ledger.sqlite` (one table per stream, plus the resolved
+`<stream>_current` tables) and one long-format CSV per stream, from scratch,
+into a temporary file that is renamed into place. The lines are the record;
+a derived view that drifted from them is repaired by deleting it.
+
+**What is and is not recoverable.** The ledger starts the day it is switched
+on. It cannot reconstruct a day whose evidence is already gone — the GitHub
+backfill is the one exception, and only because that service keeps the
+history this machine does not. What it promises is the other direction: no day
+measured after that point is ever lost again, including the days the sealed
+window has since dropped and the days a vendor surface later disagrees with.
+
 ## Workstation setup
 
 1. **Build the sealer** from the repository root:
@@ -552,6 +678,7 @@ accrues days the history store supplied.
    # MERGE_SOURCES=other-label=/path/to/other-series.json
    # MERGE_CAPTURES=other-label=running-totals=$HOME/<other-tool-records>
    # HISTORY_DIR=$HOME/.config/naranjo-usage-export/history
+   # LEDGER_DIR=$HOME/.config/naranjo-usage-export/history/ledger
    ```
 
    **`PUSH_HOST` is a real `user@host`, not an `~/.ssh/config` alias, and
@@ -667,6 +794,15 @@ accrues days the history store supplied.
    a read-on day before the day it names, or a malformed file refuses the
    run rather than serving a figure the owner has already corrected.
 
+   `LEDGER_DIR` is the append-only lifelong record described above (issue
+   #267). It DEFAULTS to `$HISTORY_DIR/ledger` whenever `HISTORY_DIR` is set,
+   so configuring durable days configures the record with them and the line
+   above exists only to move it elsewhere; with neither set, the export writes
+   no record at all. The stores and the record answer different questions and
+   neither replaces the other: the store says what a day's best figure is, and
+   the record says every figure anyone ever measured for it, how, and when.
+   Setting it also installs the nightly panel snapshot in step 5.
+
    `MERGE_SOURCES` is how a second tool's ALREADY-CAPTURED series joins the
    same document: point it at that tool's capture output (the capture tool's
    stdout shape). The export validates and re-guards whatever it merges.
@@ -693,6 +829,18 @@ accrues days the history store supplied.
    job, so a capture that runs long does not overlap itself. Logs live under
    `~/Library/Logs/naranjo-online-usage-export/`. One manual run first is good
    practice: `scripts/usage-export/push-usage-series.sh`.
+
+   The installer lands TWO agents when `LEDGER_DIR` (or `HISTORY_DIR`) is
+   configured, and says so on the last line of its output. The second is
+   `com.naranjo-online.ledger-snapshot`: once a night at 23:45 plus at load,
+   logging beside the first, reading the site's public panels into the record.
+   It runs OUTSIDE the producer sandbox because it needs the network the
+   profile denies and reads nothing private, and it is installed only when
+   there is a record to write into — a workstation with neither variable set
+   gets exactly the one agent it had before. The installer reads those two
+   variables out of the same configuration file the push script reads, under
+   the same 0600 refusal, and reads it in a subshell so the file's own
+   `REPO_DIR` can never move the schedule's anchor.
 
    What one run writes to the log (issue #299): a `START <stage>` line as
    each stage begins — `recapture-<key>`, `export`, `seal`, `push` — so a
@@ -857,6 +1005,10 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | Symptom | Meaning |
 | --- | --- |
 | `configuration must be private` | config file mode laxer than 0600 |
+| `the ledger line N is malformed: …` | a line in the append-only record is damaged in a way an interrupted write cannot produce. The run refuses rather than skipping it; the named line is the whole diagnosis |
+| `ledger repaired a partial line in …` | the tolerated fault: an interrupted append left a line with no newline. It was truncated back and the run continued |
+| `ledger snapshot skipped <stream>` | that panel's envelope did not report `ok`, so the night has no reading for it. The next night takes one |
+| `a panel request was redirected` / `came from a different host` | the snapshot refuses both rather than following them; check the configured site |
 | `sealing refused` / key-file refusal | key file missing, malformed, or group/world-readable |
 | `push refused` | ssh transport failed; nothing landed |
 | `checksum mismatch after push` | landed bytes differ from sealed bytes — investigate before trusting the panel |

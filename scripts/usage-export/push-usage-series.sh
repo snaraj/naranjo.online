@@ -83,6 +83,14 @@
 #                   "$HISTORY_DIR/<key>.json", so a measured day survives its
 #                   sources. Optional so an unconfigured workstation still
 #                   exports; the depth guarantee rests on configuring it.
+#   LEDGER_DIR      directory for the append-only lifelong record (issue
+#                   #267). Defaults to "$HISTORY_DIR/ledger" whenever
+#                   HISTORY_DIR is set, so configuring the stores configures
+#                   the record with them; unset and with no HISTORY_DIR, the
+#                   export writes no record at all. The stores keep one best
+#                   figure per day and forget how it was measured; the record
+#                   keeps every reading, with its method and the instant it
+#                   was taken, and never rewrites one.
 #
 # Exit status is nonzero on any failure; diagnostics never include payload
 # content. Stage names and byte counts only.
@@ -150,6 +158,13 @@ MERGE_SOURCES="${MERGE_SOURCES:-}"
 MERGE_CAPTURES="${MERGE_CAPTURES:-}"
 ACTIVITY_CACHE="${ACTIVITY_CACHE:-}"
 HISTORY_DIR="${HISTORY_DIR:-}"
+# The record lives beside the stores unless it is told otherwise: the two are
+# the same pipeline's memory, and a workstation that configured durable days
+# should not have to configure durability twice (issue #267).
+LEDGER_DIR="${LEDGER_DIR:-}"
+if [ -z "$LEDGER_DIR" ] && [ -n "$HISTORY_DIR" ]; then
+    LEDGER_DIR="$HISTORY_DIR/ledger"
+fi
 PUSH_PORT="${PUSH_PORT:-22}"
 
 # The destination must carry its own user, because -F /dev/null means no
@@ -175,6 +190,14 @@ CAPTURE_SCRIPT="$REPO_DIR/scripts/capture_usage_series.py"
 BASELINES_FILE="$REPO_DIR/scripts/usage-export/lifetime-baselines.json"
 [ -f "$BASELINES_FILE" ] || fail "lifetime baselines table not found under REPO_DIR"
 [ -x "$USAGESEAL_BIN" ] || fail "usageseal binary not executable"
+
+# The revision of the checkout this run exports from, read ONCE. The export
+# records it beside every ledger row and the SUMMARY line below reports it, so
+# the log and the record name the same tree rather than two reads that a
+# mid-run checkout could make disagree (issue #288). It is a public
+# repository's commit id, never a path or a host fact; "unknown" when REPO_DIR
+# is not a checkout at all.
+exporter_revision=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 
 # The producer's capability boundary, and the reason it lives HERE rather than
 # inside the producer (2026-08-24 security review, round 3, finding 1). The
@@ -290,6 +313,13 @@ if [ -n "$HISTORY_DIR" ]; then
     # The graphing dataset is rebuilt from the stores on every run and lives
     # beside them (issue #299): machine-local, never sealed, never pushed.
     set -- "$@" --dataset "$HISTORY_DIR/dataset.json"
+fi
+# The lifelong record (issue #267): every reading this run measured, appended
+# with the revision that measured it. It is written inside the same sandbox —
+# the record lives under HISTORY_DIR, which the profile leaves writable, and
+# the stage still has no network and cannot create a process.
+if [ -n "$LEDGER_DIR" ]; then
+    set -- "$@" --ledger "$LEDGER_DIR" --exporter-version "$exporter_revision"
 fi
 for pair in $MERGE_SOURCES; do
     set -- "$@" --merge-source "$pair"
@@ -489,7 +519,4 @@ remote_sum=$(echo "$remote_line" | head -n 1 | cut -d' ' -f1)
 finish
 
 echo "usage-export: pushed $sealed_bytes sealed bytes; checksum verified"
-# The revision is a public repository's commit id, never a path or a host
-# fact; "unknown" when REPO_DIR is not a checkout at all.
-exporter_revision=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 echo "usage-export: SUMMARY pushed=${sealed_bytes}B sha256=$(echo "$local_sum" | cut -c1-12) exporter=$exporter_revision elapsed=$(elapsed)s stages:$timings"

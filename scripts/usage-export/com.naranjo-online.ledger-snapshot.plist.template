@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd template for the nightly panel snapshot (issue #267).
+
+  This TEMPLATE is the committed artifact; the rendered agent is not, because
+  a rendered plist carries absolute workstation paths, which stay out of the
+  repository. scripts/usage-export/install-launchd.sh substitutes the three
+  placeholders — __SNAPSHOT_SCRIPT__ (absolute path to ledger_snapshot.py),
+  __LEDGER_DIR__ (the append-only record's directory) and __LOG_DIR__ (the
+  same per-user log directory the export job uses) — and installs the result
+  beside the export agent under ~/Library/LaunchAgents.
+
+  ONCE A DAY, LATE, and never every minute like the export: the panels this
+  reads change on the origin's own refresh cadence, and one reading a day is
+  what the record wants — a level reading per day, taken at the end of it.
+  RunAtLoad covers the install and any day the machine was asleep at 23:45.
+
+  IT RUNS OUTSIDE THE PRODUCER SANDBOX, deliberately and unlike every other
+  job in this pipeline. It needs a network, which producer.sb denies outright,
+  and it reads nothing private: one public HTTPS endpoint on the site's own
+  panel API, no credential, no transcript. The sandbox exists to keep the
+  program that walks raw records away from the network; this program walks no
+  records.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.naranjo-online.ledger-snapshot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>-I</string>
+        <string>-B</string>
+        <string>__SNAPSHOT_SCRIPT__</string>
+        <string>--ledger</string>
+        <string>__LEDGER_DIR__</string>
+        <string>--site</string>
+        <string>https://naranjo.online</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>23</integer>
+        <key>Minute</key>
+        <integer>45</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityBackgroundIO</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/ledger-snapshot.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/ledger-snapshot.err.log</string>
+</dict>
+</plist>

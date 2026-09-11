@@ -83,7 +83,7 @@ and only this", never as "this program cannot spawn".
 
     scripts/export_usage_series.py --transcripts DIR --source LABEL \\
         [--activity-cache FILE] [--merge-source LABEL=FILE] \\
-        [--lifetime-baselines FILE] [--out FILE]
+        [--lifetime-baselines FILE] [--ledger DIR] [--out FILE]
 """
 
 from __future__ import annotations
@@ -97,6 +97,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import capture_usage_series as capture  # noqa: E402
+import usage_ledger  # noqa: E402
 
 # The document identity the origin's strict decoder requires.
 SCHEMA = "usage-series/v1"
@@ -809,6 +810,14 @@ def parse_arguments(argv):
         help="machine-local graphing dataset to write from the history stores beside --history-store",
     )
     parser.add_argument(
+        "--ledger",
+        help="append-only lifelong record this run's readings are written to",
+    )
+    parser.add_argument(
+        "--exporter-version",
+        help="the checkout revision recorded beside every ledger row this run writes",
+    )
+    parser.add_argument(
         "--out",
         help="file to write the document to; prints to stdout when omitted",
     )
@@ -863,6 +872,15 @@ def main(argv=None):
         if not dataset_path.parent.is_dir():
             print("no such dataset directory", file=sys.stderr)
             return 2
+    ledger_dir = None
+    if arguments.ledger is not None:
+        ledger_dir = pathlib.Path(arguments.ledger).expanduser()
+        if not ledger_dir.parent.is_dir():
+            # The record itself bootstraps on first use; the directory it
+            # lives under must exist, or a misconfigured path would silently
+            # record nothing, run after run.
+            print("no such ledger directory", file=sys.stderr)
+            return 2
     now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     baselines = None
     if arguments.lifetime_baselines is not None:
@@ -894,6 +912,20 @@ def main(argv=None):
         )
         if dataset_path is not None:
             write_dataset(dataset_path, build_dataset(sources, history_store.parent, now))
+        if ledger_dir is not None:
+            # `material` is the out-of-band half `export()` returned above:
+            # per source, the complete capture document with its ledger block
+            # beside that block on its own. The record archives the document
+            # and reads its readings from it; the wire never sees the block.
+            usage_ledger.record_run(
+                ledger_dir,
+                material,
+                history_store.parent if history_store is not None else None,
+                now,
+                arguments.exporter_version,
+                now.astimezone().date().isoformat(),
+                baselines,
+            )
     except capture.CaptureError as error:
         print(str(error), file=sys.stderr)
         return 1
