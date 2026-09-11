@@ -305,11 +305,13 @@ def make_row(
     raw=None,
     extra=None,
 ):
-    """Build one row in the record's field order, then admit it.
+    """Build one row in the record's field order.
 
-    Every row this module writes goes through the SAME admission the reader
-    applies to a line it did not write, so a rule can never hold on read and
-    not on write.
+    Admission happens ONCE, in append_rows, which every row this module
+    builds is handed to: the same admission the reader applies to a line it
+    did not write, so a rule can never hold on read and not on write. A second
+    admission here was decorative — no input told it apart from the one
+    downstream (PR #312 review, finding 5).
     """
     row = {
         "schema": SCHEMA,
@@ -328,7 +330,6 @@ def make_row(
         row["raw"] = raw
     if extra:
         row.update(extra)
-    admit_row(row, stream)
     return row
 
 
@@ -485,18 +486,26 @@ def repair_partial_tail(path):
 def read_stream_file(path, stream):
     """Read and admit every line of one stream file, in order."""
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            text = handle.read(MAX_STREAM_FILE_BYTES + 1)
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_STREAM_FILE_BYTES + 1)
     except FileNotFoundError:
         return []
     except OSError:
         raise LedgerError("a ledger stream could not be read")
-    if len(text) > MAX_STREAM_FILE_BYTES:
+    if len(raw) > MAX_STREAM_FILE_BYTES:
         raise LedgerError(
             "a ledger stream is larger than the %d byte bound" % MAX_STREAM_FILE_BYTES
         )
     rows = []
-    for number, line in enumerate(text.splitlines(), start=1):
+    # Decoded LINE BY LINE so a byte that is not UTF-8 refuses the run naming
+    # its line, exactly as every other malformed line does, rather than
+    # escaping the per-line loop as a decoding traceback (PR #312 review,
+    # finding 3).
+    for number, chunk in enumerate(raw.splitlines(), start=1):
+        try:
+            line = chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            raise LedgerError("the ledger line %d is malformed: it is not UTF-8" % number)
         if not line.strip():
             raise LedgerError("the ledger line %d is malformed: it is empty" % number)
         try:
@@ -542,13 +551,17 @@ def last_values(rows):
 def unchanged(previous, row):
     """True when this row says nothing the last one for its identity did not.
 
-    The value is the figure, so an equal value is normally nothing new. A
-    SESSION also carries its end and its running total, and either can move
-    while the duration does not — a session that ended at the same second it
-    was last seen but spent more tokens is new information — so those are part
-    of the comparison for that stream and nothing else.
+    The value is the figure, so an equal value is normally nothing new — but
+    the METHOD is provenance, and the record's promise is every figure anyone
+    measured, how, and when: a verified reading equal in value to the stored
+    one is still the day the owner verified, and resolve() privileges exactly
+    that method, so a row measured another way is appended (PR #312 review,
+    finding 4). A SESSION also carries its end and its running total, and
+    either can move while the duration does not — a session that ended at the
+    same second it was last seen but spent more tokens is new information —
+    so those are part of the comparison for that stream and nothing else.
     """
-    if previous["value"] != row["value"]:
+    if previous["value"] != row["value"] or previous["method"] != row["method"]:
         return False
     if row["stream"] == STREAM_SESSIONS:
         for field in ("endedAt", "total", "categories", "models"):
@@ -797,8 +810,9 @@ def archive_capture(ledger_dir, key, document, day, stamp):
     so a figure can be traced back to the exact document it came from — and it
     is written only when the run MEASURED something, because the schedule
     wakes every minute and a document that differs from the last one solely in
-    the instant it was taken is the same measurement read again. Archiving
-    those would cost a gigabyte a month to record that nothing happened.
+    the instants it was taken — the capture's and the run's — is the same
+    measurement read again. Archiving those would cost a gigabyte a month to
+    record that nothing happened.
     """
     payload = json.dumps(document, separators=COMPACT_SEPARATORS).encode("utf-8")
     digest = DIGEST_PREFIX + hashlib.sha256(payload).hexdigest()
@@ -815,11 +829,18 @@ def archive_capture(ledger_dir, key, document, day, stamp):
     return digest, written
 
 
+# The fields that move on every run whether or not a figure did: the instant
+# the capture was taken, and the instant the exporter stamped the walked
+# source's document with (`generatedAt` — the capture tool's stdout carries
+# it too, fresh on every recapture). Excluding only the first wrote a per-run
+# archive on EVERY run (PR #312 review, finding 2).
+RUN_INSTANT_FIELDS = frozenset(("capturedAt", "generatedAt"))
+
+
 def same_measurement(path, document):
     """True when the archived document says the same thing as this one.
 
-    The capture instant is excluded from the comparison and nothing else is:
-    it is the one field that moves on every run whether or not a figure did.
+    The run instants are excluded from the comparison and nothing else is.
     An archive that is absent, unreadable, or unparsable compares as
     DIFFERENT — the point of the comparison is to avoid writing a redundant
     copy, so the safe answer is always to write one.
@@ -831,8 +852,8 @@ def same_measurement(path, document):
     if not isinstance(stored, dict):
         return False
     return {
-        key: value for key, value in stored.items() if key != "capturedAt"
-    } == {key: value for key, value in document.items() if key != "capturedAt"}
+        key: value for key, value in stored.items() if key not in RUN_INSTANT_FIELDS
+    } == {key: value for key, value in document.items() if key not in RUN_INSTANT_FIELDS}
 
 
 def stat_rows(key, document, day, stamp, exporter, digest):

@@ -121,9 +121,13 @@ export interface TokenUsageModelStat {
   totals: TokenUsageClassTotals;
 }
 
-/* The four accounting classes a model stat divides into. Named fields rather
- * than a map, so a payload missing one is a refusal at the boundary instead
- * of a missing figure that prints as a zero. */
+/* The four accounting classes a model stat divides into. On the wire a class
+ * the member never spent is ABSENT rather than zero (the origin's contract,
+ * internal/panels/types.go; the producer drops a nought class), so the
+ * boundary reads absence as the zero it is and this type carries all four,
+ * every one a true figure. The shape is pinned across the producer, the
+ * exporter, the origin and the page by one fixture,
+ * internal/panels/testdata/model-stats-shapes.json. */
 export interface TokenUsageClassTotals {
   input: number;
   output: number;

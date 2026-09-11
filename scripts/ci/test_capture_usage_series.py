@@ -4430,6 +4430,34 @@ class ModelStatsTest(unittest.TestCase):
         # A class that measured nothing is dropped inside the member too.
         self.assertEqual(set(rows[self.member]), {"input"})
 
+    def test_the_emitted_shape_is_one_the_whole_pipeline_admits(self):
+        """ONE SHAPE IN FOUR PLACES (PR #312 review, finding 1).
+
+        A class the member never spent is ABSENT on the wire, never a zero —
+        the origin's stated contract. The producer drops a nought class, the
+        exporter's merge admission and the origin admit the subset, and the
+        page reads the absence as the zero it is. Each of the four reads this
+        one fixture in its own tests; the page once required all four
+        classes and refused the WHOLE payload over a member the origin had
+        served truthfully, and no suite could see the two disagree.
+        """
+        fixture = pathlib.Path(__file__).resolve().parents[2] / "internal" / "panels" / "testdata" / "model-stats-shapes.json"
+        shapes = json.loads(fixture.read_text(encoding="utf-8"))
+        self.assertEqual(shapes["schema"], "model-stats-shapes/v1")
+        section = self.capture(
+            {
+                "avendor-%s" % self.member: {"inputTokens": 10, "outputTokens": 5,
+                                             "cacheReadInputTokens": 100, "cacheCreationInputTokens": 0},
+            }
+        )
+        emitted = self.rows(section)[self.member]
+        self.assertEqual(emitted, {"input": 10, "output": 5, "cache-read": 100})
+        self.assertIn(emitted, [shape["totals"] for shape in shapes["admitted"]])
+        # And the producer can never emit a refused shape: every class it
+        # names is in the closed vocabulary, every figure a positive integer.
+        for shape in shapes["refused"]:
+            self.assertNotEqual(emitted, shape["totals"])
+
     def test_an_unnamed_identifier_lands_on_the_residual(self):
         # A legitimate member here, not a defect: model churn is constant and
         # the residual already means exactly this.

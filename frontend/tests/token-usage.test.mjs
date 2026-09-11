@@ -1876,6 +1876,53 @@ describe('the lifetime model accounting is admitted strictly', () => {
     assert.deepEqual(source.modelStats, [{ key: member.key, totals: full }]);
   });
 
+  it('reads a class the member never spent as the zero the origin says it is', () => {
+    /* The producer drops a nought class and the origin serves the member
+       without it (its stated contract). The page used to require all four
+       and refuse the WHOLE payload over such a member — the Token usage
+       panel went to its empty state over data that was true (PR #312
+       review, finding 1). Absence is a figure here, not a fill. */
+    const [source] = tokenUsageSources(
+      withStats([{ key: member.key, totals: { input: 10, output: 5, 'cache-read': 100 } }])
+    );
+    assert.deepEqual(source.modelStats, [
+      { key: member.key, totals: { input: 10, output: 5, 'cache-read': 100, 'cache-write': 0 } }
+    ]);
+    const [single] = tokenUsageSources(withStats([{ key: member.key, totals: { output: 500 } }]));
+    assert.deepEqual(single.modelStats[0].totals, { input: 0, output: 500, 'cache-read': 0, 'cache-write': 0 });
+  });
+
+  /* ONE SHAPE IN FOUR PLACES. The producer, the exporter's merge admission,
+     the origin and this boundary each read the same fixture in their own
+     tests, so a stage that drifts on the shape reddens against the file
+     rather than against a sibling's memory of it. Capability-gated exactly
+     as the cross-tree pins in panels-ui.test.mjs are: the image's frontend
+     stage carries no internal/panels/testdata, so it skips by name there and
+     runs in every full checkout. */
+  const shapesUrl = new URL('../../internal/panels/testdata/model-stats-shapes.json', import.meta.url);
+  const shapesNote = existsSync(shapesUrl)
+    ? false
+    : 'reduced build context: internal/panels/testdata is not in the frontend stage';
+  it('admits and refuses exactly the class shapes the producer, exporter and origin do', { skip: shapesNote }, async () => {
+    const shapes = JSON.parse(await readFile(shapesUrl, 'utf8'));
+    assert.equal(shapes.schema, 'model-stats-shapes/v1');
+    assert.ok(shapes.admitted.length >= 3 && shapes.refused.length >= 6, 'the fixture has almost nothing to pin');
+    for (const shape of shapes.admitted) {
+      const sources = tokenUsageSources(withStats([{ key: member.key, totals: shape.totals }]));
+      assert.equal(sources.length, 1, `${shape.name}: the page refused a shape the origin serves`);
+      for (const key of ['input', 'output', 'cache-read', 'cache-write']) {
+        assert.equal(sources[0].modelStats[0].totals[key], shape.totals[key] ?? 0, `${shape.name}: ${key}`);
+      }
+    }
+    for (const shape of shapes.refused) {
+      assert.deepEqual(
+        tokenUsageSources(withStats([{ key: member.key, totals: shape.totals }])),
+        [],
+        `${shape.name}: the page admitted a shape the origin refuses`
+      );
+    }
+  });
+
   it('admits a payload written before the section existed', () => {
     const [source] = tokenUsageSources({ sources: [{ label: 's', windows: [] }] });
     assert.equal(source.modelStats, undefined);
@@ -1887,7 +1934,10 @@ describe('the lifetime model accounting is admitted strictly', () => {
       ['not an array', withStats({ [member.key]: full })],
       ['a key outside the vocabulary', withStats([{ key: 'a-model-nobody-declared', totals: full }])],
       ['a key twice', withStats([{ key: member.key, totals: full }, { key: member.key, totals: full }])],
-      ['a missing class', withStats([{ key: member.key, totals: { input: 1, output: 2, 'cache-read': 3 } }])],
+      ['a class outside the closed vocabulary', withStats([{ key: member.key, totals: { ...full, tokens: 5 } }])],
+      ['a class carrying no figure', withStats([{ key: member.key, totals: { input: null } }])],
+      ['a class spelled as text', withStats([{ key: member.key, totals: { input: '1' } }])],
+      ['no class at all', withStats([{ key: member.key, totals: {} }])],
       ['a negative class', withStats([{ key: member.key, totals: { ...full, output: -1 } }])],
       ['a fractional class', withStats([{ key: member.key, totals: { ...full, input: 1.5 } }])],
       ['no totals at all', withStats([{ key: member.key }])],

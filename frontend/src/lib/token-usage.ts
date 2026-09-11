@@ -401,10 +401,15 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
  * rendering has to survive a future boundary regression rather than depend on
  * one.
  *
- * The four class totals are required TOGETHER. A row missing one is a row
- * whose share would be computed from an incomplete sum — a WRONG number
- * rather than a missing one, and the wrong number would be drawn beside
- * correct ones with nothing to tell them apart. */
+ * A class the member never spent is ABSENT on the wire, not zero — the
+ * origin's contract (internal/panels/types.go), and the producer's, which
+ * drops a nought class from the member — so the boundary reads absence as
+ * the zero it is, refuses a class outside the closed vocabulary or a class
+ * present without a figure, and requires at least one class, exactly as the
+ * origin does. One fixture, internal/panels/testdata/model-stats-shapes.json,
+ * pins the four stages to one shape (PR #312 review, finding 1): before it,
+ * this boundary required all four classes and refused the WHOLE payload over
+ * a member the origin had served truthfully. */
 function admitModelStats(value: unknown): TokenUsageModelStat[] | null {
   if (value === undefined) {
     return [];
@@ -438,7 +443,12 @@ function admitModelStats(value: unknown): TokenUsageModelStat[] | null {
   return stats;
 }
 
-/* admitClassTotals admits one model's four counts, or refuses.
+/* admitClassTotals admits one model's classes, or refuses.
+ *
+ * Every key present must be one of the four classes and carry a count; a
+ * class absent is the zero the origin's contract says it is; a record naming
+ * no class at all is a member that spent nothing, which never reaches the
+ * wire and is refused here as the origin refuses it.
  *
  * The sum is CHECKED, the same rule the day partition takes and for the same
  * reason: JavaScript addition does not overflow, it silently stops being
@@ -450,23 +460,25 @@ function admitClassTotals(value: unknown): TokenUsageClassTotals | null {
   if (!isRecord(value)) {
     return null;
   }
+  const totals: TokenUsageClassTotals = { input: 0, output: 0, 'cache-read': 0, 'cache-write': 0 };
   let sum = 0;
-  for (const key of classKeys) {
+  let present = 0;
+  for (const key of Object.keys(value)) {
+    if (!(classKeys as readonly string[]).includes(key)) {
+      return null;
+    }
     const count = value[key];
     if (!isCount(count)) {
       return null;
     }
+    totals[key as (typeof classKeys)[number]] = count;
     sum += count;
+    present += 1;
   }
-  if (!Number.isSafeInteger(sum)) {
+  if (present === 0 || !Number.isSafeInteger(sum)) {
     return null;
   }
-  return {
-    input: value.input as number,
-    output: value.output as number,
-    'cache-read': value['cache-read'] as number,
-    'cache-write': value['cache-write'] as number
-  };
+  return totals;
 }
 
 /* How many rows ONE breakdown of a series may carry. The category bound is

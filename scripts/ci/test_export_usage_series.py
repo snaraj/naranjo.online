@@ -1799,6 +1799,31 @@ class MergeSourceModelStatsTest(unittest.TestCase):
             [{"key": member, "totals": {"input": 1, "output": 2}}],
         )
 
+    def test_the_class_shapes_are_one_contract_in_four_places(self):
+        # The fixture the producer's, the origin's and the page's tests read
+        # too (PR #312 review, finding 1): a class the member never spent is
+        # absent, never a zero, and the four stages admit and refuse the
+        # same shapes.
+        fixture = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..",
+            "internal", "panels", "testdata", "model-stats-shapes.json",
+        )
+        with open(fixture, "r", encoding="utf-8") as handle:
+            shapes = json.load(handle)
+        self.assertEqual(shapes["schema"], "model-stats-shapes/v1")
+        member = capture.MODEL_KEYS[1]
+        for shape in shapes["admitted"]:
+            section = self.load([{"key": member, "totals": shape["totals"]}])
+            self.assertEqual(section["modelStats"][0]["key"], member, shape["name"])
+            self.assertEqual(
+                {name: value for name, value in section["modelStats"][0]["totals"].items()},
+                {name: shape["totals"][name] for name in capture.CATEGORY_KEYS if name in shape["totals"]},
+                shape["name"],
+            )
+        for shape in shapes["refused"]:
+            with self.assertRaises(CaptureError, msg=shape["name"]):
+                self.load([{"key": member, "totals": shape["totals"]}])
+
     def test_every_rule_has_an_input_that_breaks_it(self):
         member = capture.MODEL_KEYS[1]
         for name, members, needle in (

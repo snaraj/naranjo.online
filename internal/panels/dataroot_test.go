@@ -20,6 +20,8 @@ import (
 	"io/fs"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -2419,5 +2421,59 @@ func TestEnvelopeInstantIsTheOldestSourcesCapture(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestThePerModelClassShapesAreOneContractInFourPlaces reads the shape
+// fixture the producer's, the exporter's and the page's tests also read
+// (PR #312 review, finding 1). The contract is the one this package states
+// on TokenUsageModelStat: a class the member never spent is absent, never a
+// zero. Before the fixture, each stage pinned its own reading of that
+// sentence green — the producer dropping a nought class, the page requiring
+// all four — and no suite could see the two disagree.
+func TestThePerModelClassShapesAreOneContractInFourPlaces(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("testdata", "model-stats-shapes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type shape struct {
+		Name   string          `json:"name"`
+		Totals json.RawMessage `json:"totals"`
+	}
+	var shapes struct {
+		Schema   string  `json:"schema"`
+		Admitted []shape `json:"admitted"`
+		Refused  []shape `json:"refused"`
+	}
+	if err := json.Unmarshal(raw, &shapes); err != nil {
+		t.Fatal(err)
+	}
+	if shapes.Schema != "model-stats-shapes/v1" || len(shapes.Admitted) < 3 || len(shapes.Refused) < 6 {
+		t.Fatalf("the fixture has almost nothing to pin: %+v", shapes)
+	}
+	run := func(name string, totals json.RawMessage, want bool) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			reg, state := usageDataRootRegistry(t, modelStatsSnapshot)
+			var decoded any
+			if err := json.Unmarshal(totals, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			document := modelStatsDocument()
+			alphaSection(document)["modelStats"] = []any{
+				map[string]any{"key": modelServeOrder[0], "totals": decoded},
+			}
+			_, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex))
+			if (err == nil) != want {
+				t.Fatalf("%s: admitted=%v, want %v (%v)", name, err == nil, want, err)
+			}
+		})
+	}
+	for _, entry := range shapes.Admitted {
+		run("admits "+entry.Name, entry.Totals, true)
+	}
+	for _, entry := range shapes.Refused {
+		run("refuses "+entry.Name, entry.Totals, false)
 	}
 }

@@ -296,6 +296,19 @@ class MalformedLineTest(LedgerTestCase):
     def test_a_line_that_is_not_json_refuses(self):
         self.refuses("{not json", "not parsable JSON")
 
+    def test_a_line_that_is_not_utf8_refuses_naming_its_line(self):
+        # A ValueError, not an OSError, and raised by a whole-file decode
+        # BEFORE the per-line loop — so it once escaped as a traceback rather
+        # than the line-numbered refusal every other malformed line gets
+        # (PR #312 review, finding 3).
+        self.append(row())
+        with open(self.stream_file(), "ab") as handle:
+            handle.write(b'{"schema": "ledger/v1", "note": "\xff"}\n')
+        with self.assertRaises(ledger.LedgerError) as caught:
+            self.append(row(value=99))
+        self.assertIn("line 2", str(caught.exception))
+        self.assertIn("not UTF-8", str(caught.exception))
+
     def test_a_line_with_the_wrong_schema_refuses(self):
         self.refuses(json.dumps(row(schema="ledger/v2")), "expected schema")
 
@@ -370,6 +383,35 @@ class ResolutionTest(LedgerTestCase):
         self.append(row(value=90, method="verified", capturedAt="2026-09-11T09:00:00Z"))
         current = ledger.resolve(self.ledger, "usage")
         self.assertEqual(current[(YESTERDAY, SOURCE, "total", "tokens")]["value"], 90)
+
+    def test_a_verified_reading_equal_in_value_is_still_appended_with_its_method(self):
+        # Provenance: the record promises every figure anyone measured, how,
+        # and when. A verified reading equal in value to the stored one used
+        # to be deduplicated away, so resolve() reported method=store for the
+        # very day the owner verified (PR #312 review, finding 4).
+        self.assertEqual(self.append(row(value=100, method="store")), (1, 0))
+        self.assertEqual(
+            self.append(row(value=100, method="verified", capturedAt="2026-09-11T08:00:00Z")),
+            (1, 0),
+        )
+        current = ledger.resolve(self.ledger, "usage")
+        self.assertEqual(current[(YESTERDAY, SOURCE, "total", "tokens")]["method"], "verified")
+        # The same reading read again is still nothing new.
+        self.assertEqual(
+            self.append(row(value=100, method="verified", capturedAt="2026-09-11T09:00:00Z")),
+            (0, 1),
+        )
+
+    def test_a_row_the_module_builds_is_admitted_at_the_append_and_nowhere_else(self):
+        # One admission point (PR #312 review, finding 5): make_row builds,
+        # append_rows admits. A row built with a kind outside its stream's
+        # vocabulary is refused when appended, not when built.
+        built = ledger.make_row(
+            YESTERDAY, "usage", SOURCE, "no-such-kind", "tokens", 1, "tokens", STAMP, "store", EXPORTER
+        )
+        self.assertEqual(built["kind"], "no-such-kind")
+        with self.assertRaises(ledger.LedgerError):
+            self.append(built)
 
     def test_a_stored_reading_never_lowers_a_verified_one(self):
         self.append(row(value=100, method="verified", capturedAt="2026-09-11T08:00:00Z"))
@@ -653,16 +695,24 @@ class RawArchiveTest(RecordRunCase):
 
     def test_a_run_that_measured_nothing_new_archives_no_second_copy(self):
         # The schedule wakes every minute. A document that differs only in
-        # the instant it was taken is the same measurement read again, and
-        # archiving those would cost a gigabyte a month to say so.
+        # the instants it was taken is the same measurement read again, and
+        # archiving those would cost a gigabyte a month to say so. BOTH
+        # instants: the exporter stamps the walked source's document with a
+        # fresh `generatedAt` on every run, and a recaptured merge source
+        # carries the capture tool's own fresh one — the document this models
+        # is the one the exporter actually hands over (PR #312 review,
+        # finding 2: excluding `capturedAt` alone archived every run).
         minute_later = NOW + datetime.timedelta(minutes=1)
         two_minutes = NOW + datetime.timedelta(minutes=2)
-        self.record()
+        self.record({SOURCE: {"capture": capture_document(generatedAt="2026-09-11T07:39:08Z")}})
         self.record(
-            {SOURCE: {"capture": capture_document(capturedAt="2026-09-11T07:40:08Z")}},
+            {SOURCE: {"capture": capture_document(
+                generatedAt="2026-09-11T07:40:08Z", capturedAt="2026-09-11T07:40:08Z"
+            )}},
             now=minute_later,
         )
         self.assertEqual(len(list(self.raw_day().glob("%s.T*.json.gz" % SOURCE))), 1)
+        self.assertEqual(ledger.RUN_INSTANT_FIELDS, frozenset({"capturedAt", "generatedAt"}))
         self.record(
             {SOURCE: {"capture": capture_document(stats={"lifetime": 7})}},
             now=two_minutes,

@@ -1,0 +1,72 @@
+{
+  "schema": "model-stats-shapes/v1",
+  "contract": "A per-model lifetime split names a class only when the member spent in it: a class the member never spent is ABSENT, never a zero, and a member that spent nothing at all never reaches the wire. The producer (scripts/capture_usage_series.py, model_stats_section), the exporter's merge admission (scripts/export_usage_series.py, admit_model_stats), the origin (internal/panels/dataroot.go, orderModelStats) and the page (frontend/src/lib/token-usage.ts, admitClassTotals) each read THIS file in their tests, so the four cannot drift apart on the shape again (PR #312 review, finding 1). `admitted` shapes must be admitted by all four; `refused` shapes must be refused by all four.",
+  "admitted": [
+    {
+      "name": "all four classes",
+      "totals": {
+        "input": 1,
+        "output": 2,
+        "cache-read": 3,
+        "cache-write": 4
+      }
+    },
+    {
+      "name": "one class only; the other three never spent",
+      "totals": {
+        "output": 500
+      }
+    },
+    {
+      "name": "three classes; cache-write never spent",
+      "totals": {
+        "input": 10,
+        "output": 5,
+        "cache-read": 100
+      }
+    }
+  ],
+  "refused": [
+    {
+      "name": "no class at all",
+      "totals": {}
+    },
+    {
+      "name": "a class outside the closed vocabulary",
+      "totals": {
+        "input": 1,
+        "tokens": 2
+      }
+    },
+    {
+      "name": "a class carrying no figure",
+      "totals": {
+        "input": null
+      }
+    },
+    {
+      "name": "a negative class",
+      "totals": {
+        "input": -1
+      }
+    },
+    {
+      "name": "a fractional class",
+      "totals": {
+        "input": 1.5
+      }
+    },
+    {
+      "name": "a boolean class",
+      "totals": {
+        "input": true
+      }
+    },
+    {
+      "name": "a class spelled as text",
+      "totals": {
+        "input": "1"
+      }
+    }
+  ]
+}

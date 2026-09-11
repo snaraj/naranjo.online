@@ -1150,10 +1150,12 @@ async function stageUsagePayload(page, edit) {
 /* THE OWNER'S SIX-CARD BOARD, staged from the shipped vocabulary.
  *
  * The embedded snapshot this origin serves carries two sources with lifetime
- * figures and daily series but no model split, so the board it draws is four
- * cards — honest, and not the arrangement the geometry lanes are about. This
- * gives each source a split (one through the lifetime accounting, one through
- * the windowed partition, so BOTH kinds of models card are on the board), a
+ * figures, daily series, one lifetime split and both daily partitions, so
+ * the board it draws is already six cards; the geometry lanes still stage
+ * their own so what they measure never depends on which sample the snapshot
+ * was last rebuilt from. This gives each source a split (one through the
+ * lifetime accounting, one through the windowed partition, so BOTH kinds of
+ * models card are on the board), a
  * window row and the session record, which is exactly the six the owner's
  * drawing lays out three by two.
  *

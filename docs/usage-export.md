@@ -495,6 +495,8 @@ and enforces `Σ members ≤ each class tile`. It is `≤` and not `=` because t
 per-model accrual covers the days the walk owns while the class tile also
 accrues days the history store supplied.
 
+One shape, four places: a class the member never spent is ABSENT on the wire, never a zero, and a member that spent nothing never reaches it. The producer drops a nought class, the exporter's merge admission and the origin admit the subset, and the page reads the absence as the zero it is. All four read the same fixture, `internal/panels/testdata/model-stats-shapes.json`, in their tests, so a stage that drifts on the shape reddens against the file rather than against a sibling's memory of it.
+
 ## The ledger — the append-only record (ledger/v1)
 
 Everything above this line is a WINDOW. The sealed document carries a bounded
@@ -579,8 +581,9 @@ SQLite export materialises exactly that as the `<stream>_current` tables.
 **The raw archive.** The day's `.last` document is replaced every run and kept
 forever, so the archive's size is bounded by days rather than by runs. A
 per-run copy is written only when the run MEASURED something — a document that
-differs from the last one solely in the instant it was taken is the same
-measurement read again — and those copies are pruned after 30 days. The
+differs from the last one solely in the instants it was taken (`capturedAt`
+and the run's `generatedAt`) is the same measurement read again — and those
+copies are pruned after 30 days. The
 pruner deletes only names it can generate itself, in day directories past the
 bound; a `.last` archive, an operator's file, and anything a future version of
 the program leaves there are never candidates.
