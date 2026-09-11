@@ -766,6 +766,17 @@
   --control-target: 2.75rem;
   --control-mark: 2rem;
 
+  /* Rime's sheet, DERIVED from the control target rather than restated as the
+     880 x 1056 pixels it comes to (owner decision, 2026-09-11, issue 314).
+     One cell must draw at exactly the size of the mark's box, and that box is
+     a rem length: a reader whose browser font size is not 16px gets a box the
+     literal numbers no longer divide, and the cell beside the one being shown
+     starts to show inside it. Twenty columns by twenty-four rows is the
+     sheet's own layout, so these two lines are the one place the grid is
+     stated and the keyframes below read them back. */
+  --rime-sheet-inline: calc(var(--control-target) * 20);
+  --rime-sheet-block: calc(var(--control-target) * 24);
+
   /* The board of cards, and the strip under it. The minimum is the height the
      owner's drawing gives a card at 1440px; a row is taller when a card in it
      has more to say, and never shorter, so the board keeps its rhythm without
@@ -815,6 +826,14 @@
   --band-fade: 320ms;
   --masthead-draw: 1400ms;
   --ticker-duration: 90s;
+  /* Rime's flight (owner decision, 2026-09-11, issue 314). The study is 480
+     frames at 60Hz, laid out as 24 rows of 20: --rime-flight is the whole
+     loop and --rime-flight-strip is one row of it, so the two are 8s and
+     8s/24 and the browser lands on a new cell every 16.67ms. They are stated
+     rather than divided because CSS cannot carry the repeating decimal
+     honestly, and 0.33333s is what the canvas proved advancing. */
+  --rime-flight: 8s;
+  --rime-flight-strip: 0.33333s;
 
   /* The panel theme layer. Every panel component was built "shaped, not
      styled" — each color reads a --panel-* custom property with a
@@ -1548,8 +1567,43 @@ html[data-column-resizing] {
   color: var(--ledger-muted);
 }
 
+/* RIME FLIES AT THE END OF THE ROW (owner decision, 2026-09-11, issue 314).
+
+   One WebP sheet of the owner's own v6 flight study — 480 frames at 60Hz laid
+   out as 24 rows of 20 — stepped by two composed animations: the columns of a
+   row every --rime-flight-strip and the rows of the sheet over --rime-flight,
+   which is one new cell every 16.67ms. No canvas, no WebGL, no library, no
+   script, no second origin and no new content type: the alternative on disk
+   renders the model with a 3D runtime from an iframe the origin refuses at
+   three layers, and this needs none of that. The sheet is named here, in the
+   stylesheet, so the bundler resolves it to a content-hashed URL and the
+   component never learns a file name (requirement 11's rule for media, the
+   same one the gallery's adapter follows).
+
+   The box is the site's own 44px hit lane and it is RESERVED: stated on the
+   element rather than measured from the picture, so the row is the same
+   height before the sheet has arrived as after, and a decode cannot move the
+   page (the zero-CLS floor). flex: none for the same reason — the row's end
+   cluster must not let him shrink when the nav is wide.
+
+   He holds frame 0 here. The flight is declared once, inside the page's one
+   no-preference block further down, so a reader who asked for less motion
+   gets the pose rather than a cancelled animation — and so does a browser
+   that has never heard of the preference. */
+.rime-mark {
+  flex: none;
+  inline-size: var(--control-target);
+  block-size: var(--control-target);
+  background-image: url('./assets/images/rime/rime-flight.webp');
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-size: var(--rime-sheet-inline) var(--rime-sheet-block);
+}
+
 /* The place label is the first thing to go when the row runs out of room: it
-   is context, not navigation, and the nav and the mode control are both. */
+   is context, not navigation, and the nav and the mode control are both. Rime
+   is not in that queue: the owner's decision puts him in the row at every
+   width, and the row has space for him precisely because the label yields. */
 @media (max-width: 45rem) {
   .page-place {
     display: none;
@@ -3330,6 +3384,30 @@ h1 {
   .ticker-strip:focus-within .ticker-run {
     animation-play-state: paused;
   }
+
+  /* THE FLIGHT (owner decision, 2026-09-11, issue 314). Two steps() composed
+     on one element: the inner one walks the 20 cells of a row, the outer one
+     walks the 24 rows, and together they name each of the 480 frames once
+     before returning to the first. steps() rather than a duration, because a
+     sprite has no in-between state to interpolate — a smooth tween would draw
+     two half-frames at once.
+
+     The loop closes on itself by construction rather than by a fade: the
+     study was authored with frame 480 equal to frame 0, so the step back to
+     the top-left cell is one more 16.67ms step like every other. Measured on
+     the shipped sheet: the mean absolute difference between the last frame
+     and the first is 13.4/255, under the 18.0 the widest pair of consecutive
+     frames already spends, so the seam is the smallest kind of motion in the
+     loop rather than a cut.
+
+     Nothing is paused when the tab is hidden and nothing needs to be: a
+     document that is not being painted does not run its animations, and
+     buying that with script would cost the page a listener it cannot check. */
+  .rime-mark {
+    animation:
+      rime-flight-strip var(--rime-flight-strip) steps(20) infinite,
+      rime-flight var(--rime-flight) steps(24) infinite;
+  }
 }
 
 @keyframes masthead-draw {
@@ -3345,5 +3423,21 @@ h1 {
 
   to {
     transform: translateX(-50%);
+  }
+}
+
+/* Each keyframe travels the sheet's own measurement, read back from the token
+   the background is sized by, so the sprite grid is stated once. A literal
+   here would be a second copy free to disagree with the first, and the frame
+   the mark shows is exactly where those two numbers meet. */
+@keyframes rime-flight-strip {
+  to {
+    background-position-x: calc(-1 * var(--rime-sheet-inline));
+  }
+}
+
+@keyframes rime-flight {
+  to {
+    background-position-y: calc(-1 * var(--rime-sheet-block));
   }
 }

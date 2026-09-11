@@ -1631,6 +1631,31 @@ test('exactly the reviewed sixteen WebP files (plus the sources manifest) are ve
   assert.ok(total <= 16 * 1024 * 1024, `the vendored set is ${total} bytes, over the 16MB total ceiling`);
 });
 
+test('Rime’s flight sheet is exactly one vendored file under its own ceiling (owner 2026-09-11, issue 314)', async () => {
+  /* The second dated requirement-11 exception, and a narrower one than the
+     gallery's: ONE file, the owner's own render of his own dragon, carried as
+     a hashed bundle asset because the alternative — a 3D runtime, a model and
+     an iframe from the media origin — is a new publish path and a new
+     content type for a mark in the corner of a row.
+     The ceiling is 1,000,000 bytes rather than the gallery's 2MB because this
+     one is fetched on EVERY first paint, not when a reader opens a picture,
+     and it is what the sheet is encoded against: 80px cells at quality 80.
+     The allowlist half is what makes a missing sheet a red build rather than
+     an empty box — a build that dropped the file fails here, before a reader
+     ever meets a mark with nothing in it. */
+  const dir = new URL('../src/assets/images/rime/', import.meta.url);
+  const entries = (await readdir(dir)).filter((entry) => !entry.startsWith('.'));
+  assert.deepEqual(entries.sort(), ['rime-flight.webp'], 'the vendored flight directory is not exactly the one sheet');
+  const styles = await read('../src/styles.css');
+  assert.match(
+    styles,
+    /url\('\.\/assets\/images\/rime\/rime-flight\.webp'\)/,
+    'the stylesheet no longer names the sheet, so the bundler emits a file nothing draws'
+  );
+  const { size } = await stat(new URL('rime-flight.webp', dir));
+  assert.ok(size <= 1_000_000, `the flight sheet is ${size} bytes, over its 1,000,000-byte ceiling`);
+});
+
 /* The enlarged branch, extracted whole. Issue 202 nested a further {#if}
  * inside it (the optional metadata block), and the non-greedy extraction
  * this replaces stopped at that inner {/if} — it would still have found

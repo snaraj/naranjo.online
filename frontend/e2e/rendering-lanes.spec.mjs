@@ -756,6 +756,156 @@ test('the page name clears the fixed chrome row rather than starting under it', 
   }
 });
 
+/* RIME FLIES AT THE END OF THE ROW (owner decision, 2026-09-11, issue 314).
+ *
+ * The source pins in tests/experience.test.mjs hold the declarations; this
+ * holds what an engine did with them, which for a sprite is the only place the
+ * claim can be tested at all: "the picture advances" is not a property of any
+ * declaration, it is 480 background positions a compositor steps through.
+ *
+ * Both halves of the motion doctrine are measured, in two contexts, because
+ * "no animation" must never mean "no dragon": with the preference reduced he
+ * is still there, still 44px, still showing frame 0 — he simply holds it. */
+test('Rime holds a reserved 44px box at both viewports, flies where motion is welcome, and holds still where it is not (owner 2026-09-11, issue 314)', async ({
+  browser,
+}) => {
+  for (const motion of ['no-preference', 'reduce']) {
+    const context = await browser.newContext({
+      reducedMotion: motion === 'reduce' ? 'reduce' : 'no-preference',
+    });
+    const page = await context.newPage();
+    await visit(page);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await settled(page);
+      const mark = page.locator('.rime-mark');
+      await expect(mark, `Rime is not in the row at ${width}px`).toHaveCount(1);
+      const box = await mark.boundingBox();
+      expect(box.width, `Rime is ${box.width}px wide at ${width}px with motion ${motion}`).toBeCloseTo(
+        touchFloorPx,
+        0
+      );
+      expect(box.height, `Rime is ${box.height}px tall at ${width}px with motion ${motion}`).toBeCloseTo(
+        touchFloorPx,
+        0
+      );
+      /* THE BOX IS RESERVED, so the row he sits in is exactly as tall as the
+         row's own stated reserve: the site's hit lane plus the one rule it
+         draws. A mark sized by its picture instead would make this taller the
+         moment the sheet decoded, which is the layout shift the static shell
+         exists to prevent. */
+      const row = await page.locator('.page-header').boundingBox();
+      expect(
+        row.height,
+        `the chrome row is ${row.height}px tall at ${width}px with Rime in it`
+      ).toBeCloseTo(touchFloorPx + 2, 0);
+      /* And the page still does not scroll sideways with him in the row. */
+      const overflow = await page.evaluate(
+        () => window.document.documentElement.scrollWidth - window.document.documentElement.clientWidth
+      );
+      expect(overflow, `the page scrolls ${overflow}px sideways at ${width}px`).toBeLessThanOrEqual(0);
+    }
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await settled(page);
+    const mark = page.locator('.rime-mark');
+    const declared = await mark.evaluate((node) => ({
+      name: getComputedStyle(node).animationName,
+      timing: getComputedStyle(node).animationTimingFunction,
+      position: getComputedStyle(node).backgroundPosition,
+    }));
+    /* THE SPRITE REALLY MOVES, sampled rather than reasoned: every animation
+       frame for longer than one full pass across the sheet's 20 columns,
+       counting the DISTINCT background positions an engine actually computed.
+       A declaration that named the keyframes but never advanced — a sheet
+       that failed to load, an engine that dropped a var() inside @keyframes —
+       passes every source pin and fails here.
+
+       Counting distinct frames rather than comparing two samples is what
+       makes it a measurement instead of a coin toss: a steps(1) mutant, which
+       jumps the whole sheet once per cycle, was MEASURED surviving the
+       two-sample form (it lands on either side of the single jump often
+       enough to look like motion) and dies here on the count. MEASURED in
+       this window: the shipped sheet draws 37 distinct positions — the two
+       animations step together, so the count is pairs rather than cells — and
+       the mutant draws 3. The floor is 8, low enough that a loaded machine
+       sampling at half rate still clears it and high enough that no mutant
+       this lane is for can reach it. */
+    const frames = await mark.evaluate(
+      (node) =>
+        new Promise((done) => {
+          const seen = new Set();
+          const opened = performance.now();
+          const sample = () => {
+            seen.add(getComputedStyle(node).backgroundPosition);
+            if (performance.now() - opened < 600) requestAnimationFrame(sample);
+            else done([...seen]);
+          };
+          requestAnimationFrame(sample);
+        })
+    );
+
+    if (motion === 'reduce') {
+      expect(
+        declared.name,
+        `Rime animates (${declared.name}) with the reader's motion reduced`
+      ).toBe('none');
+      expect(
+        frames,
+        `Rime advanced through ${frames.length} positions with the reader's motion reduced`
+      ).toHaveLength(1);
+      /* He is on frame 0 — the pose, not a blank box. */
+      expect(declared.position, `Rime rests at ${declared.position} rather than on his first frame`).toMatch(
+        /^0(?:px|%)? 0(?:px|%)?$/
+      );
+    } else {
+      for (const keyframes of ['rime-flight-strip', 'rime-flight']) {
+        expect(
+          declared.name,
+          `Rime's computed animation-name is "${declared.name}" and does not include ${keyframes}`
+        ).toContain(keyframes);
+      }
+      /* steps(), not a tween: a sprite has no in-between state, and an
+         interpolating timing function paints two half-frames at once. */
+      expect(declared.timing, `Rime's frames are tweened (${declared.timing}), not stepped`).toContain(
+        'steps('
+      );
+      expect(
+        frames.length,
+        `Rime drew only ${frames.length} distinct frames in 600ms: ${frames.slice(0, 4).join(' / ')}`
+      ).toBeGreaterThanOrEqual(8);
+    }
+
+    /* THE KEYBOARD ORDER IS UNCHANGED. He is a picture, so he must not be in
+       it at all — asked of the row's own focusable inventory rather than by
+       pressing Tab, because engines in this matrix disagree about whether a
+       plain link is tabbable and that disagreement would decide the result
+       instead of the change under test. */
+    const order = await page.evaluate(() => {
+      const header = window.document.querySelector('.page-header');
+      const focusable = [
+        ...header.querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])'),
+      ];
+      return {
+        classes: focusable.map((node) => node.className || node.tagName.toLowerCase()),
+        includesMark: focusable.some((node) => node.classList.contains('rime-mark')),
+        markAfterMode:
+          [...header.querySelectorAll('*')].indexOf(header.querySelector('.rime-mark')) >
+          [...header.querySelectorAll('*')].indexOf(
+            header.querySelector('[aria-label="Reading mode"], button')
+          ),
+      };
+    });
+    expect(order.includesMark, 'Rime is a keyboard stop; the row’s pinned order has gained one').toBe(
+      false
+    );
+    expect(order.markAfterMode, 'Rime is drawn before the reading mode, so he sits between two stops').toBe(
+      true
+    );
+    await context.close();
+  }
+});
+
 test('a phone still renders the single full-width column it always did', async ({ page }) => {
   await visit(page);
   for (const width of phoneWidths) {
@@ -811,6 +961,7 @@ test('a phone still renders the single full-width column it always did', async (
     const control = await page.evaluate(async () => {
       const header = window.document.querySelector('.page-header');
       const button = header.querySelector('[aria-label="Reading mode"]');
+      const chrome = header.querySelector('.page-chrome');
       const row = header.getBoundingClientRect();
       const seat = button.getBoundingClientRect();
       const at = {
@@ -823,6 +974,12 @@ test('a phone still renders the single full-width column it always did', async (
         top: seat.top,
         right: seat.right,
         bottom: seat.bottom,
+        /* The LAST thing in the row, whatever it is. The reading mode was the
+           end of the row until Rime joined it (owner decision, 2026-09-11,
+           issue 314); what issue 264 was about is the GAP after the last of
+           them, so that is what is measured. */
+        endLabel: chrome.lastElementChild.className,
+        endRight: chrome.lastElementChild.getBoundingClientRect().right,
       };
       window.scrollTo(0, 600);
       await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
@@ -851,12 +1008,17 @@ test('a phone still renders the single full-width column it always did', async (
       control.rest.bottom,
       `the reading-mode control's bottom edge is ${control.rest.bottom}px, below the masthead's own ${control.rest.rowBottom}px`
     ).toBeLessThanOrEqual(control.rest.rowBottom + subPixel);
-    /* Still at the inline END of its row, and the row still stops where the
-       column does: the dead strip down the inline end the owner reported
-       (issue 264) shows up here as a gap at either of these two joints. */
+    /* The row's end cluster still REACHES the inline end of its row, and the
+       row still stops where the column does: the dead strip down the inline
+       end the owner reported (issue 264) shows up here as a gap at either of
+       these two joints. The subject is the row's last element rather than the
+       reading-mode control by name — the control was the last of them until
+       Rime joined the row (owner decision, 2026-09-11, issue 314), and a lane
+       that named the control would have reported a 56px dead strip that is
+       not there. */
     expect(
-      control.rest.right,
-      `the control's end edge is ${control.rest.right}px inside a masthead that ends at ${control.rest.rowRight}px`
+      control.rest.endRight,
+      `"${control.rest.endLabel}" ends at ${control.rest.endRight}px inside a masthead that ends at ${control.rest.rowRight}px`
     ).toBeGreaterThanOrEqual(control.rest.rowRight - gutterPx / 2 - subPixel);
     expect(
       observed.viewport - control.rest.rowRight,
@@ -2354,6 +2516,14 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
         const box = window.document.querySelector('.page-header').getBoundingClientRect();
         return { right: box.right, bottom: box.bottom };
       })(),
+      /* The LAST thing in the row, whatever it is: the reading mode was the
+         end of it until Rime joined (owner decision, 2026-09-11, issue 314),
+         and what the corner rule protected is the gap AFTER the last of them
+         rather than the identity of that last one. */
+      rowEnd: (() => {
+        const last = window.document.querySelector('.page-chrome').lastElementChild;
+        return { label: last.className, right: last.getBoundingClientRect().right };
+      })(),
       /* The column's own end edge. The masthead shares `main`'s inline-size
          rule now, so "outside the feed" is a relationship between the two
          boxes rather than a distance from the viewport — at a wide viewport
@@ -2437,10 +2607,9 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
      column ends, and the control sits ABOVE every panel on the page rather
      than among them. A control that had drifted back into the feed fails the
      last of those. */
-  const [icon] = observed.icons;
   expect(
-    icon.right,
-    `the control's end edge is ${icon.right}px inside a masthead that ends at ${observed.header.right}px`
+    observed.rowEnd.right,
+    `"${observed.rowEnd.label}" ends at ${observed.rowEnd.right}px inside a masthead that ends at ${observed.header.right}px`
   ).toBeGreaterThanOrEqual(observed.header.right - gutterPx / 2 - subPixel);
   expect(
     observed.header.right,
@@ -6475,11 +6644,15 @@ test('the reading-mode popover fits the narrowest phone this site supports', asy
   const observed = await page.evaluate(() => {
     const popover = window.document.querySelector('#reading-mode-menu');
     const box = popover.getBoundingClientRect();
+    const trigger = window.document
+      .querySelector('.page-header [aria-label="Reading mode"]')
+      .getBoundingClientRect();
     const root = window.document.documentElement;
     return {
       width: Math.round(box.width * 100) / 100,
       left: box.left,
       right: box.right,
+      triggerRight: trigger.right,
       viewport: root.clientWidth,
       scrollWidth: root.scrollWidth,
     };
@@ -6501,11 +6674,20 @@ test('the reading-mode popover fits the narrowest phone this site supports', asy
     observed.width,
     `the popover is ${observed.width}px wide in a ${observed.viewport}px viewport`
   ).toBeLessThan(observed.viewport - gutterPx);
-  // The header pins to the VIEWPORT corner now (owner directive, issue 168),
-  // so the popover it hangs from is measured against the window's own edge
-  // rather than the column's — the two only used to coincide because the
-  // header shared the column's rule, which it no longer does.
-  expect(observed.viewport - observed.right).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
+  /* And it hangs from its own trigger: the popover's end edge sits on the
+     control's, so a reader's eye and thumb find it where they left the
+     button. This used to be measured against the VIEWPORT's end edge, on the
+     reasoning that the header was glued to the viewport's corner (issue 168)
+     — an arrangement retired with the in-flow ledger row (issue 287), and a
+     measurement that only kept working because the control happened to be the
+     last thing in the row. Rime is the last thing in the row now (owner
+     decision, 2026-09-11, issue 314), so the viewport measurement would be
+     reporting the 56px he occupies as a defect in a menu he is not part of.
+     The anchoring claim is the one this lane was always making. */
+  expect(
+    Math.abs(observed.right - observed.triggerRight),
+    `the popover ends at ${observed.right}px and the control it hangs from at ${observed.triggerRight}px`
+  ).toBeLessThanOrEqual(gutterPx / 2 + subPixel);
 });
 
 /* ===========================================================================

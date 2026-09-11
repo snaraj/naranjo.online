@@ -1552,6 +1552,123 @@ test('the chrome row is in the document, so no control owns a corner of the page
   );
 });
 
+/* RIME FLIES AT THE END OF THE ROW (owner decision, 2026-09-11, issue 314),
+ * and everything that makes that safe is a source fact this pin holds. The
+ * rendering lane of the same name measures the box and the moving frames in a
+ * real engine; neither half replaces the other. */
+test('Rime is a picture in the chrome row, reserved, silent, and stepped only where motion is welcome (owner 2026-09-11, issue 314)', () => {
+  const mark = componentSources['lib/components/RimeMark.svelte'];
+  assert.ok(mark, 'the mark component is not where this pin expects it');
+  const markup = mark.replace(/<!--[\s\S]*?-->/g, '').trim();
+
+  /* SILENT AND UNREACHABLE. SN. at the start of the row is the page's
+     accessible mark; a decorative dragon that announced itself would be a
+     name every screen reader reads past on every visit, and a focusable one
+     would be a fourth stop on a keyboard order the rendering lanes pin. */
+  assert.match(markup, /aria-hidden="true"/, 'the mark is announced to a screen reader');
+  assert.doesNotMatch(markup, />[^<\s][\s\S]*</, 'the mark carries text');
+  assert.doesNotMatch(
+    markup,
+    /\b(?:href|tabindex|role|onclick|onkeydown|aria-label|title)\b/,
+    'the mark has grown a name, a role, or a way to reach it'
+  );
+  /* And the component knows no file name of its own: the stylesheet names the
+     sheet so the bundler resolves it to a content-hashed URL, which is the
+     same rule requirement 11 puts on every other picture this page draws. */
+  assert.doesNotMatch(markup, /\.webp|import\.meta|src=/, 'the component resolves its own asset');
+
+  /* LAST IN THE ROW. After the reading mode, so the keyboard order through
+     the chrome — the wordmark, the nav, the mode — gains nothing between any
+     two of its stops. */
+  const header = componentSources['lib/components/PageHeader.svelte'].replace(/<!--[\s\S]*?-->/g, '');
+  const chrome = /<div class="page-chrome">([\s\S]*?)<\/div>/.exec(header);
+  assert.ok(chrome, 'the row’s end cluster is not where this pin expects it');
+  assert.ok(
+    chrome[1].indexOf('<RimeMark') > chrome[1].indexOf('<ThemeMenu'),
+    'Rime is drawn before the reading mode, so he now sits between two keyboard stops'
+  );
+
+  const rest = sweptRules.find(
+    (rule) => rule.selector === '.rime-mark' && !rule.enclosing.some((at) => at.startsWith('@media'))
+  );
+  assert.ok(rest, 'the mark has no rule outside a media block, so it renders nothing at all for a reader who asked for less motion');
+  const resting = Object.fromEntries(
+    declarationsOf(rest.body).map(({ property, value }) => [property, value])
+  );
+  /* THE BOX IS RESERVED, not measured from the picture: the row is the same
+     height before the sheet arrives as after it, which is the page's zero-CLS
+     floor, and the mark is the size of every control beside it. */
+  assert.equal(resting['inline-size'], 'var(--control-target)');
+  assert.equal(resting['block-size'], 'var(--control-target)');
+  assert.equal(resting.flex, 'none', 'the row’s end cluster may squeeze him');
+  /* At rest he holds frame 0 — a still, rather than a cancelled animation. */
+  assert.equal(resting['background-position'], '0 0');
+  assert.match(
+    resting['background-image'],
+    /^url\('\.\/assets\/[^']+\.webp'\)$/,
+    'the sheet is not a relative bundled asset, so nothing content-hashes it'
+  );
+  /* The drawn sheet is DERIVED from the box rather than restated in pixels:
+     the box is a rem length, so literals stop dividing it the moment a reader
+     runs a browser font size other than 16px and the next cell starts showing
+     inside the mark. */
+  assert.equal(resting['background-size'], 'var(--rime-sheet-inline) var(--rime-sheet-block)');
+  for (const [token, axis] of [
+    ['--rime-sheet-inline', 20],
+    ['--rime-sheet-block', 24],
+  ]) {
+    assert.match(
+      stylesCode,
+      new RegExp(`${token}: calc\\(var\\(--control-target\\) \\* ${axis}\\);`),
+      `${token} no longer derives the sheet’s ${axis}-cell axis from the mark’s own box`
+    );
+  }
+
+  /* THE FLIGHT, and only inside no-preference. The sweep above proves no rule
+     animates outside that block; this proves the two steps() that make the
+     sprite advance are DECLARED, that they are steps rather than a tween (a
+     tween paints two half-frames at once), and that each walks its own axis's
+     whole sheet. */
+  const moving = sweptRules.find(
+    (rule) =>
+      rule.selector === '.rime-mark' &&
+      rule.enclosing.some((at) => /prefers-reduced-motion\s*:\s*no-preference/.test(at))
+  );
+  assert.ok(moving, 'Rime never flies; the mark declares no animation where motion is welcome');
+  const flight = declarationsOf(moving.body).find(({ property }) => property === 'animation');
+  assert.ok(flight, 'the mark’s motion rule declares no animation');
+  assert.match(flight.value, /rime-flight-strip var\(--rime-flight-strip\) steps\(20\) infinite/);
+  assert.match(flight.value, /rime-flight var\(--rime-flight\) steps\(24\) infinite/);
+  for (const [name, token] of [
+    ['rime-flight-strip', '--rime-sheet-inline'],
+    ['rime-flight', '--rime-sheet-block'],
+  ]) {
+    const frames = sweptRules.find((rule) =>
+      rule.enclosing.some((at) => at === `@keyframes ${name}`)
+    );
+    assert.ok(frames, `@keyframes ${name} is missing, so the animation names nothing`);
+    assert.match(
+      frames.body,
+      new RegExp(`background-position-[xy]: calc\\(-1 \\* var\\(${token}\\)\\)`),
+      `@keyframes ${name} travels a distance the sheet’s own size does not decide`
+    );
+  }
+});
+
+test('the document declares both marks a browser looks for, and nothing inlines them (owner 2026-09-11, issue 314)', () => {
+  /* The tab mark keeps its name and its type (issue 239): the runtime image
+     carries no MIME registry beyond Go's built-in table, so the extension is
+     what decides whether a browser is handed an icon or a download. */
+  assert.match(fallback, /<link rel="icon"[^>]*href="\/favicon\.svg"/);
+  assert.match(fallback, /<link rel="icon"[^>]*type="image\/svg\+xml"/);
+  /* And the home-screen mark, which iOS looks for INSTEAD of the icon above
+     when a visitor adds the site to a home screen; without it the tile is a
+     screenshot of the page. It rides the static head for the reason every
+     other head tag here does: nothing that reads it runs script. */
+  assert.match(fallback, /<link rel="apple-touch-icon"[^>]*href="\/apple-touch-icon\.png"/);
+  assert.doesNotMatch(component, /rel="(?:icon|apple-touch-icon)"/, 'the mounted page adds a second copy of a mark the static head already carries');
+});
+
 test('an open modal stops the document scrolling behind it, without moving it (issue 241)', () => {
   /* MEASURED with the lightbox open on 0.1.54: +485px at an iPhone 13
      viewport and +1400px at 1280x720. showModal() makes the page inert to

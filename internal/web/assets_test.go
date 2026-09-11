@@ -207,11 +207,22 @@ func TestBuiltFrontendIsEmbeddedAndServed(t *testing.T) {
 	}
 }
 
-// faviconDeclaration reads the icon the built document actually asks a browser
-// for, so the test below follows the document's own reference rather than a
-// path restated here — a renamed file that nothing declares fails, and so does
-// a declaration pointing at a file the bundle never embedded.
-var faviconDeclaration = regexp.MustCompile(`<link rel="icon"[^>]*href="(/[^"]+)"`)
+// iconDeclarations reads EVERY mark the built document asks a browser for, so
+// the test below follows the document's own references rather than paths
+// restated here — a renamed file that nothing declares fails, and so does a
+// declaration pointing at a file the bundle never embedded.
+//
+// Two relationships exist and they are not the same mark (issue #314): `icon`
+// is the tab strip's, `apple-touch-icon` is the one iOS looks for INSTEAD of it
+// when a visitor adds the site to a home screen. A pin that only followed the
+// first would have let the second rot into a 404 nobody sees from a desktop.
+var iconDeclarations = regexp.MustCompile(`<link rel="(icon|apple-touch-icon)"[^>]*href="(/[^"]+)"`)
+
+// requiredIconRelationships is the inventory the document must declare. It is
+// stated rather than derived from what the document happens to carry, because
+// a test that read the answer off the page would go green on a page that had
+// silently stopped declaring one of them.
+var requiredIconRelationships = []string{"icon", "apple-touch-icon"}
 
 // browserIconTypes are the media types a browser will accept as a tab icon AND
 // that Go resolves from its own BUILT-IN table, which is the only registry the
@@ -231,10 +242,10 @@ var browserIconTypes = map[string]struct{}{
 	"image/avif":    {},
 }
 
-// TestBuiltFrontendServesTheDeclaredFavicon proves the tab mark is a promise
-// the origin keeps (issue #239). Before it the site declared no icon at all,
-// so every visit cost a WARN-level 404 for the /favicon.ico a browser probes
-// when a document names none.
+// TestBuiltFrontendServesTheDeclaredFavicon proves every mark the document
+// names is a promise the origin keeps (issue #239, extended by issue #314).
+// Before it the site declared no icon at all, so every visit cost a WARN-level
+// 404 for the /favicon.ico a browser probes when a document names none.
 func TestBuiltFrontendServesTheDeclaredFavicon(t *testing.T) {
 	assets, err := website.FileSystem()
 	if err != nil {
@@ -247,31 +258,39 @@ func TestBuiltFrontendServesTheDeclaredFavicon(t *testing.T) {
 
 	root := httptest.NewRecorder()
 	siteHandler.ServeHTTP(root, edgeRequest(http.MethodGet, "/"))
-	declared := faviconDeclaration.FindStringSubmatch(root.Body.String())
-	if declared == nil {
-		t.Fatalf("the built document declares no icon, so every visit is probed for /favicon.ico: %q", root.Body.String())
+	declared := make(map[string]string)
+	for _, found := range iconDeclarations.FindAllStringSubmatch(root.Body.String(), -1) {
+		declared[found[1]] = found[2]
 	}
-	href := declared[1]
+	for _, relationship := range requiredIconRelationships {
+		href, ok := declared[relationship]
+		if !ok {
+			t.Fatalf(
+				"the built document declares no %q mark, so a browser falls back to its own blank glyph or a screenshot of the page: %q",
+				relationship, root.Body.String(),
+			)
+		}
 
-	icon := httptest.NewRecorder()
-	siteHandler.ServeHTTP(icon, edgeRequest(http.MethodGet, href))
-	if icon.Code != http.StatusOK {
-		t.Fatalf("declared icon %s status = %d; the document names a file the bundle does not embed", href, icon.Code)
+		icon := httptest.NewRecorder()
+		siteHandler.ServeHTTP(icon, edgeRequest(http.MethodGet, href))
+		if icon.Code != http.StatusOK {
+			t.Fatalf("declared %s %s status = %d; the document names a file the bundle does not embed", relationship, href, icon.Code)
+		}
+		contentType, _, err := mime.ParseMediaType(icon.Header().Get("Content-Type"))
+		if err != nil {
+			t.Fatalf("declared %s %s Content-Type = %q: %v", relationship, href, icon.Header().Get("Content-Type"), err)
+		}
+		if _, ok := browserIconTypes[contentType]; !ok {
+			t.Errorf(
+				"declared %s %s is served %q; the runtime image has no MIME registry beyond Go's built-in table, so an extension outside it becomes application/octet-stream and nosniff refuses it as an icon",
+				relationship, href, contentType,
+			)
+		}
+		// A root-level bundle file: revalidated, never immutable — it carries
+		// no content hash, so the operator replacing the mark must be able to
+		// publish it under the same URL.
+		assertServedFile(t, siteHandler, href, "no-cache")
 	}
-	contentType, _, err := mime.ParseMediaType(icon.Header().Get("Content-Type"))
-	if err != nil {
-		t.Fatalf("declared icon %s Content-Type = %q: %v", href, icon.Header().Get("Content-Type"), err)
-	}
-	if _, ok := browserIconTypes[contentType]; !ok {
-		t.Errorf(
-			"declared icon %s is served %q; the runtime image has no MIME registry beyond Go's built-in table, so an extension outside it becomes application/octet-stream and nosniff refuses it as an icon",
-			href, contentType,
-		)
-	}
-	// A root-level bundle file: revalidated, never immutable — it carries no
-	// content hash, so the operator replacing the mark must be able to publish
-	// it under the same URL.
-	assertServedFile(t, siteHandler, href, "no-cache")
 }
 
 // TestBuiltShellStatesItsOwnBootFailure proves the honest boot state survives

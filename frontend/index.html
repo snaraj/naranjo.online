@@ -19,8 +19,17 @@
       leave the origin as application/octet-stream under nosniff, which no
       browser accepts as an icon.
       TestBuiltFrontendServesTheDeclaredFavicon pins that it is served as a
-      real image type rather than as a download. -->
+      real image type rather than as a download.
+      The mark itself is Rime's head since issue 314 (owner decision,
+      2026-09-11); the LINE is unchanged, because the file keeps its name. -->
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- The home-screen mark (issue 314). iOS ignores the icon above when a
+      visitor adds the site to a home screen and looks for this link instead;
+      without it, the tile is a screenshot of the page. It is a PNG rather
+      than the SVG above because that is the only format the touch icon has
+      ever been read in, and it is opaque on the sheet's own paper because iOS
+      composites a transparent tile onto black. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <!-- Link-preview identity (owner directive, 0.1.52: "when I text a link
       to the website, I expect to see a preview... SN. white and black, very
       simple"). These live in the STATIC head, not svelte:head, because the
@@ -37,7 +46,7 @@
     <meta property="og:image" content="https://naranjo.online/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="SN." />
+    <meta property="og:image:alt" content="SN., and Rime beside it" />
     <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
