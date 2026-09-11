@@ -627,14 +627,16 @@ WEEK_DAYS = 7
 # range is DECLARED (the section carries its own start date) so a reader is
 # told what it is looking at rather than shown a silent truncation.
 #
-# TEN WEEKS, down from a quarter (issue #302). The budget is members TIMES
-# days, and the vocabulary more than doubled when the second vendor group
-# arrived; at ninety-two days the widest document the origin admits no longer
-# left the one further decimal digit of headroom the ceiling is measured
-# against. The ceiling is one number five stages agree on and is not a lever,
-# so the window moved instead — and CapParityTest measures the result rather
-# than trusting this comment.
-MAX_MODEL_DAYS = 70
+# EIGHT WEEKS, down from ten (issue #267), which was down from a quarter
+# (issue #302). The budget is members TIMES days. When the second vendor
+# group more than doubled the vocabulary, ninety-two days no longer left the
+# one further decimal digit of headroom the ceiling is measured against, and
+# the window fell to seventy; when the per-model lifetime split joined the
+# wire, seventy no longer did either, and it fell to fifty-six. The ceiling is
+# one number five stages agree on and is not a lever, so the window moves
+# instead — and CapParityTest measures the result rather than trusting this
+# comment.
+MAX_MODEL_DAYS = 56
 
 # The tool's own per-day roll-up, named for what it contains. `activity_days`
 # explains why a second, weaker source of the same measurement exists at all;

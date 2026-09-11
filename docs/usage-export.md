@@ -245,25 +245,14 @@ per-model LIFETIME split and the longest-session tile. The structural maximum
 the origin can admit is one document
 covering both shipped snapshot sources, each at the 732-day series bound with
 the complete five-key category vocabulary, the complete thirteen-key model
-vocabulary over its own 70-day window, the complete seven-key captured-stats
+vocabulary over its own 56-day window, the complete seven-key captured-stats
 vocabulary, the per-model lifetime split at every member times every
 accounting class, and every required section present.
-Compact-encoded and sealed, that measures **123,668 bytes** at ten-digit daily
+Compact-encoded and sealed, that measures **119,664 bytes** at ten-digit daily
 values — an order of magnitude above the shipped snapshot's own measured peak
-day. 131,072 leaves **7,404 bytes** of headroom.
-
-**The one-further-digit claim is spent, and this paragraph records that rather
-than dropping it.** The same maximum used to seal inside the ceiling at
-eleven-digit values; it now reaches **134,426** there, and 145,184 at twelve.
-The per-model lifetime split costs 3,904 bytes at eleven digits — thirteen
-vocabulary members times five accounting classes on both sources — against the
-610 bytes the ceiling had left, and the longest-session tile costs 60 more.
-Neither lever was pulled to buy it back: the ceiling is one number five stages
-agree on, and the window is a product decision about how deep the per-model
-breakdown reaches. `CapParityTest` therefore carries the gap as the ratchet
-pair `AGENTS.md` prescribes — a green pin on the measured behaviour plus a
-named pending-contract test that reddens as an unexpected success the day the
-digit returns, forcing this paragraph to be rewritten rather than left to rot.
+day. 131,072 leaves **11,408 bytes** of headroom: the same maximum still seals
+to 130,058 bytes at eleven-digit values and only crosses the ceiling at twelve,
+where it reaches 140,452.
 
 The models section spent one decimal digit of the original headroom — it was
 three before #170 — and the sixth model member (issue #299) spent the second:
@@ -272,7 +261,10 @@ a measured decision, not a free edit. Issue #302 paid that price the other
 way round. Seven named members joined at once, which at the old 92-day window
 put the eleven-digit maximum over the ceiling; the ceiling is one number five
 stages agree on and moving it would move all five, so the WINDOW was cut to
-ten weeks instead. That is precisely the trade the window bounds. One
+ten weeks instead. Issue #267 paid it once more: the per-model lifetime split
+and the longest-session tile cost 3,904 bytes at eleven digits against the
+610 the ceiling then had left, and the window fell to eight weeks. That is
+precisely the trade the window bounds. One
 integer per day per member over the full 732-day series would cost roughly
 ten times what the window costs and would not fit under this ceiling at
 all, which is why the section declares the range it covers instead of
@@ -281,7 +273,7 @@ quietly covering fewer days than the series above it.
 The per-model LIFETIME split is the cheaper shape of the same idea and pays a
 different price: one integer per member per class rather than per member per
 DAY, so it is a fixed cost the window does not bound. That is why it fits at
-all — and why it still spent the last digit.
+all — and why the window, not the split, is what moved to pay for it.
 
 These figures are no longer transcribed into a test assertion. `CapParityTest`
 BUILDS the maximum document from the shipped snapshot's own labels and the
@@ -303,8 +295,8 @@ not (2026-08-25 round-4 review, finding 7). The two bound different bytes:
 this one bounds the sealed FILE, the response budget bounds the finished
 ENVELOPE — the payload merged onto the embedded snapshot, plus the envelope
 around it — so the served bytes always exceed the transported ones. The
-maximal document the origin admits measures the gap at +1,625 bytes (117,503
-sealed, 119,128 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
+maximal document the origin admits measures the gap at +1,625 bytes (111,679
+sealed, 113,304 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
 `internal/panels/dataroot_test.go` logs both), and a larger snapshot widens
 it. A file sealed at exactly 131,072 bytes is therefore refused at serve
 time. What equality buys is only that the last step no longer hides a
@@ -464,7 +456,7 @@ directory, a git branch, a title or a prompt byte cannot ride under a
 friendly key, because a key nobody reached for is a key nobody copies.
 
 **`modelCategories` is the joint of model against accounting class**, day
-indexed over the full depth the walk partitions rather than the seventy-day
+indexed over the full depth the walk partitions rather than the eight-week
 wire window: the block is read off local disk and pays no payload ceiling. A
 marginal cannot be recovered from two other marginals, so the joint is
 accumulated in the SAME loop that builds the aggregate, the class split and

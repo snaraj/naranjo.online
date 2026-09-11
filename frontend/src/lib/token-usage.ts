@@ -381,7 +381,7 @@ const maxCategoryRows = 8;
  * its second vendor group (issue #302): the section costs one integer per day
  * per member, and the shared payload ceiling is not a lever. The categories
  * breakdown carries no separate day bound on either side, exactly as in Go. */
-const maxModelDays = 70;
+const maxModelDays = 56;
 
 /* admitSeries returns the admitted series, undefined when the section is
  * absent, or null when it exists and is malformed. The start date must be a

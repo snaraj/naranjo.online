@@ -3283,47 +3283,21 @@ class CapParityTest(unittest.TestCase):
         self.assertEqual(cap, 131072)
         maximum = self.structural_maximum(10)
         self.assertGreater(cap, maximum)
-        # The headroom USED to be one further decimal digit on every value —
-        # the maximum fitting at eleven digits and crossing only at twelve —
-        # and issue #267 spent it. Measured: the per-model lifetime split
-        # costs 3,774 bytes at ten digits and 3,904 at eleven (thirteen
-        # vocabulary members times five accounting classes on both sources),
-        # and the longest-session tile costs 58 more. The eleven-digit
-        # maximum is 134,426 against a 131,072 ceiling.
-        #
-        # It is recorded here as the GREEN half of a ratchet pair rather than
-        # quietly deleted, because the gap is real and the lever is not this
-        # lane's to pull: the ceiling is one number five stages agree on, and
-        # MAX_MODEL_DAYS is a product decision about how deep the model
-        # breakdown reaches. The pending-contract test below flips the suite
-        # red the day the headroom digit comes back, which is what forces this
-        # comment to be rewritten rather than left to rot.
+        # The headroom is one further decimal digit on every value: the same
+        # maximum still fits at eleven digits and crosses only at twelve.
+        # Measured after issue #267 at a fifty-six-day model window: 119,664
+        # sealed bytes at ten digits, 130,058 at eleven, 140,452 at twelve.
         #
         # The history of the trade: three digits before the models section
         # (issue #170), two after the sixth model member (issue #299), one
-        # after issue #302 cut the window to ten weeks to buy it back, none
-        # now.
-        self.assertGreater(self.structural_maximum(11), cap)
+        # after issue #302 cut the window to ten weeks to buy it back, and
+        # still one after issue #267 added the per-model lifetime split and
+        # the longest-session tile — which together cost 3,904 bytes at
+        # eleven digits against the 610 the ceiling then had left — and cut
+        # the window again, to eight weeks, for the same reason. The ceiling
+        # is never the lever; the window is.
+        self.assertLess(self.structural_maximum(11), cap)
         self.assertGreater(self.structural_maximum(12), cap)
-
-    @unittest.expectedFailure
-    def test_the_pending_contract_restores_one_digit_of_headroom(self):
-        """The PENDING half of the ratchet pair (AGENTS.md, "Ratchet pairs").
-
-        The documented headroom property — the same structural maximum still
-        fitting at one further decimal digit on every value — is the claim
-        `docs/usage-export.md` and `internal/seal/types.go` made until issue
-        #267 added the per-model lifetime split. It is asserted here as an
-        EXPECTED FAILURE so the suite says the gap out loud instead of
-        pretending the property was never claimed.
-
-        It goes red as an UNEXPECTED SUCCESS the moment the headroom returns —
-        by a narrower model window, a cheaper section shape, or a smaller
-        vocabulary — which forces this marker's removal and turns the note
-        back into an enforced rule. Nothing here weakens the binding claim
-        above: the ceiling still exceeds the measured maximum.
-        """
-        self.assertLess(self.structural_maximum(11), self.go_cap())
 
     def test_matches_the_origin_admission_cap(self):
         source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")

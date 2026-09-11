@@ -8,9 +8,9 @@ the measurements and history behind those numbers. It adds no rule.
 ## The panels payload budgets
 
 `MaxPanelResponseBytes` is 131072, raised from 32768 by the owner on
-2026-08-24. Full-depth token-usage history structurally reaches 119,128 bytes
+2026-08-24. Full-depth token-usage history structurally reaches 113,304 bytes
 served — re-measured 2026-09-11 against the thirteen-member model vocabulary
-over its seventy-day window; issue #170 measured 104,508 against the five-member
+over its fifty-six-day window; issue #170 measured 104,508 against the five-member
 one, and the 115,981 figure recorded before that was a projection — and the old
 gate, chosen before any real content existed, would have refused exactly the
 documents the sealed-data pipeline exists to deliver.
@@ -30,22 +30,16 @@ to the sealed file and nothing to the envelope — which is why the producer-sid
 measurement in `docs/usage-export.md` is the larger of the two and the one the
 transport ceiling answers to.
 
-### The headroom digit is spent (issue #267)
+### The window moved again (issue #267)
 
-The sealed structural maximum measures 123,668 bytes at ten-digit daily
-values, 7,404 under the 131,072 ceiling. It used to leave one further decimal
-digit on every value; it no longer does, reaching 134,426 at eleven digits.
-The per-model lifetime split costs 3,904 bytes there — thirteen vocabulary
-members times five accounting classes on both sources — against the 610 bytes
-the ceiling had left, and the longest-session tile costs 60 more.
-
-Neither lever was pulled. The ceiling is one number five stages agree on, and
-`MAX_MODEL_DAYS` is a product decision about how deep the per-model breakdown
-reaches. So `CapParityTest` carries the gap as the ratchet pair AGENTS.md
-prescribes: a green pin on the measured behaviour and a named
-pending-contract test that turns the suite red as an unexpected success the
-day the headroom returns, which forces the note to become an enforced rule
-again rather than rot.
+The sealed structural maximum measures 119,664 bytes at ten-digit daily
+values, 11,408 under the 131,072 ceiling, and still 130,058 at eleven digits.
+The per-model lifetime split and the longest-session tile together cost 3,904
+bytes at eleven digits — thirteen vocabulary members times five accounting
+classes on both sources, plus one tile — against the 610 bytes the ceiling
+had left at the ten-week window, so the model window is now eight weeks. The
+ceiling is one number five stages agree on and never the lever; the window is,
+exactly as it was when issue #302 cut it from a quarter to ten weeks.
 
 ## Why two of the rendering-lane pins are structural
 

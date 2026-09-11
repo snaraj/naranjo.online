@@ -70,21 +70,20 @@ const (
 	// can admit is one document covering both shipped snapshot sources, each
 	// at the 732-day series bound with the complete five-key category
 	// vocabulary, the complete thirteen-key model vocabulary over its own
-	// 70-day window, the complete seven-key captured-stats vocabulary, the
+	// 56-day window, the complete seven-key captured-stats vocabulary, the
 	// per-model lifetime split at every member times every class, and every
 	// required section present; compact-encoded and sealed, that measures
-	// 123,668 bytes at ten-digit daily values, leaving 7,404 bytes of
-	// headroom under this ceiling.
+	// 119,664 bytes at ten-digit daily values. 131,072 leaves 11,408 bytes of
+	// headroom: the same maximum still seals to 130,058 bytes at eleven-digit
+	// values and only crosses the ceiling at twelve, where it reaches
+	// 140,452.
 	//
-	// THE FURTHER-DIGIT HEADROOM IS SPENT, and it is recorded rather than
-	// quietly dropped. The same maximum used to fit at eleven-digit values;
-	// it now seals to 134,426 there, because the per-model lifetime split
-	// costs 3,904 bytes at that width (thirteen members times five classes on
-	// both sources) against the 610 bytes the ceiling had left. The ceiling
-	// is not the lever — it is one number five stages agree on — and the
-	// window is an owner decision about how deep the model breakdown reaches,
-	// so CapParityTest carries the gap as a green behaviour pin plus a named
-	// pending-contract test that reddens the day the digit comes back.
+	// The one-further-digit headroom is what the model WINDOW is sized to.
+	// Issue #267's per-model lifetime split and longest-session tile cost
+	// 3,904 bytes at eleven digits against the 610 the ceiling then had left,
+	// so the window fell from ten weeks to eight (issue #302 had cut it from
+	// a quarter to ten for the same reason). The ceiling is not the lever —
+	// it is one number five stages agree on.
 	//
 	// The numbers are no longer transcribed into an assertion. CapParityTest
 	// BUILDS that maximum document from the shipped snapshot's own labels and

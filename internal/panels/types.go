@@ -48,9 +48,9 @@ const (
 	// dataroot_test point here rather than restating it.
 	//
 	// Raised from 32 KiB to 128 KiB by the owner on 2026-08-24. Full-depth
-	// token-usage history structurally maxes at 119,128 bytes SERVED,
+	// token-usage history structurally maxes at 113,304 bytes SERVED,
 	// re-measured 2026-09-11 with the thirteen-member vocabulary over its
-	// seventy-day window by TestTheMaximalDocumentFitsTheRaisedBudget; the
+	// fifty-six-day window by TestTheMaximalDocumentFitsTheRaisedBudget; the
 	// 32 KiB gate, chosen before any real content existed, would have refused
 	// exactly the documents the sealed-data pipeline exists to deliver.
 	//
@@ -61,7 +61,7 @@ const (
 	// different bytes — this one the finished envelope, seal.MaxSealedBytes
 	// the sealed FILE — and the envelope adds the embedded snapshot and its
 	// own scaffolding on top. Measured at +1,625 bytes for the maximal
-	// admissible document (117,503 sealed, 119,128 served), and unbounded
+	// admissible document (111,679 sealed, 113,304 served), and unbounded
 	// above that as the snapshot grows, so a file sealed at exactly 131,072
 	// bytes serves OVER budget and is refused.
 	//
@@ -1900,19 +1900,20 @@ const (
 	// section's own start date, so a reader is told what they are looking at
 	// rather than shown a silent truncation.
 	//
-	// TEN WEEKS, down from a quarter (issue #302). The budget is the product
-	// of members and days, and the vocabulary more than doubled when the
-	// second vendor group arrived; at the old ninety-two days the widest
-	// document the origin admits no longer left the one further decimal digit
-	// of headroom the ceiling is measured against. The ceiling itself is not
-	// a lever — it is one number five stages agree on — so the WINDOW moved
-	// instead, and CapParityTest measures the result rather than trusting
-	// this comment.
+	// EIGHT WEEKS, down from ten (issue #267), which was down from a quarter
+	// (issue #302). The budget is the product of members and days. When the
+	// second vendor group more than doubled the vocabulary, ninety-two days no
+	// longer left the one further decimal digit of headroom the ceiling is
+	// measured against, and the window fell to seventy; when the per-model
+	// lifetime split joined the wire, seventy no longer did either, and it
+	// fell to fifty-six. The ceiling itself is not a lever — it is one number
+	// five stages agree on — so the WINDOW moves instead, and CapParityTest
+	// measures the result rather than trusting this comment.
 	//
 	// The categories breakdown has no separate day bound: it answers to
 	// maxSeriesDays like the series it partitions, because it costs the same
 	// per day as the totals beside it rather than a multiple of them.
-	maxModelDays = 70
+	maxModelDays = 56
 
 	// maxCountValue is THE upper bound on every count a pushed document
 	// carries, and it is one number three languages agree on (2026-08-24
