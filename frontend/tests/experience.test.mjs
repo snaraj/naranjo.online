@@ -1736,23 +1736,18 @@ test('every reading mode declares the identical token set', () => {
  * visitor to press something), so only the reading-mode trigger remains, and
  * the stroke pin rests on the token alone.
  *
- * The drift this still guards is real rather than theoretical: the trigger
- * carries its size as an SVG ATTRIBUTE, which no custom property can reach,
- * while the swatches read a token. So the attribute is read back out of the
- * chrome component here and compared with the token the swatches consume —
- * and the browser lanes measure the same pair in a real engine.
+ * THE DRIFT THIS GUARDS CHANGED SHAPE (owner design decision, 2026-09-11,
+ * issue 313). The trigger used to draw its own crescent and state its painted
+ * size as a `width="18"` ATTRIBUTE — markup, which no custom property can
+ * reach — so this pin read that attribute back out and compared it with the
+ * token the swatches consume. The trigger is a member of the Hairline family
+ * now and carries no size attribute at all: it is sized by `--icon-chrome`.
+ * So the comparison moved to where the size is DECIDED, which is the stricter
+ * direction — a chrome glyph can no longer be resized in markup at all, and
+ * this pin measures two declarations against each other rather than a
+ * declaration against a hopeful copy. The browser lanes still measure the two
+ * families' painted boxes against each other in a real engine.
  * ======================================================================== */
-
-// The chrome's own glyph, as the markup states it: the size attribute both
-// header icons carry, and the line weight the stroked one is drawn at.
-const chromeGlyphAttributes = (source) => {
-  const svg = /<svg[^>]*>/.exec(source);
-  assert.ok(svg, 'a chrome control renders no inline SVG at all');
-  return {
-    width: Number(/\bwidth="([\d.]+)"/.exec(svg[0])?.[1]),
-    height: Number(/\bheight="([\d.]+)"/.exec(svg[0])?.[1]),
-  };
-};
 
 // One rule from one file, by exact selector. Fails loudly rather than
 // returning undefined: a rule this pin cannot find is a rule it cannot
@@ -1786,20 +1781,29 @@ test('the reading-mode swatches are drawn in the header chrome grammar', () => {
     'the swatch line weight no longer derives from the chrome stroke token'
   );
 
-  /* ...and the tokens are the truth about the chrome, not a hopeful copy of
-     it. Both header icons state their painted size as an attribute, so the
-     attribute is what this compares against: a chrome glyph resized in the
-     markup and nowhere else is exactly the drift the owner's complaint was
-     made of, in the opposite direction. */
+  /* ...and the one chrome glyph left is the icon family's, at the family's
+     chrome size, which is a THIRD token that has to agree with the other two
+     or the trigger and the swatches under it are drawn at different scales
+     again — the owner's original complaint, exactly. The component states no
+     size of its own: it names a slot, and the slot is a token. */
   const glyphPx = lengthInPx(glyphSize);
   assert.ok(glyphPx !== null, `--chrome-icon-glyph-size is "${glyphSize}", which this pin cannot measure`);
-  const painted = chromeGlyphAttributes(componentSources[menuFile]);
-  assert.equal(
-    painted.width,
-    glyphPx,
-    `${menuFile} paints its chrome glyph at ${painted.width}px while the shared token says ${glyphPx}px`
+  assert.match(
+    componentSources[menuFile],
+    /<Icon name="mode-dark" slot="chrome" \/>/,
+    `${menuFile} draws its own trigger glyph again instead of the icon family's`
   );
-  assert.equal(painted.height, glyphPx, `${menuFile} paints a chrome glyph that is not square`);
+  const familyPx = lengthInPx(resolveToken('--icon-chrome', tokens));
+  assert.equal(
+    familyPx,
+    glyphPx,
+    `the icon family's chrome mark is ${familyPx}px while the chrome grammar says ${glyphPx}px`
+  );
+  assert.doesNotMatch(
+    componentSources[menuFile],
+    /<svg[^>]*\bwidth="/,
+    `${menuFile} states a painted glyph size as an attribute again; a chrome size is a token`
+  );
 
   /* The swatch wears the chrome's absence of chrome. Each of these is one
      innocent-looking declaration away from returning, and together they are

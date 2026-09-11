@@ -723,6 +723,12 @@
   --commit-row-height: 2.75rem;
   --ledger-row-pad: 0.875rem;
   --ledger-column-gap: 1.5rem;
+  /* The employer monogram's square (owner design decision, 2026-09-11, issue
+     313): a hairline box the size of the ledger's other row furniture, not a
+     logo. Its own token because the row grid declares it as a TRACK and the
+     tile declares it as a box, and a row whose track and tile disagree is a
+     row with a gap down one side of every entry. */
+  --ledger-monogram: 1.75rem;
 
   /* The mono LABEL, which is the ledger's connective tissue: section numbers,
      column heads, sub-lines, the footer. One size, one tracking, everywhere. */
@@ -1041,6 +1047,28 @@
      --tip-radius) rather than the bespoke 1.875rem pill curve the owner
      rejected as "looks very AI". */
   --theme-menu-radius: 3px;
+
+  /* The Hairline family's three sizes (owner design decision, 2026-09-11,
+     issue 313). A mark is sized by the SLOT it sits in — the chrome row, a
+     list or control line, a table figure — never by the surface that draws
+     it, so every mark on a line is the same height as every other mark on
+     that kind of line and a resize is one edit here. The family carries no
+     colour token at all: it paints currentColor, so it follows all four
+     reading modes without a single theme branch.
+
+     These are rem, unlike the chrome-icon grammar above, because a mark sits
+     beside text and should scale with the reader's type size; the 18px
+     chrome glyph is a fixed control ornament and 1.125rem is the same size
+     at the default root. */
+  --icon-chrome: 1.125rem;
+  --icon-row: 1rem;
+  --icon-cell: 0.75rem;
+  /* The distance between a mark and the words beside it, wherever the two
+     share a line. It is one token because seven surfaces set that pair and
+     they are flex, grid and plain inline boxes alike — `gap` does not exist
+     for the last of those, so the same distance is spent two ways and must
+     still be ONE number. */
+  --icon-gap: 0.375rem;
 
   color: var(--color-text);
   background: var(--color-surface);
@@ -1505,7 +1533,13 @@ html[data-column-resizing] {
   flex: none;
 }
 
+/* A pin and a city (owner design decision, 2026-09-11, issue 313). Inline-flex
+   rather than plain inline so the mark and the word share one measured gap —
+   the same token every other pair on the page spends. */
 .page-place {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--icon-gap);
   font-family: var(--font-mono);
   font-size: var(--ledger-label-size);
   letter-spacing: var(--ledger-label-tracking);
@@ -1640,6 +1674,7 @@ main {
      The row scrolls instead: each link keeps the width its label needs, and
      the floor goes back to being a floor for the SHORT labels. */
   flex: none;
+  gap: var(--icon-gap);
   min-inline-size: var(--control-target);
   min-block-size: var(--control-target);
   padding-inline: 0.25rem;
@@ -1702,8 +1737,24 @@ main {
   color: var(--ledger-ink);
 }
 
-.section-number::after {
+/* The ledger's separator, and the ONE place it is written. The nav link and
+   the section head both print a number followed by a slash (owner design
+   decision, 2026-09-11, issue 313 moved the number into the link), so the
+   slash is a generated mark on both rather than a character typed into two
+   components that would drift. */
+.section-number::after,
+.section-link-number::after {
   content: ' /';
+}
+
+/* The mark leads the number on the section head. The head aligns its parts on
+   the BASELINE — the number and the title are one line of type — so this pair
+   cannot become a flex box the way the chrome row's can: an inline-flex
+   baseline is its first item's, and the first item here is a drawing with no
+   text in it, which would drop the number below the heading beside it. The
+   mark stays an inline box and spends the same gap as a margin. */
+.section-number .icon {
+  margin-inline-end: var(--icon-gap);
 }
 
 .section-title {
@@ -2042,8 +2093,17 @@ h1 {
   color: var(--ledger-ink);
 }
 
+/* A licence and an author, each led by its mark (owner design decision,
+   2026-09-11, issue 313). A margin rather than a flex gap for the reason the
+   section head's is: the line is ordinary inline type — two marks and two
+   words in one sentence — and making it a flex row would turn every word into
+   a flex item and break the line wherever the sentence should. */
 .footer-meta {
   color: var(--ledger-muted);
+}
+
+.footer-meta .icon {
+  margin-inline-end: var(--icon-gap);
 }
 
 /* --- The panel shell, under the ledger ----------------------------------- */
@@ -2061,7 +2121,7 @@ h1 {
 
 .ledger-row {
   display: grid;
-  grid-template-columns: 8.75rem 1.1fr 1.3fr 9.375rem var(--control-target);
+  grid-template-columns: 8.75rem var(--ledger-monogram) 1.1fr 1.3fr 9.375rem var(--control-target);
   align-items: center;
   gap: var(--ledger-column-gap);
   min-block-size: var(--control-target);
@@ -2072,6 +2132,24 @@ h1 {
   text-align: start;
   cursor: pointer;
   font: inherit;
+}
+
+/* THE MONOGRAM TILE (owner design decision, 2026-09-11, issue 313): two
+   letters in a hairline square, in the sheet's own rule colour and the sheet's
+   own mono face. It is deliberately NOT a logo — a logo is a trademark, and
+   the page draws none — and deliberately not a disc or a filled chip either,
+   because the ledger rules everything else it draws with the same hairline.
+   Square by construction: one token drives the tile here and the row's track
+   above, so the two cannot disagree. */
+.ledger-monogram {
+  display: grid;
+  place-items: center;
+  inline-size: var(--ledger-monogram);
+  block-size: var(--ledger-monogram);
+  border: var(--ledger-hairline) solid var(--ledger-rule);
+  font-family: var(--font-mono);
+  font-size: var(--ledger-figure-size);
+  color: var(--ledger-muted);
 }
 
 .ledger-row:hover {
@@ -2971,14 +3049,26 @@ h1 {
      the page does not scroll sideways at any width, and a table that did would
      take the whole document with it. */
   .ledger-row {
-    grid-template-columns: minmax(0, 1fr) var(--control-target);
+    grid-template-columns: var(--ledger-monogram) minmax(0, 1fr) var(--control-target);
     grid-template-areas:
-      'span chevron'
-      'name chevron'
-      'role chevron'
-      'place chevron';
+      'mark span chevron'
+      'mark name chevron'
+      'mark role chevron'
+      'mark place chevron';
     align-items: start;
     row-gap: 0.125rem;
+    /* The stacked row pays for the monogram out of its own gutters rather than
+       mostly out of the words. At the sheet's 1.5rem column gap the tile would
+       cost the text column 3.25rem — the tile plus a second gutter; at 0.625rem
+       it costs 1.5rem, which is 24px of a 390px viewport. The gutter is
+       narrowed only here, where there is one text column and a control beside
+       it; the desktop row keeps the sheet's own gap. */
+    column-gap: 0.625rem;
+  }
+
+  .ledger-monogram {
+    grid-area: mark;
+    align-self: center;
   }
 
   .ledger-span {

@@ -25,8 +25,10 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import FeedCard from './FeedCard.svelte';
+  import Icon from './Icon.svelte';
   import { swipeHorizontal } from '../gesture.ts';
   import type { MediaGalleryItem, MediaGalleryProps } from '../blocks.ts';
+  import type { IconName } from '../icons.ts';
 
   let { items, width, height, tiles = 4 }: MediaGalleryProps = $props();
 
@@ -47,6 +49,17 @@
   const stills = $derived(visible.filter((candidate) => candidate.video === undefined));
   function countOf(name: string): number {
     return items.filter((candidate) => setOf(candidate) === name).length;
+  }
+  /* A SET'S MARK IS ITS CONTENTS, not its word (owner design decision,
+     2026-09-11, issue 313). The segment buttons print a mark where they used
+     to print "Photographs" or "Videos", and the mark is decided the same way
+     the default NAME already is — by what the set holds — so a manifest that
+     names its own set still gets the right drawing, and a set that is all
+     films is the only one that reads as film. A mixed set reads as pictures,
+     which is the honest answer: it is not all films. */
+  function setGlyph(name: string): IconName {
+    const members = items.filter((candidate) => setOf(candidate) === name);
+    return members.every((candidate) => candidate.video !== undefined) ? 'film' : 'photo';
   }
   function itemNoun(candidate: MediaGalleryItem): string {
     return candidate.video === undefined ? 'photograph' : 'film';
@@ -212,9 +225,7 @@
                   aria-label={`Play ${tile.alt}`}
                 >
                   <span class="gallery-play-disc">
-                    <svg class="gallery-glyph" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-                      <path d="M9 6.5l9 5.5-9 5.5z" fill="currentColor" />
-                    </svg>
+                    <Icon name="play" slot="chrome" />
                   </span>
                 </button>
               {/if}
@@ -244,11 +255,18 @@
           {#if sets.length > 1}
             <div class="gallery-sets" role="group" aria-label="Media set">
               {#each sets as name (name)}
+                <!-- The set's WORD moved to the accessible name and nowhere
+                  else: aria-label replaces a control's contents in the
+                  accessibility tree, so a screen reader hears "Photographs ·
+                  1" where the eye reads a mark and a figure. The count stays
+                  visible because a figure is a fact, not a label. -->
                 <button
                   type="button"
                   class="gallery-set"
                   aria-pressed={name === activeSet}
-                  onclick={() => selectSet(name)}>{name} · {countOf(name)}</button>
+                  aria-label={`${name} · ${countOf(name)}`}
+                  onclick={() => selectSet(name)}
+                  ><Icon name={setGlyph(name)} slot="row" /> · {countOf(name)}</button>
               {/each}
             </div>
           {:else}
@@ -275,9 +293,7 @@
       aria-label="Close enlarged photograph"
     >
       <span class="gallery-close-mark">
-        <svg class="gallery-glyph" viewBox="0 0 24 24" width="10" height="10" aria-hidden="true">
-          <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
-        </svg>
+        <Icon name="close" slot="cell" />
       </span>
     </button>
     {#if enlarged && item !== undefined}
@@ -310,9 +326,7 @@
             aria-label={`Previous ${itemNoun(stills[(shown - 1 + total) % total])}`}
           >
             <span class="gallery-nav-disc">
-              <svg class="gallery-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                <path d="M14.5 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
+              <Icon name="chevron-left" slot="row" />
             </span>
           </button>
           <button
@@ -323,9 +337,7 @@
             aria-label={`Next ${itemNoun(stills[(shown + 1) % total])}`}
           >
             <span class="gallery-nav-disc">
-              <svg class="gallery-glyph" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                <path d="M9.5 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
+              <Icon name="chevron-right" slot="row" />
             </span>
           </button>
         {/if}
@@ -474,6 +486,7 @@
   .gallery-set {
     display: inline-flex;
     align-items: center;
+    gap: var(--icon-gap);
     min-inline-size: var(--control-target);
     min-block-size: var(--control-target);
     padding: 0 var(--gallery-control-gap);
@@ -593,9 +606,6 @@
   .gallery-lightbox-close:hover .gallery-close-mark,
   .gallery-lightbox-close:focus-visible .gallery-close-mark {
     opacity: 1;
-  }
-  .gallery-glyph {
-    color: inherit;
   }
   .gallery-lightbox-meta {
     display: grid;

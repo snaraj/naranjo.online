@@ -29,6 +29,7 @@
   import type { TipDetail } from '../tooltip.ts';
   import DetailTip from './DetailTip.svelte';
   import FeedCard from './FeedCard.svelte';
+  import Icon from './Icon.svelte';
   import PanelShell from './PanelShell.svelte';
 
   let { title, status, generatedAt, items, emptyNote, staleNote, label, mark }: TickerProps =
@@ -115,6 +116,16 @@
                     width={mark.width}
                     height={mark.height}
                     decoding="async" />
+                  <!-- A second mark, from the icon family, when the binding
+                    hands one over (owner design decision, 2026-09-11, issue
+                    313). It travels with the picture rather than being named
+                    here, because a strip that drew a fixed glyph would be a
+                    strip with an opinion about what it counts — the same rule
+                    that keeps every other domain word out of this file. Both
+                    marks are decorative; the strip's label is its name. -->
+                  {#if mark.glyph}
+                    <Icon name={mark.glyph} slot="row" />
+                  {/if}
                 {/if}
               </span>
               {#each items as item, index (item.key)}

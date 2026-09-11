@@ -1008,7 +1008,7 @@ test('the manifest mounts the calendar block exactly once, bound to both its pan
   );
   assert.match(
     manifest,
-    /section\('commits', 'Commits', \[commitLog\], \{ layout: 'stack' \}\)/,
+    /section\('commits', 'Commits', \[commitLog\], \{ mark: '[a-z-]+', layout: 'stack' \}\)/,
     'the commits section lists the calendar block on its own'
   );
   assert.match(binding, /panelsBlock\(\s*'commit-log',\s*CommitLog,\s*commitPanelIds,/);

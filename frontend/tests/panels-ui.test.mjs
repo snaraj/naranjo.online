@@ -133,18 +133,21 @@ test('the manifest mounts exactly the two tracker blocks, in the stacked order',
      the board of token cards and the boss ticker, in that order. */
   assert.match(
     manifest,
-    /section\('trackers', 'Trackers', \[tokenBoard, bossTicker\], \{ layout: 'stack' \}\)/,
+    /section\('trackers', 'Trackers', \[tokenBoard, bossTicker\], \{ mark: '[a-z-]+', layout: 'stack' \}\)/,
     'the trackers section must list exactly one entry per panel, in the order the page stacks them'
   );
   // ...and the calendar is mounted exactly once, in its own section.
-  assert.match(manifest, /section\('commits', 'Commits', \[commitLog\], \{ layout: 'stack' \}\)/);
+  assert.match(manifest, /section\('commits', 'Commits', \[commitLog\], \{ mark: '[a-z-]+', layout: 'stack' \}\)/);
   // The page renders the manifest rather than spelling its own copy of it. The
   // ordinal it passes is the manifest's own position, so a section moved there
-  // renumbers itself (owner directive, 2026-09-03, issue 287).
+  // renumbers itself (owner directive, 2026-09-03, issue 287) — through the
+  // shared rule in lib/blocks.ts, because the nav prints the same number now
+  // (owner design decision, 2026-09-11, issue 313) and two copies of a
+  // numbering rule is how one sheet ends up numbered two ways.
   assert.match(app, /import \{ page \} from '\.\/page\.ts'/);
   assert.match(
     app,
-    /\{#each page as section, position \(section\.id\)\}\s*<PageSection \{section\} ordinal=\{String\(position \+ 1\)\.padStart\(2, '0'\)\} \/>\s*\{\/each\}/
+    /\{#each page as section, position \(section\.id\)\}\s*<PageSection \{section\} ordinal=\{sectionOrdinal\(position\)\} \/>\s*\{\/each\}/
   );
 });
 

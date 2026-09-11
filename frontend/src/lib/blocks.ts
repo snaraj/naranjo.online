@@ -26,6 +26,7 @@
 
 import type { Component } from 'svelte';
 import type { GridCell } from './grid.ts';
+import type { IconName } from './icons.ts';
 import type { PanelEnvelope, PanelStatus } from './panels';
 import type { TipDetail } from './tooltip.ts';
 
@@ -116,6 +117,13 @@ export interface PageBlock extends BlockPresentation {
 export interface PageSection {
   readonly id: string;
   readonly label: string;
+  /* The section's own mark (owner design decision, 2026-09-11, issue 313).
+   * The nav prints it in place of the section's words and the section head
+   * prints it beside them, so it is stated ONCE here with the label it
+   * stands for rather than in two components that would drift. Required,
+   * not optional: five sections, five marks, and a sixth section cannot
+   * quietly ship without choosing one. */
+  readonly mark: IconName;
   readonly layout: 'flow' | 'stack';
   readonly blocks: readonly PageBlock[];
 }
@@ -128,9 +136,9 @@ export function section(
   id: string,
   label: string,
   blocks: readonly PageBlock[],
-  options: { layout?: 'stack' } = {}
+  options: { mark: IconName; layout?: 'stack' }
 ): PageSection {
-  return { id, label, layout: options.layout ?? 'flow', blocks };
+  return { id, label, mark: options.mark, layout: options.layout ?? 'flow', blocks };
 }
 
 export function staticBlock<P extends BlockProps>(
@@ -208,6 +216,16 @@ export function sectionHref(target: Pick<PageSection, 'id'>): string {
   return `#${target.id}`;
 }
 
+/* The number the ledger prints for a section: its position in the manifest,
+ * two digits wide so the five stack as a column of figures rather than a
+ * ragged edge. ONE function because two surfaces print it — the nav link and
+ * the section head — and a second copy of the rule is how one sheet ends up
+ * numbered two different ways. The position is the caller's, so a section
+ * moved in the manifest renumbers itself and no two can claim one number. */
+export function sectionOrdinal(position: number): string {
+  return String(position + 1).padStart(2, '0');
+}
+
 /* ===========================================================================
  * Component-layer props contracts, one block component each. Field names are
  * the reader's vocabulary — a figure, a caption, a detail — never a domain's.
@@ -243,8 +261,14 @@ export type LedgerRow = {
   readonly key: string;
   /* The years, already written the way the source writes them. */
   readonly span: string;
-  /* The short name the row leads with. */
+  /* The short name the row leads with, and the monogram tile that leads the
+   * name (owner design decision, 2026-09-11, issue 313). The monogram is
+   * DATA rather than initials this component derives: an employer's own short
+   * form is an editorial judgement, exactly as `name` already is, and a rule
+   * that guessed "UMBC LIDAR Research Group" would guess wrong. A trademark
+   * is never drawn — a monogram in the site's own ink is the mark. */
   readonly name: string;
+  readonly mark: string;
   /* The one-line description under (or beside) the name. */
   readonly role: string;
   /* Where it happened. */
@@ -492,6 +516,12 @@ export type TickerMark = {
   readonly url: string;
   readonly width: number;
   readonly height: number;
+  /* A family mark set beside the picture (owner design decision, 2026-09-11,
+   * issue 313). It travels with the picture, in the binding layer, because a
+   * strip that hardcoded one would be a strip with an opinion about which
+   * collection it counts — the same rule that keeps every name out of this
+   * component. Decorative, like the picture: the strip's label is the name. */
+  readonly glyph?: IconName;
 };
 
 /* --- MediaGallery: one visible frame, prev/next, a click-to-enlarge lightbox

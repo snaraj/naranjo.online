@@ -22,7 +22,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
 import { relativeAge } from '../src/lib/age.ts';
-import { section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
+import { section, sectionHref, sectionOrdinal, staticBlock } from '../src/lib/blocks.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
 import {
   roleLedgerProps,
@@ -147,14 +147,20 @@ const componentSources = Object.fromEntries(
 const styleBlock = (source) => /<style[^>]*>([\s\S]*?)<\/style>/.exec(source)?.[1] ?? '';
 
 /* The manifest's section calls, read from the one module the page is. Each
- * captured id and label is then driven through the EXECUTED constructor the
- * manifest is written in, so the assertions bind to the real page rather
- * than to a copy of it. */
+ * captured id, label and mark is then driven through the EXECUTED constructor
+ * the manifest is written in, so the assertions bind to the real page rather
+ * than to a copy of it.
+ *
+ * The mark is REQUIRED in the pattern, not optional (owner design decision,
+ * 2026-09-11, issue 313): a section that shipped without one would fall out of
+ * this list entirely and take its own pins with it, which is the quiet failure
+ * an optional capture invites. */
 const manifestSections = [...manifest.matchAll(
-  /section\('([a-z-]+)', '([^']+)', \[([^\]]*)\](?:, (\{ layout: 'stack' \}))?\)/g
-)].map(([, id, label, blocks, stack]) => ({
+  /section\('([a-z-]+)', '([^']+)', \[([^\]]*)\], \{ mark: '([a-z-]+)'(, layout: 'stack')? \}\)/g
+)].map(([, id, label, blocks, mark, stack]) => ({
   id,
   label,
+  mark,
   blocks: blocks.split(',').map((name) => name.trim()).filter(Boolean),
   layout: stack ? 'stack' : 'flow',
 }));
@@ -196,14 +202,29 @@ test('the manifest names the owner’s five sections, in the order the page stac
     ['flow', 'flow', 'stack', 'stack', 'flow'],
     'the two panel stacks are the sections whose blocks share one column'
   );
+  /* EVERY SECTION CARRIES ITS MARK (owner design decision, 2026-09-11, issue
+     313), here in the manifest beside the label it stands for — so the nav
+     link and the section head read one entry and cannot draw two different
+     marks for one section. */
+  assert.deepEqual(
+    manifestSections.map((entry) => entry.mark),
+    ['work', 'folder', 'commit', 'chip', 'photo'],
+    'each section names the mark the nav and the section head both draw'
+  );
   // The constructors the manifest is written in, executed with its own ids:
   // the id in, the id out, the layout defaulted to flow, and the href built
   // by a function rather than concatenated in markup — a lost '#' is one red
   // test instead of four links to the page root.
   for (const entry of manifestSections) {
-    const built = section(entry.id, entry.label, [], entry.layout === 'stack' ? { layout: 'stack' } : {});
+    const built = section(
+      entry.id,
+      entry.label,
+      [],
+      entry.layout === 'stack' ? { mark: entry.mark, layout: 'stack' } : { mark: entry.mark }
+    );
     assert.equal(built.id, entry.id);
     assert.equal(built.label, entry.label);
+    assert.equal(built.mark, entry.mark, 'the constructor drops the section mark');
     assert.equal(built.layout, entry.layout);
     assert.equal(sectionHref(built), `#${entry.id}`);
   }
@@ -249,9 +270,31 @@ test('every nav link lands on the section the manifest renders', () => {
   // Structural now, not counted: the nav and the sections read the SAME
   // manifest entry, so a link cannot point at a section nobody rendered.
   assert.match(sectionNav, /import \{ page \} from '\.\.\/\.\.\/page\.ts'/);
-  assert.match(sectionNav, /\{#each page as section \(section\.id\)\}/);
+  assert.match(sectionNav, /\{#each page as section, position \(section\.id\)\}/);
   assert.match(sectionNav, /href=\{sectionHref\(section\)\}/);
   assert.match(sectionNav, /class="section-link"/);
+  /* A LINK IS A MARK AND A NUMBER, AND THE WORD IS ITS ACCESSIBLE NAME (owner
+     design decision, 2026-09-11, issue 313). Both halves of what a link shows
+     come from the manifest — the mark from the entry, the number from the
+     entry's POSITION through the shared ordinal rule — so a section moved in
+     src/page.ts renumbers its link and its head together and neither is a
+     literal in a component. The label is what a screen reader hears, and it is
+     the same word the heading the link points at is called. */
+  assert.match(sectionNav, /<Icon name=\{section\.mark\} slot="row" \/>/);
+  assert.match(sectionNav, /\{sectionOrdinal\(position\)\}/);
+  assert.match(sectionNav, /aria-label=\{section\.label\}/, 'a mark-only link with no accessible name');
+  assert.doesNotMatch(
+    sectionNav,
+    />\{section\.label\}</,
+    'the link prints the section word again; the word is the accessible name now'
+  );
+  /* ONE ordinal rule for two surfaces, EXECUTED rather than matched: the nav
+     and the page both call it, so the sheet cannot end up numbered two ways.
+     Two digits, and the position is the caller's. */
+  assert.equal(sectionOrdinal(0), '01');
+  assert.equal(sectionOrdinal(4), '05');
+  assert.equal(sectionOrdinal(9), '10');
+  assert.equal(sectionOrdinal(99), '100', 'the rule pads to two digits, it does not truncate to two');
   assert.match(pageSectionSource, /<section class="page-section" id=\{section\.id\}/);
   /* The ordinal the ledger's section head prints is derived from the
      manifest's own position (owner directive of 2026-09-03, issue 287), so a
@@ -259,7 +302,7 @@ test('every nav link lands on the section the manifest renders', () => {
      claim the same number. */
   assert.match(
     app,
-    /\{#each page as section, position \(section\.id\)\}\s*<PageSection \{section\} ordinal=\{String\(position \+ 1\)\.padStart\(2, '0'\)\} \/>/
+    /\{#each page as section, position \(section\.id\)\}\s*<PageSection \{section\} ordinal=\{sectionOrdinal\(position\)\} \/>/
   );
   // No component may spell a section of its own beside the manifest: one
   // renderer, zero hardcoded ids, or the counting guarantee above is gone.
@@ -341,7 +384,8 @@ test('the page stacks the chrome row, the name and the sections in one column', 
      aria-labelledby points at — are unchanged. */
   assert.match(
     pageSectionSource,
-    /<div class="section-head">\s*<span class="section-number" aria-hidden="true">\{ordinal\}<\/span>/
+    /<div class="section-head">(?:\s*<!--[\s\S]*?-->)?\s*<span class="section-number" aria-hidden="true"\s*><Icon name=\{section\.mark\} slot="row" \/>\{ordinal\}<\/span\s*>/,
+    'the section head must lead with the manifest mark and the ordinal, both hidden from assistive technology (issue 313)'
   );
   /* A section link has to be a real touch target: 44px on both axes, as a
      minimum rather than a fixed box so an enlarged base font grows it. It
@@ -1929,7 +1973,18 @@ test('the media sets are data: kind-derived by default, named by the manifest, c
   assert.match(mediaGallery, /const sets = \$derived\(\[\.\.\.new Set\(items\.map\(setOf\)\)\]\);/, 'a set exists exactly when something is in it');
   assert.match(mediaGallery, /\{#if sets\.length > 1\}\s*<div class="gallery-sets" role="group" aria-label="Media set">/, 'one set draws no switch');
   assert.match(mediaGallery, /aria-pressed=\{name === activeSet\}/);
-  assert.match(mediaGallery, /\{name\} · \{countOf\(name\)\}/, 'each set states its own count');
+  /* THE SET'S WORD MOVED TO THE ACCESSIBLE NAME (owner design decision,
+     2026-09-11, issue 313) and the figure stayed visible, because a count is a
+     fact and "Photographs" was a label. The mark is decided by what the set
+     HOLDS, the same rule the default name already follows, so a manifest that
+     names its own set still gets the right drawing. */
+  assert.match(mediaGallery, /<Icon name=\{setGlyph\(name\)\} slot="row" \/> · \{countOf\(name\)\}/, 'each set states its own count');
+  assert.match(mediaGallery, /aria-label=\{`\$\{name\} · \$\{countOf\(name\)\}`\}/, 'a mark-only segment with no accessible name');
+  assert.match(
+    mediaGallery,
+    /return members\.every\(\(candidate\) => candidate\.video !== undefined\) \? 'film' : 'photo';/,
+    'a set reads as film only when every member is one; a mixed set is pictures'
+  );
   assert.match(mediaGallery, /chosenSet = name;\s*playingKey = undefined;\s*index = 0;/, 'a set change hands every film back and returns the stage to the start');
   assert.match(galleryStyle, /\.gallery-set \{[^}]*min-inline-size: var\(--control-target\);\s*min-block-size: var\(--control-target\);/);
 });

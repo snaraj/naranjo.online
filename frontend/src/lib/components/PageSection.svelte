@@ -25,6 +25,7 @@
 <script lang="ts">
   import type { PageSection } from '../blocks.ts';
   import Block from './Block.svelte';
+  import Icon from './Icon.svelte';
 
   let { section, ordinal }: { section: PageSection; ordinal: string } = $props();
 </script>
@@ -47,7 +48,18 @@
     section moved in src/page.ts renumbers itself and two sections can never
     claim the same number. -->
   <div class="section-head">
-    <span class="section-number" aria-hidden="true">{ordinal}</span>
+    <!-- The mark joins the number on the decorative side of the line (owner
+      design decision, 2026-09-11, issue 313), for exactly the reason the
+      number is already there: the heading's accessible name is what a screen
+      reader navigates the page by, and a briefcase announced before
+      "Professional Experience" is noise to the one reader who cannot see it.
+      So the mark is aria-hidden and the h2, its class and its id are still
+      untouched — the same heading the nav's aria-labelledby has always
+      pointed at. The mark itself is the manifest's, so the head and the nav
+      link cannot show two different marks for one section. -->
+    <span class="section-number" aria-hidden="true"
+      ><Icon name={section.mark} slot="row" />{ordinal}</span
+    >
     <h2 class="section-title" id={`${section.id}-title`}>{section.label}</h2>
   </div>
   {#if section.layout === 'stack'}

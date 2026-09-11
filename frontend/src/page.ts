@@ -43,11 +43,18 @@ import { workHistory } from './lib/blocks/workHistory.ts';
  * and `gallery` are new ids because they name new sections.
  *
  * "About Me" is still gone (owner directive, 2026-08-28), and its absence is
- * still one missing line rather than a gap left behind. */
+ * still one missing line rather than a gap left behind.
+ *
+ * EACH SECTION ALSO CARRIES ITS MARK (owner design decision, 2026-09-11,
+ * issue 313). The nav prints the mark and the number where the words used to
+ * be, and the section head prints the mark beside them; both read this one
+ * entry, so the two can never show different marks for one section. The
+ * NUMBER is not here — it is the entry's position in this array, so a section
+ * moved renumbers itself and no two can claim the same number. */
 export const page: readonly PageSection[] = [
-  section('work', 'Professional Experience', [workHistory]),
-  section('projects', 'Projects', [codingProjects]),
-  section('commits', 'Commits', [commitLog], { layout: 'stack' }),
-  section('trackers', 'Trackers', [tokenBoard, bossTicker], { layout: 'stack' }),
-  section('gallery', 'Gallery', [mediaGallery])
+  section('work', 'Professional Experience', [workHistory], { mark: 'work' }),
+  section('projects', 'Projects', [codingProjects], { mark: 'folder' }),
+  section('commits', 'Commits', [commitLog], { mark: 'commit', layout: 'stack' }),
+  section('trackers', 'Trackers', [tokenBoard, bossTicker], { mark: 'chip', layout: 'stack' }),
+  section('gallery', 'Gallery', [mediaGallery], { mark: 'photo' })
 ];

@@ -19,9 +19,17 @@
   every width.
 
   The place is the owner's own portfolio location, the same public fact the
-  work entries carry. -->
+  work entries carry. It reads as a pin and a city now (owner design decision,
+  2026-09-11, issue 313): the mark says "place" in the channel a glyph is good
+  at, so the two-letter state abbreviation — the one part of the line a reader
+  gains nothing from — goes, and the CITY stays as words because a place name
+  is a fact, not a label. The pin is aria-hidden and the span still reads
+  "Irvine" to a screen reader, so nothing was removed from the accessibility
+  tree; a word was removed from the page. The phone rule that hides this whole
+  span is untouched. -->
 <script lang="ts">
   import ThemeMenu from '../ThemeMenu.svelte';
+  import Icon from './Icon.svelte';
   import SectionNav from './SectionNav.svelte';
 </script>
 
@@ -29,7 +37,7 @@
   <a class="page-mark" href="#page-title">SN.</a>
   <SectionNav />
   <div class="page-chrome">
-    <span class="page-place">Irvine, CA</span>
+    <span class="page-place"><Icon name="location" slot="chrome" />Irvine</span>
     <ThemeMenu />
   </div>
 </header>

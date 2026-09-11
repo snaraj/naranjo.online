@@ -3695,7 +3695,15 @@ test('the experience section renders four complete roles, and no placeholder sur
     const section = window.document.querySelector('#work');
     return {
       heading: section.querySelector('.section-title')?.textContent.trim(),
-      firstNavLabel: window.document.querySelector('.section-link')?.textContent.trim(),
+      /* THE NAV LINK'S WORD MOVED CHANNEL (owner design decision, 2026-09-11,
+         issue 313): the link prints a mark and the section's number, and the
+         section's own label is its accessible name. So the label is read off
+         aria-label and the PRINTED text is asserted separately to be the
+         number — a link that quietly lost its accessible name and a link that
+         quietly printed the heading again are two different failures, and
+         reading only one of the two channels could not tell them apart. */
+      firstNavLabel: window.document.querySelector('.section-link')?.getAttribute('aria-label'),
+      firstNavText: window.document.querySelector('.section-link')?.textContent.trim(),
       /* The id is the address a reader may already have shared; renaming a
          label must not move it. */
       linkedFromNav: window.document.querySelector('.section-link')?.getAttribute('href'),
@@ -3728,9 +3736,28 @@ test('the experience section renders four complete roles, and no placeholder sur
     };
   });
   expect(observed.heading).toBe('Professional Experience');
-  expect(observed.firstNavLabel, 'the nav still names the section by its old label').toBe(
+  expect(observed.firstNavLabel, 'the nav link lost the section word as its accessible name').toBe(
     'Professional Experience'
   );
+  expect(observed.firstNavText, 'the nav link prints the heading again instead of the sheet number').toBe(
+    '01'
+  );
+  /* The ledger's slash is GENERATED content, which is why it is absent from
+     the text above and measured here instead: it is punctuation the section
+     head already draws the same way, and drawing it from one rule is what
+     keeps the two from drifting. */
+  const separator = await page
+    .locator('.section-link-number')
+    .first()
+    .evaluate((node) => getComputedStyle(node, '::after').content);
+  expect(separator, 'the nav number lost the ledger separator the section head draws').toContain('/');
+  /* And the engine agrees, which is the assertion that matters: an accessible
+     name is computed, not declared, so only a real accessibility tree can say
+     the aria-label actually became the link's name. */
+  await expect(
+    page.getByRole('link', { name: 'Professional Experience', exact: true }),
+    'no link answers to the section word any more'
+  ).toHaveCount(1);
   expect(observed.linkedFromNav, 'the section id moved with the label').toBe('#work');
   expect(observed.entries, 'the section renders the wrong number of roles').toHaveLength(4);
   for (const entry of observed.entries) {
@@ -4202,7 +4229,23 @@ test('the set switch lists only sets that exist, filters the row without moving 
   await expect(
     sets,
     'the switch lists a set the manifest never published, or lost one it did'
-  ).toHaveText(['Photographs · 1', 'Videos · 1']);
+  ).toHaveText([' · 1', ' · 1']);
+  /* THE SET'S WORD IS ITS ACCESSIBLE NAME NOW (owner design decision,
+     2026-09-11, issue 313): the segment prints a mark and the figure, and the
+     engine's own accessibility tree is what has to still carry the word. */
+  for (const name of ['Photographs · 1', 'Videos · 1']) {
+    await expect(
+      page.getByRole('button', { name, exact: true }),
+      `no segment answers to "${name}"`
+    ).toHaveCount(1);
+  }
+  /* ...and the marks differ, which is the whole reason a word could go: two
+     segments drawn identically would be two segments nobody can tell apart. */
+  const markShapes = await sets.evaluateAll((nodes) =>
+    nodes.map((node) => node.querySelector('svg')?.innerHTML ?? '')
+  );
+  expect(markShapes[0], 'a gallery segment draws no mark at all').not.toBe('');
+  expect(markShapes[0], 'both gallery segments draw the same mark').not.toBe(markShapes[1]);
   await expect(page.locator('.gallery-set-name')).toHaveCount(0);
   await expect(page.locator('.gallery-sets')).toHaveAttribute('aria-label', 'Media set');
   for (const index of [0, 1]) {
@@ -10539,4 +10582,249 @@ test('the contribution calendar carries a data-through line and trails today pas
     observed.months,
     'the month axis does not reach the month the reader is in'
   ).toContain(saturday.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' }));
+});
+
+/* ===========================================================================
+ * The Hairline icon family (owner design decision, 2026-09-11, issue 313)
+ *
+ * Marks replaced words on nine surfaces. The source pins in
+ * tests/icons.test.mjs bind the module to the components and the words to the
+ * accessibility tree; only an engine can answer the two questions those pins
+ * cannot: did a mark MOVE anything, and can a keyboard still get through the
+ * chrome it now sits in.
+ *
+ * Both viewports, because the chrome row and the ledger rows lay out
+ * differently on a phone — the place label is hidden entirely below 45rem and
+ * the ledger row restacks into a monogram column, a text column and the
+ * chevron — so a measurement taken only at the reading width would be a
+ * measurement of one of the two layouts.
+ * ======================================================================== */
+
+const markViewports = [
+  { width: 1440, height: 900 },
+  { width: 390, height: 844 },
+];
+
+for (const viewport of markViewports) {
+  test(`the marks move nothing on the sheet at ${viewport.width}px`, async ({ page }) => {
+    /* The engine's own layout-shift ledger, armed before the navigation so it
+       records ACROSS the arrival rather than after it, and attributed: the
+       whole page is loading through this window and a ledger that summed the
+       document would be measuring the page's load rather than the marks. Only
+       Chromium implements the entry type; the box comparisons below are the
+       measurement that runs in every engine. */
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.addInitScript(() => {
+      window.__markShift = { supported: false, chrome: 0, roles: 0 };
+      const types = window.PerformanceObserver?.supportedEntryTypes ?? [];
+      if (!types.includes('layout-shift')) return;
+      window.__markShift.supported = true;
+      new window.PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.hadRecentInput) continue;
+          const header = window.document.querySelector('.page-header');
+          const roles = window.document.querySelector('#work');
+          for (const source of entry.sources ?? []) {
+            if (!source.node) continue;
+            if (header !== null && header.contains(source.node)) {
+              window.__markShift.chrome += entry.value;
+            }
+            if (roles !== null && roles.contains(source.node)) {
+              window.__markShift.roles += entry.value;
+            }
+          }
+        }
+      }).observe({ type: 'layout-shift', buffered: true });
+    });
+    await visit(page);
+
+    const observed = await page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
+      const box = (node) => {
+        const rect = node.getBoundingClientRect();
+        return {
+          x: round(rect.x),
+          y: round(rect.y),
+          width: round(rect.width),
+          height: round(rect.height),
+        };
+      };
+      return {
+        shift: window.__markShift,
+        /* Every mark on the page, as the engine painted it: a mark that
+           resolved no size token renders at the SVG default 300x150 and would
+           push the row it sits in clean off the sheet — and nothing would go
+           red, which is why this is measured rather than assumed. */
+        marks: [...window.document.querySelectorAll('.icon')].map((mark) => ({
+          classes: mark.getAttribute('class'),
+          ...box(mark),
+          ink: getComputedStyle(mark).color,
+          shapes: mark.children.length,
+          /* A mark inside something the page is not showing has no box at
+             all, and that is correct rather than broken — but "has no box"
+             and "resolved no size" look identical from the outside, so each
+             boxless mark has to NAME why. Two reasons are legitimate: the
+             enlarged stage is a closed <dialog>, and the place label is
+             display:none below 45rem by the chrome row's own rule. Anything
+             else is a mark nobody can see and nobody would notice. */
+          laidOut: mark.getClientRects().length > 0,
+          hiddenBy:
+            mark.closest('dialog:not([open])') !== null
+              ? 'the closed stage'
+              : mark.closest('.page-place') !== null
+                ? 'the place the phone rule hides'
+                : 'nothing',
+        })),
+        /* The monogram column: one square per role, all the same size, and
+           every employer name starting at the same inline offset. A track
+           that varied per row is the defect a fixed column exists to prevent,
+           and it is invisible until two rows are compared. */
+        monograms: [...window.document.querySelectorAll('.ledger-monogram')].map(box),
+        names: [...window.document.querySelectorAll('.ledger-name')].map((node) => box(node).x),
+        /* The nav's numbers: same top edge on every link, so a mark beside a
+           figure has not lifted one of them off the row's line. */
+        navNumbers: [...window.document.querySelectorAll('.section-link-number')].map(
+          (node) => box(node).y
+        ),
+        navLinks: [...window.document.querySelectorAll('.section-link')].map((node) => ({
+          name: node.getAttribute('aria-label'),
+          text: node.textContent.trim(),
+          ...box(node),
+        })),
+        /* No sideways scroll: the chrome row gained a mark and the ledger row
+           gained a column, and both are the kind of addition that pushes a
+           390px sheet into a horizontal scrollbar. */
+        documentWidth: window.document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+      };
+    });
+
+    if (observed.shift.supported) {
+      expect(observed.shift.chrome, 'the chrome row shifted as the page loaded').toBeLessThan(0.01);
+      expect(observed.shift.roles, 'the roles section shifted as the page loaded').toBeLessThan(0.01);
+    }
+
+    expect(observed.marks.length, 'the page draws no marks at all').toBeGreaterThan(5);
+    for (const mark of observed.marks.filter((candidate) => !candidate.laidOut)) {
+      expect(
+        mark.hiddenBy,
+        `a mark (${mark.classes}) is on the page with no box and nothing hiding it`
+      ).not.toBe('nothing');
+    }
+    for (const mark of observed.marks.filter((candidate) => candidate.laidOut)) {
+      expect(mark.shapes, `a mark (${mark.classes}) draws no shapes`).toBeGreaterThan(0);
+      /* The three slots are 18, 16 and 12 CSS pixels at the default root, and
+         every mark is square. The bound is generous on purpose — this is the
+         "did the token resolve at all" floor, not a re-pin of the token's
+         value, which tests/icons.test.mjs owns. */
+      expect(mark.width, `a mark (${mark.classes}) painted at ${mark.width}px`).toBeGreaterThan(8);
+      expect(mark.width, `a mark (${mark.classes}) painted at ${mark.width}px`).toBeLessThan(32);
+      expect(mark.height, `a mark (${mark.classes}) is not square`).toBeCloseTo(mark.width, 1);
+      /* Ink is inherited, never named: a mark with no colour of its own is
+         what makes the family follow all four reading modes with no branch. */
+      expect(mark.ink, `a mark (${mark.classes}) painted no ink`).toMatch(/^rgba?\(/);
+    }
+
+    expect(observed.monograms, 'the roles render no monogram tiles').toHaveLength(4);
+    for (const tile of observed.monograms) {
+      expect(tile.height, 'a monogram tile is not square').toBeCloseTo(tile.width, 1);
+      expect(tile.width, 'a monogram tile has a different size from its siblings').toBeCloseTo(
+        observed.monograms[0].width,
+        1
+      );
+    }
+    expect(
+      new Set(observed.names).size,
+      `the employer names start at ${new Set(observed.names).size} different offsets; the monogram column varies per row`
+    ).toBe(1);
+    expect(
+      new Set(observed.navNumbers).size,
+      'the nav numbers sit at different heights; a mark has lifted one off the row'
+    ).toBe(1);
+
+    expect(observed.navLinks, 'the nav renders the wrong number of links').toHaveLength(5);
+    expect(
+      observed.navLinks.map((link) => link.name),
+      'the nav links lost the section words as their accessible names'
+    ).toEqual(['Professional Experience', 'Projects', 'Commits', 'Trackers', 'Gallery']);
+    expect(
+      observed.navLinks.map((link) => link.text),
+      'the nav prints something other than the sheet numbers'
+    ).toEqual(['01', '02', '03', '04', '05']);
+    for (const link of observed.navLinks) {
+      /* The touch floor survives the words leaving: a link that is now a mark
+         and two digits is a SMALLER box, which is exactly the direction that
+         breaks a 44px minimum. */
+      expect(link.width, `the "${link.name}" link is ${link.width}px wide`).toBeGreaterThanOrEqual(
+        44
+      );
+      expect(link.height, `the "${link.name}" link is ${link.height}px tall`).toBeGreaterThanOrEqual(
+        44
+      );
+    }
+
+    expect(
+      observed.documentWidth,
+      `the sheet scrolls sideways at ${viewport.width}px (${observed.documentWidth}px of document)`
+    ).toBeLessThanOrEqual(observed.viewportWidth);
+  });
+}
+
+test('the keyboard still walks the chrome row: the wordmark, the five nav links, then the reading mode', async ({
+  page,
+}) => {
+  await visit(page);
+  /* The nav links became marks and numbers; a control with no text is exactly
+     the kind of control that quietly leaves the tab order — a span someone
+     styled to look pressable, an anchor that lost its href. So the walk is
+     measured from the wordmark forward, naming what it lands on at each step,
+     rather than asserting a count of focusable things. */
+  await page.locator('.page-mark').evaluate((node) => node.focus());
+  const landed = [];
+  for (let step = 0; step < 6; step += 1) {
+    await page.keyboard.press('Tab');
+    landed.push(
+      await page.evaluate(() => {
+        const active = window.document.activeElement;
+        return {
+          classes: active === null ? '' : (active.getAttribute('class') ?? ''),
+          name:
+            active === null
+              ? ''
+              : (active.getAttribute('aria-label') ?? active.textContent?.trim() ?? ''),
+        };
+      })
+    );
+  }
+  /* WebKit's automation build mirrors Safari's own "Text boxes and lists
+     only" keyboard setting and omits plain links from the tab order entirely,
+     which is a true report about that engine rather than a defect in this
+     nav. So the capability has to be asked — but NEVER of the nav itself.
+     Deriving the skip from the walk above is the self-derived-skip defect
+     this file records twice already: a nav link that quietly left the tab
+     order would look exactly like an engine that does not tab to links, and
+     the lane would report nothing while looking green.
+
+     The probe is therefore the same independent one the nav-ink lane uses: a
+     single Tab out of the LAST role row, which lands on the first plain
+     anchor in the page's own content — the projects table's first repository
+     link, an anchor with nothing to do with the nav. Reaching an anchor there
+     means this engine tabs to links, and the walk above is then ASSERTED. */
+  await page
+    .locator('#work .ledger-entry')
+    .last()
+    .locator('.ledger-row')
+    .evaluate((node) => node.focus());
+  await page.keyboard.press('Tab');
+  const engineTabsLinks = await page.evaluate(
+    () => window.document.activeElement?.tagName === 'A'
+  );
+  test.skip(!engineTabsLinks, 'this engine does not put plain links in the tab order');
+  expect(
+    landed.slice(0, 5).map((stop) => stop.name),
+    'the tab order through the nav is no longer the sheet order'
+  ).toEqual(['Professional Experience', 'Projects', 'Commits', 'Trackers', 'Gallery']);
+  expect(landed[5].name, 'the reading mode no longer follows the nav in the tab order').toBe(
+    'Reading mode'
+  );
 });
