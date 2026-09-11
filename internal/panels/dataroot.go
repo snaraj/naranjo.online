@@ -730,11 +730,134 @@ func mergeSeriesSource(section usageSeriesSource, base TokenUsageSource, capture
 	if err != nil {
 		return TokenUsageSource{}, err
 	}
+	models, err := admitModelStats(base.ModelStats, section.ModelStats, stats)
+	if err != nil {
+		return TokenUsageSource{}, err
+	}
 	base.Series = series
 	base.Stats = stats
+	base.ModelStats = models
 	base.Windows = windows
 	base.CapturedAt = captured.UTC().Format(time.RFC3339)
 	return base, nil
+}
+
+// admitModelStats validates the pushed per-model lifetime section and returns
+// the served form (issue #267). One refusal per rule, and the rules are the
+// ones every other admission here already states, applied to a new shape:
+//
+//   - every key is a MEMBER of the closed model vocabulary, never merely
+//     label-shaped (the H1 lesson: `private-feature` walks through a shape
+//     test and onto a public page);
+//   - a key appears once, so one member cannot be served twice and the served
+//     order cannot repeat a row;
+//   - every totals key is a member of the closed CATEGORY vocabulary, which
+//     is the same closed set the daily breakdown admits;
+//   - every count obeys the one numeric contract, and a null is refused
+//     rather than published as a zero — the rule Derived and Stats already
+//     state, for the reason the owner stated: unknown renders as unknown;
+//   - a member whose totals sum to nothing is refused, exactly as an
+//     all-zero breakdown row is: a placeholder draws a named entity at
+//     nought beside entities that were used;
+//   - for every class the source's OWN stats tile reports, the members sum
+//     to no MORE than that tile. It is `≤` and not `=` on purpose: the
+//     producer's per-model accrual covers the days the walk owns, while the
+//     class tile also accrues days a history store supplied, so a correct
+//     document can legitimately attribute less than the whole.
+//
+// COMPLETENESS IS THE CAPTURED-STATS RULE, VERBATIM. A source whose snapshot
+// ships the section must refresh it on every push, because a frozen
+// release-time per-model split beside a runtime series is the exact mixing
+// findings 5 and 7 refused. A source whose snapshot ships none owes nothing,
+// and its pushed section is validated and DISCARDED rather than served —
+// a pushed figure can never add a surface the owner did not ship.
+func admitModelStats(base []TokenUsageModelStat, pushed []usageSeriesModelStat, stats []TokenUsageStat) ([]TokenUsageModelStat, error) {
+	if len(base) == 0 {
+		// Validated for shape even though it is discarded: a malformed
+		// section is a producer fault worth refusing wherever it appears, and
+		// silently dropping one would hide the drift until the day the
+		// snapshot starts shipping the surface.
+		if len(pushed) > 0 {
+			if _, err := orderModelStats(pushed, stats); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
+	if len(pushed) == 0 {
+		return nil, errors.New("the document does not refresh the per-model lifetime split; a shipped section may never keep a release-time value beside a runtime series")
+	}
+	return orderModelStats(pushed, stats)
+}
+
+// orderModelStats applies every per-member rule and returns the rows in
+// vocabulary order, so every replica emits identical bytes and its digest
+// ETag stays identical — the job orderBreakdown does for a daily partition.
+//
+// The two addCounts refusals inside are admitBreakdown's belt-and-braces,
+// for admitBreakdown's stated reason and with its stated limit: admitCount
+// already bounds every value to maxCountValue, so thirteen members times five
+// classes cannot overflow an int64 today and neither branch is reachable from
+// any input. They exist so a future edit to either bound cannot quietly
+// reopen the wrap that once summed three authenticated values to zero.
+func orderModelStats(pushed []usageSeriesModelStat, stats []TokenUsageStat) ([]TokenUsageModelStat, error) {
+	if len(pushed) > maxSeriesModels {
+		return nil, fmt.Errorf("%d per-model rows, over the %d bound", len(pushed), maxSeriesModels)
+	}
+	rows := make(map[string]map[string]int64, len(pushed))
+	sums := map[string]int64{}
+	for _, member := range pushed {
+		if !inVocabulary(member.Key, modelServeOrder) {
+			return nil, errors.New("per-model key is outside the closed vocabulary")
+		}
+		if _, ok := rows[member.Key]; ok {
+			return nil, fmt.Errorf("per-model key %q is declared twice", member.Key)
+		}
+		totals := make(map[string]int64, len(member.Totals))
+		var carried int64
+		for key, value := range member.Totals {
+			if !inVocabulary(key, categoryServeOrder) {
+				return nil, fmt.Errorf("per-model row %q names a class outside the closed vocabulary", member.Key)
+			}
+			if value == nil {
+				return nil, fmt.Errorf("per-model row %q leaves a class carrying no figure; a class the producer cannot measure may not be published as a zero", member.Key)
+			}
+			if err := admitCount(*value); err != nil {
+				return nil, fmt.Errorf("per-model row %q: %w", member.Key, err)
+			}
+			totals[key] = *value
+			sum, ok := addCounts(carried, *value)
+			if !ok {
+				return nil, fmt.Errorf("per-model row %q overflows its own total", member.Key)
+			}
+			carried = sum
+			sum, ok = addCounts(sums[key], *value)
+			if !ok {
+				return nil, fmt.Errorf("per-model class %q overflows the lifetime split", key)
+			}
+			sums[key] = sum
+		}
+		if carried == 0 {
+			return nil, fmt.Errorf("per-model row %q carries nothing; a placeholder row draws a named entity at nought beside entities that were used", member.Key)
+		}
+		rows[member.Key] = totals
+	}
+	for _, stat := range stats {
+		summed, ok := sums[stat.Key]
+		if !ok || stat.Value == nil {
+			continue
+		}
+		if summed > *stat.Value {
+			return nil, fmt.Errorf("the per-model split attributes %d to the %q class; the source's own tile reports %d", summed, stat.Key, *stat.Value)
+		}
+	}
+	ordered := make([]TokenUsageModelStat, 0, len(rows))
+	for _, key := range modelServeOrder {
+		if totals, ok := rows[key]; ok {
+			ordered = append(ordered, TokenUsageModelStat{Key: key, Totals: totals})
+		}
+	}
+	return ordered, nil
 }
 
 // admitSeriesSection validates the daily series and its category partition

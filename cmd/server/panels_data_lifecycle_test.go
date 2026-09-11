@@ -38,7 +38,7 @@ var panelsDataLifecycleKeyHex = func() string {
 // the embedded capture instant without spelling either in code. EVERY label
 // is returned, because a document must refresh the complete shipped set to
 // be admitted at all (2026-08-24 review finding 7).
-func embeddedUsageFacts(t *testing.T) (labels []string, generatedAt string) {
+func embeddedUsageFacts(t *testing.T) (labels []string, modelKey, generatedAt string) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "panels", "snapshots", "token-usage.json"))
 	if err != nil {
@@ -49,6 +49,13 @@ func embeddedUsageFacts(t *testing.T) (labels []string, generatedAt string) {
 		Data        struct {
 			Sources []struct {
 				Label string `json:"label"`
+				// One model vocabulary key, read off the shipped section
+				// rather than spelled here, exactly as the labels are: the
+				// per-model lifetime split a pushed document must carry is
+				// keyed by that vocabulary (issue #267).
+				ModelStats []struct {
+					Key string `json:"key"`
+				} `json:"modelStats"`
 			} `json:"sources"`
 		} `json:"data"`
 	}
@@ -63,14 +70,22 @@ func embeddedUsageFacts(t *testing.T) (labels []string, generatedAt string) {
 			t.Fatal("embedded snapshot carries an unlabeled source")
 		}
 		labels = append(labels, source.Label)
+		for _, row := range source.ModelStats {
+			if modelKey == "" && row.Key != "" {
+				modelKey = row.Key
+			}
+		}
 	}
-	return labels, document.GeneratedAt
+	if modelKey == "" {
+		t.Fatal("the embedded snapshot ships no per-model lifetime row to take a vocabulary key from")
+	}
+	return labels, modelKey, document.GeneratedAt
 }
 
 // stageSealedSeries seals one complete document — a two-day series with a
 // category partition for every shipped source — into dir under the
 // production file name and returns its capture instant.
-func stageSealedSeries(t *testing.T, dir string, labels []string) string {
+func stageSealedSeries(t *testing.T, dir string, labels []string, modelKey string) string {
 	t.Helper()
 	generatedAt := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
 	sources := make(map[string]any, len(labels))
@@ -97,12 +112,29 @@ func stageSealedSeries(t *testing.T, dir string, labels []string) string {
 			// refreshed, and a key naming no tile is validated and
 			// unrendered, so the full set satisfies every shipped label.
 			"stats": map[string]any{
-				"lifetime":    77,
-				"input":       11,
-				"output":      22,
-				"cache-read":  33,
-				"cache-write": 44,
-				"sessions":    55,
+				"lifetime":        77,
+				"input":           11,
+				"output":          22,
+				"cache-read":      33,
+				"cache-write":     44,
+				"sessions":        55,
+				"longest-session": 66,
+			},
+			// And the per-model lifetime split under the same rule (issue
+			// #267): a source whose snapshot ships the section must refresh
+			// it on every push, and one whose snapshot ships none has its
+			// pushed section validated and discarded. Its figures stay under
+			// the class tiles above, which is what the origin enforces.
+			"modelStats": []any{
+				map[string]any{
+					"key": modelKey,
+					"totals": map[string]any{
+						"input":       1,
+						"output":      2,
+						"cache-read":  3,
+						"cache-write": 4,
+					},
+				},
 			},
 		}
 	}
@@ -161,9 +193,9 @@ func drainRun(t *testing.T, runResult <-chan error) {
 
 func TestRunServesThePanelsDataLifecycleEndToEnd(t *testing.T) {
 	requireBuiltFrontend(t)
-	labels, embeddedGeneratedAt := embeddedUsageFacts(t)
+	labels, modelKey, embeddedGeneratedAt := embeddedUsageFacts(t)
 	dir := t.TempDir()
-	stagedGeneratedAt := stageSealedSeries(t, dir, labels)
+	stagedGeneratedAt := stageSealedSeries(t, dir, labels, modelKey)
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// Direction one: capability configured — the sealed file is decrypted,

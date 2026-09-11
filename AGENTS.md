@@ -971,19 +971,23 @@ Structural promises of the panels subsystem, pinned by
   figure is a doctrine violation no matter how good the panel looks with
   it.
 - **Vendor names are data, never code.** Tool and vendor names appear
-  only as data labels inside snapshots, the embedded fetch config, and the
-  model vocabulary `internal/panels/config/models.json` — the ONE file that
+  only as data labels inside snapshots, the embedded fetch config, and TWO
+  vocabulary files under one rule: `internal/panels/config/models.json`
   spells every model key, written name, palette slot, vendor group and raw
-  identifier, which the origin embeds, the exporter reads and the frontend
-  imports (issue #302 retired the three hand-kept tables and the regex
-  parity test between them). Two pins hold the line: `vendorMarks` in
+  identifier, and `internal/panels/config/sources.json` spells every
+  reporting tool's key, written name and vendor group (issue #302 retired
+  the three hand-kept model tables and the regex parity test between them;
+  issue #267 gave the source NAME the same home, because until then a
+  source key was all the wire carried and the name had nowhere to live but
+  a component). The origin embeds both, the exporter reads the model file,
+  and the frontend imports both. Two pins hold the line: `vendorMarks` in
   `internal/panels/doctrine_test.go` scans that package's production source
   bytes — identifiers, strings, and comments alike — and the vocabulary
   sweep in `scripts/ci/test_capture_usage_series.py` proves no Go,
   TypeScript, Svelte, CSS or Python production source anywhere spells a
-  model key, a written name or a vendor group. A provider swap and a model
-  addition are both data edits, and the compiled binary carries no vendor
-  coupling.
+  model key, a source key, a written name or a vendor group. A provider
+  swap, a model addition and a source addition are all data edits, and the
+  compiled binary carries no vendor coupling.
 
 ## Docs and attribution conventions
 

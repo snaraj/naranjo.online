@@ -6,11 +6,12 @@
 import type {
   LedgerBar,
   LedgerBoardProps,
+  LedgerCard,
   LedgerFact,
   LedgerMeter,
-  LedgerSquare
+  LedgerSpark
 } from './blocks.ts';
-import { addDays, formatMagnitude, formatWhole } from './grid.ts';
+import { addDays, formatMagnitudeFixed, formatWhole } from './grid.ts';
 import { dayNumber, formatDateRange } from './periods.ts';
 import { panelStaleAfterMs, panelStaleNote } from './panels.ts';
 /* The model vocabulary is DATA and it lives in one file, outside this
@@ -19,12 +20,20 @@ import { panelStaleAfterMs, panelStaleNote } from './panels.ts';
    The container's frontend stage copies the file in beside VERSION, which is
    the precedent this follows. */
 import modelVocabulary from '../../../internal/panels/config/models.json' with { type: 'json' };
+/* The SOURCE vocabulary is data in exactly the same sense and lives beside it
+   for exactly the same reason (issue #311): the wire carries a machine key,
+   the page prints a written name, and a table kept anywhere else is a table
+   that can disagree with the origin about what a source is called. */
+import sourceVocabulary from '../../../internal/panels/config/sources.json' with { type: 'json' };
 import type {
   PanelEnvelope,
   PanelStatus,
+  TokenUsageClassKey,
+  TokenUsageClassTotals,
   TokenStatUnit,
   TokenUsageCategory,
   TokenUsageInsight,
+  TokenUsageModelStat,
   TokenUsageSeries,
   TokenUsageSource,
   TokenUsageStat,
@@ -76,19 +85,27 @@ export function formatUtilization(pct: number): string {
 }
 
 /* formatTokenCount is the auto-compact figure used across the panel: exact
- * comma-grouped digits below ten thousand, then one-decimal K, M, B and T
- * steps with a trailing .0 trimmed — 1284 renders "1,284", 12900 renders
- * "12.9K", 9421770 renders "9.4M". Counts are non-negative by admission below.
+ * comma-grouped digits below ten thousand, then K, M, B and T steps written
+ * to ONE decimal place — 1284 renders "1,284", 12900 renders "12.9K",
+ * 129000000 renders "129.0M". Counts are non-negative by admission below.
  *
- * The arithmetic moved to lib/grid.ts's formatMagnitude (owner directive,
- * 2026-08-25), and this is now the panel's name for it rather than a second
- * implementation. It had one already: the heatmap under this panel's own
- * summary line rendered its cells with exact digits, so the same day's usage
- * read "7.7B tokens over 15 days" in the sentence and "627,742,457" in the
- * tooltip above it. One function, called from both places, is what makes
- * those two readings the same reading. */
+ * The decimal place is KEPT rather than trimmed (owner directive, 2026-09-11:
+ * the approved board prints "129.0M"). The board reads its figures down a
+ * column and across a row against each other, and a column that alternates
+ * "129M" with "44.9B" is a column whose digits stop lining up — which is a
+ * different claim about the same quantity only in the sense that it is harder
+ * to compare. The calendar keeps the trimmed spelling, because a tooltip is
+ * read alone rather than against its neighbours.
+ *
+ * The arithmetic lives in lib/grid.ts (owner directive, 2026-08-25), and this
+ * is the panel's NAME for it rather than a second implementation. It had one
+ * already: the heatmap under this panel's own summary line rendered its cells
+ * with exact digits, so the same day's usage read "7.7B tokens over 15 days"
+ * in the sentence and "627,742,457" in the tooltip above it. Both spellings
+ * pick their unit through one shared step walk, so the two readings can never
+ * disagree about whether a figure is millions or billions. */
 export function formatTokenCount(count: number): string {
-  return formatMagnitude(count);
+  return formatMagnitudeFixed(count);
 }
 
 /* resetsIn renders a window's resetsAt in the same coarse relative language
@@ -225,9 +242,11 @@ export function formatStatValue(value: number | null, unit: TokenStatUnit): stri
  * non-string label, a negative count, a numberless window, a stat in a unit
  * this file cannot format — refuses the whole payload so the panel shows its
  * honest empty state instead of fake numbers. Source labels pass through as
- * data; nothing here knows a vendor. The stat, series, and insight sections
- * are optional: a payload written before they existed is still admitted, an
- * absent section simply does not render. */
+ * DATA and stay machine keys here; nothing in this admission knows a vendor,
+ * and the written name is resolved at render time through sourceName. The
+ * stat, series, insight and model-accounting sections are all optional: a
+ * payload written before any of them existed is still admitted, and an absent
+ * section simply does not render. */
 export function tokenUsageSources(data: unknown): TokenUsageSource[] {
   if (!isRecord(data) || !Array.isArray(data.sources)) {
     return [];
@@ -253,6 +272,10 @@ export function tokenUsageSources(data: unknown): TokenUsageSource[] {
     }
     const series = admitSeries(candidate.series);
     if (series === null) {
+      return [];
+    }
+    const modelStats = admitModelStats(candidate.modelStats);
+    if (modelStats === null) {
       return [];
     }
     const windows: TokenUsageWindow[] = [];
@@ -294,6 +317,9 @@ export function tokenUsageSources(data: unknown): TokenUsageSource[] {
     }
     if (series !== undefined) {
       source.series = series;
+    }
+    if (modelStats.length > 0) {
+      source.modelStats = modelStats;
     }
     sources.push(source);
   }
@@ -366,6 +392,97 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
   return insights;
 }
 
+/* admitModelStats holds the optional LIFETIME model accounting to the same
+ * three-state contract every other section takes — absent is an empty list, a
+ * malformed section refuses the whole payload — and to the SAME closed
+ * membership the daily model partition takes: a key outside the vocabulary
+ * refuses, no key twice, and never more rows than the file has members. It is
+ * defence in depth exactly as admitBreakdown's membership rule is: the origin
+ * blocks such a payload today, and the claim that an unknown key cannot reach
+ * rendering has to survive a future boundary regression rather than depend on
+ * one.
+ *
+ * A class the member never spent is ABSENT on the wire, not zero — the
+ * origin's contract (internal/panels/types.go), and the producer's, which
+ * drops a nought class from the member — so the boundary reads absence as
+ * the zero it is, refuses a class outside the closed FIVE (the categories,
+ * reasoning among them) or a class present without a figure, and refuses a
+ * member whose classes sum to nothing, exactly as the origin does. One
+ * fixture, internal/panels/testdata/model-stats-shapes.json, pins the four
+ * stages to one set of shapes, and the capture suite's parity pin holds the
+ * three spellings of the vocabulary to one list (PR #312 review, rounds 1
+ * and 2): before them this boundary required exactly the four stat tiles and
+ * refused the WHOLE payload over a member the origin had served truthfully. */
+function admitModelStats(value: unknown): TokenUsageModelStat[] | null {
+  if (value === undefined) {
+    return [];
+  }
+  /* The row bound is checked BEFORE a single row is read, which is what makes
+     it a bound on WORK rather than a second spelling of the duplicate rule
+     below: closed membership already means an over-long section must repeat a
+     key, but only after the walk has run over every entry in it. */
+  if (!Array.isArray(value) || value.length > modelSlots.size) {
+    return null;
+  }
+  const seen = new Set<string>();
+  const stats: TokenUsageModelStat[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.key !== 'string' || !modelSlots.has(entry.key)) {
+      return null;
+    }
+    /* No key twice: two rows for one model are two answers to one question,
+       and the share arithmetic below would count the member's tokens twice in
+       the denominator and once in its own bar. */
+    if (seen.has(entry.key)) {
+      return null;
+    }
+    seen.add(entry.key);
+    const totals = admitClassTotals(entry.totals);
+    if (totals === null) {
+      return null;
+    }
+    stats.push({ key: entry.key, totals });
+  }
+  return stats;
+}
+
+/* admitClassTotals admits one model's classes, or refuses.
+ *
+ * Every key present must be one of the five classes and carry a count; a
+ * class absent is the zero the origin's contract says it is; a member whose
+ * classes SUM to nothing — none named, or every one named at nought — spent
+ * nothing, never reaches the wire, and is refused here by the origin's own
+ * rule (a sum, not a presence).
+ *
+ * The sum is CHECKED, the same rule the day partition takes and for the same
+ * reason: JavaScript addition does not overflow, it silently stops being
+ * exact, so four admissible counts can land on a number that is merely NEAR
+ * the truth — and every share on the card would then be a proportion of an
+ * approximation. Refusing the moment the running sum leaves the exact range
+ * keeps the arithmetic meaningful instead of decorative. */
+function admitClassTotals(value: unknown): TokenUsageClassTotals | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const totals = Object.fromEntries(modelClassKeys.map((key) => [key, 0])) as TokenUsageClassTotals;
+  let sum = 0;
+  for (const key of Object.keys(value)) {
+    if (!categorySlots.has(key)) {
+      return null;
+    }
+    const count = value[key];
+    if (!isCount(count)) {
+      return null;
+    }
+    totals[key as TokenUsageClassKey] = count;
+    sum += count;
+  }
+  if (sum === 0 || !Number.isSafeInteger(sum)) {
+    return null;
+  }
+  return totals;
+}
+
 /* How many rows ONE breakdown of a series may carry. The category bound is
  * the structural guard the Go boundary states as maxSeriesCategories; the
  * model bound is the model vocabulary's own size, exactly as maxSeriesModels
@@ -375,13 +492,15 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
 const maxCategoryRows = 8;
 
 /* maxModelDays bounds how many trailing days the model breakdown may cover —
- * the same ten-week budget the Go boundary enforces (maxModelDays in
+ * the same eight-week budget the Go boundary enforces (maxModelDays in
  * internal/panels/types.go), mirrored here so a regression there still meets
  * a refusal before rendering. It was a quarter until the vocabulary gained
- * its second vendor group (issue #302): the section costs one integer per day
- * per member, and the shared payload ceiling is not a lever. The categories
- * breakdown carries no separate day bound on either side, exactly as in Go. */
-const maxModelDays = 70;
+ * its second vendor group (issue #302), and ten weeks until the sealed
+ * ceiling needed its further digit (issue #267): the section costs one
+ * integer per day per member, and the ceiling is never the lever; the window
+ * is. The categories breakdown carries no separate day bound on either side,
+ * exactly as in Go. */
+const maxModelDays = 56;
 
 /* admitSeries returns the admitted series, undefined when the section is
  * absent, or null when it exists and is malformed. The start date must be a
@@ -630,9 +749,14 @@ function breakdownWindow(
   return { offset, declared };
 }
 
-/* categoryLabel renders a category key as display copy: hyphens become
- * spaces and nothing else changes, so the shown word list is exactly the
- * data's vocabulary in the panel's own lowercase voice. */
+/* categoryLabel renders a machine key as display copy: hyphens become spaces
+ * and nothing else changes, so the shown word list is exactly the data's
+ * vocabulary in the panel's own lowercase voice. It is the board's key-to-
+ * words rule for every key it prints — an accounting class on a source card,
+ * a streak on the session card — rather than one rule per section, because
+ * "cache-write" and "longest-streak" are the same kind of word list and a
+ * second transformation would be a second place for them to disagree. Model
+ * keys are the deliberate exception and modelLabel says why. */
 export function categoryLabel(key: string): string {
   return key.replace(/-/g, ' ');
 }
@@ -661,8 +785,10 @@ export interface CategoryShare {
 
 /* unknownFigure is the one spelling of "this is not a number the data can
  * vouch for", shared by every figure that can be absent so a reader learns one
- * mark rather than three. */
-export const unknownFigure = '--';
+ * mark rather than three. An em dash, which is the mark lib/projects.ts has
+ * always drawn for the same claim — two hyphens read as a truncated figure
+ * beside a column of real ones (owner directive, 2026-09-11). */
+export const unknownFigure = '—';
 
 /* formatShare renders a proportion, or the unknown mark when there is none. */
 export function formatShare(pct: number | null): string {
@@ -708,6 +834,21 @@ const categorySlots: ReadonlyMap<string, number> = new Map([
 export function categorySlot(key: string): number {
   return categorySlots.get(key) ?? 0;
 }
+
+/* The four lifetime STAT tiles a source card prints, in the order every
+ * surface prints them: the wire's stat vocabulary (usageSeriesStatKeys in
+ * internal/panels/types.go) carries a lifetime figure for these four and not
+ * for reasoning. */
+const classKeys = ['input', 'output', 'cache-read', 'cache-write'] as const;
+
+/* The classes a MODEL'S OWN split may name are the five categories, read off
+ * categorySlots above — the one list on the page the capture suite's parity
+ * pin holds to the origin's categoryServeOrder and the producer's
+ * CATEGORY_KEYS. A merge source reports reasoning per model (the second
+ * tool's class), and the origin serves it; a page that read only the four
+ * stat tiles here refused the whole payload over such a member (PR #312
+ * round 2, finding 1). */
+export const modelClassKeys: readonly TokenUsageClassKey[] = [...categorySlots.keys()] as TokenUsageClassKey[];
 
 /* The CLOSED MODEL vocabulary, read from the one file that states it
  * (issue #302). Every key, written name, palette slot and vendor group the
@@ -764,39 +905,45 @@ export function modelLabel(key: string): string {
   return modelLabels.get(key) ?? key;
 }
 
-/* Which vendor group a member belongs to, and the written heading that group
- * puts on its own block. The residual belongs to NO group — it is the fold
- * every source may carry — so it answers with the empty string and rides the
- * block of whichever group its source's named members sit in. */
-const modelGroups: ReadonlyMap<string, string> = new Map(
-  modelMembers.map((member): [string, string] => [member.key, member.group])
+/* THE SOURCE VOCABULARY, read from the one file that states it (issue #311).
+ * The wire carries a machine key for each source — the producer's own name
+ * for where a capture came from — and the page prints a written name. Both
+ * live in internal/panels/config/sources.json, which the origin embeds and
+ * this module imports, exactly as the model vocabulary works and for exactly
+ * the same reason: two tables of names are two tables that can disagree, and
+ * the one that disagreed would be the one a reader is looking at.
+ *
+ * This is the ONLY function that turns a key into words. The board's source
+ * cards, the models headings and the commits section's segment labels all ask
+ * it, so a source renamed in the file is renamed everywhere at once. */
+const sourceNames: ReadonlyMap<string, string> = new Map(
+  sourceVocabulary.sources.map((entry): [string, string] => [entry.key, entry.name])
 );
 
-export function modelGroup(key: string): string {
-  return modelGroups.get(key) ?? '';
+/* A key the file does not name renders AS THE KEY. A source the vocabulary
+ * has not been taught yet is still a source whose figures are true, and its
+ * raw key says exactly what is known about it — where inventing a name would
+ * be a fabrication and dropping the card would hide real data. */
+export function sourceName(key: string): string {
+  return sourceNames.get(key) ?? key;
 }
 
-const modelGroupLabels: ReadonlyMap<string, string> = new Map(
-  modelVocabulary.groups.map((group): [string, string] => [group.key, group.label])
+/* The canonical SERVE order as a RANK, so a card lays its rows out in the
+ * vocabulary's order whatever order a payload served them in. The residual
+ * leads it, exactly as modelSlots does, because the two are the same list
+ * read for two different questions.
+ *
+ * The vendor GROUP is no longer read anywhere (owner directive, 2026-09-11):
+ * a models card is headed by the SOURCE whose split it draws, so the group's
+ * written name, its declared row count and the "which group is present" walk
+ * that fed them all went with the blocks they headed. The groups are still
+ * the file's own structure and still what gives each member its slot; nothing
+ * on the page asks which one a member belongs to. */
+const modelRanks: ReadonlyMap<string, number> = new Map(
+  [modelResidual.key, ...modelMembers.map((member) => member.key)].map(
+    (key, index): [string, number] => [key, index]
+  )
 );
-
-export function modelGroupLabel(group: string): string {
-  return modelGroupLabels.get(group) ?? '';
-}
-
-/* How many rows a group's block RESERVES: its declared members plus the
- * residual, which any source may carry into it. The box a block holds is
- * sized from this rather than from the rows one envelope happens to bring,
- * so a later envelope with fewer members leaves the page exactly where it
- * was — the zero-CLS floor, stated where the count is known. */
-export function modelGroupRows(group: string): number {
-  const declared = modelVocabulary.groups.find((entry) => entry.key === group);
-  return declared === undefined ? 0 : declared.members.length + 1;
-}
-
-/* The vendor groups in the file's own order, which is the order their blocks
- * are rendered in. */
-const modelGroupKeys: readonly string[] = modelVocabulary.groups.map((group) => group.key);
 
 /* modelShares summarizes the model partition the way categoryShares does the
  * category one, with ONE deliberate difference in the denominator: a model
@@ -835,84 +982,6 @@ export const tokenUsageFallbackTitle = 'Token usage';
 export const tokenUsageEmptyNote = 'No usage data available.';
 export const tokenUsageSourceEmptyNote = 'No usage recorded for this source yet.';
 
-/* modelBlocks answers which proportions this source actually shows, and whose
- * models they are.
- *
- * The panel has always had an insights row, and until the series carried a
- * MODEL partition those proportions could only be release-time figures frozen
- * into the shipped snapshot: true when the snapshot was cut, and quietly
- * ageing from then on. The v2 models section measures the same division from
- * the same days the graph above draws, so when it is present it is what the
- * rows report, and the frozen set becomes the documented fallback for a
- * payload that has no model partition — an older document, a source that does
- * not report one, or a live fetch that never carried one.
- *
- * The rows inherit the SERIES' provenance rather than claiming none: the
- * sealed push is an out-of-band capture, so a measured share is a recorded
- * figure exactly as the tiles beside it are, and it says so through the same
- * marking rule instead of borrowing a freshness the envelope did not
- * promise. */
-/* One rendered model block: the bars of one vendor group as read from one
- * source, the heading that group puts on them, and the rows its box reserves. */
-type ModelBlock = {
-  readonly label: string;
-  readonly ariaLabel: string;
-  readonly bars: LedgerBar[];
-  readonly rows: number;
-};
-
-function modelBlocks(source: TokenUsageSource): ModelBlock[] {
-  const shares = source.series ? modelShares(source.series) : [];
-  if (shares.length === 0) {
-    /* No model partition — an older document, a source that does not report
-       one, or a live fetch that never carried one. The frozen snapshot
-       insights are then what this source can say, and they belong to no
-       vendor group, so the block is headed by the source that reported them
-       rather than by a group it is not a partition of. */
-    const insights = source.insights ?? [];
-    return insights.length === 0
-      ? []
-      : [
-          {
-            label: `Models · ${source.label}`,
-            ariaLabel: `Model shares for ${source.label}`,
-            bars: insights.map(insightBar),
-            rows: insights.length
-          }
-        ];
-  }
-  /* One block per vendor GROUP, headed by the group's own written name from
-     the vocabulary file — never by the source's operator-typed label, which
-     names where the numbers were captured rather than whose models they
-     measure (issue #302). A source whose members all sit in one group renders
-     one block; a source that ever carries two groups' members renders one
-     block each, in the file's order.
-
-     The residual belongs to no group, so it rides the FIRST group present:
-     it is the fold of what that source could not attribute, and splitting it
-     across blocks would double-count it. A payload whose only member IS the
-     residual renders nothing at all — a block saying "all of it was
-     something we cannot name" is the aggregate above it with extra steps. */
-  const groupOfShare = (share: CategoryShare): string => modelGroup(share.key);
-  const present = modelGroupKeys.filter((group) =>
-    shares.some((share) => groupOfShare(share) === group)
-  );
-  const recorded = source.series?.recorded === true;
-  return present.map((group, index) => {
-    const carried = shares.filter(
-      (share) => groupOfShare(share) === group || (index === 0 && groupOfShare(share) === '')
-    );
-    return {
-      label: `Models · ${modelGroupLabel(group)}`,
-      ariaLabel: `Model shares for ${modelGroupLabel(group)}`,
-      bars: carried.map((share) =>
-        insightBar({ label: modelLabel(share.key), pct: share.pct, recorded })
-      ),
-      rows: modelGroupRows(group)
-    };
-  });
-}
-
 /* The stale threshold and the line itself are the page's, not this panel's
  * (lib/panels.ts, issue 285): the contribution calendar renders the same
  * data-through idiom, and two builders would be two ways to word one fact. */
@@ -949,39 +1018,74 @@ export function usageStaleNote(
 }
 
 /* ---------------------------------------------------------------------------
- * The board of squares (owner directive, 2026-09-03, issue 287)
+ * The six-card board (owner directive, 2026-09-11, issues 267 and 311)
  *
- * The tile grid became five turnable squares: a total, one per reported
- * source, the model split, and the session record. Every figure on every face
- * comes from a stat the payload actually carried, through the same formatter
- * the tiles used, and a stat the payload does not carry renders as the dash it
- * has always rendered as — never a zero, and never a hidden square.
+ * The five turnable squares became six cards on a three-by-two grid: the
+ * lifetime total, one card per reported source, the session record, and one
+ * models card per source that has a split to show. Every figure on every card
+ * comes from a stat, a window or a series the payload actually carried,
+ * through the formatters above, and a figure nobody reported renders as the
+ * page's own dash — never a zero, and never a card quietly missing from the
+ * board.
  *
- * THE SQUARES ARE DERIVED FROM THE SOURCES, not enumerated. A payload
- * reporting one source produces one source square; a third source appearing
- * tomorrow produces a third, with no edit here and none in the component. What
- * IS enumerated is the stat vocabulary — the keys the origin serves — because
- * that is payload data this adapter is allowed to know and the component is
- * not.
+ * THE CARDS ARE DERIVED FROM THE SOURCES, not enumerated, and no function
+ * below knows WHICH source it is reading. A source card is one shape rendered
+ * per source in wire order; a models card is the same. A third source
+ * appearing tomorrow produces a third of each with no edit here and none in
+ * the component. What IS enumerated is the stat vocabulary — the keys the
+ * origin serves — because that is payload data this adapter is allowed to
+ * know and the component is not.
+ *
+ * THE SOURCE'S WRITTEN NAME comes from the vocabulary file, through
+ * sourceName above and nowhere else. The wire carries a machine key; the
+ * board, the models headings and the commits section's segment labels all
+ * print the same written name because all three ask the same function.
  * ------------------------------------------------------------------------ */
 
-/* The stat keys each square claims, so no figure is shown twice on the board.
- * Written as data rather than as a chain of conditionals: the origin's own
- * key vocabulary (internal/panels), read here and nowhere else. */
+/* The stat keys the board reads, written as data rather than as a chain of
+ * conditionals: the origin's own key vocabulary (internal/panels), read here
+ * and nowhere else. */
 const lifetimeKey = 'lifetime';
-const peakDayKey = 'peak-day';
+const sessionsKey = 'sessions';
 const currentStreakKey = 'current-streak';
-const sessionKeys: readonly string[] = [
-  'sessions',
-  'active-days',
-  'tracked-days',
-  'longest-streak',
-  'longest-task'
-];
+const longestStreakKey = 'longest-streak';
+const longestSessionKey = 'longest-session';
 
+/* The page's own wording for the origin's CLOSED window vocabulary
+ * (usageSeriesWindowKeys in internal/panels/types.go). Two entries because
+ * the origin serves two, and a period outside them prints VERBATIM: an
+ * unknown window is still a real reading, and printing the word the payload
+ * used says exactly what is known about it. */
+const windowTerms: ReadonlyMap<string, string> = new Map([
+  ['today', 'today'],
+  ['week', 'this week']
+]);
+
+export function windowTerm(period: string): string {
+  return windowTerms.get(period) ?? period;
+}
+
+/* The board's own words. The turn labels prefix each card's accessible name,
+ * so a reader is told what pressing does and what state the card is in;
+ * nothing is printed on the card itself (owner directive, 2026-09-11: no
+ * turn hint). */
 export const boardTurnLabel = 'Turn';
 export const boardReturnLabel = 'Turn back';
 export const boardEmptyNote = tokenUsageEmptyNote;
+
+/* The total card's own copy: what the headline is a total OF, and the subject
+ * its daily line names. */
+export const totalCardLabel = 'Tokens tracked';
+export const lifetimeContext = 'lifetime';
+const combinedLineSubject = 'All sources';
+
+/* The session card's own copy. Its figure is a count of sessions and its
+ * facts are records, so the label names the subject and the three rows name
+ * themselves from their keys. */
+export const sessionsCardLabel = 'Sessions';
+
+/* What heads a models card, in front of the source's written name. */
+const modelsLabelPrefix = 'Models ·';
 
 /* One stat by key, or undefined. */
 function statOf(source: TokenUsageSource, key: string): TokenUsageStat | undefined {
@@ -991,73 +1095,69 @@ function statOf(source: TokenUsageSource, key: string): TokenUsageStat | undefin
 /* A stat's written figure, or the page's own unknown mark. A stat that is
  * absent and a stat whose value is null are the same claim — nobody reported
  * this — and they render identically, which is the honest-states floor at the
- * one place a square would otherwise be tempted to show a zero. */
+ * one place a card would otherwise be tempted to show a zero. */
 function statFigure(stat: TokenUsageStat | undefined): string {
-  return stat === undefined || stat.value === null ? unknownFigure : formatStatValue(stat.value, stat.unit);
+  return stat === undefined || stat.value === null
+    ? unknownFigure
+    : formatStatValue(stat.value, stat.unit);
 }
 
-/* The facts a square's back lists.
- *
- * A source whose series carries the per-day CATEGORY breakdown shows that: how
- * its tokens divide across input, output and the two cache classes, each with
- * its own count and share and its own fixed palette swatch. It is the retired
- * composition strip in the ledger's grammar — same categoryShares, same fixed
- * slots, same rule that identity rides the printed label rather than the
- * colour — and it is what the owner's drawing asks the source squares to turn
- * over to.
- *
- * A source with no breakdown falls back to whichever stats the front and the
- * other squares did not already claim, so a payload that reports only stat
- * tiles still turns over to something true. */
-function backFacts(source: TokenUsageSource): LedgerFact[] {
-  const shares = source.series ? categoryShares(source.series) : [];
-  if (shares.length > 0) {
-    return shares.map((share) => ({
-      key: share.key,
-      term: categoryLabel(share.key),
-      value: `${formatTokenCount(share.total)} · ${formatShare(share.pct)}`,
-      slot: categorySlot(share.key)
-    }));
-  }
-  const claimed = new Set<string>([lifetimeKey, peakDayKey, currentStreakKey, ...sessionKeys]);
-  return (source.stats ?? [])
-    .filter((stat) => !claimed.has(stat.key))
-    .map((stat) => ({ key: stat.key, term: stat.label, value: statFigure(stat) }));
+/* A stat's value, or undefined for the same two reasons statFigure renders a
+ * dash for. Separate from statFigure because arithmetic needs the number and
+ * a card needs the words, and deriving one from the other would mean parsing
+ * a rendered figure back into a count. */
+function statValue(source: TokenUsageSource, key: string): number | undefined {
+  const stat = statOf(source, key);
+  return stat === undefined || stat.value === null ? undefined : stat.value;
 }
 
-/* One proportion as a bar. The same row the tiles' insight region drew, at
- * the same saturation, so the board and the retired panel would have said the
- * identical thing. */
-function insightBar(insight: TokenUsageInsight): LedgerBar {
-  return {
-    key: insight.label,
-    label: insight.label,
-    fillPct: insight.pct === null ? null : meterFillPct(insight.pct),
-    reading: formatShare(insight.pct)
-  };
+/* ONE ruled line, or nothing at all. A term whose figure the payload does not
+ * carry never becomes a row: the dash belongs to a card's HEADLINE, where a
+ * reader is being told the card's whole subject went unmeasured, and a ladder
+ * of dashes says that four times over while burying the rows that are true. */
+function statFact(source: TokenUsageSource, key: string): LedgerFact | undefined {
+  const stat = statOf(source, key);
+  if (stat === undefined || stat.value === null) {
+    return undefined;
+  }
+  return { key, term: categoryLabel(key), value: formatStatValue(stat.value, stat.unit) };
 }
 
-/* The sub-line under a source's lifetime figure: its current streak and its
- * biggest single day, both from stats it reported. A source reporting neither
- * gets no sub-line rather than a sentence full of dashes. */
-function sourceSubline(source: TokenUsageSource): string | undefined {
-  const streak = statOf(source, currentStreakKey);
-  const peak = statOf(source, peakDayKey);
-  const parts: string[] = [];
-  if (streak !== undefined && streak.value !== null) {
-    parts.push(`${formatWhole(streak.value)}-day streak`);
+function present<T>(value: T | undefined): value is T {
+  return value !== undefined;
+}
+
+/* Each window the source reports, as its own ruled line: what went in and what
+ * came out, in the page's word for that period. */
+function windowFacts(source: TokenUsageSource): LedgerFact[] {
+  return source.windows.map((window) => ({
+    key: `window-${window.period}`,
+    term: windowTerm(window.period),
+    value: `${formatTokenCount(window.inputTokens)} in · ${formatTokenCount(window.outputTokens)} out`
+  }));
+}
+
+/* The lines beside a source's lifetime figure: its current streak and its
+ * longest single session, both from stats it reported. A source reporting
+ * neither gets no sub-line rather than a column of dashes. */
+function sourceSubline(source: TokenUsageSource): string[] {
+  const lines: string[] = [];
+  const streak = statValue(source, currentStreakKey);
+  if (streak !== undefined) {
+    lines.push(`${formatWhole(streak)}-day streak`);
   }
-  if (peak !== undefined && peak.value !== null) {
-    parts.push(`peak ${formatStatValue(peak.value, peak.unit)}`);
+  const longest = statOf(source, longestSessionKey);
+  if (longest !== undefined && longest.value !== null) {
+    lines.push(`longest session ${formatStatValue(longest.value, longest.unit)}`);
   }
-  return parts.length === 0 ? undefined : parts.join(' · ');
+  return lines;
 }
 
 /* A source's current usage window, drawn as a meter under its figure. It is
  * the SAME reading the retired tile panel drew, through the same saturation
  * and the same severity thresholds — a window the payload reports has a real
- * utilization and a real reset, and dropping it with the tiles would have been
- * the redesign quietly losing a capability rather than restyling one.
+ * utilization and a real reset, and dropping it with the squares would have
+ * been the redesign quietly losing a capability rather than restyling one.
  *
  * A source reporting no window, or a window with no utilization, draws no
  * meter: a bar at zero and a bar for a figure nobody reported are the same
@@ -1076,114 +1176,347 @@ function sourceMeter(source: TokenUsageSource): LedgerMeter | undefined {
   };
 }
 
+/* The accessible name of a daily line. The figures printed above it carry the
+ * reading itself — that is the non-colour channel the dataviz floor asks for
+ * — so the label says what the line IS and how much of it there is, rather
+ * than re-reading values a screen reader would have to hold in its head. */
+function dailyLineLabel(subject: string, days: number): string {
+  return `${subject} daily tokens, ${days} ${days === 1 ? 'day' : 'days'}`;
+}
+
+/* One source's own daily line, or nothing when it reported no series. */
+function sourceSpark(source: TokenUsageSource, subject: string): LedgerSpark | undefined {
+  const series = source.series;
+  if (series === undefined || series.totals.length === 0) {
+    return undefined;
+  }
+  return { totals: series.totals, ariaLabel: dailyLineLabel(subject, series.totals.length) };
+}
+
 /* The lifetime total across every source that reported one. Undefined when no
- * source did — the total square then shows the dash, because a sum of nothing
- * is not zero tokens, it is no measurement. */
+ * source did — the total card then shows the dash, because a sum of nothing is
+ * not zero tokens, it is no measurement. */
 function lifetimeTotal(sources: readonly TokenUsageSource[]): number | undefined {
   let total: number | undefined;
   for (const source of sources) {
-    const stat = statOf(source, lifetimeKey);
-    if (stat === undefined || stat.value === null) {
+    const lifetime = statValue(source, lifetimeKey);
+    if (lifetime === undefined) {
       continue;
     }
-    total = (total ?? 0) + stat.value;
+    total = (total ?? 0) + lifetime;
   }
   return total;
 }
 
-export function tokenSquares(sources: readonly TokenUsageSource[]): LedgerSquare[] {
+/* combinedSeries is the ONE line the total card draws, and the rule it
+ * follows is the only honest one available: it covers the days EVERY
+ * series-reporting source carries — the intersection of their windows — and
+ * each day is the sum of their readings on it.
+ *
+ * A DAY ONE SOURCE LACKS CONTRIBUTES THAT SOURCE'S ABSENCE, NOT ZERO. Two
+ * sources whose captures began a fortnight apart have a fortnight in which
+ * only one of them can speak; adding the other in at zero would draw a
+ * measured trough where the truth is that nobody was looking, and the drop
+ * would land exactly where the older series starts. So the line stops at the
+ * first day all of them carry and ends at the last — outside that span at
+ * least one source is silent, and a sum with a silence in it is not a sum.
+ *
+ * A source with NO series at all is not part of the intersection: it never
+ * narrows the window, because it has no window to narrow it with. That is the
+ * same rule read from the other side — a source that says nothing about any
+ * day cannot make a day unmeasurable — and it is what keeps the card drawing
+ * a line at all when one source reports figures but no history. */
+function combinedSeries(sources: readonly TokenUsageSource[]): number[] | undefined {
+  const drawn: { start: number; totals: readonly number[] }[] = [];
+  for (const source of sources) {
+    const series = source.series;
+    if (series === undefined || series.totals.length === 0) {
+      continue;
+    }
+    const start = dayNumber(series.startDate);
+    if (start === null) {
+      return undefined;
+    }
+    drawn.push({ start, totals: series.totals });
+  }
+  if (drawn.length === 0) {
+    return undefined;
+  }
+  const from = Math.max(...drawn.map((series) => series.start));
+  const to = Math.min(...drawn.map((series) => series.start + series.totals.length - 1));
+  if (to < from) {
+    return undefined;
+  }
+  const totals: number[] = [];
+  for (let day = from; day <= to; day += 1) {
+    let sum = 0;
+    for (const series of drawn) {
+      sum += series.totals[day - series.start];
+    }
+    totals.push(sum);
+  }
+  return totals;
+}
+
+/* The lifetime split, as ONE ruled line: the sources that reported a lifetime,
+ * named in wire order, against their shares of the sum.
+ *
+ * Built only when at least TWO sources reported one and the sum is positive.
+ * One source's "100%" is the figure above it restated, and a share of a sum
+ * of nothing is not zero percent — it is unknown, which is a different claim
+ * and the one the dash is for. */
+function splitFact(
+  sources: readonly TokenUsageSource[],
+  total: number | undefined
+): LedgerFact | undefined {
+  if (total === undefined || total <= 0) {
+    return undefined;
+  }
+  const reported = sources
+    .map((source) => ({ name: sourceName(source.label), lifetime: statValue(source, lifetimeKey) }))
+    .filter((entry): entry is { name: string; lifetime: number } => entry.lifetime !== undefined);
+  if (reported.length < 2) {
+    return undefined;
+  }
+  return {
+    key: 'split',
+    term: reported.map((entry) => entry.name).join(' · '),
+    value: reported.map((entry) => formatShare((entry.lifetime / total) * 100)).join(' · ')
+  };
+}
+
+/* Card one: everything this page has ever counted, with the split under it and
+ * the combined daily line along the bottom. */
+function totalCard(sources: readonly TokenUsageSource[]): LedgerCard {
+  const total = lifetimeTotal(sources);
+  const figure = total === undefined ? unknownFigure : formatTokenCount(total);
+  const split = splitFact(sources, total);
+  const totals = combinedSeries(sources);
+  return {
+    key: 'tracked',
+    label: totalCardLabel,
+    ctx: lifetimeContext,
+    figure,
+    sub: total === undefined ? undefined : [formatWhole(total)],
+    facts: split === undefined ? undefined : [split],
+    factColumns: 1,
+    spark:
+      totals === undefined
+        ? undefined
+        : { totals, ariaLabel: dailyLineLabel(combinedLineSubject, totals.length) },
+    note:
+      total === undefined && split === undefined && totals === undefined
+        ? boardEmptyNote
+        : undefined,
+    ariaLabel: `${totalCardLabel}, ${lifetimeContext}: ${figure}`
+  };
+}
+
+/* Cards two and three, and any card a later source brings with it: ONE shape
+ * rendered per source in wire order. Nothing here asks which source it is
+ * reading — the name comes from the vocabulary, the classes and the windows
+ * from whatever that source reported — so the card that draws a tool with
+ * four accounting classes and the card that draws one with none are the same
+ * function reading different data.
+ *
+ * EVERY SECOND SOURCE CARD OPENS INVERTED. It is the board's rhythm rather
+ * than a fact about any source: the owner's board alternates ink and paper
+ * across the top row, and stating it as "every other one" is what makes a
+ * third source join that rhythm instead of needing a rule of its own. */
+function sourceCard(source: TokenUsageSource, index: number): LedgerCard {
+  const name = sourceName(source.label);
+  const figure = statFigure(statOf(source, lifetimeKey));
+  const facts = [
+    ...classKeys.map((key) => statFact(source, key)).filter(present),
+    ...windowFacts(source)
+  ];
+  const sub = sourceSubline(source);
+  const spark = sourceSpark(source, name);
+  const empty = figure === unknownFigure && facts.length === 0 && spark === undefined;
+  return {
+    key: `source-${source.label}`,
+    label: name,
+    figure,
+    sub: sub.length === 0 ? undefined : sub,
+    facts: facts.length === 0 ? undefined : facts,
+    factColumns: 2,
+    meter: sourceMeter(source),
+    spark,
+    note: empty ? tokenUsageSourceEmptyNote : undefined,
+    turned: index % 2 === 1,
+    ariaLabel: `${name} lifetime tokens: ${figure}`
+  };
+}
+
+/* Card four: the session record, from the first source that keeps one.
+ *
+ * The current streak is marked when it HAS reached the longest — and the
+ * longest is printed on the line directly above it, so the mark is the
+ * redundant channel and a reader who sees no colour reads the same fact off
+ * two equal numbers. */
+function sessionsCard(sources: readonly TokenUsageSource[]): LedgerCard {
+  const keeper =
+    sources.find((source) => statOf(source, sessionsKey) !== undefined) ?? sources[0];
+  const figure = statFigure(statOf(keeper, sessionsKey));
+  const longest = statValue(keeper, longestStreakKey);
+  const current = statOf(keeper, currentStreakKey);
+  const facts = [
+    statFact(keeper, longestSessionKey),
+    statFact(keeper, longestStreakKey),
+    current === undefined || current.value === null
+      ? undefined
+      : {
+          key: currentStreakKey,
+          term: categoryLabel(currentStreakKey),
+          value: formatStatValue(current.value, current.unit),
+          peak: longest !== undefined && current.value >= longest
+        }
+  ].filter(present);
+  return {
+    key: 'sessions',
+    label: sessionsCardLabel,
+    figure,
+    facts: facts.length === 0 ? undefined : facts,
+    factColumns: 1,
+    note: figure === unknownFigure && facts.length === 0 ? tokenUsageSourceEmptyNote : undefined,
+    ariaLabel: `${sessionsCardLabel}: ${figure}`
+  };
+}
+
+/* One member's reading on a models card: how much it carried, and the
+ * accounting behind that where the source reports it. */
+type ModelReading = {
+  readonly key: string;
+  readonly total: number;
+  readonly detail?: string;
+};
+
+/* A model's own total across the five accounting classes. */
+function classTotal(totals: TokenUsageClassTotals): number {
+  return modelClassKeys.reduce((sum, key) => sum + totals[key], 0);
+}
+
+/* The row's accounting line: what went in, what came out, the reasoning the
+ * second tool's models spend — printed only when the member spent any, since
+ * the other tool's models never do and a row of noughts says nothing — and
+ * the two cache figures as a PAIR, because a reader compares cache read
+ * against cache write rather than against either of the other two. */
+function classDetail(totals: TokenUsageClassTotals): string {
+  const parts = [`in ${formatTokenCount(totals.input)}`, `out ${formatTokenCount(totals.output)}`];
+  if (totals.reasoning > 0) {
+    parts.push(`reasoning ${formatTokenCount(totals.reasoning)}`);
+  }
+  parts.push(`cache ${formatTokenCount(totals['cache-read'])} / ${formatTokenCount(totals['cache-write'])}`);
+  return parts.join(' · ');
+}
+
+/* REAL MEMBERS ONLY, IN THE VOCABULARY'S ORDER.
+ *
+ * The residual is dropped because it is not an entity: it is the fold of every
+ * identifier the vocabulary does not name, and a bar beside named models
+ * would read as one more model. A member that carried NOTHING is dropped for
+ * the opposite reason — it is a named entity that would be drawn at nought
+ * beside entities that were actually used, which is a row saying something
+ * the data never said.
+ *
+ * Dropping the empty rows is also what makes the bar arithmetic total: every
+ * remaining member has a positive total, so the largest is positive, so no
+ * row can be handed a share it would have to decline to draw. That is the
+ * honest-states rule this used to carry as a nullable fill in the component,
+ * decided once here instead. */
+function realMembers(readings: readonly ModelReading[]): ModelReading[] {
+  return readings
+    .filter((reading) => reading.key !== modelResidual.key && reading.total > 0)
+    .sort((first, second) => rankOf(first.key) - rankOf(second.key));
+}
+
+function rankOf(key: string): number {
+  /* Admission refuses a key outside the vocabulary, so the fallback is
+     unreachable; it exists so a vocabulary edit that forgets a member sorts it
+     last rather than sorting it by NaN. */
+  return modelRanks.get(key) ?? modelRanks.size;
+}
+
+/* Which readings one source can show, and how its rows are read.
+ *
+ * A source that reports its own LIFETIME accounting per model shows that: the
+ * rows are shares of what it has ever spent, with the classes printed under
+ * each. A source that reports only the daily model partition shows the window
+ * that partition covers, summed per member, read as compact totals — because
+ * a share of a window is a different quantity from a share of a lifetime, and
+ * printing them in the same units on two neighbouring cards would invite
+ * exactly the comparison that is false. */
+function modelReadings(source: TokenUsageSource): ModelReading[] {
+  const stats = source.modelStats;
+  if (stats !== undefined && stats.length > 0) {
+    return realMembers(
+      stats.map((entry) => ({
+        key: entry.key,
+        total: classTotal(entry.totals),
+        detail: classDetail(entry.totals)
+      }))
+    );
+  }
+  const shares = source.series === undefined ? [] : modelShares(source.series);
+  return realMembers(shares.map((share) => ({ key: share.key, total: share.total })));
+}
+
+/* Cards five and six, and one per later source that carries a split: the SAME
+ * shape as each other, headed by the source whose numbers they are. A source
+ * with nothing to split renders no card at all rather than an empty one — the
+ * board is the cards the payload can fill. */
+function modelCard(source: TokenUsageSource): LedgerCard | undefined {
+  const readings = modelReadings(source);
+  if (readings.length === 0) {
+    return undefined;
+  }
+  const name = sourceName(source.label);
+  const measured = source.modelStats !== undefined && source.modelStats.length > 0;
+  const largest = Math.max(...readings.map((reading) => reading.total));
+  const grand = readings.reduce((sum, reading) => sum + reading.total, 0);
+  const models: LedgerBar[] = readings.map((reading) => ({
+    key: reading.key,
+    label: modelLabel(reading.key),
+    /* Against the LARGEST member, not against the sum: the rule is the same
+       on both kinds of card, so the longest bar always runs the card's full
+       width and the rest are read against it. The number beside each row is
+       what says how much of the whole it was. */
+    fillPct: (reading.total / largest) * 100,
+    reading: measured
+      ? formatShare((reading.total / grand) * 100)
+      : formatTokenCount(reading.total),
+    detail: reading.detail
+  }));
+  const label = `${modelsLabelPrefix} ${name}`;
+  return {
+    key: `models-${source.label}`,
+    label,
+    models,
+    ariaLabel: `Model split for ${name}`
+  };
+}
+
+/* tokenCards composes the board: the total, every source, the session record,
+ * then every source's split. Row one of the owner's board is the first three
+ * and row two the next three, which is the grid's own doing rather than a
+ * layout this adapter states. */
+export function tokenCards(sources: readonly TokenUsageSource[]): LedgerCard[] {
   if (sources.length === 0) {
     return [];
   }
-  const total = lifetimeTotal(sources);
-  const squares: LedgerSquare[] = [
-    {
-      key: 'tracked',
-      label: 'Tokens tracked',
-      figure: total === undefined ? unknownFigure : formatTokenCount(total),
-      sub: 'all sources · lifetime',
-      ariaLabel: `Tokens tracked, all sources, lifetime: ${total === undefined ? unknownFigure : formatTokenCount(total)}`,
-      back: {
-        label: 'By source',
-        facts: sources.map((source) => ({
-          key: source.label,
-          term: source.label,
-          value: statFigure(statOf(source, lifetimeKey))
-        }))
-      }
-    }
+  return [
+    totalCard(sources),
+    ...sources.map(sourceCard),
+    sessionsCard(sources),
+    ...sources.map(modelCard).filter(present)
   ];
-  for (const source of sources) {
-    const figure = statFigure(statOf(source, lifetimeKey));
-    const sub = sourceSubline(source);
-    const facts = backFacts(source);
-    squares.push({
-      key: `source-${source.label}`,
-      label: source.label,
-      figure,
-      meter: sourceMeter(source),
-      sub,
-      ariaLabel: `${source.label} lifetime tokens: ${figure}`,
-      back: {
-        label: `${source.label} breakdown`,
-        facts: facts.length > 0 ? facts : undefined,
-        note: facts.length > 0 ? undefined : tokenUsageSourceEmptyNote
-      }
-    });
-  }
-  /* The model split: every source's blocks in order, two to a square — one on
-     the front and one behind it. Two blocks is what the payload carries today
-     (one vendor group per source) and the shape survives either way: an odd
-     last block turns to its own empty note, and a fifth block would take its
-     own square rather than being silently dropped. */
-  const blocks = sources.flatMap(modelBlocks);
-  for (let index = 0; index < blocks.length; index += 2) {
-    const front = blocks[index];
-    const back = blocks[index + 1];
-    squares.push({
-      key: index === 0 ? 'models' : `models-${index / 2 + 1}`,
-      label: front.label,
-      bars: front.bars,
-      barRows: front.rows,
-      ariaLabel: front.ariaLabel,
-      back:
-        back === undefined
-          ? { label: 'Models', note: tokenUsageSourceEmptyNote }
-          : { label: back.label, bars: back.bars, barRows: back.rows }
-    });
-  }
-  /* The session record, from the first source that keeps one. */
-  const keeper = sources.find((source) => statOf(source, 'sessions') !== undefined) ?? sources[0];
-  const sessions = statFigure(statOf(keeper, 'sessions'));
-  squares.push({
-    key: 'sessions',
-    label: 'Sessions',
-    figure: sessions,
-    ariaLabel: `Sessions: ${sessions}`,
-    back: {
-      label: 'Records',
-      facts: [
-        {
-          key: 'longest-task',
-          term: statOf(keeper, 'longest-task')?.label ?? 'Longest session',
-          value: statFigure(statOf(keeper, 'longest-task'))
-        },
-        {
-          key: 'longest-streak',
-          term: statOf(keeper, 'longest-streak')?.label ?? 'Longest streak',
-          value: statFigure(statOf(keeper, 'longest-streak'))
-        }
-      ]
-    }
-  });
-  return squares;
 }
 
-/* tokenSquaresProps renders the board as data, or null before the first
+/* tokenBoardProps renders the board as data, or null before the first
  * envelope arrives — the same loading face every panel-bound block has: the
  * host renders nothing for null rather than reserving a box for a payload it
  * cannot describe yet. */
-export function tokenSquaresProps(
+export function tokenBoardProps(
   envelope: PanelEnvelope | null,
   now: Date = new Date()
 ): LedgerBoardProps | null {
@@ -1195,7 +1528,7 @@ export function tokenSquaresProps(
     title: envelope.title || tokenUsageFallbackTitle,
     status: envelope.status,
     generatedAt: envelope.generatedAt,
-    squares: tokenSquares(sources),
+    cards: tokenCards(sources),
     emptyNote: boardEmptyNote,
     staleNote: usageStaleNote(envelope.status, envelope.generatedAt, sources, now),
     turnLabel: boardTurnLabel,

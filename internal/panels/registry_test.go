@@ -122,10 +122,10 @@ func TestTokenUsagePanelKeepsSourceLabelsAsData(t *testing.T) {
 	units := map[string]bool{UnitTokens: true, UnitDays: true, UnitSeconds: true, UnitCount: true}
 	for _, source := range payload.Sources {
 		labels[source.Label] = true
-		// Windows, stats, and insights are all optional and all honest: the
-		// shipped snapshot carries figures that were actually recorded and
-		// leaves the rest empty rather than inventing numbers. What every
-		// section that IS present must satisfy is pinned below.
+		// Windows, stats, and the per-model split are all optional and all
+		// honest: the shipped snapshot carries figures that were actually
+		// recorded and leaves the rest empty rather than inventing numbers.
+		// What every section that IS present must satisfy is pinned below.
 		for _, stat := range source.Stats {
 			if stat.Key == "" || stat.Label == "" {
 				t.Errorf("source %q ships a stat without a key or label: %+v", source.Label, stat)
@@ -140,12 +140,40 @@ func TestTokenUsagePanelKeepsSourceLabelsAsData(t *testing.T) {
 				t.Errorf("source %q stat %q is served from a snapshot yet claims live provenance", source.Label, stat.Key)
 			}
 		}
-		for _, insight := range source.Insights {
-			if insight.Label == "" {
-				t.Errorf("source %q ships an insight without a label", source.Label)
+		// The per-model lifetime split is DATA in exactly the way the source
+		// label is (issue #267): a machine key the reader resolves a written
+		// name for, never display copy on the wire. Every shipped row is
+		// checked against the closed vocabularies and against the source's
+		// own class tiles, which is the same `≤` the pushed-document
+		// admission enforces — the shipped sample has to satisfy the boundary
+		// it is the fallback for.
+		classes := map[string]int64{}
+		for _, member := range source.ModelStats {
+			if !inVocabulary(member.Key, modelServeOrder) {
+				t.Errorf("source %q ships a per-model row %q outside the model vocabulary", source.Label, member.Key)
 			}
-			if insight.Pct != nil && (*insight.Pct < 0 || *insight.Pct > 100) {
-				t.Errorf("source %q insight %q is outside 0-100", source.Label, insight.Label)
+			var carried int64
+			for key, value := range member.Totals {
+				if !inVocabulary(key, categoryServeOrder) {
+					t.Errorf("source %q per-model row %q names class %q outside the category vocabulary", source.Label, member.Key, key)
+				}
+				if value < 0 {
+					t.Errorf("source %q per-model row %q is negative in class %q", source.Label, member.Key, key)
+				}
+				classes[key] += value
+				carried += value
+			}
+			if carried == 0 {
+				t.Errorf("source %q ships a per-model row %q carrying nothing", source.Label, member.Key)
+			}
+		}
+		for _, stat := range source.Stats {
+			summed, ok := classes[stat.Key]
+			if !ok || stat.Value == nil {
+				continue
+			}
+			if summed > *stat.Value {
+				t.Errorf("source %q attributes %d to the %q class across its models; its own tile reports %d", source.Label, summed, stat.Key, *stat.Value)
 			}
 		}
 		assertShippedSeriesIsMarkedRecorded(t, source)

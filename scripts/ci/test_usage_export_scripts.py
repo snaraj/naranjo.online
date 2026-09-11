@@ -55,6 +55,8 @@ INSTALL = SCRIPTS / "install-launchd.sh"
 PUSH = SCRIPTS / "push-usage-series.sh"
 TEMPLATE = SCRIPTS / "com.naranjo-online.usage-export.plist.template"
 PROFILE = SCRIPTS / "producer.sb"
+SNAPSHOT_TEMPLATE = SCRIPTS / "com.naranjo-online.ledger-snapshot.plist.template"
+SNAPSHOT = REPO_ROOT / "scripts" / "ledger_snapshot.py"
 
 
 def required_match(pattern, text, message, flags=0):
@@ -507,6 +509,70 @@ class PushTransportHardeningTest(unittest.TestCase):
         self.assertEqual(beta_days[earlier], {"total": 7})
         dataset = json.loads((history / "dataset.json").read_text(encoding="utf-8"))
         self.assertEqual(dataset["sources"]["beta"]["days"][0], {"date": earlier, "total": 7, "verified": True})
+
+    def test_a_configured_history_directory_records_the_run_in_the_ledger(self):
+        # Issue #267: the record defaults to living beside the stores, and it
+        # is the EXPORT that writes it, inside the same sandbox. What is
+        # pinned is the argument AND the result: a flag the producer never
+        # received is a record that silently never grows, which is the exact
+        # failure class the activity cache and the stores already taught.
+        history = self.scratch / "history"
+        self.write_config(HISTORY_DIR=str(history))
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(argv[argv.index("--ledger") + 1], str(history / "ledger"))
+        # The revision the SUMMARY reports is the one recorded on every row,
+        # read once per run: two reads could name two trees.
+        revision = argv[argv.index("--exporter-version") + 1]
+        self.assertIn("exporter=%s" % revision, result.stdout)
+        rows = [
+            json.loads(line)
+            for line in (history / "ledger" / "usage" / "2026.ndjson")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        self.assertTrue(rows, "the ledger recorded nothing")
+        recorded = {row["day"] for row in rows}
+        self.assertIn(TRANSCRIPT_FIXTURE_DAY, recorded)
+        for row in rows:
+            self.assertEqual(row["schema"], "ledger/v1")
+            self.assertEqual(row["exporter"], revision)
+        # The record is private: it holds this workstation's whole measured
+        # history of its own work.
+        self.assertEqual(
+            stat.S_IMODE((history / "ledger" / "usage" / "2026.ndjson").stat().st_mode),
+            0o600,
+        )
+        # A second run measures the same figures and appends nothing.
+        before = (history / "ledger" / "usage" / "2026.ndjson").read_bytes()
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            (history / "ledger" / "usage" / "2026.ndjson").read_bytes(), before
+        )
+
+    def test_no_configured_history_directory_writes_no_ledger(self):
+        # The negative control: without a store directory there is nowhere the
+        # record lives by default, and the producer runs exactly as it did
+        # before the option existed.
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        self.assertNotIn("--ledger", argv)
+        self.assertNotIn("--exporter-version", argv)
+
+    def test_an_explicit_ledger_directory_overrides_the_store_default(self):
+        history = self.scratch / "history"
+        elsewhere = self.scratch / "record"
+        elsewhere.mkdir()
+        self.write_config(HISTORY_DIR=str(history), LEDGER_DIR=str(elsewhere / "ledger"))
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = self.sandbox_args_file.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(argv[argv.index("--ledger") + 1], str(elsewhere / "ledger"))
+        self.assertTrue((elsewhere / "ledger" / "schema.json").is_file())
+        self.assertFalse((history / "ledger").exists())
 
     def test_the_log_brackets_every_stage_and_ends_with_one_summary_line(self):
         # Issue #299, the failure-logging rule: a START line per stage in
@@ -1038,11 +1104,27 @@ class InstallAnchorTest(unittest.TestCase):
         shutil.copy(TEMPLATE, target / TEMPLATE.name)
         write_executable(target / "push-usage-series.sh", "#!/bin/sh\nexit 0\n")
         shutil.copy(INSTALL, target / "install-launchd.sh")
+        # The second agent's two committed artifacts (issue #267): the
+        # snapshot template beside the export one, and the script it runs.
+        shutil.copy(SNAPSHOT_TEMPLATE, target / SNAPSHOT_TEMPLATE.name)
+        (self.primary / "scripts" / SNAPSHOT.name).write_text(
+            "#!/usr/bin/env python3\n", encoding="utf-8"
+        )
 
     def env(self, **extra):
         merged = {"HOME": str(self.home)}
         merged.update(extra)
         return merged
+
+    def config(self, **values):
+        """One push-script configuration file, private, naming only what the
+        installer reads out of it."""
+        path = self.scratch / "config"
+        path.write_text(
+            "".join("%s=%s\n" % pair for pair in values.items()), encoding="utf-8"
+        )
+        path.chmod(0o600)
+        return path
 
     def test_the_default_anchor_is_the_primary_checkout(self):
         # Invoked from the REAL repository's copy of the installer — a
@@ -1105,6 +1187,141 @@ class InstallAnchorTest(unittest.TestCase):
     def test_an_unknown_argument_is_refused(self):
         result = run_script(INSTALL, ["--frobnicate"], env=self.env())
         self.assertEqual(result.returncode, 2)
+
+    def test_a_repo_dir_without_the_snapshot_artifacts_is_refused(self):
+        # Both halves of the second agent are checked before anything is
+        # rendered, for the reason the push script checks its own scripts: a
+        # plist pointing at a file that is not there installs a job that fails
+        # every night into a log nobody reads.
+        for missing in (SNAPSHOT_TEMPLATE.name, SNAPSHOT.name):
+            with self.subTest(missing=missing):
+                target = self.primary / "scripts"
+                path = (
+                    target / "usage-export" / missing
+                    if missing.endswith(".template")
+                    else target / missing
+                )
+                moved = path.with_name(path.name + ".moved")
+                path.rename(moved)
+                self.addCleanup(lambda a=moved, b=path: a.rename(b) if a.exists() else None)
+                result = run_script(INSTALL, ["--render-only"], env=self.env())
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("snapshot", result.stderr)
+                moved.rename(path)
+
+    def test_no_configured_ledger_renders_no_snapshot_agent(self):
+        # Issue #267, the negative control: the second agent exists to write
+        # into the record, so a workstation with no record configured gets
+        # exactly the schedule it had before this option existed.
+        result = run_script(INSTALL, ["--render-only"], env=self.env())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("com.naranjo-online.ledger-snapshot", result.stdout)
+        self.assertIn("com.naranjo-online.usage-export", result.stdout)
+
+    def test_a_configured_history_directory_renders_the_nightly_snapshot(self):
+        # The record defaults to living beside the stores, so configuring the
+        # stores configures the snapshot with them. What is pinned is the
+        # rendered ARGUMENTS — a plist that runs the script without a ledger
+        # would install a job that refuses every night.
+        history = self.scratch / "history"
+        config = self.config(HISTORY_DIR=str(history))
+        result = run_script(
+            INSTALL, ["--render-only"],
+            env=self.env(NARANJO_USAGE_EXPORT_CONFIG=str(config)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("com.naranjo-online.ledger-snapshot", result.stdout)
+        self.assertIn(
+            "<string>%s</string>" % (self.primary / "scripts" / SNAPSHOT.name),
+            result.stdout,
+        )
+        self.assertIn("<string>%s</string>" % (history / "ledger"), result.stdout)
+        self.assertNotIn("__SNAPSHOT_SCRIPT__", result.stdout)
+        self.assertNotIn("__LEDGER_DIR__", result.stdout)
+        # Once a night, not every minute: the panels it reads change on the
+        # origin's cadence and the record wants one level reading per day.
+        self.assertIn("<key>StartCalendarInterval</key>", result.stdout)
+        self.assertIn("<key>Hour</key>\n        <integer>23</integer>", result.stdout)
+        self.assertIn("<key>Minute</key>\n        <integer>45</integer>", result.stdout)
+
+    def test_an_explicit_ledger_directory_wins_over_the_default(self):
+        elsewhere = self.scratch / "elsewhere" / "record"
+        config = self.config(
+            HISTORY_DIR=str(self.scratch / "history"), LEDGER_DIR=str(elsewhere)
+        )
+        result = run_script(
+            INSTALL, ["--render-only"],
+            env=self.env(NARANJO_USAGE_EXPORT_CONFIG=str(config)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<string>%s</string>" % elsewhere, result.stdout)
+        self.assertNotIn(str(self.scratch / "history" / "ledger"), result.stdout)
+
+    def test_the_snapshot_runs_outside_the_producer_sandbox(self):
+        # Stated in the template and pinned here, because it is the one job
+        # in this pipeline that is deliberately unconfined: it needs the
+        # network producer.sb denies, and it reads nothing private.
+        config = self.config(HISTORY_DIR=str(self.scratch / "history"))
+        result = run_script(
+            INSTALL, ["--render-only"],
+            env=self.env(NARANJO_USAGE_EXPORT_CONFIG=str(config)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshot = result.stdout.split("com.naranjo-online.ledger-snapshot", 1)[1]
+        self.assertNotIn("sandbox-exec", snapshot)
+        self.assertNotIn("producer.sb", snapshot)
+        # The interpreter is still isolated, exactly as the export's is.
+        self.assertIn("<string>-I</string>", snapshot)
+        self.assertIn("<string>-B</string>", snapshot)
+
+    def test_a_lax_configuration_mode_refuses_the_install(self):
+        # The push script requires its configuration private because it names
+        # key material; this script reads the same file, so it applies the
+        # same refusal rather than a weaker one.
+        config = self.config(HISTORY_DIR=str(self.scratch / "history"))
+        config.chmod(0o644)
+        result = run_script(
+            INSTALL, ["--render-only"],
+            env=self.env(NARANJO_USAGE_EXPORT_CONFIG=str(config)))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("configuration must be private", result.stderr)
+
+    def test_the_configuration_cannot_move_what_the_installer_decides(self):
+        # The configuration file is read for exactly two values. Sourcing it
+        # in the parent shell would let every other name in it — the log
+        # directory here, but equally the labels or the agent directory —
+        # take over a decision this script owns.
+        config = self.config(
+            HISTORY_DIR=str(self.scratch / "history"),
+            LOG_DIR=str(self.scratch / "hijacked-logs"),
+        )
+        result = run_script(
+            INSTALL, ["--render-only"],
+            env=self.env(NARANJO_USAGE_EXPORT_CONFIG=str(config)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("hijacked-logs", result.stdout)
+        self.assertIn(
+            "<string>%s/Library/Logs/naranjo-online-usage-export/usage-export.log</string>"
+            % self.home,
+            result.stdout,
+        )
+
+    def test_the_configurations_repo_dir_never_moves_the_anchor(self):
+        # The configuration file also defines REPO_DIR. Reading it in a
+        # subshell is what keeps the anchor the installer's own decision —
+        # the M4 finding above is exactly about the anchor coming from
+        # somewhere that can move.
+        config = self.config(
+            REPO_DIR=str(self.scratch / "somewhere-else"),
+            HISTORY_DIR=str(self.scratch / "history"),
+        )
+        result = run_script(
+            INSTALL, ["--render-only"],
+            env=self.env(NARANJO_USAGE_EXPORT_CONFIG=str(config)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(str(self.scratch / "somewhere-else"), result.stdout)
+        self.assertIn(
+            "<string>%s</string>"
+            % (self.primary / "scripts" / "usage-export" / "push-usage-series.sh"),
+            result.stdout,
+        )
 
 
 @unittest.skipIf(shutil.which("ssh") is None, "no ssh client on this host")

@@ -1007,7 +1007,7 @@
      alone: the peak cell carries the identical count-and-date reading every
      other cell does, in its accessible label and in the shared detail card. */
   .grid-cell[data-grid-peak='true'] {
-    background: var(--grid-cell-peak, #ff3b1f);
+    background: var(--grid-cell-peak, #00d95a);
   }
 
   /* A day the window does not cover is absent, not a zero, and is still

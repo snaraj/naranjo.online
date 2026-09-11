@@ -667,6 +667,16 @@ func TestInfrastructureCommitSourceUsesCurrentRepositoryName(t *testing.T) {
 // producer can refresh the daily series and baseline-backed lifetime total;
 // it has no source for these native-application counts, so absence is the
 // only truthful value until such a source exists.
+//
+// The insight rows went the whole way (issue #267). They shipped as rows
+// whose percentage was permanently null — a labelled placeholder nothing in
+// the pipeline could ever fill, because no producer measures a proportion and
+// none is planned. The rule they used to satisfy ("present, and never
+// claiming a figure") is now the stronger "not present at all", which is the
+// same honesty one step further: a row that can never carry a value is not an
+// honest empty state, it is a promise the panel keeps breaking. The Go type
+// survives for decode compatibility, so a snapshot or a live mapping that
+// still carries one parses; this asserts the SHIPPED file carries none.
 func TestSnapshotDoesNotClaimUnmeasuredCounts(t *testing.T) {
 	t.Parallel()
 	loaded, err := SnapshotSource{Name: "snapshots/token-usage.json"}.load(snapshotFiles, KindTokenUsageV2)
@@ -680,13 +690,8 @@ func TestSnapshotDoesNotClaimUnmeasuredCounts(t *testing.T) {
 	unsupported := map[string]bool{"chats": true, "skills-explored": true, "skills-used": true, "longest-task": true}
 	foundCodex := false
 	for _, source := range payload.Sources {
-		if len(source.Insights) == 0 {
-			t.Errorf("source %q lost its canonical unavailable insight rows", source.Label)
-		}
-		for _, insight := range source.Insights {
-			if insight.Pct != nil || insight.Recorded {
-				t.Errorf("source %q snapshot still claims unmeasured insight percentage %+v", source.Label, insight)
-			}
+		if len(source.Insights) != 0 {
+			t.Errorf("source %q ships %d insight row(s); no producer measures a proportion, so a row here is a placeholder the runtime can never fill: %+v", source.Label, len(source.Insights), source.Insights)
 		}
 		for _, stat := range source.Stats {
 			if unsupported[stat.Key] {

@@ -192,19 +192,24 @@
   --palette-brand-orange: #dc8a00;
   --palette-brand-orange-on-light: #8a5600;
 
-  /* THE LEDGER'S ONE CHROMATIC MARK (owner directive, 2026-09-03, issue 287).
+  /* THE LEDGER'S ONE CHROMATIC MARK (owner directive, 2026-09-03, issue 287;
+     NO RED ANYWHERE, 2026-09-11).
      The redesign is monochrome — rules, ink and paper — and spends colour on
      exactly one thing: the extreme. The peak day of a heatmap, a hovered
-     control, the boss the owner has killed most. One value across every
-     reading mode, deliberately, because it is not a palette member: it is the
-     same red on paper as it is on near-black, the way a printer's spot colour
-     is. Measured against every surface it can land on — 3.31:1 on the light
-     page, 3.08:1 on the light card, 4.68:1 dark, 4.89:1 slate, 4.41:1 sepia —
-     which clears 1.4.11's 3:1 for the non-text indicator it always is. It is
-     never the only channel: a peak cell still prints its own count, a hovered
-     control still moves, and the ramp below still steps monotonically without
-     it. */
-  --palette-highlight: #ff3b1f;
+     control, the boss the owner has killed most, the streak that has reached
+     its own record.
+     It used to be one red across every reading mode, a printer's spot colour
+     that did not belong to any palette. It is now each mode's OWN peak green
+     — the value its calendar already spends on the busiest day — so the
+     page's one mark is one colour rather than two that happen to mean the
+     same thing, and the red is gone from the sheet in one token rather than
+     in a rule per component. The mapping is per mode, below, beside every
+     other --color-* the mode declares; there is no mode-independent
+     highlight literal left to restate.
+     It is never the only channel: a peak cell still prints its own count, a
+     hovered control still moves, a marked streak still prints its figure
+     under the record it has matched, and the ramp below still steps
+     monotonically without it. */
 
   /* Panel status: the WHOLE traffic-light family, not one third of it
      (issues 222 and 229). Shape and text already distinguish these states —
@@ -299,6 +304,11 @@
   --palette-light-grid-3: #37b043;
   --palette-light-grid-4: #158a31;
   --palette-light-grid-peak: #00d95a;
+  /* Light's mark: the one mode whose fourth step (4.23:1 on the page) is
+     short of the 4.5:1 a text ink is held to, so it carries a deeper green of
+     the same hue — 5.54:1 on the surface, 5.07:1 raised, 4.59:1 overlay. The
+     three dark modes' fourth steps clear 10:1 and are the mark as they are. */
+  --palette-light-mark: #10752a;
 
   --palette-dark-grid-0: #2a2a2a;
   --palette-dark-grid-1: #17492a;
@@ -690,6 +700,14 @@
   --ledger-ink: var(--color-text);
   --ledger-muted: var(--color-accent);
   --ledger-rule: var(--color-text);
+  /* The sheet's one mark is a green of each mode's own calendar ramp — the
+     fourth step where that step is legible as text, a deeper step of the same
+     hue for light, whose fourth step is not — and never the peak: every
+     surface that spends it paints TEXT (a hovered link, a record figure), the
+     ticker's at 0.75rem, and the light peak measures under 2:1 on the page.
+     Every mode's mark clears 4.5:1 on every surface it is printed on; the
+     token pin measures it. The calendar's busiest day keeps the peak,
+     through --grid-cell-peak. */
   --ledger-highlight: var(--color-highlight);
 
   /* The two rule weights the whole sheet is drawn with, and the gaps between
@@ -742,10 +760,35 @@
   --control-target: 2.75rem;
   --control-mark: 2rem;
 
-  /* The board of flip squares, and the strip under it. */
+  /* The board of cards, and the strip under it. The minimum is the height the
+     owner's drawing gives a card at 1440px; a row is taller when a card in it
+     has more to say, and never shorter, so the board keeps its rhythm without
+     the fixed square that used to clip whatever did not fit. */
   --square-figure-size: 2.75rem;
   --square-pad: 0.875rem;
   --square-gap: 0.5rem;
+  --board-card-min: 16.75rem;
+  --board-row-gap: 0.625rem;
+  --board-ctx-size: 0.625rem;
+  --board-fact-size: 0.71875rem;
+  --board-fact-pad: 0.375rem;
+  /* The hairline under a fact. The one card colour that does NOT invert with
+     the rest: a mid value reads as a rule against the sheet's paper and
+     against its ink alike, so one declaration serves both states where an
+     inverted pair would need two values measured against two surfaces. */
+  --board-fact-rule: var(--color-border);
+  --board-model-gap: 0.375rem;
+  --board-model-name-size: 0.8125rem;
+  --board-detail-size: 0.625rem;
+  --board-bar-rule: 4px;
+
+  /* The daily line. The stroke is a length rather than a ratio because the
+     plot is drawn with a squashed aspect (Sparkline.svelte) and keeps its own
+     thickness through vector-effect; the mark is the diameter of the dot on
+     the newest reading. */
+  --spark-height: 3rem;
+  --spark-stroke: 1.5px;
+  --spark-mark-size: 0.375rem;
   --ticker-icon: 22px;
   /* The item padding, stated per axis so the lead's mark can cancel the block
      half of it and stand the strip's full height (below). */
@@ -762,7 +805,6 @@
   --ledger-repaint: 360ms;
   --ledger-hover: 200ms;
   --drawer-duration: 520ms;
-  --flip-duration: 680ms;
   --heat-fade: 420ms;
   --band-fade: 320ms;
   --masthead-draw: 1400ms;
@@ -880,13 +922,6 @@
   --usage-cat-5: var(--color-cat-5);
   --usage-cat-6: var(--color-cat-6);
   --usage-cat-7: var(--color-cat-7);
-  /* The per-source heading ("Claude Code", "Codex") -- one step above the
-     panel's body size (owner directive, 2026-08-28: "a bit bigger so they're
-     easier to see"). It is the name of the thing every figure under it
-     belongs to, and it was rendering at the same 0.8125rem as the prose it
-     titles. Declared here rather than left to a component fallback, because
-     this is a dimension the owner tunes. */
-
   /* The hover-detail token layer. The detail that hangs off a tile is one
      primitive (lib/components/DetailTip.svelte), so like the card above it
      every dimension it has is a token declared once here — including the two
@@ -929,7 +964,7 @@
   --color-accent: var(--palette-light-accent);
   --color-text: var(--palette-light-text);
   --color-brand: var(--palette-brand-orange-on-light);
-  --color-highlight: var(--palette-highlight);
+  --color-highlight: var(--palette-light-mark);
   --color-status-ok: var(--palette-status-ok-on-light);
   --color-status-stale: var(--palette-status-stale-on-light);
   --color-status-critical: var(--palette-status-critical-on-light);
@@ -1030,7 +1065,7 @@
     --color-accent: var(--palette-dark-accent);
     --color-text: var(--palette-dark-text);
     --color-brand: var(--palette-brand-orange);
-    --color-highlight: var(--palette-highlight);
+    --color-highlight: var(--palette-dark-grid-4);
     --color-status-ok: var(--palette-status-ok);
     --color-status-stale: var(--palette-status-stale);
     --color-status-critical: var(--palette-status-critical);
@@ -1062,7 +1097,7 @@
   --color-accent: var(--palette-dark-accent);
   --color-text: var(--palette-dark-text);
   --color-brand: var(--palette-brand-orange);
-  --color-highlight: var(--palette-highlight);
+  --color-highlight: var(--palette-dark-grid-4);
   --color-status-ok: var(--palette-status-ok);
   --color-status-stale: var(--palette-status-stale);
   --color-status-critical: var(--palette-status-critical);
@@ -1099,7 +1134,7 @@
   --color-accent: var(--palette-slate-accent);
   --color-text: var(--palette-slate-text);
   --color-brand: var(--palette-brand-orange);
-  --color-highlight: var(--palette-highlight);
+  --color-highlight: var(--palette-slate-grid-4);
   --color-status-ok: var(--palette-status-ok);
   --color-status-stale: var(--palette-status-stale);
   --color-status-critical: var(--palette-status-critical);
@@ -1130,7 +1165,7 @@
   --color-accent: var(--palette-sepia-accent);
   --color-text: var(--palette-sepia-text);
   --color-brand: var(--palette-brand-orange);
-  --color-highlight: var(--palette-highlight);
+  --color-highlight: var(--palette-sepia-grid-4);
   --color-status-ok: var(--palette-status-ok);
   --color-status-stale: var(--palette-status-stale);
   --color-status-critical: var(--palette-status-critical);
@@ -2449,86 +2484,115 @@ h1 {
   min-inline-size: 0;
 }
 
-/* --- 04 / the board of squares ------------------------------------------- */
+/* --- 04 / the board of cards --------------------------------------------- */
 
+/* THE BOARD FILLS THE COLUMN AT EVERY WIDTH (owner directive, 2026-09-11).
+   The tracks are fractions of the sheet's own width rather than a fixed size,
+   so the board's right edge is the column's right edge at every viewport —
+   the no-dead-space rule, stated in the one declaration that decides it. The
+   row height is the tallest card in that row and never less than the minimum
+   below, which is what keeps a row reading as one band while letting a card
+   that has more to say be taller than a square would have allowed.
+
+   ONE COLUMN IS THE BASE and the wider arrangements are the upgrades, which
+   is what lets the whole ladder be written in the sheet's OWN two boundaries
+   and add none of its own: the sheet already says where a phone ends
+   (45rem, measured, and a second max-width breakpoint would be the sheet
+   disagreeing with itself about that) and where the reading column stops
+   being a phone-shaped one (--page-rails-from). Six cards is one column on a
+   phone, three symmetric rows on a tablet, and the owner's three-by-two board
+   from the width the rails appear at. */
 .board-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(var(--board-card-min), auto);
   gap: var(--square-gap);
   padding-block-start: var(--square-gap);
 }
 
-.board-square {
-  position: relative;
-  aspect-ratio: 1 / 1;
-  min-inline-size: var(--control-target);
-  min-block-size: var(--control-target);
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--ledger-ink);
-  cursor: pointer;
-  font: inherit;
-  perspective: 1400px;
+@media (min-width: 45.0625rem) {
+  .board-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-.board-square:focus-visible {
+@media (min-width: 67.5rem) {
+  .board-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* THE CARD IS ITS OWN TOKEN LAYER, and that is what makes a turn one rule
+   rather than a rule per painted thing. Every colour inside a card reads one
+   of these five roles; the turned block below swaps what the roles point at,
+   so the whole card inverts — rules, muted text, tracks and fills together —
+   without a single component learning that it can be inverted. */
+.board-card {
+  --board-paper: var(--ledger-bg);
+  --board-ink: var(--ledger-ink);
+  --board-rule: var(--ledger-rule);
+  --board-muted: var(--ledger-muted);
+  --board-raised: var(--ledger-raised);
+  /* A COLUMN, so the regions stack in the order the adapter composed them and
+     the daily line can be pushed to the card's own floor by an auto margin —
+     which is what makes two cards' lines comparable at a glance whatever
+     sits above them. A grid would size each region to its content and leave
+     the slack at the bottom, which is where the line has to be. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--board-row-gap);
+  /* The touch floor, declared on the control rather than inherited from its
+     content — and it doubles as the fix for a grid item's automatic minimum,
+     which is MIN-CONTENT: an unbreakable row (a long model name, a wide
+     figure) would otherwise refuse to shrink and drag the board past the
+     column, which the body then scrolls sideways to reveal. A stated minimum
+     replaces `auto`, so every card is exactly the track it was given and
+     anything genuinely too wide ellipsizes inside it. */
+  min-inline-size: var(--control-target);
+  min-block-size: var(--control-target);
+  padding: var(--square-pad);
+  border: var(--ledger-hairline) solid var(--board-rule);
+  background: var(--board-paper);
+  color: var(--board-ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+}
+
+.board-card > * {
+  min-inline-size: 0;
+}
+
+.board-card:hover {
+  background: var(--board-raised);
+}
+
+.board-card:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 
-.board-pivot {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
+/* THE TURN IS AN INVERSION, and it is this rule and nothing else (owner
+   directive, 2026-09-11). Paper becomes ink, ink becomes paper, and the
+   muted role goes to full paper rather than to a dimmer one: on ink there is
+   no dimmer paper to be had that keeps a small mono line legible, and the
+   hierarchy is already carried by size and weight. The raised role takes the
+   muted ink, which is the only value on the sheet that reads as a groove
+   against ink the way --ledger-raised reads as one against paper. */
+.board-card[data-turned='true'] {
+  --board-paper: var(--ledger-ink);
+  --board-ink: var(--ledger-bg);
+  --board-rule: var(--ledger-ink);
+  --board-muted: var(--ledger-bg);
+  --board-raised: var(--ledger-muted);
 }
 
-.board-square[data-turned='true'] .board-pivot {
-  transform: rotateY(180deg);
-}
-
-.board-face {
-  position: absolute;
-  inset: 0;
+.board-head {
   display: flex;
-  flex-direction: column;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 0.375rem;
-  padding: var(--square-pad);
+  gap: 0.5rem;
   overflow: hidden;
-  border: var(--ledger-hairline) solid var(--ledger-rule);
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-  background: var(--ledger-bg);
-  color: var(--ledger-ink);
-  text-align: start;
-}
-
-.board-square:hover .board-face[data-face='front'] {
-  background: var(--ledger-raised);
-}
-
-.board-face[data-face='back'] {
-  transform: rotateY(180deg);
-  background: var(--ledger-ink);
-  color: var(--ledger-bg);
-}
-
-/* THE FAR FACE IS HIDDEN BY VISIBILITY, NOT ONLY BY BACKFACE CULLING. WebKit
-   flattens the 3D context inside a <button>, so backface-visibility never
-   applies there and the back face painted mirrored over the front at rest —
-   the whole board unreadable on every iOS browser (found by screenshot,
-   2026-09-03). So the face the reader is not looking at is simply invisible:
-   swapped at the flip's midpoint under motion (the delay below), instantly
-   otherwise. The cull stays for the engines that honour it; nothing depends
-   on it any more. */
-.board-face[data-face='back'],
-.board-square[data-turned='true'] .board-face[data-face='front'] {
-  visibility: hidden;
-}
-
-.board-square[data-turned='true'] .board-face[data-face='back'] {
-  visibility: visible;
 }
 
 .board-label {
@@ -2536,6 +2600,31 @@ h1 {
   font-size: var(--ledger-label-size);
   letter-spacing: var(--ledger-label-tracking);
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* What the figure is OF, at the head's far edge: a step smaller than the
+   label and muted, so the row reads as one name and one qualifier rather
+   than as two headings. */
+.board-ctx {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  font-family: var(--font-mono);
+  font-size: var(--board-ctx-size);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--board-muted);
+  text-align: end;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.board-headline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .board-figure {
@@ -2549,109 +2638,53 @@ h1 {
   text-overflow: ellipsis;
 }
 
+/* The lines beside the figure: right-aligned, so a one-line sub and a
+   two-line one both hang off the same edge. */
 .board-sub {
+  display: grid;
+  justify-items: end;
   font-family: var(--font-mono);
   font-size: var(--ledger-label-size);
-  color: var(--ledger-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.4;
+  color: var(--board-muted);
+  min-inline-size: 0;
 }
 
-.board-face[data-face='back'] .board-sub {
-  color: var(--ledger-bg);
-}
-
-.board-bars,
-.board-facts {
-  display: grid;
-  gap: 0.25rem;
-  min-block-size: 0;
-  overflow: hidden;
-}
-
-/* THE BARS BOX IS RESERVED FROM A DECLARED COUNT (issue 302), the same shape
-   `.commit-rows` and the calendar's `--grid-columns` already take: the
-   adapter writes how many rows its own vocabulary declares, and the face
-   divides that many equal rows out of its fixed height. An envelope carrying
-   fewer members leaves the box exactly where it was, so a later arrival never
-   moves the page, and the widest block a group can produce is printed rather
-   than clipped by the overflow rule above. */
-.board-bars {
-  flex: 1 1 auto;
-  gap: var(--board-bar-gap, 0.25rem);
-  grid-template-rows: repeat(var(--board-bar-rows, 1), minmax(0, 1fr));
-}
-
-.board-bar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 2.5rem;
-  align-items: center;
-  gap: var(--board-bar-gap, 0.25rem) 0.375rem;
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  line-height: var(--board-bar-lead, normal);
-}
-
-/* A block that declares more rows than the loose pitch prints inside a square
-   tightens the pitch instead of overflowing it: the leading closes up, the
-   rule thins, and the gaps halve. The ladder is enumerated rather than
-   computed because CSS cannot derive a type size from a row count, and a
-   frontend test requires every group size the vocabulary declares to have a
-   rung here — so a vendor group that grows past this ladder is a red build
-   rather than a clipped square. */
-.board-bars[data-rows='6'],
-.board-bars[data-rows='7'],
-.board-bars[data-rows='8'],
-.board-bars[data-rows='9'],
-.board-bars[data-rows='10'] {
-  --board-bar-gap: 0.125rem;
-  --board-bar-lead: 1.1;
-  --board-bar-rule: 3px;
-}
-
-.board-bar-label {
+.board-sub-line {
+  max-inline-size: 100%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-/* PLACED, not auto-flowed, and the difference is two whole lines per bar. The
-   track spans both columns, so auto-placement pushes it to a row of its own
-   and then pushes the READING — which comes after it in the DOM, because it
-   belongs to the label — onto a third row below the track. Four bars at three
-   rows each is 172px of content in a 118px box, and the square's own
-   `overflow: hidden` silently ate two of the four models. Naming the rows
-   puts the reading back beside its label where it was always drawn, and four
-   bars fit. */
-.board-reading {
-  grid-row: 1;
-  grid-column: 2;
-  text-align: end;
-  font-variant-numeric: tabular-nums;
+/* THE FACT LIST DIVIDES INTO COLUMNS THE ADAPTER ASKED FOR, because the
+   number of columns is a property of what the facts ARE — a pair of
+   accounting ladders, or one ruled record — rather than of how wide the card
+   happens to be. The phone block below overrides it to one for the same
+   reason the board folds to one card across. */
+.board-facts {
+  display: grid;
+  grid-template-columns: repeat(var(--board-fact-columns, 1), minmax(0, 1fr));
+  gap: 0 var(--ledger-column-gap);
+  /* The ladder takes the card's spare height and spreads its rows through it,
+     so a card with two facts and a card with six read as the same object at
+     different densities rather than as one ladder and one gap. */
+  flex: 1 1 auto;
+  align-content: space-evenly;
 }
 
-/* The track spans both columns under its own label, so a share is read as a
-   length AND as a printed percentage — never as a colour. */
-.board-track {
-  grid-row: 2;
+.board-facts[data-columns='2'] {
+  --board-fact-columns: 2;
+}
+
+/* AN ODD LAST FACT TAKES THE WHOLE ROW rather than leaving a hole beside
+   itself — the same rule the retired board of squares gave its odd final
+   square, for the same reason and with one more: a window row reads "this
+   week  3.3B in · 4.3M out", which does not fit half a card, and a term that
+   ellipsizes to "this we…" is a fact the page withheld. The pair columns are
+   for the accounting classes, which come in fours. */
+.board-facts[data-columns='2'] .board-fact:last-child:nth-child(odd) {
   grid-column: 1 / -1;
-  block-size: var(--board-bar-rule, 4px);
-  background: var(--ledger-raised);
-}
-
-.board-face[data-face='back'] .board-track {
-  background: var(--ledger-muted);
-}
-
-.board-fill {
-  display: block;
-  block-size: 100%;
-  inline-size: var(--board-fill, 0%);
-  background: var(--ledger-ink);
-}
-
-.board-face[data-face='back'] .board-fill {
-  background: var(--ledger-bg);
 }
 
 .board-fact {
@@ -2659,8 +2692,17 @@ h1 {
   align-items: baseline;
   justify-content: space-between;
   gap: 0.5rem;
+  padding-block: var(--board-fact-pad);
+  border-block-end: var(--ledger-hairline) solid var(--board-fact-rule);
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: var(--board-fact-size);
+}
+
+/* THE RECORD, MARKED — and never marked alone. The figure this one has
+   reached is printed on the line directly above it, so a reader who sees no
+   colour reads the same fact off two equal numbers (the dataviz floor). */
+.board-fact[data-peak='true'] .board-value {
+  color: var(--ledger-highlight);
 }
 
 .board-term {
@@ -2668,11 +2710,137 @@ h1 {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  color: var(--board-muted);
 }
 
 .board-value {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* The model rows. Each is a name, its reading at the row's end, the rule that
+   runs under both, and the accounting line under that where the source
+   reports one — four cells of one small grid, placed rather than auto-flowed
+   so the reading stays beside its name instead of being pushed under the
+   rule it belongs to. */
+.board-models {
+  display: grid;
+  gap: var(--board-model-gap);
+  flex: 1 1 auto;
+  align-content: space-evenly;
+}
+
+.board-model {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.1875rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--board-fact-size);
+}
+
+.board-model-name {
+  grid-row: 1;
+  grid-column: 1;
+  font-family: var(--font-sans);
+  font-size: var(--board-model-name-size);
+  font-weight: 700;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.board-reading {
+  grid-row: 1;
+  grid-column: 2;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The rule spans both columns under its own name, so a share is read as a
+   length AND as a printed figure — never as a colour. */
+.board-track {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  block-size: var(--board-bar-rule);
+  background: var(--board-raised);
+}
+
+.board-fill {
+  display: block;
+  block-size: 100%;
+  inline-size: var(--board-fill, 0%);
+  background: var(--board-ink);
+}
+
+.board-detail {
+  grid-row: 3;
+  grid-column: 1 / -1;
+  font-size: var(--board-detail-size);
+  color: var(--board-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.board-card-note,
+.board-note {
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  color: var(--board-muted, var(--ledger-muted));
+}
+
+/* --- 04 / the daily line -------------------------------------------------- */
+
+/* THE LINE RUNS TO THE CARD'S OWN EDGES. It is the last thing in the card and
+   it pulls the card's padding back on three sides, so the series spans the
+   full width of the box rather than sitting in a well — which is what makes
+   two cards' lines comparable at a glance. `preserveAspectRatio="none"` on
+   the plot is what lets one coordinate space serve every card width. */
+.spark {
+  position: relative;
+  display: block;
+  block-size: var(--spark-height);
+  margin-block-start: auto;
+  margin-inline: calc(-1 * var(--square-pad));
+  margin-block-end: calc(-1 * var(--square-pad));
+}
+
+.spark-plot {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.spark-area {
+  fill: var(--grid-cell-1);
+  stroke: none;
+}
+
+.spark-line {
+  fill: none;
+  stroke: var(--grid-cell-peak);
+  stroke-width: var(--spark-stroke);
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  /* The box is squashed to the card; the stroke is not. Without this the line
+     would be thicker on a narrow card than on a wide one. */
+  vector-effect: non-scaling-stroke;
+}
+
+/* The newest reading, marked OUTSIDE the squashed coordinate space so it is a
+   circle rather than an ellipse whose eccentricity is the card's aspect
+   ratio. It is never the only channel: the figure the line ends at is printed
+   above it. */
+.spark-mark {
+  position: absolute;
+  inset-block-start: var(--spark-mark-y, 0%);
+  inset-inline-start: var(--spark-mark-x, 0%);
+  inline-size: var(--spark-mark-size);
+  block-size: var(--spark-mark-size);
+  margin-block-start: calc(-0.5 * var(--spark-mark-size));
+  margin-inline-start: calc(-0.5 * var(--spark-mark-size));
+  border-radius: 50%;
+  background: var(--grid-cell-peak);
 }
 
 /* --- 04 / the ticker ----------------------------------------------------- */
@@ -2964,30 +3132,6 @@ h1 {
     display: none;
   }
 
-  /* Two squares to a row, with an odd last one taking the width rather than
-     leaving a hole. */
-  .board-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .board-square:last-child:nth-child(odd) {
-    grid-column: 1 / -1;
-    aspect-ratio: 2 / 1;
-  }
-
-  /* A square carrying a dense block takes the row's whole width, for the
-     reason the odd last one does: two columns of a phone leave a box that
-     cannot print the rows its vocabulary declares, and a clipped bar is a
-     reading the page silently withheld. The wider box is the same height
-     ratio the odd-last rule uses, so the board's rhythm is unchanged. */
-  .board-square[data-rows='6'],
-  .board-square[data-rows='7'],
-  .board-square[data-rows='8'],
-  .board-square[data-rows='9'],
-  .board-square[data-rows='10'] {
-    grid-column: 1 / -1;
-    aspect-ratio: 3 / 2;
-  }
 }
 
 /* ===========================================================================
@@ -3020,7 +3164,7 @@ h1 {
   .commit-caption,
   .commit-row,
   .commit-segment,
-  .board-face,
+  .board-card,
   .ticker-strip,
   .ticker-lead,
   .ticker-item {
@@ -3058,12 +3202,16 @@ h1 {
     transform: rotate(180deg);
   }
 
-  .board-pivot {
-    transition: transform var(--flip-duration) var(--ledger-ease);
-  }
-
-  .board-face {
-    transition: visibility 0s linear calc(var(--flip-duration) / 2);
+  /* THE TURN IS AN INK CHANGE (owner directive, 2026-09-11), so what moves is
+     the paint rather than the box: the card's background and every colour
+     that inherits from it cross over together. Nothing is transformed, so
+     there is no half-turned frame in which a reader could see the back of
+     anything, and a reader who asked for less motion gets the same inversion
+     with none of it — the swap is instant outside this block. */
+  .board-card {
+    transition:
+      background var(--ledger-hover) var(--ledger-ease),
+      color var(--ledger-hover) var(--ledger-ease);
   }
 
   .commit-grid {
@@ -3108,49 +3256,4 @@ h1 {
   to {
     transform: translateX(-50%);
   }
-}
-
-/* A category's own swatch on a square's back (issue 287). The colour is the
-   entity's fixed palette slot, chosen by a closed set of attribute rules
-   rather than by an inline style — the same mechanism the heatmap's levels
-   use, and for the same reason: this origin's Content-Security-Policy admits
-   no style attribute. It is never the only channel; the category's name is
-   printed beside it. */
-.board-swatch {
-  flex: none;
-  inline-size: 0.5rem;
-  block-size: 0.5rem;
-  background: var(--usage-cat-0);
-}
-
-.board-swatch[data-slot='1'] {
-  background: var(--usage-cat-1);
-}
-
-.board-swatch[data-slot='2'] {
-  background: var(--usage-cat-2);
-}
-
-.board-swatch[data-slot='3'] {
-  background: var(--usage-cat-3);
-}
-
-.board-swatch[data-slot='4'] {
-  background: var(--usage-cat-4);
-}
-
-.board-swatch[data-slot='5'] {
-  background: var(--usage-cat-5);
-}
-
-.board-swatch[data-slot='6'] {
-  background: var(--usage-cat-6);
-}
-
-.board-swatch[data-slot='7'] {
-  background: var(--usage-cat-7);
-}
-
-.board-fact {
-  align-items: center;
 }

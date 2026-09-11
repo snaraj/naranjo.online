@@ -344,27 +344,38 @@ export type CommitLogProps = {
   readonly staleNote?: string;
 };
 
-/* One proportional bar on a square's face: a label, a fill and the reading
- * beside it. A NULL fill draws no bar at all — a zero-width bar is
- * pixel-identical to a measured 0%, so an unknown proportion would look like
- * a measured one (the same rule UsageInsight carries). */
+/* One model's row on a models card: its written name, how long its rule runs
+ * against the longest one beside it, the reading printed at the row's end,
+ * and the small accounting line under it where the source reports one.
+ *
+ * The fill is a plain number because a row with no measurable share cannot
+ * exist: the adapter drops a member that carried nothing across the window it
+ * covers, so the component is never handed a proportion it would have to
+ * decline to draw. That is the same honest-states rule a nullable fill used
+ * to carry, moved to the one place it can be decided once and unit-tested —
+ * and made unrepresentable here rather than guarded there. */
 export type LedgerBar = {
   readonly key: string;
   readonly label: string;
-  readonly fillPct: number | null;
+  readonly fillPct: number;
   readonly reading: string;
+  /* The row's own figures, already worded; absent where the source reports
+     only a window total. */
+  readonly detail?: string;
 };
 
-/* One line of a square's back face. The optional slot is the fixed palette
- * slot the ENTITY owns (--usage-cat-N), never its position in this list, so a
- * category keeps its swatch whichever subset a source reports; a fact with no
- * slot draws no swatch. Identity is never the swatch alone — the term is
- * printed beside it, always. */
+/* One ruled line of a card: a term and its figure. A fact whose figure the
+ * payload does not carry is never built, so nothing here renders a dash in a
+ * list — the card's own figure is where an absence is spoken.
+ *
+ * `peak` marks the one value that has reached the record it is measured
+ * against. It is never the only channel: the record itself is printed on the
+ * line above, so a reader compares two numbers rather than reading a colour. */
 export type LedgerFact = {
   readonly key: string;
   readonly term: string;
   readonly value: string;
-  readonly slot?: number;
+  readonly peak?: boolean;
 };
 
 /* A proportional reading with a SEVERITY: a window's utilization, drawn as a
@@ -381,48 +392,66 @@ export type LedgerMeter = {
   readonly label: string;
 };
 
-/* One square of the board: a front face and the face behind it. A square
- * whose source said nothing renders dashes and its own note — never a zero,
- * and never nothing. */
-export type LedgerSquare = {
+/* The daily line under a card: the series itself and the accessible name the
+ * adapter wrote for it. The figures printed above it are the non-colour
+ * channel the dataviz floor asks for, so the drawing carries no axis, no
+ * caption and no legend. A null day is a day nobody measured; lib/spark.ts
+ * decides what that draws. */
+export type LedgerSpark = {
+  readonly totals: readonly (number | null)[];
+  readonly ariaLabel: string;
+};
+
+/* One card of the board. Every region is optional and every one is drawn only
+ * when it holds something — a card is a shape the adapter composes, not a
+ * fixed template with blanks in it — and a card whose source said nothing
+ * renders its own note rather than a zero.
+ *
+ * There is ONE face. Pressing a card inverts its ink and its paper through a
+ * single token remap; the content does not change, so there is no second face
+ * to keep in the DOM, nothing turned away from the reader, and no hint to
+ * print (owner directive, 2026-09-11). */
+export type LedgerCard = {
   readonly key: string;
   readonly label: string;
-  /* The front's headline, when the square has one. */
+  /* The small label at the head's far edge: what the figure is OF. */
+  readonly ctx?: string;
+  /* The headline, when the card has one. */
   readonly figure?: string;
-  /* The line under it. */
-  readonly sub?: string;
-  /* A front made of bars instead of a headline figure. */
-  readonly bars?: readonly LedgerBar[];
-  /* How many bar rows the face RESERVES, which is what the adapter's own
-   * vocabulary declares rather than what this payload happened to carry. The
-   * face divides its box into that many rows, so an envelope with fewer bars
-   * leaves the box exactly where it was and the page never moves under a
-   * later arrival (the zero-CLS floor). Absent on a face with no bars. */
-  readonly barRows?: number;
+  /* The lines beside the headline, in reading order. */
+  readonly sub?: readonly string[];
+  readonly facts?: readonly LedgerFact[];
+  /* How many columns the fact list divides into. Stated by the adapter
+     because it is a property of what the facts ARE — a pair of accounting
+     columns, or one ruled ladder — rather than of how wide the card is. */
+  readonly factColumns?: 1 | 2;
+  readonly models?: readonly LedgerBar[];
+  /* How many model rows the card RESERVES, which is what the adapter's own
+     vocabulary declares rather than what this payload happened to carry, so
+     an envelope with fewer members leaves the box exactly where it was and
+     the page never moves under a later arrival (the zero-CLS floor). */
+  readonly modelRows?: number;
   /* A window's utilization, under the figure. Present exactly when the source
-   * reported a window with one; a source that reports no window draws no
-   * meter rather than a bar at zero. */
+     reported a window with one; a source that reports no window draws no
+     meter rather than a bar at zero. */
   readonly meter?: LedgerMeter;
-  /* The whole square's accessible name, front and back together. */
+  readonly spark?: LedgerSpark;
+  /* What the card says when it has nothing else to say. */
+  readonly note?: string;
+  /* Whether the card opens inverted. The board's rhythm, decided by the
+     adapter over the sources it read, never by the component. */
+  readonly turned?: boolean;
   readonly ariaLabel: string;
-  readonly back: {
-    readonly label: string;
-    readonly facts?: readonly LedgerFact[];
-    readonly bars?: readonly LedgerBar[];
-    /* The back's own reserve, read exactly as the front's is. */
-    readonly barRows?: number;
-    readonly note?: string;
-  };
 };
 
 export type LedgerBoardProps = {
   readonly title: string;
   readonly status: PanelStatus;
   readonly generatedAt?: string;
-  readonly squares: readonly LedgerSquare[];
+  readonly cards: readonly LedgerCard[];
   readonly emptyNote: string;
   readonly staleNote?: string;
-  /* The words a square's own button carries in each state. */
+  /* The words a card's own button carries in each state. */
   readonly turnLabel: string;
   readonly returnLabel: string;
 };

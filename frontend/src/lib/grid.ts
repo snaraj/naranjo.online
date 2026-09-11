@@ -622,22 +622,45 @@ export const magnitudeFloor = 10_000;
  * read a value off an absent cell before this function is ever reached, and
  * an unreported figure renders as its own explicit dash upstream. */
 export function formatMagnitude(value: number): string {
+  const step = magnitudeStep(value);
+  return step === null ? formatWhole(value) : `${step.scaled}${step.suffix}`;
+}
+
+/* formatMagnitudeFixed is the same reading with the decimal place KEPT: the
+ * token board's figures are read down a column against each other, and a
+ * column that alternates "129M" with "44.9B" is a column whose digits no
+ * longer line up (owner directive, 2026-09-11 — the approved board prints
+ * "129.0M"). Identical below the floor, where the exact grouped figure is
+ * what both write.
+ *
+ * It shares magnitudeStep with formatMagnitude rather than repeating the step
+ * walk, so the two spellings can never disagree about which UNIT a figure
+ * reads in — which is the whole reason the table below is stated once. */
+export function formatMagnitudeFixed(value: number): string {
+  const step = magnitudeStep(value);
+  return step === null ? formatWhole(value) : `${step.scaled.toFixed(1)}${step.suffix}`;
+}
+
+/* magnitudeStep picks the unit a value reads in and scales the value into it,
+ * or answers null for a figure that stays exact. The promotion below is why
+ * this is one function rather than two: a figure that rounds to 1000 of its
+ * own unit reads better one unit up, so 999,950 is "1M" and never "1000K",
+ * and both spellings above have to agree about that. */
+function magnitudeStep(value: number): { scaled: number; suffix: string } | null {
   if (!Number.isFinite(value)) {
-    return formatWhole(value);
+    return null;
   }
   if (Math.abs(value) < magnitudeFloor) {
-    return formatWhole(value);
+    return null;
   }
   let index = 0;
   while (index + 1 < magnitudeSteps.length && Math.abs(value) >= magnitudeSteps[index + 1][0]) {
     index += 1;
   }
   let scaled = Math.round((value / magnitudeSteps[index][0]) * 10) / 10;
-  /* A figure that rounds to 1000 of its own unit reads better one unit up:
-   * 999,950 is "1M", never "1000K". */
   if (Math.abs(scaled) >= 1000 && index + 1 < magnitudeSteps.length) {
     index += 1;
     scaled = Math.round((value / magnitudeSteps[index][0]) * 10) / 10;
   }
-  return `${scaled}${magnitudeSteps[index][1]}`;
+  return { scaled, suffix: magnitudeSteps[index][1] };
 }

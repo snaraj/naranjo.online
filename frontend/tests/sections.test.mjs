@@ -186,7 +186,7 @@ test('the manifest names the owner’s five sections, in the order the page stac
       ['workHistory'],
       ['codingProjects'],
       ['commitLog'],
-      ['tokenSquares', 'bossTicker'],
+      ['tokenBoard', 'bossTicker'],
       ['mediaGallery'],
     ],
     'each section holds exactly its blocks; reordering the page is moving one name here'

@@ -110,6 +110,30 @@ export interface TokenUsageInsight {
   recorded?: boolean;
 }
 
+/* One model's LIFETIME accounting, by class — the figures a source's own
+ * tool reports rather than anything a daily series can define. It is what
+ * lets a models card print a share of a lifetime and the classes behind it,
+ * where the windowed series can only report the window it covers. Optional
+ * on the wire: a source that reports no such accounting simply has none, and
+ * its card reads its window totals instead. */
+export interface TokenUsageModelStat {
+  key: string;
+  totals: TokenUsageClassTotals;
+}
+
+/* The accounting classes a model's lifetime split may name: the FIVE the
+ * origin serves a daily partition by (categoryServeOrder in
+ * internal/panels/types.go), the fifth being the reasoning class the second
+ * tool reports. On the wire a class the member never spent is ABSENT rather
+ * than zero (the origin's contract; the producer drops a nought class), so
+ * the boundary reads absence as the zero it is and this type carries all
+ * five, every one a true figure. The shape is pinned across the producer,
+ * the exporter, the origin and the page by one fixture,
+ * internal/panels/testdata/model-stats-shapes.json, and the vocabulary by
+ * the capture suite's parity pin over the three sources. */
+export type TokenUsageClassKey = 'input' | 'output' | 'cache-read' | 'cache-write' | 'reasoning';
+export type TokenUsageClassTotals = Record<TokenUsageClassKey, number>;
+
 export interface TokenUsageSource {
   label: string;
   account?: string;
@@ -117,6 +141,7 @@ export interface TokenUsageSource {
   stats?: TokenUsageStat[];
   series?: TokenUsageSeries;
   insights?: TokenUsageInsight[];
+  modelStats?: TokenUsageModelStat[];
 }
 
 /* vcs-activity/v1 — contribution weeks, totals, streak, recent commits. */

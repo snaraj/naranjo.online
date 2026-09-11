@@ -15,7 +15,7 @@ import { bossTicker } from './lib/blocks/bossTicker.ts';
 import { codingProjects } from './lib/blocks/codingProjects.ts';
 import { commitLog } from './lib/blocks/commitLog.ts';
 import { mediaGallery } from './lib/blocks/mediaGallery.ts';
-import { tokenSquares } from './lib/blocks/tokenSquares.ts';
+import { tokenBoard } from './lib/blocks/tokenBoard.ts';
 import { workHistory } from './lib/blocks/workHistory.ts';
 
 /* THE LEDGER'S FIVE SECTIONS (owner directive, 2026-09-03, issue 287), and
@@ -35,7 +35,7 @@ import { workHistory } from './lib/blocks/workHistory.ts';
  *     sheet's last section under its own number.
  *   * TRACKERS keeps its stack layout and keeps exactly the two blocks that
  *     are still trackers once the calendar has moved out: the board of token
- *     squares and the boss ticker.
+ *     cards and the boss ticker.
  *
  * The IDS do not move. An id is the fragment a nav link jumps to and an
  * address a reader may already have shared, so `work` stays `work` — renaming
@@ -48,6 +48,6 @@ export const page: readonly PageSection[] = [
   section('work', 'Professional Experience', [workHistory]),
   section('projects', 'Projects', [codingProjects]),
   section('commits', 'Commits', [commitLog], { layout: 'stack' }),
-  section('trackers', 'Trackers', [tokenSquares, bossTicker], { layout: 'stack' }),
+  section('trackers', 'Trackers', [tokenBoard, bossTicker], { layout: 'stack' }),
   section('gallery', 'Gallery', [mediaGallery])
 ];

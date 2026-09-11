@@ -5,17 +5,18 @@
  *
  * It used to bind UsageTracker, which drew a grid of tiles, meters and a graph.
  * The owner's ledger redesign (2026-09-03, issue 287) made it a board of five
- * turnable squares, and moved the graph into the commits section's cycler. The
- * figures are the same figures, from the same stats, through the same
- * formatters. */
+ * turnable squares and moved the graph into the commits section's cycler; the
+ * lifelong-tracker board (2026-09-11, issues 267 and 311) made it six cards
+ * with a daily line back under each of the ones that have one. The figures are
+ * the same figures, from the same stats, through the same formatters. */
 
 import { panelBlock, type PageBlock } from '../blocks.ts';
 import LedgerBoard from '../components/LedgerBoard.svelte';
-import { tokenSquaresProps, tokenUsagePanelId } from '../token-usage.ts';
+import { tokenBoardProps, tokenUsagePanelId } from '../token-usage.ts';
 
-export const tokenSquares: PageBlock = panelBlock(
-  'token-squares',
+export const tokenBoard: PageBlock = panelBlock(
+  'token-board',
   LedgerBoard,
   tokenUsagePanelId,
-  (envelope) => tokenSquaresProps(envelope)
+  (envelope) => tokenBoardProps(envelope)
 );

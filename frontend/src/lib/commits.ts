@@ -65,7 +65,12 @@ import {
 } from './grid.ts';
 import { panelAge, panelKinds, panelStaleNote } from './panels.ts';
 import type { PanelEnvelope, TokenUsageSource, VCSActivityData } from './panels';
-import { tokenUsagePanelId, tokenUsageSources, usageDataThrough } from './token-usage.ts';
+import {
+  sourceName,
+  tokenUsagePanelId,
+  tokenUsageSources,
+  usageDataThrough
+} from './token-usage.ts';
 
 /* The two panels this block binds, in the order the adapter reads them. The
  * block module names them once, from here, so the order the binding declares
@@ -88,13 +93,44 @@ const noMark = '—';
  * anywhere. */
 export const contributionsSetLabel = 'Contributions';
 
-/* The source whose calendar the section opens on — a payload label, matched
- * exactly, so a payload that stops reporting it simply opens on whatever set
- * comes first instead. */
-export const leadTokenSource = 'codex';
+/* The activity a series carries: the sum over every day it reports. */
+function seriesSum(totals: readonly number[]): number {
+  return totals.reduce((running, value) => running + value, 0);
+}
 
+/* The source whose calendar the section opens on: the one that reported the
+ * MOST activity, measured as the sum over the days its series carries, with
+ * payload order breaking a tie. The owner's directive (2026-09-04, issue 294)
+ * named the lead for exactly that reason — "has the most activity" — so the
+ * rule keeps the reason and drops the name: a source that overtakes another
+ * opens the section without an edit here, a payload that stops reporting the
+ * lead opens on whichever set remains, and no wire key is spelled in this
+ * file (the vocabulary sweep, issue #267). A source with no days carries no
+ * activity and cannot lead, exactly as it is offered no segment below. */
+export function leadTokenSource(sources: readonly TokenUsageSource[]): string | undefined {
+  let lead: string | undefined;
+  let most = -1;
+  for (const source of sources) {
+    const series = source.series;
+    if (series === undefined || series.totals.length === 0) {
+      continue;
+    }
+    const activity = seriesSum(series.totals);
+    if (activity > most) {
+      most = activity;
+      lead = source.label;
+    }
+  }
+  return lead;
+}
+
+/* A token set is named for the source that reported it, through the ONE
+ * function that turns a wire key into words (issue #311): the segment a
+ * reader presses and the card on the board above it say the same name because
+ * both ask sourceName, and a source the vocabulary has not been taught prints
+ * its raw key here exactly as it does there. */
 export function tokenSetLabel(source: string): string {
-  return `Tokens · ${source}`;
+  return `Tokens · ${sourceName(source)}`;
 }
 
 export const contributionsEmptyNote = activityStripEmptyNote;
@@ -112,7 +148,7 @@ export function contributionsCaption(activity: VCSActivityData): string {
 export function tokenCaption(source: TokenUsageSource): string {
   const totals = source.series?.totals ?? [];
   const days = totals.length;
-  const sum = totals.reduce((running, value) => running + value, 0);
+  const sum = seriesSum(totals);
   const peak = totals.reduce((largest, value) => (value > largest ? value : largest), 0);
   const through = source.series ? addDays(source.series.startDate, days - 1) : '';
   const parts = [
@@ -193,7 +229,7 @@ export function commitLogProps(
       columns: calendarColumns(seriesCells(series.startDate, series.totals), pendingWeeks, anchor),
       caption: tokenCaption(source),
       noun: 'token',
-      stripLabel: `${source.label} token calendar: daily totals, newest last`,
+      stripLabel: `${sourceName(source.label)} token calendar: daily totals, newest last`,
       /* The note the grid would draw if this set were ever empty. The guard
          above means it is not — a token set exists only when its source
          reported days — so this is the component's contract being satisfied
@@ -205,9 +241,10 @@ export function commitLogProps(
   /* Lead source first, the rest in payload order, contributions last. A
      stable partition rather than a sort comparator, so two payload orders
      that agree about the lead agree about everything. */
+  const lead = leadTokenSource(sources);
   const sets: CommitLogSet[] = [
-    ...tokenSets.filter((set) => set.key === leadTokenSource),
-    ...tokenSets.filter((set) => set.key !== leadTokenSource),
+    ...tokenSets.filter((set) => set.key === lead),
+    ...tokenSets.filter((set) => set.key !== lead),
     contributions
   ];
 

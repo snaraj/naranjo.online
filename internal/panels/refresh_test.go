@@ -581,13 +581,12 @@ func TestUsageRefreshSkipsUnkeyedSourcesAndMerges(t *testing.T) {
 		if unkeyed.Account == "" || len(unkeyed.Stats) == 0 {
 			t.Errorf("unkeyed source lost its recorded snapshot section: %+v", unkeyed)
 		}
-		if len(unkeyed.Insights) == 0 {
-			t.Errorf("unkeyed source lost its canonical unavailable insight rows")
-		}
-		for _, insight := range unkeyed.Insights {
-			if insight.Pct != nil || insight.Recorded {
-				t.Errorf("unkeyed source restored unsupported insight percentage: %+v", insight)
-			}
+		// The shipped snapshot carries no insight row at all (issue #267), so
+		// what the merge must not do is MINT one: a partially fetched payload
+		// that grew a labelled proportion nothing measured would be the
+		// fabrication the whole provenance contract refuses.
+		if len(unkeyed.Insights) != 0 {
+			t.Errorf("unkeyed source acquired %d insight row(s) the snapshot does not ship: %+v", len(unkeyed.Insights), unkeyed.Insights)
 		}
 		if unkeyed.Series == nil {
 			t.Fatalf("unkeyed source lost the recorded series it ships")

@@ -62,17 +62,28 @@ const (
 	// hand-duplication pin.
 	//
 	// The number is measured, not guessed, and the measurement has been REDONE
-	// twice — at the 2026-08-24 round-3 review, when a required per-source
-	// capturedAt and mandatory window and derived sections made the printed
-	// figures stale, and again for issue #170, which added the per-model
-	// partition. The structural maximum the origin can admit is one document
-	// covering both shipped snapshot sources, each at the 732-day series bound
-	// with the complete five-key category vocabulary, the complete five-key
-	// model vocabulary over its own 92-day window, and every required section
-	// present; compact-encoded and sealed, that measures 109,280 bytes at
-	// ten-digit daily values. 131,072 leaves 21,792 bytes of headroom: the
-	// same maximum still seals to 128,708 bytes at twelve-digit values and
-	// only crosses the ceiling at thirteen, where it reaches 138,422.
+	// at every reshape: the 2026-08-24 round-3 review (a required per-source
+	// capturedAt plus mandatory window and derived sections), issue #170 (the
+	// per-model partition), issue #276 (the captured-stats section), issue
+	// #302 (a second vendor group), and issue #267 (the per-model LIFETIME
+	// split and the longest-session tile). The structural maximum the origin
+	// can admit is one document covering both shipped snapshot sources, each
+	// at the 732-day series bound with the complete five-key category
+	// vocabulary, the complete thirteen-key model vocabulary over its own
+	// 56-day window, the complete seven-key captured-stats vocabulary, the
+	// per-model lifetime split at every member times every class, and every
+	// required section present; compact-encoded and sealed, that measures
+	// 119,664 bytes at ten-digit daily values. 131,072 leaves 11,408 bytes of
+	// headroom: the same maximum still seals to 130,058 bytes at eleven-digit
+	// values and only crosses the ceiling at twelve, where it reaches
+	// 140,452.
+	//
+	// The one-further-digit headroom is what the model WINDOW is sized to.
+	// Issue #267's per-model lifetime split and longest-session tile cost
+	// 3,904 bytes at eleven digits against the 610 the ceiling then had left,
+	// so the window fell from ten weeks to eight (issue #302 had cut it from
+	// a quarter to ten for the same reason). The ceiling is not the lever —
+	// it is one number five stages agree on.
 	//
 	// The numbers are no longer transcribed into an assertion. CapParityTest
 	// BUILDS that maximum document from the shipped snapshot's own labels and

@@ -235,38 +235,45 @@ admitted, and an oversized one was truncated, atomically installed over the
 last good file, and only then reported as a checksum mismatch.
 
 The ceiling is measured, not guessed, and the measurement has been REDONE
-four times — at the 2026-08-24 round-3 review, when a required per-source
+five times — at the 2026-08-24 round-3 review, when a required per-source
 `capturedAt` and mandatory window and derived sections made the printed
 figures stale; again for issue #170, which added the per-model
 partition; again for issue #276, which grew the derived set to five and
-added the captured-stats section; and again for issue #302, which more than
-doubled the model vocabulary. The structural maximum the origin can
-admit is one document
+added the captured-stats section; again for issue #302, which more than
+doubled the model vocabulary; and again for issue #267, which added the
+per-model LIFETIME split and the longest-session tile. The structural maximum
+the origin can admit is one document
 covering both shipped snapshot sources, each at the 732-day series bound with
 the complete five-key category vocabulary, the complete thirteen-key model
-vocabulary over its own 70-day window, the complete six-key captured-stats
-vocabulary, and every required section present.
-Compact-encoded and sealed, that measures **119,836 bytes** at ten-digit daily
+vocabulary over its own 56-day window, the complete seven-key captured-stats
+vocabulary, the per-model lifetime split at every member times every
+accounting class, and every required section present.
+Compact-encoded and sealed, that measures **119,664 bytes** at ten-digit daily
 values — an order of magnitude above the shipped snapshot's own measured peak
-day of 1,911,380,289. Pretty-printed, the identical document is 237,884
-bytes, so compact output alone roughly halves it. 131,072 leaves **11,236
-bytes** of headroom: the same maximum still seals to 130,462 bytes at
-eleven-digit values and only crosses the ceiling at twelve, where it
-reaches 141,088.
+day. 131,072 leaves **11,408 bytes** of headroom: the same maximum still seals
+to 130,058 bytes at eleven-digit values and only crosses the ceiling at twelve,
+where it reaches 140,452.
 
-The models section spent one decimal digit of that headroom — it was three
-before #170 — and the sixth model member (issue #299) spent the second:
+The models section spent one decimal digit of the original headroom — it was
+three before #170 — and the sixth model member (issue #299) spent the second:
 every member costs one integer per window day on every source, so a member is
 a measured decision, not a free edit. Issue #302 paid that price the other
 way round. Seven named members joined at once, which at the old 92-day window
 put the eleven-digit maximum over the ceiling; the ceiling is one number five
 stages agree on and moving it would move all five, so the WINDOW was cut to
-ten weeks instead and the one-further-digit claim above is the same claim it
-always was. That is precisely the trade the window bounds. One
+ten weeks instead. Issue #267 paid it once more: the per-model lifetime split
+and the longest-session tile cost 3,904 bytes at eleven digits against the
+610 the ceiling then had left, and the window fell to eight weeks. That is
+precisely the trade the window bounds. One
 integer per day per member over the full 732-day series would cost roughly
 ten times what the window costs and would not fit under this ceiling at
 all, which is why the section declares the range it covers instead of
 quietly covering fewer days than the series above it.
+
+The per-model LIFETIME split is the cheaper shape of the same idea and pays a
+different price: one integer per member per class rather than per member per
+DAY, so it is a fixed cost the window does not bound. That is why it fits at
+all — and why the window, not the split, is what moved to pay for it.
 
 These figures are no longer transcribed into a test assertion. `CapParityTest`
 BUILDS the maximum document from the shipped snapshot's own labels and the
@@ -288,25 +295,50 @@ not (2026-08-25 round-4 review, finding 7). The two bound different bytes:
 this one bounds the sealed FILE, the response budget bounds the finished
 ENVELOPE — the payload merged onto the embedded snapshot, plus the envelope
 around it — so the served bytes always exceed the transported ones. The
-maximal document the origin admits measures the gap at +875 bytes (103,633
-sealed, 104,508 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
+maximal document the origin admits measures the gap at +1,625 bytes (111,679
+sealed, 113,304 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
 `internal/panels/dataroot_test.go` logs both), and a larger snapshot widens
 it. A file sealed at exactly 131,072 bytes is therefore refused at serve
 time. What equality buys is only that the last step no longer hides a
 SMALLER ceiling than the four before it; what makes an over-budget document
 safe is the refusal itself, which keeps the last good response serving.
 
-### The model vocabulary is one data file (issue #302)
+That pair is measured over the sections the SNAPSHOT also ships, which is why
+it is smaller than the producer-side maximum above. A pushed section a
+source's snapshot ships none of — a per-model lifetime split on a source that
+shows no such surface — is transported, validated, and then discarded, so it
+adds to the sealed file and nothing at all to the envelope. The transport
+ceiling answers to the larger figure; the serve budget answers to this one.
 
-`internal/panels/config/models.json` (`usage-models/v1`) is the ONLY place a
-model key, a written name, a palette slot, a vendor group or a raw model
-identifier is spelled. The origin embeds it, `capture_usage_series.py` reads
-it from the repository beside itself, and the page imports it at build time;
-before this it was three hand-kept tables held together by a regex test that
-compared them, and adding a model meant editing three files in step. Adding a
-model or a vendor group is now one data edit plus a release, and a test sweeps
+### The vocabularies are data files (issues #302 and #267)
+
+TWO FILES, ONE RULE. `internal/panels/config/models.json` (`usage-models/v1`)
+is the ONLY place a model key, a written name, a palette slot, a vendor group
+or a raw model identifier is spelled, and
+`internal/panels/config/sources.json` (`usage-sources/v1`) is the ONLY place a
+reporting tool's key and written name are. The origin embeds both,
+`capture_usage_series.py` reads the model file from the repository beside
+itself, and the page imports both at build time;
+before this the model vocabulary was three hand-kept tables held together by a
+regex test that compared them, and adding a model meant editing three files in
+step. Adding a
+model, a vendor group or a source is now one data edit plus a release, and a
+test sweeps
 every production source in Go, TypeScript, Svelte, CSS and Python to prove no
-fourth table has appeared.
+fourth table has appeared — for every key and every written name in BOTH
+files.
+
+The source file declares, per source: the machine key the wire carries (the
+pushed document's source labels, the snapshot's own labels and the fetch
+config's are all that one key), the written name a reader prints beside a
+graph, and the model-vocabulary GROUP the source belongs to. Keys are
+label-shaped and unique, names are non-empty, bounded and unique — two
+sources that rendered identically would be a defect nobody could see — and
+every vendor must be a group the model file declares, so the two files cannot
+come to disagree about who exists. The ORIGIN reads none of the names: it
+validates the file at init and a test proves every snapshot and fetch-config
+source label is a key of it, so a push can never name a source the page has no
+written name for. Printing the name is the page's job, from the same bytes.
 
 The file declares, per member: the machine key that crosses the wire, the
 written name every reader resolves, the palette slot the entity owns inside
@@ -404,6 +436,194 @@ drift review: read the vendor surface again, replace the entry's `total`
 and `asOf` together, and land it through review like any other artifact
 change.
 
+## The lifelong ledger's material (issue #267)
+
+The panel serves a windowed, sealed, byte-bounded document. The workstation's
+lifelong tracker answers different questions, needs more depth than the wire
+can carry, and runs entirely on the owner's own disk — so the capture emits
+what it needs as ONE extra top-level section the export strips before sealing.
+
+**`ledger` never reaches the wire.** `assert_only_dates_and_integers` refuses
+the key BY NAME, so a wire document carrying one is a refusal rather than a
+leak, and `export()` returns the block out of band beside the wire document
+(per source: the complete capture document it read, and that block on its
+own). It is the only section that emits an INSTANT or a vocabulary KEY as a
+value, so it answers to its own guard, `assert_ledger_block` — a structural
+walk that reaches every field by name and admits only closed sets: this
+file's schema marker, a model key, an accounting-class key, a calendar date,
+an RFC 3339 UTC second, and bounded counts. A session identifier, a working
+directory, a git branch, a title or a prompt byte cannot ride under a
+friendly key, because a key nobody reached for is a key nobody copies.
+
+**`modelCategories` is the joint of model against accounting class**, day
+indexed over the full depth the walk partitions rather than the eight-week
+wire window: the block is read off local disk and pays no payload ceiling. A
+marginal cannot be recovered from two other marginals, so the joint is
+accumulated in the SAME loop that builds the aggregate, the class split and
+the model split — one walk, four indexes, no second chance to disagree — and
+the producer refuses a joint whose two marginals are not exactly the day's own
+splits. It covers only days the emitted document still owns: the history store
+can override a walked day, and a joint refining a split nobody serves would be
+a tracker disagreeing with the panel. When the store owns every such day the
+section is ABSENT rather than empty, which an ordinary pruning run reaches.
+
+**`sessions` is one entry per record FILE the walk billed a token to** — one
+file is one session in both record shapes — carrying the span from its first
+admitted record to its last, its total, its class partition, and the distinct
+model keys in first-appearance order. Nothing else. Under the message shape's
+GLOBAL de-duplication a record replayed into a second file was already spent
+where it was first seen, so it counts there and the second file's entry never
+sees it. A file that admitted nothing gets no entry, and neither does one
+whose records carry no readable instant: a session with no span is not a
+session.
+
+**Two wire figures come out of the same walk.** `longest-session` joins the
+captured-stats vocabulary in SECONDS, with one definition for every source —
+first admitted record to last, of one session. The producing tool's own
+roll-up reports exactly that in milliseconds where it reports it at all (the
+conversion floors, because a tile is a magnitude), and the walk's own session
+spans measure it where it does not, so a source with no roll-up fills the tile
+instead of freezing it. A roll-up that records the figure and reports it
+malformed refuses the run: absent is a state, broken is a fault.
+`modelStats` carries the lifetime token classes PER MODEL, folded through the
+model vocabulary exactly like every other identifier, accrued past the cache's
+own as-of day through the joint above so the split moves with the class tiles
+it sits under. The origin admits it under the captured-stats completeness
+rule — a source whose snapshot ships the section must refresh it on every
+push, a source whose snapshot ships none owes nothing and cannot mint one —
+and enforces `Σ members ≤ each class tile`. It is `≤` and not `=` because the
+per-model accrual covers the days the walk owns while the class tile also
+accrues days the history store supplied.
+
+One shape, four places: a class the member never spent is ABSENT on the wire, never a zero, and a member whose classes sum to nothing never reaches it. The classes are the five categories the origin serves a daily partition by — `reasoning`, the second tool's class, among them — held to one list across `categoryServeOrder`, `CATEGORY_KEYS` and the page's `categorySlots` by the capture suite's parity pin. The producer drops a nought class, the exporter's merge admission and the origin admit the subset, and the page reads the absence as the zero it is and prints a member's reasoning only when it spent any. All four read the same fixture, `internal/panels/testdata/model-stats-shapes.json`, in their tests, so a stage that drifts on a shape reddens against the file rather than against a sibling's memory of it.
+
+## The ledger — the append-only record (ledger/v1)
+
+Everything above this line is a WINDOW. The sealed document carries a bounded
+series, the history stores carry one best figure per day and forget how it was
+measured, and the dataset is rebuilt from scratch on every run. None of them
+can answer "what did this machine know, and when did it know it", and none of
+them holds a reading the panel never served. The owner's ruling (2026-09-11)
+is that the tracker is lifelong: a figure this workstation has once measured is
+written down once, kept forever, and never rewritten. The ledger is that
+record, and `scripts/usage_ledger.py` is the only program that writes it.
+
+**Layout**, under `LEDGER_DIR` (`$HISTORY_DIR/ledger` by default):
+
+```
+schema.json                        the streams, kinds, units and methods, declared for a reader with no code
+usage/<YYYY>.ndjson                one JSON object per line, appended, never rewritten
+sessions/<YYYY>.ndjson
+github/<YYYY>.ndjson
+projects/<YYYY>.ndjson
+osrs/<YYYY>.ndjson
+raw/usage/<day>/<key>.T<HHMMSS>Z.json.gz   the capture document a reading came from, kept 30 days
+raw/usage/<day>/<key>.last.json.gz         the day's latest, kept forever
+raw/<stream>/<day>.json.gz                 the panel envelope a reading came from
+exports/                                   derived SQLite and CSV, regenerated on demand
+```
+
+**One row is one reading**:
+
+```json
+{"schema":"ledger/v1","day":"2026-09-11","stream":"usage","source":"<source key>",
+ "kind":"model-category","key":"<member>/<class>","value":1183450221,"unit":"tokens",
+ "capturedAt":"2026-09-11T07:39:08Z","method":"capture","exporter":"abc1234",
+ "raw":"sha256:<digest of the archived document's uncompressed bytes>"}
+```
+
+`(day, source, kind, key)` names a figure and `value` is that figure as of
+`capturedAt`. `method` says where the reading came from — `capture` (the
+fresh capture document), `store` (the durable per-day store), `verified` (the
+owner's reading of the vendor surface), `baseline` (the one-time lifetime
+reading), `panel` (the nightly snapshot of this site's own panels),
+`backfill` (the owner-run GitHub reconstruction) — and `unit` is one of
+`tokens`, `count`, `seconds`, `xp`, `level`, `rank`, `stars`,
+`epoch-seconds`. Values are non-negative integers, days are the
+workstation's LOCAL calendar days exactly as everywhere else in this pipeline,
+and instants are UTC RFC 3339. `raw` is present only when an archive backs
+the reading; an absent digest says no document was kept, never a fabricated
+one.
+
+**Append rules**, and every one of them has a hostile test:
+
+1. A run builds an index of the LAST value written per identity by reading the
+   year files for the days it touches. Reading a whole year file each run is
+   the deliberate trade: a year of this pipeline's rows is a few megabytes, and
+   any index beside the file would be a second source of truth that can
+   disagree with the lines it indexes.
+2. Only rows whose value DIFFERS from that last one are appended. A run that
+   changes nothing appends nothing and rewrites nothing — the file grows with
+   information rather than with runs. A session row also compares its end and
+   its running total, because either can move while the duration does not.
+3. The write is `O_WRONLY|O_CREAT|O_APPEND` at mode 0600, one `os.write` of
+   every line, one `os.fsync`. Directories are 0700, including every one the
+   record creates on its way to them.
+4. A final line with no terminating newline is the one tolerated fault — an
+   interrupted append is the only thing that can produce it. It is truncated
+   back to the previous newline, reported on stderr, and the run continues.
+5. Every OTHER malformed line refuses the run naming its line number: bad
+   JSON, the wrong schema, a foreign stream, a negative or boolean value, a
+   day no calendar has, a kind outside its stream, a unit or method outside
+   its vocabulary, an unknown field. This is the history store's
+   "malformed refuses rather than forgets" rule, kept for its reason: a reader
+   that skips what it cannot parse turns corruption into silent data loss.
+
+**Resolution.** `resolve()` answers "what is the current figure" in one place,
+with the rule the rest of the pipeline already uses: a `verified` reading wins
+outright, and the latest one wins among those; otherwise the LARGEST figure
+wins, because every other method under-measures rather than over-measures —
+a retention-pruned tree, a roll-up that discarded a month, a panel that had
+not refreshed. Sessions resolve by latest capture instead: a session's figures
+move while it runs, so the newest reading is simply the current one. The
+SQLite export materialises exactly that as the `<stream>_current` tables.
+
+**The raw archive.** The day's `.last` document is replaced every run and kept
+forever, so the archive's size is bounded by days rather than by runs. A
+per-run copy is written only when the run MEASURED something — a document that
+differs from the last one solely in the instants it was taken (`capturedAt`
+and the run's `generatedAt`) is the same measurement read again — and those
+copies are pruned after 30 days. The
+pruner deletes only names it can generate itself, in day directories past the
+bound; a `.last` archive, an operator's file, and anything a future version of
+the program leaves there are never candidates.
+
+**The nightly panel snapshot.** Three of the five streams are measured by the
+ORIGIN rather than by this workstation — the contribution calendar, the
+repository listing, the game account — under credentials this machine
+deliberately does not hold, and the origin keeps no history of them.
+`scripts/ledger_snapshot.py` reads the public `panel/v1` envelopes once a
+night and records what they said. It runs OUTSIDE `producer.sb`, deliberately
+and unlike every other job here: it needs a network the profile denies, and it
+reads nothing private. Its bounds are the fetch's: https only, the resolved
+host must equal the configured site's, no redirect is followed, one 20-second
+timeout, one 512 KiB read. A panel whose envelope status is not `ok` is
+skipped with no rows at all — the status is the origin's own statement that
+the payload is stale, and a stale reading recorded as today's is a lie the
+record would keep forever.
+
+**The GitHub backfill.** `scripts/ledger_backfill_github.py` is owner-run and
+never scheduled: `--from 2016 [--to 2026]` walks the contribution calendar a
+year at a time and every owned repository's commits, through the owner's own
+authenticated `gh`, and records them with method `backfill`. The login comes
+from `gh api user` at run time, so no account name lives in this repository. A
+non-zero `gh` exit refuses the whole run; a rate-limited response is a wait,
+not a failure. It is idempotent by the append rule, so an interrupted backfill
+is safe to run again.
+
+**Exports.** `python3 -I -B scripts/usage_ledger.py export --ledger DIR`
+rebuilds `exports/ledger.sqlite` (one table per stream, plus the resolved
+`<stream>_current` tables) and one long-format CSV per stream, from scratch,
+into a temporary file that is renamed into place. The lines are the record;
+a derived view that drifted from them is repaired by deleting it.
+
+**What is and is not recoverable.** The ledger starts the day it is switched
+on. It cannot reconstruct a day whose evidence is already gone — the GitHub
+backfill is the one exception, and only because that service keeps the
+history this machine does not. What it promises is the other direction: no day
+measured after that point is ever lost again, including the days the sealed
+window has since dropped and the days a vendor surface later disagrees with.
+
 ## Workstation setup
 
 1. **Build the sealer** from the repository root:
@@ -453,6 +673,7 @@ change.
    # MERGE_SOURCES=other-label=/path/to/other-series.json
    # MERGE_CAPTURES=other-label=running-totals=$HOME/<other-tool-records>
    # HISTORY_DIR=$HOME/.config/naranjo-usage-export/history
+   # LEDGER_DIR=$HOME/.config/naranjo-usage-export/history/ledger
    ```
 
    **`PUSH_HOST` is a real `user@host`, not an `~/.ssh/config` alias, and
@@ -568,6 +789,15 @@ change.
    a read-on day before the day it names, or a malformed file refuses the
    run rather than serving a figure the owner has already corrected.
 
+   `LEDGER_DIR` is the append-only lifelong record described above (issue
+   #267). It DEFAULTS to `$HISTORY_DIR/ledger` whenever `HISTORY_DIR` is set,
+   so configuring durable days configures the record with them and the line
+   above exists only to move it elsewhere; with neither set, the export writes
+   no record at all. The stores and the record answer different questions and
+   neither replaces the other: the store says what a day's best figure is, and
+   the record says every figure anyone ever measured for it, how, and when.
+   Setting it also installs the nightly panel snapshot in step 5.
+
    `MERGE_SOURCES` is how a second tool's ALREADY-CAPTURED series joins the
    same document: point it at that tool's capture output (the capture tool's
    stdout shape). The export validates and re-guards whatever it merges.
@@ -594,6 +824,18 @@ change.
    job, so a capture that runs long does not overlap itself. Logs live under
    `~/Library/Logs/naranjo-online-usage-export/`. One manual run first is good
    practice: `scripts/usage-export/push-usage-series.sh`.
+
+   The installer lands TWO agents when `LEDGER_DIR` (or `HISTORY_DIR`) is
+   configured, and says so on the last line of its output. The second is
+   `com.naranjo-online.ledger-snapshot`: once a night at 23:45 plus at load,
+   logging beside the first, reading the site's public panels into the record.
+   It runs OUTSIDE the producer sandbox because it needs the network the
+   profile denies and reads nothing private, and it is installed only when
+   there is a record to write into — a workstation with neither variable set
+   gets exactly the one agent it had before. The installer reads those two
+   variables out of the same configuration file the push script reads, under
+   the same 0600 refusal, and reads it in a subshell so the file's own
+   `REPO_DIR` can never move the schedule's anchor.
 
    What one run writes to the log (issue #299): a `START <stage>` line as
    each stage begins — `recapture-<key>`, `export`, `seal`, `push` — so a
@@ -758,6 +1000,10 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | Symptom | Meaning |
 | --- | --- |
 | `configuration must be private` | config file mode laxer than 0600 |
+| `the ledger line N is malformed: …` | a line in the append-only record is damaged in a way an interrupted write cannot produce. The run refuses rather than skipping it; the named line is the whole diagnosis |
+| `ledger repaired a partial line in …` | the tolerated fault: an interrupted append left a line with no newline. It was truncated back and the run continued |
+| `ledger snapshot skipped <stream>` | that panel's envelope did not report `ok`, so the night has no reading for it. The next night takes one |
+| `a panel request was redirected` / `came from a different host` | the snapshot refuses both rather than following them; check the configured site |
 | `sealing refused` / key-file refusal | key file missing, malformed, or group/world-readable |
 | `push refused` | ssh transport failed; nothing landed |
 | `checksum mismatch after push` | landed bytes differ from sealed bytes — investigate before trusting the panel |

@@ -39,7 +39,7 @@ const panelsDataTestKeyHex = "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfd0d1d2d3d4d5d6d7d8
 // document that refreshed only some of them is refused as partial
 // (2026-08-24 review finding 7), so a complete one is what this suite must
 // stage to exercise the serving path at all.
-func sealSeriesFile(t *testing.T, dir string, labels []string, generatedAt string) []byte {
+func sealSeriesFile(t *testing.T, dir string, labels []string, modelKey, generatedAt string) []byte {
 	t.Helper()
 	sources := make(map[string]any, len(labels))
 	for _, label := range labels {
@@ -65,12 +65,31 @@ func sealSeriesFile(t *testing.T, dir string, labels []string, generatedAt strin
 			// is validated and unrendered, so the full set satisfies every
 			// label this generic builder is handed.
 			"stats": map[string]any{
-				"lifetime":    9,
-				"input":       1,
-				"output":      2,
-				"cache-read":  3,
-				"cache-write": 4,
-				"sessions":    5,
+				"lifetime":        9,
+				"input":           1,
+				"output":          2,
+				"cache-read":      3,
+				"cache-write":     4,
+				"sessions":        5,
+				"longest-session": 6,
+			},
+			// And the per-model lifetime split, for the same reason (issue
+			// #267): a source whose snapshot SHIPS the section must refresh
+			// it on every push, and one whose snapshot ships none has its
+			// pushed section validated and discarded — so carrying it on
+			// every label satisfies both halves of the rule from one generic
+			// builder. The figures stay under the class tiles above, which is
+			// the invariant the origin enforces.
+			"modelStats": []any{
+				map[string]any{
+					"key": modelKey,
+					"totals": map[string]any{
+						"input":       1,
+						"output":      2,
+						"cache-read":  3,
+						"cache-write": 4,
+					},
+				},
 			},
 		}
 	}
@@ -148,6 +167,32 @@ func shippedSourceLabels(t *testing.T, site *Site) []string {
 	return labels
 }
 
+// shippedModelKey reads ONE model vocabulary key off the served payload, the
+// way shippedSourceLabels reads the source labels and for the same reason:
+// this suite never spells a data label in source, and the per-model lifetime
+// split a pushed document must carry is keyed by that vocabulary (issue
+// #267). Taken from the shipped section itself, so the key is provably one
+// the origin admits rather than one this file believes it admits.
+func shippedModelKey(t *testing.T, site *Site) string {
+	t.Helper()
+	envelope := servedTokenUsage(t, site)
+	data, _ := envelope["data"].(map[string]any)
+	sources, _ := data["sources"].([]any)
+	for _, source := range sources {
+		rows, ok := source.(map[string]any)["modelStats"].([]any)
+		if !ok {
+			continue
+		}
+		for _, row := range rows {
+			if key, ok := row.(map[string]any)["key"].(string); ok && key != "" {
+				return key
+			}
+		}
+	}
+	t.Fatal("no shipped source carries a per-model lifetime row to take a vocabulary key from")
+	return ""
+}
+
 func TestStartPanelDataServesASealedSeriesEndToEnd(t *testing.T) {
 	t.Parallel()
 	site, err := New(testsupport.FrontendFS())
@@ -157,7 +202,7 @@ func TestStartPanelDataServesASealedSeriesEndToEnd(t *testing.T) {
 	defer site.Close()
 	dir := t.TempDir()
 	generatedAt := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
-	sealSeriesFile(t, dir, shippedSourceLabels(t, site), generatedAt)
+	sealSeriesFile(t, dir, shippedSourceLabels(t, site), shippedModelKey(t, site), generatedAt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -625,7 +670,8 @@ func TestStartPanelDataFloorSurvivesProcessRestart(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	labels := shippedSourceLabels(t, site1)
-	accepted := sealSeriesFile(t, dataDir, labels, acceptedAt)
+	modelKey := shippedModelKey(t, site1)
+	accepted := sealSeriesFile(t, dataDir, labels, modelKey, acceptedAt)
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	if err := site1.StartPanelData(ctx1, dataDir, stateDir, env); err != nil {
 		t.Fatalf("first StartPanelData: %v", err)
@@ -642,7 +688,7 @@ func TestStartPanelDataFloorSurvivesProcessRestart(t *testing.T) {
 	// Process two, facing a ROLLED-BACK file: refused, stale said. Without
 	// the persisted floor this file (newer than the embedded snapshot) was
 	// accepted after every restart.
-	sealSeriesFile(t, dataDir, labels, rolledBackAt)
+	sealSeriesFile(t, dataDir, labels, modelKey, rolledBackAt)
 	site2, err := New(testsupport.FrontendFS())
 	if err != nil {
 		t.Fatalf("New: %v", err)

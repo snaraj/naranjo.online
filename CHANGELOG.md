@@ -7,6 +7,46 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.82] - 2026-09-11
+
+### Added
+
+- The lifelong ledger (issue #267): every figure the exporter measures is
+  appended to a machine-local `ledger/v1` record beside the history stores —
+  one JSON line per reading with its day, source, kind, key, value, unit,
+  capture instant, method and exporter revision, never rewritten — together
+  with the capture document it came from, kept compressed. A run appends only
+  what changed; a partial final line is repaired and any other malformed line
+  refuses the run. `scripts/usage_ledger.py export` rebuilds SQLite and CSV
+  views from the lines.
+- A nightly workstation job (`scripts/ledger_snapshot.py`, second LaunchAgent)
+  records the site's own public panels — the contribution calendar, the
+  repository figures, the game account's skills and bosses — into the same
+  record, and `scripts/ledger_backfill_github.py` reconstructs the GitHub
+  history before that night, a year at a time, through the owner's own CLI.
+- The capture emits, for the record only, the per-model-per-category daily
+  joint and one interval per session (start, end, tokens, models; no
+  identifier), and the wire gains a `longest-session` stat and a per-model
+  lifetime class split (`modelStats`) admitted by the origin under the same
+  closed vocabularies and the same ceiling, re-measured.
+- `internal/panels/config/sources.json` names each usage source in writing
+  (the model vocabulary's sibling), so the page prints product names as data;
+  both vendor-name pins now cover source names too.
+
+### Changed
+
+- The Token usage board is six cards on the Ledger sheet (issue #311): the
+  lifetime whole with the two-source share and a combined daily line; one
+  card per source with its classes, today and this week, and its daily line;
+  Sessions; and one models card per source with shares and class splits.
+  Each fact appears once; there are no hints, captions or refresh affordances;
+  a card turns into its own ink inversion; the sheet's one mark is each
+  reading mode's own calendar green, legible as text, and the red is gone.
+- The commit calendar opens on the token source that reported the most
+  activity, measured from the payload, rather than on a source named in code.
+- Release-time insight placeholders that the runtime can never fill no longer
+  ship in the embedded snapshot.
+
 ## [0.1.81] - 2026-09-07
 
 ### Security
