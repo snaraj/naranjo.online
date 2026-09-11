@@ -12,10 +12,12 @@ WORKDIR /src/frontend
 # (vite.config.ts), so that file is a build input of the frontend stage.
 COPY VERSION /src/VERSION
 # The model vocabulary is one data file every consumer reads rather than three
-# hand-kept tables (issue #302); src/lib/token-usage.ts imports it, so it is a
-# build input of this stage exactly as VERSION is. Nothing else under
-# internal/ enters the frontend context.
+# hand-kept tables (issue #302), and the source vocabulary is its sibling
+# (issue #267); src/lib/token-usage.ts imports both, so they are build inputs
+# of this stage exactly as VERSION is. Nothing else under internal/ enters the
+# frontend context.
 COPY internal/panels/config/models.json /src/internal/panels/config/models.json
+COPY internal/panels/config/sources.json /src/internal/panels/config/sources.json
 COPY frontend/package.json frontend/package-lock.json ./
 # The tag and digest select Node, while these checks also prove the npm bundled
 # by that image matches the separately reviewed package-manager pin.

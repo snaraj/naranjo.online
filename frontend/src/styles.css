@@ -304,6 +304,11 @@
   --palette-light-grid-3: #37b043;
   --palette-light-grid-4: #158a31;
   --palette-light-grid-peak: #00d95a;
+  /* Light's mark: the one mode whose fourth step (4.23:1 on the page) is
+     short of the 4.5:1 a text ink is held to, so it carries a deeper green of
+     the same hue — 5.54:1 on the surface, 5.07:1 raised, 4.59:1 overlay. The
+     three dark modes' fourth steps clear 10:1 and are the mark as they are. */
+  --palette-light-mark: #10752a;
 
   --palette-dark-grid-0: #2a2a2a;
   --palette-dark-grid-1: #17492a;
@@ -695,11 +700,14 @@
   --ledger-ink: var(--color-text);
   --ledger-muted: var(--color-accent);
   --ledger-rule: var(--color-text);
-  /* The sheet's one mark is each mode's FOURTH green — the darkest full step
-     of its own calendar ramp — and not the peak: every surface that spends it
-     paints TEXT (a hovered link, a record figure), and the light peak
-     measures under 2:1 on the page where the fourth step clears 4:1. The
-     calendar's busiest day keeps the peak, through --grid-cell-peak. */
+  /* The sheet's one mark is a green of each mode's own calendar ramp — the
+     fourth step where that step is legible as text, a deeper step of the same
+     hue for light, whose fourth step is not — and never the peak: every
+     surface that spends it paints TEXT (a hovered link, a record figure), the
+     ticker's at 0.75rem, and the light peak measures under 2:1 on the page.
+     Every mode's mark clears 4.5:1 on every surface it is printed on; the
+     token pin measures it. The calendar's busiest day keeps the peak,
+     through --grid-cell-peak. */
   --ledger-highlight: var(--color-highlight);
 
   /* The two rule weights the whole sheet is drawn with, and the gaps between
@@ -956,7 +964,7 @@
   --color-accent: var(--palette-light-accent);
   --color-text: var(--palette-light-text);
   --color-brand: var(--palette-brand-orange-on-light);
-  --color-highlight: var(--palette-light-grid-4);
+  --color-highlight: var(--palette-light-mark);
   --color-status-ok: var(--palette-status-ok-on-light);
   --color-status-stale: var(--palette-status-stale-on-light);
   --color-status-critical: var(--palette-status-critical-on-light);

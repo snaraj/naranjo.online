@@ -1703,16 +1703,17 @@ test('the board is three cards across in two equal rows, filling the column (own
 /* NO RED ANYWHERE (owner directive, 2026-09-11).
  *
  * The sheet's one chromatic mark used to be a red that belonged to no palette
- * — the same value on paper as on near-black. It is now each reading mode's
- * OWN fourth green, the darkest full step of the calendar ramp that mode
- * already paints, mapped once in the token layer so every surface that spends
- * the mark moves with one declaration. Not the ramp's peak: the mark is
- * always TEXT, and the light peak measures under 2:1 on the page. The busiest
+ * — the same value on paper as on near-black. It is now a green of each
+ * reading mode's OWN calendar ramp, mapped once in the token layer so every
+ * surface that spends the mark moves with one declaration. Not the ramp's
+ * peak: the mark is always TEXT — the ticker's figure at 0.75rem among its
+ * surfaces — and the light peak measures under 2:1 on the page. The busiest
  * calendar day keeps the peak, so this lane measures BOTH greens in the
  * engine, after the whole fallback chain has run — the only place a stale
- * literal could still show — and proves they are two steps of one ramp.
+ * literal could still show — proves they differ, and holds the mark to the
+ * 4.5:1 text floor against the page it is printed on.
  */
-test('the page spends its one mark on its own fourth green, in every reading mode (owner 2026-09-11)', async ({
+test('the page spends its one mark on its own green, legible as text, in every reading mode (owner 2026-09-11)', async ({
   page,
 }) => {
   await visit(page);
@@ -1734,42 +1735,37 @@ test('the page spends its one mark on its own fourth green, in every reading mod
       const figure = window.document.querySelector('.ticker-item[data-peak="true"] .ticker-figure');
       return {
         peak: resolve('--grid-cell-peak'),
-        step: resolve('--color-grid-4'),
+        mark: resolve('--ledger-highlight'),
         page: resolve('--color-surface'),
         busiest: peak === null ? null : getComputedStyle(peak).backgroundColor,
         ticker: figure === null ? null : getComputedStyle(figure).color,
-        highlight: resolve('--ledger-highlight'),
       };
     });
     expect(observed.peak, `${mode}: the peak token resolves to nothing`).toMatch(/rgb/);
-    expect(observed.step, `${mode}: the fourth step resolves to nothing`).toMatch(/rgb/);
+    expect(observed.mark, `${mode}: the mark resolves to nothing`).toMatch(/rgb/);
     expect(
       observed.busiest,
       `${mode}: the calendar's busiest day is ${observed.busiest}, not the peak green`
     ).toBe(observed.peak);
     expect(
       observed.ticker,
-      `${mode}: the ticker's own accent is ${observed.ticker}, not the fourth green`
-    ).toBe(observed.step);
-    expect(
-      observed.highlight,
-      `${mode}: the sheet's one mark is ${observed.highlight}, not the fourth green`
-    ).toBe(observed.step);
+      `${mode}: the ticker's own accent is ${observed.ticker}, not the sheet's mark`
+    ).toBe(observed.mark);
     /* Non-vacuity, three ways: the mark is a GREEN — more green than red — so
-       a lane that measured three names for the same stale red would fail; it
-       is NOT the peak, so a repaint that collapsed the ramp's top two steps
-       into one value would fail; and it is legible as text on this mode's
-       page at the 3:1 floor, which the light peak does not reach. */
-    const [red, green] = channels(observed.step);
-    expect(green, `${mode}: the mark ${observed.step} is not a green at all`).toBeGreaterThan(red);
-    expect(observed.step, `${mode}: the mark and the busiest day are one value`).not.toBe(
+       a lane that measured two names for the same stale red would fail; it is
+       NOT the peak, so a repaint that spent the peak as text would fail; and
+       it is legible as text on this mode's page at the 4.5:1 floor, which
+       neither the peak nor light's fourth step reaches. */
+    const [red, green] = channels(observed.mark);
+    expect(green, `${mode}: the mark ${observed.mark} is not a green at all`).toBeGreaterThan(red);
+    expect(observed.mark, `${mode}: the mark and the busiest day are one value`).not.toBe(
       observed.peak
     );
-    const ratio = contrastRatio(observed.step, observed.page);
+    const ratio = contrastRatio(observed.mark, observed.page);
     expect(
       ratio,
-      `${mode}: the mark ${observed.step} on the page ${observed.page} is ${ratio.toFixed(2)}:1`
-    ).toBeGreaterThanOrEqual(3);
+      `${mode}: the mark ${observed.mark} on the page ${observed.page} is ${ratio.toFixed(2)}:1`
+    ).toBeGreaterThanOrEqual(4.5);
   }
   await page.evaluate(() => window.document.documentElement.removeAttribute('data-theme'));
 });

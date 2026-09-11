@@ -705,6 +705,7 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     // ramps of four steps plus each palette's own peak, every value its own
     // hex so a repaint of one mode cannot quietly restate another's.
     '#aadf9f', '#72cc6c', '#37b043', '#158a31', '#00d95a', // light greens + peak
+    '#10752a', // light's mark: a deeper step of the same hue, 4.5:1 as text where grid-4 is not
     '#17492a', '#1f7d3d', '#2eb457', '#5ee97b', '#8dff97', // dark greens + peak
     '#1e4b35', '#237f48', '#34b762', '#6ceb8a', '#9dffb2', // slate greens + peak
     '#3d5330', '#55823f', '#79b455', '#a9e37e', '#ccff8a', // sepia greens + peak
@@ -774,27 +775,51 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
  * The sheet's one chromatic mark — a hovered control, the boss the owner has
  * killed most, a streak that has reached its own record — used to be ONE red
  * across every reading mode, a printer's spot colour belonging to no palette.
- * It is now each mode's OWN fourth green: the darkest full step of the
- * calendar ramp that mode already paints, and not the ramp's peak, because
- * every surface that spends the mark paints TEXT and the light peak measures
- * under 2:1 on the page where the fourth step clears 4:1. The calendar's
+ * It is now a green of each mode's OWN calendar ramp: the fourth step where
+ * that step is legible as text (the three dark modes, above 10:1), and for
+ * light a deeper step of the same hue, because light's fourth step measures
+ * 4.23:1 on the page and its peak 1.80:1, while every surface that spends the
+ * mark paints TEXT — the ticker's figure at 0.75rem among them. The calendar's
  * busiest day keeps the peak (--grid-cell-peak), so the mark and the busiest
- * tile are two greens of one ramp rather than one value twice.
+ * tile are two greens of one hue rather than one value twice.
  *
  * Three properties, none satisfiable by another: every mode maps the mark
- * onto its own fourth step, the mode-independent red literal is GONE, and the
- * step each mode resolves to is a green legible as text on that mode's own
- * surfaces — measured, so a repaint that put the peak back would fail here on
- * contrast and not only on a name. The rendering lane measures what an
- * engine resolved; this measures what the token layer declares, and neither
- * replaces the other. */
-test('the sheet spends its one mark on each mode’s own fourth green, legible as text', () => {
+ * onto a token of its OWN palette that is not its peak; the mode-independent
+ * red literal is GONE; and the value each mode resolves to is a green that
+ * clears 4.5:1 — WCAG 1.4.3, the floor this sheet's text inks are held to
+ * above — on every surface it is printed on. Measured, so a repaint that put
+ * the peak back, or light's fourth step back, fails here on contrast and not
+ * only on a name. The rendering lane measures what an engine resolved; this
+ * measures what the token layer declares, and neither replaces the other. */
+test('the sheet spends its one mark on each mode’s own green, legible as text everywhere it prints', () => {
+  const palette = paletteLiterals(styles);
   for (const mode of ['light', 'dark', 'slate', 'sepia']) {
-    assert.match(
-      styles,
-      new RegExp(`--color-highlight: var\\(--palette-${mode}-grid-4\\);`),
-      `${mode} does not map the page's one mark onto its own fourth green`
+    /* The fourth step, or the mode's own deeper mark where the fourth step
+       is short of the floor — never the peak, and never a shallower step that
+       happens to clear the floor on a dark ground: the mark is the ramp's
+       darkest full step or deeper, in every mode, so it reads as the same
+       weight of green across the four. */
+    const mapping = styles.match(
+      new RegExp(`--color-highlight: var\\((--palette-${mode}-(?:grid-4|mark))\\);`)
     );
+    assert.ok(
+      mapping,
+      `${mode} does not map the page's one mark onto its own fourth step or its own deeper mark`
+    );
+    const [, token] = mapping;
+    const mark = palette[token];
+    assert.ok(mark, `${mode}'s mark ${token} resolves to no palette value`);
+    const [red, green] = [1, 3].map((offset) => parseInt(mark.slice(offset, offset + 2), 16));
+    assert.ok(green > red, `${mode}'s mark ${mark} is not a green at all`);
+    for (const surface of ['surface', 'surface-raised', 'surface-overlay']) {
+      const ground = palette[`--palette-${mode}-${surface}`];
+      assert.ok(ground, `${mode} declares no ${surface} to measure the mark against`);
+      const ratio = contrastRatio(mark, ground);
+      assert.ok(
+        ratio >= 4.5,
+        `${mode}'s mark ${mark} on its ${surface} ${ground} is ${ratio.toFixed(2)}:1, below the 4.5:1 text floor`
+      );
+    }
   }
   /* The auto-dark branch too: a document with no stamped choice reads the
      dark palette through the media query, and a mark left behind there would
@@ -809,31 +834,6 @@ test('the sheet spends its one mark on each mode’s own fourth green, legible a
     /--palette-highlight/,
     'the mode-independent highlight literal is back; the mark is per palette now'
   );
-  assert.doesNotMatch(
-    styles,
-    /--color-highlight: var\(--palette-[a-z]+-grid-peak\)/,
-    'a mode spends the mark on its peak again — text no light reader can see'
-  );
-  /* And it really is a legible GREEN, measured rather than asserted: more
-     green than red, and at least 3:1 — the floor every UI ink on this sheet
-     is held to — against both surfaces the mark is ever printed on. The light
-     peak lands at 1.8:1 here, which is the regression the floor exists for. */
-  const palette = paletteLiterals(styles);
-  for (const mode of ['light', 'dark', 'slate', 'sepia']) {
-    const step = palette[`--palette-${mode}-grid-4`];
-    assert.ok(step, `${mode} declares no fourth step for the mark to resolve to`);
-    const [red, green] = [1, 3].map((offset) => parseInt(step.slice(offset, offset + 2), 16));
-    assert.ok(green > red, `${mode}'s mark ${step} is not a green at all`);
-    for (const surface of ['surface', 'surface-raised']) {
-      const ground = palette[`--palette-${mode}-${surface}`];
-      assert.ok(ground, `${mode} declares no ${surface} to measure the mark against`);
-      const ratio = contrastRatio(step, ground);
-      assert.ok(
-        ratio >= 3,
-        `${mode}'s mark ${step} on its ${surface} ${ground} is ${ratio.toFixed(2)}:1, below 3:1`
-      );
-    }
-  }
 });
 
 // The registry and toggle are the client half of the wiki mechanism: named

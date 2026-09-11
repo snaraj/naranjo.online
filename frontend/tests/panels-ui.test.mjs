@@ -41,7 +41,7 @@ const stripComments = (text) => {
 
 // The container image builds the frontend from a stage that holds ONLY the
 // frontend tree plus the few repo files the build DECLARES as inputs
-// (Dockerfile: COPY frontend/ ./, plus VERSION and the model vocabulary), so
+// (Dockerfile: COPY frontend/ ./, plus VERSION and the two vocabulary files), so
 // the rest of the repository does not exist there. The cross-tree pins below
 // are therefore capability-gated exactly like the provider-neutrality pin: in
 // a full checkout — the PR gate's application job, every local run — they are
