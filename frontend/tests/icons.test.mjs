@@ -321,13 +321,10 @@ function controls(source) {
  * comment, every mark, and every wrapper element removed. Whatever is left is
  * text or an interpolation — the thing a screen reader would actually read. */
 const speech = (inner) => {
-  let out = inner;
-  while (
-    out !==
-    (out = stripComments(out)
-      .replace(/<Icon\b[^>]*?\/>/g, '')
-      .replace(/<[^>]*>/g, ''))
-  ) {
+  let out = stripComments(inner).replace(/<Icon\b[^>]*?\/>/g, '');
+  /* Tags come out to a fixpoint as well, in their own loop, so the pass that
+     removes them is the one the sanitization rule can see repeating. */
+  while (out !== (out = out.replace(/<[^>]*>/g, ''))) {
     /* until a pass removes nothing */
   }
   return out.trim();
