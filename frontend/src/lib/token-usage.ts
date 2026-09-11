@@ -28,6 +28,7 @@ import sourceVocabulary from '../../../internal/panels/config/sources.json' with
 import type {
   PanelEnvelope,
   PanelStatus,
+  TokenUsageClassKey,
   TokenUsageClassTotals,
   TokenStatUnit,
   TokenUsageCategory,
@@ -404,12 +405,14 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
  * A class the member never spent is ABSENT on the wire, not zero — the
  * origin's contract (internal/panels/types.go), and the producer's, which
  * drops a nought class from the member — so the boundary reads absence as
- * the zero it is, refuses a class outside the closed vocabulary or a class
- * present without a figure, and requires at least one class, exactly as the
- * origin does. One fixture, internal/panels/testdata/model-stats-shapes.json,
- * pins the four stages to one shape (PR #312 review, finding 1): before it,
- * this boundary required all four classes and refused the WHOLE payload over
- * a member the origin had served truthfully. */
+ * the zero it is, refuses a class outside the closed FIVE (the categories,
+ * reasoning among them) or a class present without a figure, and refuses a
+ * member whose classes sum to nothing, exactly as the origin does. One
+ * fixture, internal/panels/testdata/model-stats-shapes.json, pins the four
+ * stages to one set of shapes, and the capture suite's parity pin holds the
+ * three spellings of the vocabulary to one list (PR #312 review, rounds 1
+ * and 2): before them this boundary required exactly the four stat tiles and
+ * refused the WHOLE payload over a member the origin had served truthfully. */
 function admitModelStats(value: unknown): TokenUsageModelStat[] | null {
   if (value === undefined) {
     return [];
@@ -445,10 +448,11 @@ function admitModelStats(value: unknown): TokenUsageModelStat[] | null {
 
 /* admitClassTotals admits one model's classes, or refuses.
  *
- * Every key present must be one of the four classes and carry a count; a
- * class absent is the zero the origin's contract says it is; a record naming
- * no class at all is a member that spent nothing, which never reaches the
- * wire and is refused here as the origin refuses it.
+ * Every key present must be one of the five classes and carry a count; a
+ * class absent is the zero the origin's contract says it is; a member whose
+ * classes SUM to nothing — none named, or every one named at nought — spent
+ * nothing, never reaches the wire, and is refused here by the origin's own
+ * rule (a sum, not a presence).
  *
  * The sum is CHECKED, the same rule the day partition takes and for the same
  * reason: JavaScript addition does not overflow, it silently stops being
@@ -460,22 +464,20 @@ function admitClassTotals(value: unknown): TokenUsageClassTotals | null {
   if (!isRecord(value)) {
     return null;
   }
-  const totals: TokenUsageClassTotals = { input: 0, output: 0, 'cache-read': 0, 'cache-write': 0 };
+  const totals = Object.fromEntries(modelClassKeys.map((key) => [key, 0])) as TokenUsageClassTotals;
   let sum = 0;
-  let present = 0;
   for (const key of Object.keys(value)) {
-    if (!(classKeys as readonly string[]).includes(key)) {
+    if (!categorySlots.has(key)) {
       return null;
     }
     const count = value[key];
     if (!isCount(count)) {
       return null;
     }
-    totals[key as (typeof classKeys)[number]] = count;
+    totals[key as TokenUsageClassKey] = count;
     sum += count;
-    present += 1;
   }
-  if (present === 0 || !Number.isSafeInteger(sum)) {
+  if (sum === 0 || !Number.isSafeInteger(sum)) {
     return null;
   }
   return totals;
@@ -833,13 +835,20 @@ export function categorySlot(key: string): number {
   return categorySlots.get(key) ?? 0;
 }
 
-/* The four ACCOUNTING CLASSES, in the order every surface prints them. The
- * same four the category breakdown divides a day into, named separately here
- * because the board reads them as lifetime STAT keys and as the fields of a
- * model's own accounting — two payload shapes, one closed list, stated once.
- * Reasoning is not among them: it is a fifth category on the daily partition
- * and no source reports a lifetime figure for it. */
+/* The four lifetime STAT tiles a source card prints, in the order every
+ * surface prints them: the wire's stat vocabulary (usageSeriesStatKeys in
+ * internal/panels/types.go) carries a lifetime figure for these four and not
+ * for reasoning. */
 const classKeys = ['input', 'output', 'cache-read', 'cache-write'] as const;
+
+/* The classes a MODEL'S OWN split may name are the five categories, read off
+ * categorySlots above — the one list on the page the capture suite's parity
+ * pin holds to the origin's categoryServeOrder and the producer's
+ * CATEGORY_KEYS. A merge source reports reasoning per model (the second
+ * tool's class), and the origin serves it; a page that read only the four
+ * stat tiles here refused the whole payload over such a member (PR #312
+ * round 2, finding 1). */
+export const modelClassKeys: readonly TokenUsageClassKey[] = [...categorySlots.keys()] as TokenUsageClassKey[];
 
 /* The CLOSED MODEL vocabulary, read from the one file that states it
  * (issue #302). Every key, written name, palette slot and vendor group the
@@ -1382,20 +1391,23 @@ type ModelReading = {
   readonly detail?: string;
 };
 
-/* A model's own total across the four accounting classes. */
+/* A model's own total across the five accounting classes. */
 function classTotal(totals: TokenUsageClassTotals): number {
-  return classKeys.reduce((sum, key) => sum + totals[key], 0);
+  return modelClassKeys.reduce((sum, key) => sum + totals[key], 0);
 }
 
-/* The row's accounting line: what went in, what came out, and the two cache
- * figures as a PAIR, because a reader compares cache read against cache write
- * rather than against either of the other two. */
+/* The row's accounting line: what went in, what came out, the reasoning the
+ * second tool's models spend — printed only when the member spent any, since
+ * the other tool's models never do and a row of noughts says nothing — and
+ * the two cache figures as a PAIR, because a reader compares cache read
+ * against cache write rather than against either of the other two. */
 function classDetail(totals: TokenUsageClassTotals): string {
-  return [
-    `in ${formatTokenCount(totals.input)}`,
-    `out ${formatTokenCount(totals.output)}`,
-    `cache ${formatTokenCount(totals['cache-read'])} / ${formatTokenCount(totals['cache-write'])}`
-  ].join(' · ');
+  const parts = [`in ${formatTokenCount(totals.input)}`, `out ${formatTokenCount(totals.output)}`];
+  if (totals.reasoning > 0) {
+    parts.push(`reasoning ${formatTokenCount(totals.reasoning)}`);
+  }
+  parts.push(`cache ${formatTokenCount(totals['cache-read'])} / ${formatTokenCount(totals['cache-write'])}`);
+  return parts.join(' · ');
 }
 
 /* REAL MEMBERS ONLY, IN THE VOCABULARY'S ORDER.

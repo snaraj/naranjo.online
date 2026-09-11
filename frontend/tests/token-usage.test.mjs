@@ -19,6 +19,7 @@ import {
   lifetimeContext,
   meterFillPct,
   meterSeverity,
+  modelClassKeys,
   modelLabel,
   modelShares,
   modelSlot,
@@ -1782,23 +1783,29 @@ describe('the models card is one card per source', () => {
       [modelLabel(keys[1])],
       'the residual reached a card as though it were a model'
     );
-    // A lifetime accounting whose member carried nothing loses that row too.
-    const [hollow] = modelCards({
-      sources: [
-        {
-          label: 'a-capture-tool',
-          windows: [],
-          modelStats: [
-            { key: keys[1], totals: { input: 1, output: 0, 'cache-read': 0, 'cache-write': 0 } },
-            {
-              key: keysOf(group)[1],
-              totals: { input: 0, output: 0, 'cache-read': 0, 'cache-write': 0 }
-            }
-          ]
-        }
-      ]
-    });
-    assert.deepEqual(hollow.models.map((row) => row.key), [keys[1]]);
+    // A lifetime accounting whose member carried nothing is not a row to
+    // drop but a payload to REFUSE: the origin refuses such a member whole
+    // (a sum of nothing), so a page that drew the rest would be drawing a
+    // document the origin never serves (PR #312 round 2, finding 3).
+    assert.deepEqual(
+      modelCards({
+        sources: [
+          {
+            label: 'a-capture-tool',
+            windows: [],
+            modelStats: [
+              { key: keys[1], totals: { input: 1, output: 0, 'cache-read': 0, 'cache-write': 0 } },
+              {
+                key: keysOf(group)[1],
+                totals: { input: 0, output: 0, 'cache-read': 0, 'cache-write': 0 }
+              }
+            ]
+          }
+        ]
+      }),
+      [],
+      'a member carrying nothing must refuse the payload, not lose a row'
+    );
   });
 
   it('renders no card at all when a source has nothing to split', () => {
@@ -1873,7 +1880,55 @@ describe('the lifetime model accounting is admitted strictly', () => {
 
   it('admits a well-formed section and carries it onto the source', () => {
     const [source] = tokenUsageSources(withStats([{ key: member.key, totals: full }]));
-    assert.deepEqual(source.modelStats, [{ key: member.key, totals: full }]);
+    assert.deepEqual(source.modelStats, [{ key: member.key, totals: { ...full, reasoning: 0 } }]);
+  });
+
+  it('reads the five categories as a split’s classes, reasoning among them, off the one map the parity pin holds', () => {
+    /* The origin and the exporter admit a member carrying the second tool's
+       reasoning class; a page that read only the four stat tiles refused the
+       WHOLE payload over it (PR #312 round 2, finding 1). The list is read
+       off categorySlots, which the capture suite pins to the origin's
+       categoryServeOrder and the producer's CATEGORY_KEYS. */
+    assert.deepEqual([...modelClassKeys], ['input', 'output', 'cache-read', 'cache-write', 'reasoning']);
+    const [source] = tokenUsageSources(withStats([{ key: member.key, totals: { output: 5, reasoning: 3 } }]));
+    assert.deepEqual(source.modelStats[0].totals, { input: 0, output: 5, 'cache-read': 0, 'cache-write': 0, reasoning: 3 });
+    const [card] = tokenCards(tokenUsageSources(withStats([{ key: member.key, totals: { output: 5, reasoning: 3 } }])))
+      .filter((entry) => entry.key === 'models-s');
+    assert.ok(card, 'the split card did not render for a source whose only split carries reasoning');
+    assert.equal(card.models[0].detail, 'in 0 · out 5 · reasoning 3 · cache 0 / 0');
+    assert.equal(card.models[0].reading, formatShare(100));
+    /* Reasoning COUNTS toward the member's total, so the shares and the
+       rules are read against it: 8 against 4 is two thirds and a half-length
+       rule, where a total blind to the fifth class would read 5 against 4. */
+    const [shared] = tokenCards(
+      tokenUsageSources(
+        withStats([
+          { key: member.key, totals: { output: 5, reasoning: 3 } },
+          { key: other.key, totals: { output: 4 } }
+        ])
+      )
+    ).filter((entry) => entry.key === 'models-s');
+    assert.deepEqual(
+      shared.models.map((row) => [row.key, row.reading, row.fillPct]),
+      [
+        [member.key, formatShare((8 / 12) * 100), 100],
+        [other.key, formatShare((4 / 12) * 100), 50]
+      ]
+    );
+    /* And a member that spent no reasoning prints none: the other tool's
+       models never do, and a row of noughts would say nothing. */
+    const [quiet] = tokenCards(tokenUsageSources(withStats([{ key: member.key, totals: full }])))
+      .filter((entry) => entry.key === 'models-s');
+    assert.equal(quiet.models[0].detail, 'in 1 · out 2 · cache 3 / 4');
+  });
+
+  it('refuses a member whose classes sum to nothing, by the origin’s own rule', () => {
+    /* The origin refuses a member carrying nothing — a SUM, not a presence —
+       and the exporter the same; the page once refused only a member naming
+       no class and admitted an all-nought row (PR #312 round 2, finding 3). */
+    for (const totals of [{}, { input: 0 }, { input: 0, output: 0, 'cache-read': 0, 'cache-write': 0, reasoning: 0 }]) {
+      assert.deepEqual(tokenUsageSources(withStats([{ key: member.key, totals }])), [], JSON.stringify(totals));
+    }
   });
 
   it('reads a class the member never spent as the zero the origin says it is', () => {
@@ -1886,10 +1941,10 @@ describe('the lifetime model accounting is admitted strictly', () => {
       withStats([{ key: member.key, totals: { input: 10, output: 5, 'cache-read': 100 } }])
     );
     assert.deepEqual(source.modelStats, [
-      { key: member.key, totals: { input: 10, output: 5, 'cache-read': 100, 'cache-write': 0 } }
+      { key: member.key, totals: { input: 10, output: 5, 'cache-read': 100, 'cache-write': 0, reasoning: 0 } }
     ]);
     const [single] = tokenUsageSources(withStats([{ key: member.key, totals: { output: 500 } }]));
-    assert.deepEqual(single.modelStats[0].totals, { input: 0, output: 500, 'cache-read': 0, 'cache-write': 0 });
+    assert.deepEqual(single.modelStats[0].totals, { input: 0, output: 500, 'cache-read': 0, 'cache-write': 0, reasoning: 0 });
   });
 
   /* ONE SHAPE IN FOUR PLACES. The producer, the exporter's merge admission,
@@ -1906,11 +1961,11 @@ describe('the lifetime model accounting is admitted strictly', () => {
   it('admits and refuses exactly the class shapes the producer, exporter and origin do', { skip: shapesNote }, async () => {
     const shapes = JSON.parse(await readFile(shapesUrl, 'utf8'));
     assert.equal(shapes.schema, 'model-stats-shapes/v1');
-    assert.ok(shapes.admitted.length >= 3 && shapes.refused.length >= 6, 'the fixture has almost nothing to pin');
+    assert.ok(shapes.admitted.length >= 4 && shapes.refused.length >= 9, 'the fixture has almost nothing to pin');
     for (const shape of shapes.admitted) {
       const sources = tokenUsageSources(withStats([{ key: member.key, totals: shape.totals }]));
       assert.equal(sources.length, 1, `${shape.name}: the page refused a shape the origin serves`);
-      for (const key of ['input', 'output', 'cache-read', 'cache-write']) {
+      for (const key of modelClassKeys) {
         assert.equal(sources[0].modelStats[0].totals[key], shape.totals[key] ?? 0, `${shape.name}: ${key}`);
       }
     }

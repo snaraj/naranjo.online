@@ -495,7 +495,7 @@ and enforces `Σ members ≤ each class tile`. It is `≤` and not `=` because t
 per-model accrual covers the days the walk owns while the class tile also
 accrues days the history store supplied.
 
-One shape, four places: a class the member never spent is ABSENT on the wire, never a zero, and a member that spent nothing never reaches it. The producer drops a nought class, the exporter's merge admission and the origin admit the subset, and the page reads the absence as the zero it is. All four read the same fixture, `internal/panels/testdata/model-stats-shapes.json`, in their tests, so a stage that drifts on the shape reddens against the file rather than against a sibling's memory of it.
+One shape, four places: a class the member never spent is ABSENT on the wire, never a zero, and a member whose classes sum to nothing never reaches it. The classes are the five categories the origin serves a daily partition by — `reasoning`, the second tool's class, among them — held to one list across `categoryServeOrder`, `CATEGORY_KEYS` and the page's `categorySlots` by the capture suite's parity pin. The producer drops a nought class, the exporter's merge admission and the origin admit the subset, and the page reads the absence as the zero it is and prints a member's reasoning only when it spent any. All four read the same fixture, `internal/panels/testdata/model-stats-shapes.json`, in their tests, so a stage that drifts on a shape reddens against the file rather than against a sibling's memory of it.
 
 ## The ledger — the append-only record (ledger/v1)
 

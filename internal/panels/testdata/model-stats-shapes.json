@@ -1,6 +1,6 @@
 {
   "schema": "model-stats-shapes/v1",
-  "contract": "A per-model lifetime split names a class only when the member spent in it: a class the member never spent is ABSENT, never a zero, and a member that spent nothing at all never reaches the wire. The producer (scripts/capture_usage_series.py, model_stats_section), the exporter's merge admission (scripts/export_usage_series.py, admit_model_stats), the origin (internal/panels/dataroot.go, orderModelStats) and the page (frontend/src/lib/token-usage.ts, admitClassTotals) each read THIS file in their tests, so the four cannot drift apart on the shape again (PR #312 review, finding 1). `admitted` shapes must be admitted by all four; `refused` shapes must be refused by all four.",
+  "contract": "A per-model lifetime split names a class only when the member spent in it, out of the FIVE categories the origin serves a daily partition by (input, output, cache-read, cache-write, reasoning \u2014 categoryServeOrder in internal/panels/types.go, CATEGORY_KEYS in scripts/capture_usage_series.py, categorySlots in frontend/src/lib/token-usage.ts, held to one list by the capture suite's parity pin): a class the member never spent is ABSENT, never a zero, and a member whose classes sum to nothing never reaches the wire. The producer (scripts/capture_usage_series.py, model_stats_section), the exporter's merge admission (scripts/export_usage_series.py, admit_model_stats), the origin (internal/panels/dataroot.go, orderModelStats) and the page (frontend/src/lib/token-usage.ts, admitClassTotals) each read THIS file in their tests (PR #312 review, rounds 1 and 2). `admitted` shapes must be admitted by all four; `refused` shapes must be refused by all four.",
   "admitted": [
     {
       "name": "all four classes",
@@ -23,6 +23,13 @@
         "input": 10,
         "output": 5,
         "cache-read": 100
+      }
+    },
+    {
+      "name": "the second tool's reasoning class beside output",
+      "totals": {
+        "output": 5,
+        "reasoning": 3
       }
     }
   ],
@@ -66,6 +73,22 @@
       "name": "a class spelled as text",
       "totals": {
         "input": "1"
+      }
+    },
+    {
+      "name": "a class present at nought; the member spent nothing",
+      "totals": {
+        "input": 0
+      }
+    },
+    {
+      "name": "every class present at nought",
+      "totals": {
+        "input": 0,
+        "output": 0,
+        "cache-read": 0,
+        "cache-write": 0,
+        "reasoning": 0
       }
     }
   ]

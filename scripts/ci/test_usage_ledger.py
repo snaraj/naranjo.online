@@ -402,6 +402,25 @@ class ResolutionTest(LedgerTestCase):
             (0, 1),
         )
 
+    def test_two_methods_on_one_day_each_dedup_against_their_own_last_row(self):
+        # On a baseline's as-of day the capture's lifetime figure and the
+        # owner's baseline carry one value by construction; each is appended
+        # once and then nothing new against ITS OWN last row — not appended
+        # again every run because the other method's row came between
+        # (PR #312 round 2, finding 2).
+        self.assertEqual(
+            self.append(row(value=1000, method="capture"), row(value=1000, method="baseline")),
+            (2, 0),
+        )
+        self.assertEqual(
+            self.append(row(value=1000, method="capture"), row(value=1000, method="baseline")),
+            (0, 2),
+        )
+        self.assertEqual(
+            self.append(row(value=1000, method="baseline"), row(value=1000, method="capture")),
+            (0, 2),
+        )
+
     def test_a_row_the_module_builds_is_admitted_at_the_append_and_nowhere_else(self):
         # One admission point (PR #312 review, finding 5): make_row builds,
         # append_rows admits. A row built with a kind outside its stream's

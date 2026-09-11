@@ -540,28 +540,41 @@ def read_stream(ledger_dir, stream, years=None):
     return rows
 
 
+def reading(row):
+    """The tuple the append rule compares within: one identity, one method.
+
+    Two methods can measure one identity on one day — the capture's lifetime
+    figure and the owner's baseline share a value on the baseline's as-of day
+    by construction — and each is nothing new only against ITS OWN last row.
+    Indexing by identity alone made a verified reading vanish behind a stored
+    one (round 1) and then, with method in the comparison, made the capture
+    and the baseline re-append each other every run (round 2, finding 2).
+    """
+    return identity(row) + (row["method"],)
+
+
 def last_values(rows):
-    """The LAST row appended per identity — what the append rule compares to."""
+    """The LAST row appended per reading — what the append rule compares to."""
     index = {}
     for row in rows:
-        index[identity(row)] = row
+        index[reading(row)] = row
     return index
 
 
 def unchanged(previous, row):
     """True when this row says nothing the last one for its identity did not.
 
-    The value is the figure, so an equal value is normally nothing new — but
-    the METHOD is provenance, and the record's promise is every figure anyone
-    measured, how, and when: a verified reading equal in value to the stored
-    one is still the day the owner verified, and resolve() privileges exactly
-    that method, so a row measured another way is appended (PR #312 review,
+    Compared against the last row of the SAME identity and method (see
+    reading): the value is the figure, so an equal value re-measured the same
+    way is nothing new, while the method is provenance — a verified reading
+    equal in value to a stored one has no verified row before it and is
+    appended, which is what lets resolve() privilege it (PR #312 review,
     finding 4). A SESSION also carries its end and its running total, and
     either can move while the duration does not — a session that ended at the
     same second it was last seen but spent more tokens is new information —
     so those are part of the comparison for that stream and nothing else.
     """
-    if previous["value"] != row["value"] or previous["method"] != row["method"]:
+    if previous["value"] != row["value"]:
         return False
     if row["stream"] == STREAM_SESSIONS:
         for field in ("endedAt", "total", "categories", "models"):
@@ -589,11 +602,11 @@ def append_rows(ledger_dir, stream, rows):
         index = last_values(read_stream_file(path, stream))
         lines = []
         for row in by_year[year]:
-            previous = index.get(identity(row))
+            previous = index.get(reading(row))
             if previous is not None and unchanged(previous, row):
                 kept += 1
                 continue
-            index[identity(row)] = row
+            index[reading(row)] = row
             lines.append(json.dumps(row, separators=COMPACT_SEPARATORS))
             appended += 1
         if lines:

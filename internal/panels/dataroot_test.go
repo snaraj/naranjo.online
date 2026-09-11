@@ -2449,7 +2449,7 @@ func TestThePerModelClassShapesAreOneContractInFourPlaces(t *testing.T) {
 	if err := json.Unmarshal(raw, &shapes); err != nil {
 		t.Fatal(err)
 	}
-	if shapes.Schema != "model-stats-shapes/v1" || len(shapes.Admitted) < 3 || len(shapes.Refused) < 6 {
+	if shapes.Schema != "model-stats-shapes/v1" || len(shapes.Admitted) < 4 || len(shapes.Refused) < 9 {
 		t.Fatalf("the fixture has almost nothing to pin: %+v", shapes)
 	}
 	run := func(name string, totals json.RawMessage, want bool) {
