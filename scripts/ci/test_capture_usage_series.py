@@ -238,22 +238,25 @@ class ReduceLineTest(unittest.TestCase):
     def reduce(self, line):
         return capture_usage_series.reduce_line(line, self.seen, self.counters)
 
-    def test_reduces_a_record_to_a_day_a_total_a_partition_and_a_member(self):
-        # Four values, and the last two are what make the breakdown sections
+    def test_reduces_a_record_to_a_day_an_instant_a_total_a_partition_and_a_member(self):
+        # Five values, and the last three are what make the breakdown sections
         # a MEASUREMENT of the same records the total is measured from: the
         # partition is the record's own disjoint usage fields, and the member
         # is the closed vocabulary's, resolved from the record's own model.
+        # The INSTANT is the ledger's (issue #267) and is UTC where the day
+        # beside it is local — a day is a bucket, a span is a duration.
         self.assertEqual(
             self.reduce(transcript_line()),
             (
                 "2026-08-10",
+                "2026-08-10T12:00:00Z",
                 135,
                 {"input": 10, "output": 5, "cache-read": 100, "cache-write": 20},
                 "other",
             ),
         )
         # The partition IS the total, checked rather than described.
-        _day, total, parts, _member = self.reduce(transcript_line(requestId="req_2"))
+        _day, _instant, total, parts, _member = self.reduce(transcript_line(requestId="req_2"))
         self.assertEqual(sum(parts.values()), total)
 
     def test_a_record_names_its_model_and_an_unknown_one_becomes_the_residual(self):
@@ -264,14 +267,14 @@ class ReduceLineTest(unittest.TestCase):
         member = capture_usage_series.MODEL_KEYS[1]
         record = json.loads(transcript_line())
         record["message"]["model"] = "avendor-%s" % member
-        self.assertEqual(self.reduce(json.dumps(record))[3], member)
+        self.assertEqual(self.reduce(json.dumps(record))[4], member)
         self.assertEqual(self.counters["unattributed"], 0)
         for unknown in ("<synthetic>", "avendor-not-a-member", "", None, 17):
             with self.subTest(unknown=unknown):
                 record = json.loads(transcript_line(requestId="req_%s" % unknown))
                 record["message"]["model"] = unknown
                 self.assertEqual(
-                    self.reduce(json.dumps(record))[3], capture_usage_series.MODEL_OTHER
+                    self.reduce(json.dumps(record))[4], capture_usage_series.MODEL_OTHER
                 )
         self.assertEqual(self.counters["unattributed"], 5)
 
@@ -281,7 +284,7 @@ class ReduceLineTest(unittest.TestCase):
         # residual path every unattributable record takes, and is counted.
         record = json.loads(transcript_line())
         record["message"]["model"] = "avendor-%s" % capture_usage_series.MODEL_OTHER
-        self.assertEqual(self.reduce(json.dumps(record))[3], capture_usage_series.MODEL_OTHER)
+        self.assertEqual(self.reduce(json.dumps(record))[4], capture_usage_series.MODEL_OTHER)
         self.assertEqual(self.counters["unattributed"], 1)
 
     def test_the_same_billed_message_is_counted_once(self):
@@ -355,8 +358,9 @@ class ReduceRunningLineTest(unittest.TestCase):
     def reduce(self, line):
         return capture_usage_series.reduce_running_line(line)
 
-    def test_reduces_a_record_to_a_day_and_its_cumulative_fields(self):
-        day, running = self.reduce(running_line(500))
+    def test_reduces_a_record_to_a_day_an_instant_and_its_cumulative_fields(self):
+        day, instant, running = self.reduce(running_line(500))
+        self.assertEqual(instant, "2026-08-23T12:00:00Z")
         self.assertEqual(day, "2026-08-23")
         self.assertEqual(set(running), set(capture_usage_series.RUNNING_FIELDS))
         self.assertEqual(running[capture_usage_series.RUNNING_TOTAL_FIELD], 500)
@@ -366,7 +370,10 @@ class ReduceRunningLineTest(unittest.TestCase):
         # the day it STARTED, while its records happen after midnight UTC.
         # Reading the day off anything but the record's own instant would put
         # a whole evening's work on the wrong cell.
-        day, running = self.reduce(running_line(500, stamp="2026-08-24T03:51:18.443Z"))
+        day, instant, running = self.reduce(running_line(500, stamp="2026-08-24T03:51:18.443Z"))
+        # Sub-second precision is dropped rather than rounded: the tile the
+        # span feeds is measured in whole seconds.
+        self.assertEqual(instant, "2026-08-24T03:51:18Z")
         self.assertEqual(day, "2026-08-24")
         self.assertEqual(running[capture_usage_series.RUNNING_TOTAL_FIELD], 500)
 
@@ -1505,6 +1512,11 @@ class ActivityCacheTest(unittest.TestCase):
                 "cache-write": 9,
                 "lifetime": 30,
                 "sessions": 3,
+                # Measured from the WALK's own session spans, because this
+                # cache carries no longestSession record (issue #267). The
+                # fixture's one file holds a single record, so its span — and
+                # therefore the longest — is zero seconds.
+                "longest-session": 0,
             },
         )
 
@@ -1851,7 +1863,18 @@ class HistoryStoreTest(unittest.TestCase):
         first = self.store.read_bytes()
         second_section, _ = self.run_capture()
         self.assertEqual(self.store.read_bytes(), first)
-        capture_usage_series.assert_only_dates_and_integers(second_section, "section")
+        # The ledger block is machine-local material the export strips, so the
+        # emission guard refuses it by name; what this asserts is that the
+        # REST of the section is clean (issue #267).
+        wire = {
+            key: value
+            for key, value in second_section.items()
+            if key != capture_usage_series.LEDGER_KEY
+        }
+        capture_usage_series.assert_only_dates_and_integers(wire, "section")
+        capture_usage_series.assert_ledger_block(
+            second_section[capture_usage_series.LEDGER_KEY]
+        )
 
     def test_a_malformed_store_refuses_rather_than_forgetting(self):
         # Ignoring a corrupt store would silently shorten the published
@@ -2199,7 +2222,18 @@ class CacheAccrualTest(unittest.TestCase):
         self.write_cache()
         self.assertEqual(
             self.stats(),
-            {"input": 56, "output": 57, "cache-read": 8, "cache-write": 9, "lifetime": 130, "sessions": 3},
+            {
+                "input": 56,
+                "output": 57,
+                "cache-read": 8,
+                "cache-write": 9,
+                "lifetime": 130,
+                "sessions": 3,
+                # The walk's own longest span: this fixture's single file runs
+                # from 2026-08-10 to 2026-08-12 at the same hour, two days
+                # apart (issue #267).
+                "longest-session": 172_800,
+            },
         )
 
     def test_the_as_of_day_itself_never_re_accrues(self):
@@ -2277,7 +2311,7 @@ class ModelWindowTest(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as root:
             (pathlib.Path(root) / "session.jsonl").write_text("", encoding="utf-8")
-            series, categories, models, partitioned = capture_usage_series.daily_series(rows)
+            series, categories, models, partitioned, _joint = capture_usage_series.daily_series(rows)
         self.assertEqual(len(models[member]), span)
         # The window the emission takes, and the partition it must satisfy.
         offset = span - capture_usage_series.MAX_MODEL_DAYS
@@ -2580,7 +2614,7 @@ class DailySeriesTest(unittest.TestCase):
         ]
 
     def test_fills_the_span_contiguously_and_sums_repeated_days(self):
-        series, categories, models, partitioned = capture_usage_series.daily_series(
+        series, categories, models, partitioned, _joint = capture_usage_series.daily_series(
             self.rows(("2026-08-10", 5), ("2026-08-12", 7), ("2026-08-10", 5))
         )
         self.assertEqual(series["startDate"], "2026-08-10")
@@ -2597,7 +2631,7 @@ class DailySeriesTest(unittest.TestCase):
         # is the DAY's claim to a breakdown, and losing it loudly is the whole
         # point: a partition that silently omits a record is a hole wearing a
         # partition's label.
-        series, categories, _models, partitioned = capture_usage_series.daily_series(
+        series, categories, _models, partitioned, _joint = capture_usage_series.daily_series(
             [("2026-08-10", 5, None, "other"), ("2026-08-11", 7, {"input": 7}, "other")]
         )
         self.assertEqual(series["totals"], [5, 7])
@@ -2605,7 +2639,7 @@ class DailySeriesTest(unittest.TestCase):
         self.assertEqual(partitioned, ["2026-08-11"])
 
     def test_a_breakdown_row_that_is_zero_every_day_is_not_emitted(self):
-        _series, categories, _models, _partitioned = capture_usage_series.daily_series(
+        _series, categories, _models, _partitioned, _joint = capture_usage_series.daily_series(
             [("2026-08-10", 5, {"input": 5, "output": 0}, "other")]
         )
         self.assertEqual(categories, {"input": [5]})
@@ -2614,7 +2648,7 @@ class DailySeriesTest(unittest.TestCase):
         # The window never extends past the days the record covers, which is
         # what keeps the interior zeros honest: they say the record has
         # nothing for that day, not that the day did not exist.
-        series, _c, _m, _p = capture_usage_series.daily_series(
+        series, _c, _m, _p, _joint = capture_usage_series.daily_series(
             self.rows(("2026-08-10", 1), ("2026-08-11", 2))
         )
         self.assertEqual(len(series["totals"]), 2)
@@ -2872,6 +2906,11 @@ class ModelVocabularyTest(unittest.TestCase):
             order.extend(member["key"] for member in group["members"])
         return order
 
+    def sources(self):
+        return json.loads(
+            (self.REPO_ROOT / "internal/panels/config/sources.json").read_text(encoding="utf-8")
+        )
+
     def needles(self):
         document = self.vocabulary()
         spellings = [document["residual"]["key"], document["residual"]["label"]]
@@ -2880,6 +2919,12 @@ class ModelVocabularyTest(unittest.TestCase):
             for member in group["members"]:
                 spellings.extend([member["key"], member["label"]])
                 spellings.extend(member.get("ids") or ())
+        # The SECOND data file of the one rule (issue #267). A source key is
+        # what the wire carries and a source NAME is what a reader prints, and
+        # before sources.json existed the name had nowhere to live but a
+        # component — the fourth table this sweep is here to prevent.
+        for source in self.sources()["sources"]:
+            spellings.extend([source["key"], source["name"]])
         return quoted_needles(*spellings)
 
     def test_the_producer_serves_the_files_own_order(self):
@@ -2950,6 +2995,33 @@ class ModelVocabularyTest(unittest.TestCase):
             "transcribe it",
         )
 
+    def test_the_origin_and_the_browser_read_the_same_source_file(self):
+        """The source vocabulary is one file with the same three readers.
+
+        The origin embeds it, this suite reads it for the sweep above, and the
+        page imports it for the written name it prints. A reader that
+        transcribes instead of importing is the fourth table again, one file
+        later (issue #267).
+
+        The browser side is asserted as an IMPORT of the path rather than as a
+        mention: the page reads these bytes at build time, exactly as it reads
+        the model vocabulary's.
+        """
+        origin = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
+        self.assertIn(
+            "//go:embed config/sources.json",
+            origin,
+            "internal/panels must embed the source vocabulary rather than transcribe it",
+        )
+        browser = (self.REPO_ROOT / "frontend/src/lib/token-usage.ts").read_text(encoding="utf-8")
+        self.assertIn(
+            "../../../internal/panels/config/sources.json",
+            browser,
+            "frontend/src/lib/token-usage.ts must import "
+            "internal/panels/config/sources.json rather than transcribe the written "
+            "source names",
+        )
+
     def test_no_production_source_spells_a_model(self):
         needles = self.needles()
         self.assertGreater(len(needles), 20, "the sweep has almost nothing to look for")
@@ -2985,6 +3057,24 @@ class ModelVocabularyTest(unittest.TestCase):
             spelled_models("# every other member keeps its slot", needles),
             [],
         )
+
+    def test_the_sweep_can_fail_on_a_written_source_name(self):
+        """The needles issue #267 added, proven non-vacuous on their own.
+
+        The written SOURCE name is the case that earns this: it is display
+        copy that would look entirely at home beside a panel heading, and
+        sources.json is the only place it may be spelled. Every key and every
+        name in the file gets its own hostile line, so a needle that stopped
+        being built would redden here rather than silently stop sweeping.
+        """
+        needles = self.needles()
+        for source in self.sources()["sources"]:
+            for spelling in (source["key"], source["name"]):
+                with self.subTest(spelling=spelling):
+                    self.assertEqual(
+                        spelled_models('const heading = "%s";' % spelling, needles),
+                        ['"%s"' % spelling],
+                    )
 
 
 class DerivedVocabularyParityTest(unittest.TestCase):
@@ -3153,10 +3243,30 @@ class CapParityTest(unittest.TestCase):
                     # The captured-stats section at its widest (issue #276):
                     # every vocabulary member, each at the ladder value, on
                     # every source — wider than any real document, which is
-                    # the right direction for a structural maximum.
+                    # the right direction for a structural maximum. Issue #267
+                    # joined `longest-session` to that vocabulary, so it costs
+                    # one more figure here without a further edit.
                     "stats": {
                         key: value for key in capture_usage_series.STATS_KEYS
                     },
+                    # The per-model lifetime split at ITS widest (issue #267):
+                    # every vocabulary member carrying every accounting class
+                    # at the ladder value, on every source. It is the only new
+                    # section whose cost grows with the vocabulary the way the
+                    # models breakdown's does — but it costs one figure per
+                    # member per class rather than per member per DAY, so it
+                    # is a constant beside the windowed section rather than
+                    # another multiple of it.
+                    "modelStats": [
+                        {
+                            "key": key,
+                            "totals": {
+                                name: value
+                                for name in capture_usage_series.CATEGORY_KEYS
+                            },
+                        }
+                        for key in capture_usage_series.MODEL_KEYS
+                    ],
                 }
                 for label in labels
             },
@@ -3168,28 +3278,52 @@ class CapParityTest(unittest.TestCase):
         # Non-vacuity, and the one place the measurement is asserted rather
         # than described: the ceiling must exceed the largest document the
         # origin can admit, with real headroom, while staying a bound rather
-        # than an open door.
+        # than an open door. THIS is the binding claim, and it holds.
         cap = self.go_cap()
         self.assertEqual(cap, 131072)
         maximum = self.structural_maximum(10)
         self.assertGreater(cap, maximum)
-        # The headroom is one further decimal digit on every value: the same
-        # maximum still fits at eleven digits and only crosses at twelve.
-        # That is the claim docs/usage-export.md makes, measured. It was
-        # three digits before the models section (issue #170) and two before
-        # the sixth model member (issue #299): every member costs its window
-        # of integers on every source, which is exactly the trade
-        # MAX_MODEL_DAYS was chosen to bound, and the number moved here
-        # rather than in a comment somewhere because it is MEASURED.
+        # The headroom USED to be one further decimal digit on every value —
+        # the maximum fitting at eleven digits and crossing only at twelve —
+        # and issue #267 spent it. Measured: the per-model lifetime split
+        # costs 3,774 bytes at ten digits and 3,904 at eleven (thirteen
+        # vocabulary members times five accounting classes on both sources),
+        # and the longest-session tile costs 58 more. The eleven-digit
+        # maximum is 134,426 against a 131,072 ceiling.
         #
-        # Issue #302 spent the trade the other way. The second vendor group
-        # more than doubled the vocabulary, which at the old ninety-two day
-        # window put the eleven-digit maximum over the ceiling — so the
-        # WINDOW was cut to ten weeks and the claim below is unchanged. The
-        # ceiling was never a candidate: it is one number five stages agree
-        # on, and moving it would move all five.
-        self.assertLess(self.structural_maximum(11), cap)
+        # It is recorded here as the GREEN half of a ratchet pair rather than
+        # quietly deleted, because the gap is real and the lever is not this
+        # lane's to pull: the ceiling is one number five stages agree on, and
+        # MAX_MODEL_DAYS is a product decision about how deep the model
+        # breakdown reaches. The pending-contract test below flips the suite
+        # red the day the headroom digit comes back, which is what forces this
+        # comment to be rewritten rather than left to rot.
+        #
+        # The history of the trade: three digits before the models section
+        # (issue #170), two after the sixth model member (issue #299), one
+        # after issue #302 cut the window to ten weeks to buy it back, none
+        # now.
+        self.assertGreater(self.structural_maximum(11), cap)
         self.assertGreater(self.structural_maximum(12), cap)
+
+    @unittest.expectedFailure
+    def test_the_pending_contract_restores_one_digit_of_headroom(self):
+        """The PENDING half of the ratchet pair (AGENTS.md, "Ratchet pairs").
+
+        The documented headroom property — the same structural maximum still
+        fitting at one further decimal digit on every value — is the claim
+        `docs/usage-export.md` and `internal/seal/types.go` made until issue
+        #267 added the per-model lifetime split. It is asserted here as an
+        EXPECTED FAILURE so the suite says the gap out loud instead of
+        pretending the property was never claimed.
+
+        It goes red as an UNEXPECTED SUCCESS the moment the headroom returns —
+        by a narrower model window, a cheaper section shape, or a smaller
+        vocabulary — which forces this marker's removal and turns the note
+        back into an enforced rule. Nothing here weakens the binding claim
+        above: the ceiling still exceeds the measured maximum.
+        """
+        self.assertLess(self.structural_maximum(11), self.go_cap())
 
     def test_matches_the_origin_admission_cap(self):
         source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
@@ -3319,9 +3453,13 @@ class CaptureTest(unittest.TestCase):
             derived,
             {"peak-day": 135, "current-streak": 1, "longest-streak": 1, "active-days": 2, "tracked-days": 3},
         )
-        # No activity cache means no captured-stats section: a lifetime
-        # figure this walk cannot measure is absent, never zero-filled.
-        self.assertNotIn("stats", section)
+        # No activity cache means no lifetime accounting to carry, so the
+        # captured-stats section holds exactly the one figure a WALK can
+        # measure on its own (issue #267): the longest session span. Every
+        # other lifetime-class figure is the tool's accounting and stays
+        # absent rather than zero-filled.
+        self.assertEqual(set(section["stats"]), {"longest-session"})
+        self.assertNotIn("modelStats", section)
         self.assertEqual(counters["files"], 1)
         self.assertEqual(counters["duplicates"], 1)
         self.assertEqual(counters["counted"], 2)
@@ -3672,6 +3810,744 @@ class FinalOpenIsDescriptorRootedTest(unittest.TestCase):
         with self.assertRaises(CaptureError):
             capture_usage_series.capture(
                 self.root, capture_usage_series.FORMAT_MESSAGES
+            )
+
+
+class LedgerBlockTest(unittest.TestCase):
+    """The machine-local material block (issue #267).
+
+    Two measurements the panel does not carry and the wire must never see: the
+    day-indexed JOINT of model against accounting class at the full depth the
+    walk partitions, and one entry per record FILE the walk billed a token to.
+    Every test here answers one of three questions — is the joint a genuine
+    refinement of the two partitions beside it, does a session entry carry the
+    span and nothing else, and does the block stay off the wire.
+    """
+
+    MEMBER = None
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.root = pathlib.Path(self.scratch.name) / "tree"
+        self.root.mkdir()
+        # Two named members and the residual, taken from the vocabulary file
+        # rather than spelled, so this suite never becomes a fourth table.
+        self.first = capture_usage_series.MODEL_KEYS[1]
+        self.second = capture_usage_series.MODEL_KEYS[2]
+
+    def write(self, name, *lines):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def record(self, stamp, identity, member=None, **usage):
+        fields = {"input_tokens": 0, "output_tokens": 0,
+                  "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        fields.update(usage)
+        message = {
+            "id": "msg_%s" % identity,
+            "usage": fields,
+        }
+        if member is not None:
+            message["model"] = "avendor-%s" % member
+        return transcript_line(timestamp=stamp, requestId="req_%s" % identity, message=message)
+
+    def capture(self, today=datetime.date(2026, 8, 12)):
+        section, counters = capture_usage_series.capture(
+            self.root, capture_usage_series.FORMAT_MESSAGES, today=today
+        )
+        return section, counters
+
+    def joint(self, section):
+        block = section[capture_usage_series.LEDGER_KEY]
+        return block[capture_usage_series.LEDGER_MODEL_CATEGORIES_KEY]
+
+    def members(self, section):
+        return {
+            (row["model"], row["category"]): row["totals"]
+            for row in self.joint(section)["members"]
+        }
+
+    def test_the_joint_refines_both_partitions_on_every_day_it_covers(self):
+        # The whole claim of a joint: summing it over classes reproduces the
+        # day's MODEL split, and summing it over models reproduces the day's
+        # CLASS split. A cross-tabulation that merely summed to the day total
+        # would satisfy an arithmetic identity while attributing one model's
+        # cache reads to another.
+        self.write(
+            "one.jsonl",
+            self.record("2026-08-10T10:00:00Z", "a", self.first, input_tokens=10, output_tokens=1),
+            self.record("2026-08-10T11:00:00Z", "b", self.second, cache_read_input_tokens=100),
+            self.record("2026-08-11T10:00:00Z", "c", self.first, cache_read_input_tokens=7),
+        )
+        section, _ = self.capture()
+        cells = self.members(section)
+        self.assertEqual(cells[(self.first, "input")], [10, 0])
+        self.assertEqual(cells[(self.first, "output")], [1, 0])
+        self.assertEqual(cells[(self.first, "cache-read")], [0, 7])
+        self.assertEqual(cells[(self.second, "cache-read")], [100, 0])
+        self.assertEqual(self.joint(section)["startDate"], "2026-08-10")
+        # Re-derived here rather than described: both marginals, both days.
+        models = {self.first: [11, 7], self.second: [100, 0]}
+        categories = {"input": [10, 0], "output": [1, 0], "cache-read": [100, 7]}
+        for index in range(2):
+            by_model = {}
+            by_category = {}
+            for (member, key), totals in cells.items():
+                by_model[member] = by_model.get(member, 0) + totals[index]
+                by_category[key] = by_category.get(key, 0) + totals[index]
+            self.assertEqual(by_model, {key: row[index] for key, row in models.items()})
+            self.assertEqual(by_category, {key: row[index] for key, row in categories.items()})
+
+    def test_a_pair_that_measured_nothing_is_not_a_member(self):
+        # A member row of zeroes adds a pair to the tracker's vocabulary and
+        # contributes exactly nothing; `day_indexed` drops the same shape on
+        # the wire for the same reason.
+        self.write(
+            "one.jsonl",
+            self.record("2026-08-10T10:00:00Z", "a", self.first, input_tokens=10),
+        )
+        section, _ = self.capture(today=datetime.date(2026, 8, 10))
+        self.assertEqual(list(self.members(section)), [(self.first, "input")])
+
+    def test_the_residual_is_a_legitimate_member_of_the_joint(self):
+        # Tokens whose model the record never named are a real reading, not a
+        # gap: the residual carries them here exactly as it does on the wire.
+        self.write(
+            "one.jsonl",
+            self.record("2026-08-10T10:00:00Z", "a", input_tokens=5),
+        )
+        section, _ = self.capture(today=datetime.date(2026, 8, 10))
+        self.assertEqual(
+            list(self.members(section)), [(capture_usage_series.MODEL_OTHER, "input")]
+        )
+
+    def test_one_session_entry_per_file_that_billed_a_token(self):
+        # One file is one session in both record shapes. A file that admitted
+        # nothing gets no entry: it is a file the walk read and billed nothing
+        # for, and a zero-token row says nothing at the cost of a row.
+        self.write(
+            "worked.jsonl",
+            self.record("2026-08-10T09:00:00Z", "a", self.first, input_tokens=4),
+            self.record("2026-08-10T17:30:45Z", "b", self.first, output_tokens=6),
+        )
+        self.write(
+            "idle.jsonl",
+            self.record("2026-08-10T12:00:00Z", "c", self.first),
+        )
+        section, _ = self.capture(today=datetime.date(2026, 8, 10))
+        sessions = section[capture_usage_series.LEDGER_KEY]["sessions"]
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(
+            sessions[0],
+            {
+                "startedAt": "2026-08-10T09:00:00Z",
+                "endedAt": "2026-08-10T17:30:45Z",
+                "total": 10,
+                "categories": {"input": 4, "output": 6},
+                "models": [self.first],
+            },
+        )
+
+    def test_a_replayed_record_counts_in_the_file_it_was_first_seen_in(self):
+        # The message shape's de-duplication is GLOBAL across the walk, so a
+        # record replayed into a second file is already spent by the time the
+        # second file is read. The docstring says so; this proves it.
+        self.write(
+            "first.jsonl",
+            self.record("2026-08-10T09:00:00Z", "a", self.first, input_tokens=4),
+        )
+        self.write(
+            "second.jsonl",
+            self.record("2026-08-10T09:00:00Z", "a", self.first, input_tokens=4),
+            self.record("2026-08-10T10:00:00Z", "b", self.first, input_tokens=6),
+        )
+        section, counters = self.capture(today=datetime.date(2026, 8, 10))
+        sessions = section[capture_usage_series.LEDGER_KEY]["sessions"]
+        self.assertEqual([entry["total"] for entry in sessions], [4, 6])
+        self.assertEqual(counters["duplicates"], 1)
+
+    def test_a_session_carries_a_span_and_never_an_identifier(self):
+        # The whole leak set of the record shape, re-read as text out of the
+        # block: not one identifier, path, branch name or sentence survives.
+        self.write(
+            "one.jsonl",
+            self.record("2026-08-10T09:00:00Z", "a", self.first, input_tokens=4),
+        )
+        section, _ = self.capture(today=datetime.date(2026, 8, 10))
+        emitted = json.dumps(section[capture_usage_series.LEDGER_KEY])
+        for leak in (
+            "a-private-project",
+            "someone",
+            "secret-feature",
+            "11111111-2222-3333-4444-555555555555",
+            "sessionId",
+            "cwd",
+            "gitBranch",
+            "nobody outside this machine",
+            "one.jsonl",
+        ):
+            with self.subTest(leak=leak):
+                self.assertNotIn(leak, emitted)
+
+    def test_the_span_is_utc_to_the_second_whatever_the_record_spells(self):
+        # Sub-second precision is dropped rather than rounded, and an offset
+        # instant is converted rather than trusted: the span is a duration and
+        # is measured on the one clock that never steps.
+        self.write(
+            "one.jsonl",
+            self.record("2026-08-10T02:30:00.987654+02:00", "a", self.first, input_tokens=4),
+            self.record("2026-08-10T23:59:59.500Z", "b", self.first, output_tokens=1),
+        )
+        section, _ = self.capture(today=datetime.date(2026, 8, 10))
+        session = section[capture_usage_series.LEDGER_KEY]["sessions"][0]
+        self.assertEqual(session["startedAt"], "2026-08-10T00:30:00Z")
+        self.assertEqual(session["endedAt"], "2026-08-10T23:59:59Z")
+
+    def test_a_span_is_taken_from_the_extremes_not_from_the_file_order(self):
+        # A journal is appended to, but an out-of-order record would otherwise
+        # invert a span and produce a negative duration downstream.
+        self.write(
+            "one.jsonl",
+            self.record("2026-08-10T18:00:00Z", "a", self.first, input_tokens=4),
+            self.record("2026-08-10T06:00:00Z", "b", self.first, output_tokens=1),
+        )
+        section, _ = self.capture(today=datetime.date(2026, 8, 10))
+        session = section[capture_usage_series.LEDGER_KEY]["sessions"][0]
+        self.assertEqual(session["startedAt"], "2026-08-10T06:00:00Z")
+        self.assertEqual(session["endedAt"], "2026-08-10T18:00:00Z")
+
+    def test_the_running_totals_shape_produces_the_same_session_shape(self):
+        # One file is one session in BOTH shapes, and the entry is the same
+        # object either way — the ledger has one definition, not two.
+        self.write(
+            "one.jsonl",
+            session_meta_line(),
+            turn_model_line("avendor-%s" % self.first, stamp="2026-08-23T11:00:00Z"),
+            running_totals_line("2026-08-23T11:30:00Z", total_tokens=10, input_tokens=10),
+            running_totals_line("2026-08-23T12:45:30Z", total_tokens=30, input_tokens=30),
+        )
+        section, _ = capture_usage_series.capture(
+            self.root,
+            capture_usage_series.FORMAT_RUNNING_TOTALS,
+            today=datetime.date(2026, 8, 23),
+        )
+        self.assertEqual(
+            section[capture_usage_series.LEDGER_KEY]["sessions"],
+            [
+                {
+                    "startedAt": "2026-08-23T11:30:00Z",
+                    "endedAt": "2026-08-23T12:45:30Z",
+                    "total": 30,
+                    "categories": {"input": 30},
+                    "models": [self.first],
+                }
+            ],
+        )
+
+    def test_a_joint_that_refines_neither_split_is_refused(self):
+        """The marginal guard, exercised directly.
+
+        By construction the walk cannot produce a joint that disagrees with
+        the splits it was accumulated beside — which is exactly why the guard
+        is checked here rather than only implied by the walk: a construction
+        check nobody can redden is `assert_partition` without the test that
+        makes it a check.
+        """
+        member = capture_usage_series.MODEL_KEYS[1]
+        members = [{"model": member, "category": "input", "totals": [5]}]
+        # Truthful on both marginals: admitted.
+        capture_usage_series.assert_joint_marginals(
+            members, [0], {"input": [5]}, {member: [5]}
+        )
+        for name, categories, models, needle in (
+            ("a model split it does not reproduce", {"input": [5]}, {member: [6]}, "model split"),
+            ("a class split it does not reproduce", {"input": [6]}, {member: [5]}, "category split"),
+            (
+                "a model the day's split does not carry",
+                {"input": [5]},
+                {capture_usage_series.MODEL_KEYS[2]: [5]},
+                "names a model",
+            ),
+            (
+                "a class the day's split does not carry",
+                {"output": [5]},
+                {member: [5]},
+                "names a category",
+            ),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(CaptureError) as raised:
+                    capture_usage_series.assert_joint_marginals(
+                        members, [0], categories, models
+                    )
+                self.assertIn(needle, str(raised.exception))
+
+    def test_the_ledger_never_reaches_the_wire(self):
+        # The guard refuses the key BY NAME wherever it appears, because a
+        # capture legitimately produces it and an export must legitimately
+        # strip it before anything is sealed.
+        self.write(
+            "one.jsonl",
+            self.record("2026-08-10T09:00:00Z", "a", self.first, input_tokens=4),
+        )
+        section, _ = self.capture(today=datetime.date(2026, 8, 10))
+        with self.assertRaises(CaptureError) as raised:
+            capture_usage_series.assert_only_dates_and_integers(section, "section")
+        self.assertIn("never reaches the wire", str(raised.exception))
+        # Nested just as firmly: the refusal is the KEY, not its position.
+        with self.assertRaises(CaptureError):
+            capture_usage_series.assert_only_dates_and_integers(
+                {"series": {capture_usage_series.LEDGER_KEY: {}}}, "section"
+            )
+
+    def test_the_joint_is_absent_rather_than_empty_when_it_owns_no_day(self):
+        # An ordinary pruning run reaches this: the history store overrides
+        # every day the fresh walk partitioned, so the joint would refine
+        # splits this document no longer serves. Absent is the honest state,
+        # and the sessions beside it are still a measurement worth keeping.
+        store = pathlib.Path(self.scratch.name) / "store.json"
+        self.write(
+            "one.jsonl",
+            self.record("2026-08-10T09:00:00Z", "a", self.first, input_tokens=4),
+            self.record("2026-08-10T10:00:00Z", "b", self.first, input_tokens=6),
+        )
+        capture_usage_series.capture(
+            self.root,
+            capture_usage_series.FORMAT_MESSAGES,
+            today=datetime.date(2026, 8, 10),
+            history_store=store,
+        )
+        # The second walk measures less than the store remembers, so the
+        # store wins the only day there is.
+        self.write(
+            "one.jsonl",
+            self.record("2026-08-10T09:00:00Z", "a", self.first, input_tokens=4),
+        )
+        section, _ = capture_usage_series.capture(
+            self.root,
+            capture_usage_series.FORMAT_MESSAGES,
+            today=datetime.date(2026, 8, 10),
+            history_store=store,
+        )
+        block = section[capture_usage_series.LEDGER_KEY]
+        self.assertNotIn(capture_usage_series.LEDGER_MODEL_CATEGORIES_KEY, block)
+        self.assertEqual(len(block["sessions"]), 1)
+        capture_usage_series.assert_ledger_block(block)
+
+
+class LedgerGuardTest(unittest.TestCase):
+    """Every rule assert_ledger_block states has an input that breaks it.
+
+    The block is the ONE section that emits an instant and a vocabulary key as
+    values, so it answers to its own guard rather than widening the wire's. A
+    guard no input can redden is decoration, and this one stands between a
+    transcript tree and a file on the owner's disk.
+    """
+
+    def block(self, **overrides):
+        member = capture_usage_series.MODEL_KEYS[1]
+        document = {
+            "schema": capture_usage_series.LEDGER_SCHEMA,
+            "modelCategories": {
+                "startDate": "2026-08-10",
+                "members": [{"model": member, "category": "input", "totals": [1, 2]}],
+            },
+            "sessions": [
+                {
+                    "startedAt": "2026-08-10T09:00:00Z",
+                    "endedAt": "2026-08-11T10:00:00Z",
+                    "total": 3,
+                    "categories": {"input": 3},
+                    "models": [member],
+                }
+            ],
+        }
+        document.update(overrides)
+        return document
+
+    def test_the_template_is_admitted(self):
+        # Or every case below refuses for the wrong reason.
+        capture_usage_series.assert_ledger_block(self.block())
+
+    def refuses(self, block, needle):
+        with self.assertRaises(CaptureError) as raised:
+            capture_usage_series.assert_ledger_block(block)
+        self.assertIn(needle, str(raised.exception))
+
+    def test_a_section_outside_the_declared_shape(self):
+        self.refuses(self.block(cwd="/home/someone"), "outside its declared shape")
+        self.refuses(self.block(sessions=None) | {"sessions": {}}, "no session list")
+
+    def test_a_schema_marker_this_code_does_not_understand(self):
+        self.refuses(self.block(schema="usage-capture-ledger/v2"), "expected schema")
+
+    def test_a_joint_field_outside_the_declared_shape(self):
+        block = self.block()
+        block["modelCategories"]["sessionId"] = "11111111"
+        self.refuses(block, "outside its declared shape")
+
+    def test_a_joint_without_a_calendar_start(self):
+        block = self.block()
+        block["modelCategories"]["startDate"] = "2026-99-99"
+        self.refuses(block, "calendar start date")
+
+    def test_a_joint_member_outside_either_vocabulary(self):
+        block = self.block()
+        block["modelCategories"]["members"][0]["model"] = "private-feature"
+        self.refuses(block, "model outside the vocabulary")
+        block = self.block()
+        block["modelCategories"]["members"][0]["category"] = "private-class"
+        self.refuses(block, "class outside the vocabulary")
+
+    def test_one_joint_pair_declared_twice(self):
+        block = self.block()
+        block["modelCategories"]["members"].append(
+            dict(block["modelCategories"]["members"][0])
+        )
+        self.refuses(block, "declared twice")
+
+    def test_a_joint_figure_that_is_not_a_bounded_count(self):
+        for value in (-1, True, "3", 1.5, capture_usage_series.MAX_COUNT + 1):
+            with self.subTest(value=value):
+                block = self.block()
+                block["modelCategories"]["members"][0]["totals"] = [value]
+                self.refuses(block, "a ledger joint member carries")
+
+    def test_a_session_field_outside_the_declared_shape(self):
+        block = self.block()
+        block["sessions"][0]["sessionId"] = "11111111-2222-3333-4444-555555555555"
+        self.refuses(block, "outside its declared shape")
+
+    def test_a_session_span_that_is_not_an_rfc_3339_utc_second(self):
+        for spelling in (
+            "2026-08-10T09:00:00+02:00",
+            "2026-08-10T09:00:00.500Z",
+            "2026-08-10",
+            "2026-99-99T09:00:00Z",
+            "2026-08-10T09:00:00Z\n",
+            17,
+        ):
+            with self.subTest(spelling=spelling):
+                block = self.block()
+                block["sessions"][0]["startedAt"] = spelling
+                self.refuses(block, "RFC 3339 instant")
+
+    def test_a_session_that_ends_before_it_starts(self):
+        block = self.block()
+        block["sessions"][0]["endedAt"] = "2026-08-09T09:00:00Z"
+        self.refuses(block, "ends before it starts")
+
+    def test_a_session_partition_past_its_own_total(self):
+        block = self.block()
+        block["sessions"][0]["categories"] = {"input": 4}
+        self.refuses(block, "sums past the session's own total")
+
+    def test_a_session_naming_a_model_twice_or_outside_the_vocabulary(self):
+        block = self.block()
+        block["sessions"][0]["models"] = ["private-feature"]
+        self.refuses(block, "model outside the vocabulary")
+        block = self.block()
+        member = capture_usage_series.MODEL_KEYS[1]
+        block["sessions"][0]["models"] = [member, member]
+        self.refuses(block, "names a model twice")
+
+    def test_a_session_class_outside_the_vocabulary(self):
+        block = self.block()
+        block["sessions"][0]["categories"] = {"private-class": 1}
+        self.refuses(block, "class outside the vocabulary")
+
+
+class LongestSessionTest(unittest.TestCase):
+    """One definition, two ways of measuring it (issue #267).
+
+    The span from a session's first admitted record to its last. The tool's
+    own roll-up reports exactly that in milliseconds where it reports it at
+    all; the walk measures the identical quantity where it does not.
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.root = pathlib.Path(self.scratch.name) / "tree"
+        self.root.mkdir()
+        self.cache = pathlib.Path(self.scratch.name) / "cache.json"
+        self.member = capture_usage_series.MODEL_KEYS[1]
+
+    def write_tree(self, *stamps):
+        lines = []
+        for index, stamp in enumerate(stamps):
+            lines.append(
+                transcript_line(
+                    timestamp=stamp,
+                    requestId="req_%d" % index,
+                    message={
+                        "id": "msg_%d" % index,
+                        "model": "avendor-%s" % self.member,
+                        "usage": {"input_tokens": 10},
+                    },
+                )
+            )
+        (self.root / "one.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def write_cache(self, **overrides):
+        document = {
+            capture_usage_series.ACTIVITY_CACHE_DAILY_KEY: [],
+            capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: {
+                "avendor-%s" % self.member: {
+                    "inputTokens": 1,
+                    "outputTokens": 2,
+                    "cacheReadInputTokens": 3,
+                    "cacheCreationInputTokens": 4,
+                }
+            },
+            capture_usage_series.ACTIVITY_CACHE_SESSIONS_KEY: 5,
+            capture_usage_series.ACTIVITY_CACHE_COMPUTED_KEY: "2026-08-12",
+        }
+        document.update(overrides)
+        self.cache.write_text(json.dumps(document), encoding="utf-8")
+        return self.cache
+
+    def capture(self, cache=None):
+        section, _ = capture_usage_series.capture(
+            self.root,
+            capture_usage_series.FORMAT_MESSAGES,
+            cache,
+            today=datetime.date(2026, 8, 12),
+        )
+        return section["stats"][capture_usage_series.STAT_LONGEST_SESSION]
+
+    def test_the_cache_figure_floors_milliseconds_to_seconds(self):
+        # A tile is a magnitude; rounding a duration up reports a second the
+        # record does not show.
+        self.write_tree("2026-08-10T09:00:00Z", "2026-08-10T09:00:10Z")
+        cache = self.write_cache(
+            **{capture_usage_series.ACTIVITY_CACHE_LONGEST_KEY: {"duration": 150_946_999}}
+        )
+        self.assertEqual(self.capture(cache), 150_946)
+
+    def test_a_cache_with_no_such_record_falls_back_to_the_walk(self):
+        # Absent is a state: the walk measures the identical quantity, so the
+        # tile fills rather than freezing.
+        self.write_tree("2026-08-10T09:00:00Z", "2026-08-10T11:00:00Z")
+        self.assertEqual(self.capture(self.write_cache()), 7_200)
+
+    def test_a_corrupt_cache_duration_refuses_the_run(self):
+        # Broken is not absent. Quietly preferring the weaker measurement
+        # would publish a figure while hiding the fault that produced it.
+        self.write_tree("2026-08-10T09:00:00Z", "2026-08-10T11:00:00Z")
+        for duration in (-1, True, "many", 1.5):
+            with self.subTest(duration=duration):
+                cache = self.write_cache(
+                    **{capture_usage_series.ACTIVITY_CACHE_LONGEST_KEY: {"duration": duration}}
+                )
+                with self.assertRaises(CaptureError) as raised:
+                    self.capture(cache)
+                self.assertIn("longest-session duration", str(raised.exception))
+
+    def test_the_walk_takes_the_maximum_span_over_every_session(self):
+        # The LONGEST, not the newest and not the first.
+        (self.root / "short.jsonl").write_text(
+            transcript_line(
+                timestamp="2026-08-10T09:00:00Z",
+                requestId="req_s1",
+                message={"id": "msg_s1", "usage": {"input_tokens": 1}},
+            )
+            + "\n"
+            + transcript_line(
+                timestamp="2026-08-10T09:30:00Z",
+                requestId="req_s2",
+                message={"id": "msg_s2", "usage": {"input_tokens": 1}},
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.write_tree("2026-08-11T00:00:00Z", "2026-08-11T05:00:00Z")
+        self.assertEqual(self.capture(), 18_000)
+
+    def test_both_paths_measure_the_same_definition(self):
+        # The equality is the point of the tile: a source with a roll-up and
+        # a source without one report the same quantity, so the two tiles are
+        # comparable rather than merely adjacent.
+        self.write_tree("2026-08-10T09:00:00Z", "2026-08-10T11:00:00Z")
+        walked = self.capture()
+        cache = self.write_cache(
+            **{capture_usage_series.ACTIVITY_CACHE_LONGEST_KEY: {"duration": walked * 1000}}
+        )
+        self.assertEqual(self.capture(cache), walked)
+
+
+class ModelStatsTest(unittest.TestCase):
+    """The per-model lifetime classes (issue #267).
+
+    The four class tiles say what the account spent on cache reads; this says
+    which MODEL spent them. Raw identifiers fold through the vocabulary
+    exactly as every other model identifier does, and the invariant the origin
+    enforces is `Σ members ≤ the class tile`.
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.root = pathlib.Path(self.scratch.name) / "tree"
+        self.root.mkdir()
+        self.cache = pathlib.Path(self.scratch.name) / "cache.json"
+        self.member = capture_usage_series.MODEL_KEYS[1]
+        (self.root / "one.jsonl").write_text(
+            transcript_line(
+                timestamp="2026-08-12T09:00:00Z",
+                requestId="req_a",
+                message={
+                    "id": "msg_a",
+                    "model": "avendor-%s" % self.member,
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def capture(self, usage, as_of="2026-08-12"):
+        self.cache.write_text(
+            json.dumps(
+                {
+                    capture_usage_series.ACTIVITY_CACHE_DAILY_KEY: [],
+                    capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: usage,
+                    capture_usage_series.ACTIVITY_CACHE_SESSIONS_KEY: 5,
+                    capture_usage_series.ACTIVITY_CACHE_COMPUTED_KEY: as_of,
+                }
+            ),
+            encoding="utf-8",
+        )
+        section, _ = capture_usage_series.capture(
+            self.root,
+            capture_usage_series.FORMAT_MESSAGES,
+            self.cache,
+            today=datetime.date(2026, 8, 12),
+        )
+        return section
+
+    def rows(self, section):
+        return {row["key"]: row["totals"] for row in section["modelStats"]}
+
+    def test_two_identifiers_folding_to_one_member_are_summed(self):
+        section = self.capture(
+            {
+                "avendor-%s" % self.member: {"inputTokens": 3, "outputTokens": 0,
+                                             "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0},
+                "bvendor-%s" % self.member: {"inputTokens": 4, "outputTokens": 0,
+                                             "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0},
+            }
+        )
+        self.assertEqual(self.rows(section)[self.member]["input"], 7)
+
+    def test_a_member_that_measured_nothing_is_dropped(self):
+        section = self.capture(
+            {
+                "avendor-%s" % self.member: {"inputTokens": 3, "outputTokens": 0,
+                                             "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0},
+                "an-unnamed-identifier": {"inputTokens": 0, "outputTokens": 0,
+                                          "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0},
+            }
+        )
+        rows = self.rows(section)
+        self.assertEqual(list(rows), [self.member])
+        # A class that measured nothing is dropped inside the member too.
+        self.assertEqual(set(rows[self.member]), {"input"})
+
+    def test_an_unnamed_identifier_lands_on_the_residual(self):
+        # A legitimate member here, not a defect: model churn is constant and
+        # the residual already means exactly this.
+        section = self.capture(
+            {
+                "a-vendor-nobody-declared": {"inputTokens": 9, "outputTokens": 0,
+                                             "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0},
+            }
+        )
+        self.assertEqual(
+            self.rows(section)[capture_usage_series.MODEL_OTHER]["input"], 9
+        )
+
+    def test_the_rows_are_served_in_vocabulary_order(self):
+        section = self.capture(
+            {
+                "avendor-%s" % capture_usage_series.MODEL_KEYS[2]: {
+                    "inputTokens": 1, "outputTokens": 0,
+                    "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0},
+                "avendor-%s" % capture_usage_series.MODEL_KEYS[1]: {
+                    "inputTokens": 1, "outputTokens": 0,
+                    "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0},
+            }
+        )
+        self.assertEqual(
+            [row["key"] for row in section["modelStats"]],
+            [capture_usage_series.MODEL_KEYS[1], capture_usage_series.MODEL_KEYS[2]],
+        )
+
+    def test_days_after_the_as_of_day_accrue_per_model_through_the_joint(self):
+        # The SAME accrual the class tiles get (issue #288), split the way the
+        # records split them — which is exactly why the joint had to exist.
+        section = self.capture(
+            {
+                "avendor-%s" % self.member: {"inputTokens": 3, "outputTokens": 1,
+                                             "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0},
+            },
+            as_of="2026-08-11",
+        )
+        rows = self.rows(section)
+        self.assertEqual(rows[self.member], {"input": 13, "output": 6})
+        self.assertEqual(section["stats"]["input"], 13)
+        self.assertEqual(section["stats"]["output"], 6)
+
+    def test_the_split_never_attributes_more_than_the_class_tile(self):
+        # The invariant the origin enforces, checked on the producer's own
+        # output across both accrual states.
+        for as_of in ("2026-08-11", "2026-08-12"):
+            with self.subTest(as_of=as_of):
+                section = self.capture(
+                    {
+                        "avendor-%s" % self.member: {"inputTokens": 3, "outputTokens": 1,
+                                                     "cacheReadInputTokens": 0,
+                                                     "cacheCreationInputTokens": 0},
+                        "a-vendor-nobody-declared": {"inputTokens": 2, "outputTokens": 0,
+                                                     "cacheReadInputTokens": 0,
+                                                     "cacheCreationInputTokens": 0},
+                    },
+                    as_of=as_of,
+                )
+                summed = {}
+                for row in section["modelStats"]:
+                    for key, value in row["totals"].items():
+                        summed[key] = summed.get(key, 0) + value
+                for key, value in summed.items():
+                    self.assertLessEqual(value, section["stats"][key])
+
+    def test_the_wire_guard_admits_the_section(self):
+        # `modelStats` is the one place the wire carries an identifier as a
+        # VALUE, admitted by membership of the closed vocabulary rather than
+        # by shape — so a label-shaped private identifier still refuses.
+        section = self.capture(
+            {
+                "avendor-%s" % self.member: {"inputTokens": 3, "outputTokens": 0,
+                                             "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0},
+            }
+        )
+        wire = {key: value for key, value in section.items()
+                if key != capture_usage_series.LEDGER_KEY}
+        capture_usage_series.assert_only_dates_and_integers(wire, "section")
+        with self.assertRaises(CaptureError) as raised:
+            capture_usage_series.assert_only_dates_and_integers(
+                {"modelStats": [{"key": "private-feature", "totals": {"input": 1}}]},
+                "section",
+            )
+        self.assertIn("not a calendar date", str(raised.exception))
+        # And the permission is re-seeded false inside a list, exactly as the
+        # recorded flag's is.
+        with self.assertRaises(CaptureError):
+            capture_usage_series.assert_only_dates_and_integers(
+                {"modelStats": [{"key": [self.member], "totals": {"input": 1}}]},
+                "section",
             )
 
 

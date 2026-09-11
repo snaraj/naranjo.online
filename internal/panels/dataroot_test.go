@@ -912,6 +912,242 @@ func TestDataRootValidatesCapturedStatsWithoutAddingTiles(t *testing.T) {
 	}
 }
 
+// modelStatsSnapshot is dataRootSnapshot plus the two surfaces issue #267
+// adds to alpha: a per-model lifetime split and a longest-session tile. Beta
+// deliberately gains neither, so the two sources between them pin both halves
+// of the completeness rule — alpha owes a refreshed section on every push,
+// beta owes nothing and can never mint one.
+// It also gives alpha the two CLASS tiles the `≤` invariant is measured
+// against: the rule compares the split against the source's own tiles, and a
+// snapshot that ships no class tile makes that comparison vacuous.
+var modelStatsSnapshot = strings.Replace(dataRootSnapshot,
+	`{"key": "tracked-days", "label": "Days tracked", "value": 1, "unit": "days", "recorded": true}],`,
+	`{"key": "tracked-days", "label": "Days tracked", "value": 1, "unit": "days", "recorded": true},
+      {"key": "input", "label": "Input", "value": 900, "unit": "tokens", "recorded": true},
+      {"key": "output", "label": "Output", "value": 800, "unit": "tokens", "recorded": true}],
+     "modelStats": [{"key": "`+modelServeOrder[0]+`", "totals": {"input": 400, "output": 600}}],`, 1)
+
+// modelStatsDocument is validDocument plus the section alpha's snapshot now
+// demands, at figures that satisfy the `≤` invariant against alpha's own
+// lifetime tile.
+func modelStatsDocument() map[string]any {
+	document := validDocument()
+	alphaSection(document)["modelStats"] = []any{
+		map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"input": 300, "output": 500}},
+	}
+	alphaSection(document)["stats"] = map[string]any{"lifetime": 4321, "input": 900, "output": 800}
+	return document
+}
+
+// TestDataRootAdmitsThePerModelLifetimeSplit proves the happy path serves in
+// vocabulary order and overlays onto the snapshot's own section, and that the
+// beta half of the completeness rule holds: a source shipping no section owes
+// none and never grows one by push.
+func TestDataRootAdmitsThePerModelLifetimeSplit(t *testing.T) {
+	t.Parallel()
+	reg, state := usageDataRootRegistry(t, modelStatsSnapshot)
+	document := modelStatsDocument()
+	alphaSection(document)["modelStats"] = []any{
+		// Declared out of vocabulary order on purpose: the served order is
+		// the vocabulary's, which is what keeps every replica's digest ETag
+		// identical.
+		map[string]any{"key": modelServeOrder[1], "totals": map[string]any{"output": 500}},
+		map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"input": 300}},
+	}
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex)); err != nil {
+		t.Fatalf("a well-formed per-model split was refused: %v", err)
+	}
+	_, data := decodeServedUsage(t, state)
+	served := data.Sources[0].ModelStats
+	if len(served) != 2 || served[0].Key != modelServeOrder[0] || served[1].Key != modelServeOrder[1] {
+		t.Fatalf("per-model rows served out of vocabulary order: %+v", served)
+	}
+	if served[0].Totals["input"] != 300 || served[1].Totals["output"] != 500 {
+		t.Fatalf("per-model figures wrong after merge: %+v", served)
+	}
+	if len(data.Sources[1].ModelStats) != 0 {
+		t.Fatalf("beta grew a per-model split its snapshot never shipped: %+v", data.Sources[1].ModelStats)
+	}
+	// The tile-less source's own section is VALIDATED and discarded, exactly
+	// as a tile-less captured stat is: a malformed one still refuses the
+	// whole document rather than being quietly dropped.
+	minted := modelStatsDocument()
+	betaSection(minted)["modelStats"] = []any{
+		map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"input": 5}},
+	}
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, minted)), productionUnsealer(dataRootTestKeyHex)); err != nil {
+		t.Fatalf("a tile-less per-model section must be admitted and dropped: %v", err)
+	}
+	_, data = decodeServedUsage(t, state)
+	if len(data.Sources[1].ModelStats) != 0 {
+		t.Fatalf("a pushed section minted a surface the snapshot does not ship: %+v", data.Sources[1].ModelStats)
+	}
+	// Validated, not ignored: the same tile-less section malformed still
+	// refuses the document whole. Silently dropping it would hide the drift
+	// until the day the snapshot starts shipping the surface.
+	malformed := modelStatsDocument()
+	betaSection(malformed)["modelStats"] = []any{
+		map[string]any{"key": "private-feature", "totals": map[string]any{"input": 5}},
+	}
+	before := state.current.Load()
+	_, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, malformed)), productionUnsealer(dataRootTestKeyHex))
+	if err == nil || !strings.Contains(err.Error(), "outside the closed vocabulary") {
+		t.Fatalf("a malformed tile-less per-model section returned %v", err)
+	}
+	if state.current.Load() != before {
+		t.Fatal("a refused document still changed the served response")
+	}
+}
+
+// TestDataRootRefusesEveryHostilePerModelSplit gives each rule
+// admitModelStats states an input that breaks it. A validator no input can
+// redden is decoration, and this one stands between a pushed file and a
+// public page.
+func TestDataRootRefusesEveryHostilePerModelSplit(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		mutate func(map[string]any)
+		want   string
+	}{
+		"a section the shipping source did not refresh": {
+			func(document map[string]any) { delete(alphaSection(document), "modelStats") },
+			"does not refresh the per-model lifetime split",
+		},
+		"a key outside the closed model vocabulary": {
+			func(document map[string]any) {
+				alphaSection(document)["modelStats"] = []any{
+					map[string]any{"key": "private-feature", "totals": map[string]any{"input": 1}},
+				}
+			},
+			"outside the closed vocabulary",
+		},
+		"one key declared twice": {
+			func(document map[string]any) {
+				alphaSection(document)["modelStats"] = []any{
+					map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"input": 1}},
+					map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"output": 1}},
+				}
+			},
+			"declared twice",
+		},
+		"a class outside the closed category vocabulary": {
+			func(document map[string]any) {
+				alphaSection(document)["modelStats"] = []any{
+					map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"private-class": 1}},
+				}
+			},
+			"outside the closed vocabulary",
+		},
+		"a class present carrying nothing": {
+			func(document map[string]any) {
+				alphaSection(document)["modelStats"] = []any{
+					map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"input": nil}},
+				}
+			},
+			"may not be published as a zero",
+		},
+		"a count over the shared bound": {
+			func(document map[string]any) {
+				alphaSection(document)["modelStats"] = []any{
+					map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"input": maxCountValue + 1}},
+				}
+			},
+			"above the",
+		},
+		"a negative count": {
+			func(document map[string]any) {
+				alphaSection(document)["modelStats"] = []any{
+					map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"input": -1}},
+				}
+			},
+			"negative count",
+		},
+		"a member that carries nothing at all": {
+			func(document map[string]any) {
+				alphaSection(document)["modelStats"] = []any{
+					map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"input": 0}},
+				}
+			},
+			"carries nothing",
+		},
+		"more rows than the vocabulary has members": {
+			func(document map[string]any) {
+				rows := make([]any, 0, maxSeriesModels+1)
+				for index := 0; index <= maxSeriesModels; index++ {
+					rows = append(rows, map[string]any{"key": modelServeOrder[index%len(modelServeOrder)], "totals": map[string]any{"input": 1}})
+				}
+				alphaSection(document)["modelStats"] = rows
+			},
+			"over the",
+		},
+		"a split attributing more than the source's own class tile": {
+			func(document map[string]any) {
+				alphaSection(document)["modelStats"] = []any{
+					map[string]any{"key": modelServeOrder[0], "totals": map[string]any{"input": 901}},
+				}
+			},
+			"the source's own tile reports",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			reg, state := usageDataRootRegistry(t, modelStatsSnapshot)
+			before := state.current.Load()
+			document := modelStatsDocument()
+			testCase.mutate(document)
+			_, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex))
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("refused with %v, want a refusal naming %q", err, testCase.want)
+			}
+			if state.current.Load() != before {
+				t.Fatal("a refused document still changed the served response")
+			}
+		})
+	}
+}
+
+// TestDataRootRefreshesTheLongestSessionTile pins the new lifetime-class key
+// on both ends: a tile carrying the seconds unit is refreshed from the
+// document, and one carrying any other unit refuses the document — a unit
+// mismatch means somebody is lying about what the number measures.
+func TestDataRootRefreshesTheLongestSessionTile(t *testing.T) {
+	t.Parallel()
+	const tile = `{"key": "longest-session", "label": "Longest session", "value": 60, "unit": "seconds", "recorded": true},`
+	snapshot := strings.Replace(dataRootSnapshot,
+		`{"key": "lifetime", "label": "Lifetime", "value": 1000, "unit": "tokens", "recorded": true},`,
+		`{"key": "lifetime", "label": "Lifetime", "value": 1000, "unit": "tokens", "recorded": true},`+tile, 1)
+	reg, state := usageDataRootRegistry(t, snapshot)
+	document := validDocument()
+	alphaSection(document)["stats"] = map[string]any{"lifetime": 4321, "longest-session": 150946}
+	if _, err := refreshDirect(t, reg, state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex)); err != nil {
+		t.Fatalf("a seconds-unit longest-session tile was refused: %v", err)
+	}
+	_, data := decodeServedUsage(t, state)
+	refreshed := false
+	for _, stat := range data.Sources[0].Stats {
+		if stat.Key == "longest-session" {
+			refreshed = stat.Value != nil && *stat.Value == 150946 && stat.Unit == UnitSeconds
+		}
+	}
+	if !refreshed {
+		t.Fatalf("the longest-session tile was not refreshed in seconds: %+v", data.Sources[0].Stats)
+	}
+
+	// The same tile in the wrong unit refuses the whole document. Days, not
+	// tokens, because a duration rendered as a day count is the mistake a
+	// reader would never catch on the page.
+	wrongUnit := strings.Replace(snapshot, `"value": 60, "unit": "seconds"`, `"value": 60, "unit": "days"`, 1)
+	other, otherState := usageDataRootRegistry(t, wrongUnit)
+	before := otherState.current.Load()
+	_, err := refreshDirect(t, other, otherState, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex))
+	if err == nil || !strings.Contains(err.Error(), "unit") {
+		t.Fatalf("a unit-mismatched longest-session tile was admitted: %v", err)
+	}
+	if otherState.current.Load() != before {
+		t.Fatal("a refused document still changed the served response")
+	}
+}
+
 func TestDataRootRefusesCryptographicFaults(t *testing.T) {
 	t.Parallel()
 	valid := sealDocument(t, validDocument())

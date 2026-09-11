@@ -8,20 +8,44 @@ the measurements and history behind those numbers. It adds no rule.
 ## The panels payload budgets
 
 `MaxPanelResponseBytes` is 131072, raised from 32768 by the owner on
-2026-08-24. Full-depth token-usage history structurally reaches 104,508 bytes
-served with the v2 models section — issue #170 measured it; the 115,981 figure
-recorded beforehand was a projection — and the old gate, chosen before any
-real content existed, would have refused exactly the documents the sealed-data
-pipeline exists to deliver.
+2026-08-24. Full-depth token-usage history structurally reaches 119,128 bytes
+served — re-measured 2026-09-11 against the thirteen-member model vocabulary
+over its seventy-day window; issue #170 measured 104,508 against the five-member
+one, and the 115,981 figure recorded before that was a projection — and the old
+gate, chosen before any real content existed, would have refused exactly the
+documents the sealed-data pipeline exists to deliver.
 
 It is now the same NUMBER as `seal.MaxSealedBytes`, which means the serve step
 no longer hides a smaller ceiling than the transport steps. It does NOT mean
 one ceiling governs both, and reading it that way was a finding of the
 2026-08-25 round-4 review. The two bound different bytes: the sealed FILE
 versus the finished ENVELOPE, which also carries the embedded snapshot,
-measured at +875 bytes for the maximal admissible document. A file at exactly
+measured at +1,625 bytes for the maximal admissible document. A file at exactly
 the transport ceiling is refused at serve time, and the refusal — never a
 truncation — is what the guarantee actually rests on.
+
+That +1,625 measures the sections the snapshot also ships. A pushed section a
+source's snapshot ships none of is transported and then discarded, so it adds
+to the sealed file and nothing to the envelope — which is why the producer-side
+measurement in `docs/usage-export.md` is the larger of the two and the one the
+transport ceiling answers to.
+
+### The headroom digit is spent (issue #267)
+
+The sealed structural maximum measures 123,668 bytes at ten-digit daily
+values, 7,404 under the 131,072 ceiling. It used to leave one further decimal
+digit on every value; it no longer does, reaching 134,426 at eleven digits.
+The per-model lifetime split costs 3,904 bytes there — thirteen vocabulary
+members times five accounting classes on both sources — against the 610 bytes
+the ceiling had left, and the longest-session tile costs 60 more.
+
+Neither lever was pulled. The ceiling is one number five stages agree on, and
+`MAX_MODEL_DAYS` is a product decision about how deep the per-model breakdown
+reaches. So `CapParityTest` carries the gap as the ratchet pair AGENTS.md
+prescribes: a green pin on the measured behaviour and a named
+pending-contract test that turns the suite red as an unexpected success the
+day the headroom returns, which forces the note to become an enforced rule
+again rather than rot.
 
 ## Why two of the rendering-lane pins are structural
 

@@ -280,7 +280,16 @@ def load_merge_source(path, now):
     the release-time figure rendered beside a runtime series under one
     envelope instant, which no single `generatedAt` can describe honestly.
 
-    Returns (section, capture instant).
+    `ledger` is ADMITTED AND NEVER COPIED (issue #267). It is machine-local
+    material for the workstation tracker: refusing it would refuse every
+    capture this pipeline produces, and copying it into the section would put
+    it on the wire. So it is validated against the capture tool's own ledger
+    guard — a hostile merge file's ledger is a refusal, not a pass-through —
+    and returned beside the section for the caller to hand out of band. The
+    section this function builds is an allowlist rather than a filtered copy,
+    so a section field can only ever appear here by being written here.
+
+    Returns (section, capture instant, the document as loaded).
     """
     document = read_bounded_json(path)
     if not isinstance(document, dict):
@@ -295,6 +304,8 @@ def load_merge_source(path, now):
         "modelsStartDate",
         "windows",
         "stats",
+        "modelStats",
+        capture.LEDGER_KEY,
     }
     unknown = set(document) - allowed
     if unknown:
@@ -387,7 +398,64 @@ def load_merge_source(path, now):
             ):
                 raise capture.CaptureError("a merge source stats figure is malformed")
         section["stats"] = stats
-    return section, captured
+    members = document.get("modelStats")
+    if members is not None:
+        section["modelStats"] = admit_model_stats(members)
+    if capture.LEDGER_KEY in document:
+        capture.assert_ledger_block(document[capture.LEDGER_KEY])
+    return section, captured, document
+
+
+def admit_model_stats(members):
+    """Admit one merge source's per-model lifetime classes, or refuse.
+
+    The origin's own rules, checked here so a broken producer cannot push a
+    document the origin rejects every five minutes until somebody reads a log
+    (issue #267): closed-vocabulary members, each declared once, closed
+    accounting classes, the shared count contract, and no member whose
+    totals sum to nothing. The `Σ members ≤ the class tile` invariant is the
+    ORIGIN's to enforce, because only the origin sees the snapshot's tile
+    inventory; what this can prove is the shape and the vocabularies.
+    """
+    if not isinstance(members, list) or not members:
+        raise capture.CaptureError("a merge source carries a malformed modelStats section")
+    seen = set()
+    admitted = []
+    for member in members:
+        if not isinstance(member, dict) or set(member) != {"key", "totals"}:
+            raise capture.CaptureError("a merge source modelStats member is malformed")
+        key = member["key"]
+        if key not in capture.MODEL_KEYS:
+            raise capture.CaptureError(
+                "a merge source modelStats member is outside the model vocabulary"
+            )
+        if key in seen:
+            raise capture.CaptureError("a merge source modelStats member is declared twice")
+        seen.add(key)
+        totals = member["totals"]
+        if not isinstance(totals, dict) or not totals:
+            raise capture.CaptureError("a merge source modelStats member carries no totals")
+        for name, value in totals.items():
+            if name not in capture.CATEGORY_KEYS:
+                raise capture.CaptureError(
+                    "a merge source modelStats total is outside the category vocabulary"
+                )
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+                or value > capture.MAX_COUNT
+            ):
+                raise capture.CaptureError("a merge source modelStats total is malformed")
+        if sum(totals.values()) == 0:
+            raise capture.CaptureError(
+                "a merge source modelStats member carries nothing; a placeholder row draws a "
+                "named entity at nought beside entities that were used"
+            )
+        admitted.append(
+            {"key": key, "totals": {name: totals[name] for name in capture.CATEGORY_KEYS if name in totals}}
+        )
+    return admitted
 
 
 # The one-time lifetime baselines (issue #276, owner ruling 2026-09-01). A
@@ -497,7 +565,20 @@ def export(
     baselines=None,
     verified_readings=None,
 ):
-    """Walk, merge, guard, and return (sources payload, counters)."""
+    """Walk, merge, guard, and return (sources payload, counters, material).
+
+    `material` is the OUT-OF-BAND half of one run (issue #267): per source,
+    the complete capture document this export read — ledger block included —
+    beside that block on its own. The workstation's lifelong ledger is built
+    from it, and none of it reaches the wire; `sources` below is stripped of
+    the ledger before the guard runs, and the guard then refuses the key by
+    name if anything ever puts it back.
+
+    Two shapes, one dictionary, because the two halves answer different
+    questions: `capture` is what the run measured and `ledgerBlock` is the
+    part of it the wire may never carry, so a writer that wants only the
+    second does not have to know where inside the first it lives.
+    """
     section, counters = capture.capture(
         # The capture buckets LOCAL days (issue #276), so the "today" its
         # windows read is this instant's local date, not its UTC one.
@@ -511,10 +592,28 @@ def export(
     sources = {source_key: section}
     # The walked tree is captured by THIS run, so its instant is this run's.
     captured = {source_key: now}
+    material = {
+        source_key: {
+            # The walked source has no capture FILE, so its document is the
+            # one the capture tool would have printed: its own stdout shape,
+            # stamped with this run's instant.
+            "capture": {"generatedAt": now.strftime(INSTANT_FORMAT), **section},
+            "ledgerBlock": section.get(capture.LEDGER_KEY),
+        }
+    }
     for key, path in merge_files:
         if key in sources:
             raise capture.CaptureError("two sources claim one key")
-        sources[key], captured[key] = load_merge_source(path, now)
+        sources[key], captured[key], document = load_merge_source(path, now)
+        material[key] = {
+            "capture": document,
+            "ledgerBlock": document.get(capture.LEDGER_KEY),
+        }
+    # THE STRIP, and it is one line because the section is the only place the
+    # block ever sat: `load_merge_source` builds its section from an allowlist
+    # and never copies one, so only the walked source's own section carries it
+    # here. The guard below is the proof rather than this line.
+    sources[source_key].pop(capture.LEDGER_KEY, None)
     if baselines:
         apply_lifetime_baselines(sources, baselines)
     # THE guard — the capture tool's own, not a copy — over the complete
@@ -534,7 +633,7 @@ def export(
     # stamped and this program already validated.
     for key, instant in captured.items():
         sources[key]["capturedAt"] = instant.strftime(INSTANT_FORMAT)
-    return sources, counters
+    return sources, counters, material
 
 
 DATASET_SCHEMA = "usage-dataset/v1"
@@ -778,7 +877,12 @@ def main(argv=None):
             print("the lifetime baselines table could not be read", file=sys.stderr)
             return 1
     try:
-        sources, counters = export(
+        # `material` is the out-of-band half of the run — every source's
+        # capture document with its ledger block — which the workstation's
+        # lifelong ledger writer consumes and the wire never sees (issue
+        # #267). It is bound here, beside the document, because both come
+        # from the one walk and a second read would be a second measurement.
+        sources, counters, material = export(
             root,
             arguments.source,
             merge_files,

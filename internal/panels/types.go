@@ -48,10 +48,11 @@ const (
 	// dataroot_test point here rather than restating it.
 	//
 	// Raised from 32 KiB to 128 KiB by the owner on 2026-08-24. Full-depth
-	// token-usage history structurally maxes at 104,508 bytes SERVED, measured
-	// with the v2 models section by TestTheMaximalDocumentFitsTheRaisedBudget;
-	// the 32 KiB gate, chosen before any real content existed, would have
-	// refused exactly the documents the sealed-data pipeline exists to deliver.
+	// token-usage history structurally maxes at 119,128 bytes SERVED,
+	// re-measured 2026-09-11 with the thirteen-member vocabulary over its
+	// seventy-day window by TestTheMaximalDocumentFitsTheRaisedBudget; the
+	// 32 KiB gate, chosen before any real content existed, would have refused
+	// exactly the documents the sealed-data pipeline exists to deliver.
 	//
 	// It is the same VALUE as seal.MaxSealedBytes, so the serve step no longer
 	// hides a smaller ceiling than the transport steps. That is NOT the
@@ -59,10 +60,16 @@ const (
 	// the 2026-08-25 round-4 review found stated here and false: the two bound
 	// different bytes — this one the finished envelope, seal.MaxSealedBytes
 	// the sealed FILE — and the envelope adds the embedded snapshot and its
-	// own scaffolding on top. Measured at +875 bytes for the maximal
-	// admissible document (103,633 sealed, 104,508 served), and unbounded
+	// own scaffolding on top. Measured at +1,625 bytes for the maximal
+	// admissible document (117,503 sealed, 119,128 served), and unbounded
 	// above that as the snapshot grows, so a file sealed at exactly 131,072
 	// bytes serves OVER budget and is refused.
+	//
+	// That delta measures the sections the SNAPSHOT also ships. A pushed
+	// section the snapshot ships none of — a per-model lifetime split on a
+	// source that shows none — is transported and then discarded, so it adds
+	// to the sealed file and nothing to the envelope; docs/usage-export.md
+	// carries the separate producer-side measurement that includes it.
 	//
 	// The guarantee rests on that refusal, not on the arithmetic: construction
 	// degrades an over-budget panel to unavailable and refresh keeps the last
@@ -200,6 +207,14 @@ type TokenUsageSource struct {
 	Windows []TokenUsageWindow `json:"windows"`
 	// Stats holds headline figures rendered as tiles above the windows.
 	Stats []TokenUsageStat `json:"stats,omitempty"`
+	// ModelStats holds the lifetime token classes PER MODEL, in vocabulary
+	// order (issue #267). Optional under the additive rule, and optional in a
+	// second sense the other sections are not: a source whose producing tool
+	// keeps no per-model accounting genuinely cannot report it, and the
+	// admission mirrors the captured-stats rule exactly — a source whose
+	// snapshot ships the section must refresh it on every push, and a source
+	// whose snapshot ships none can never introduce it by push.
+	ModelStats []TokenUsageModelStat `json:"modelStats,omitempty"`
 	// Series is the daily consumption series the activity grid renders.
 	Series *TokenUsageSeries `json:"series,omitempty"`
 	// Insights holds the labeled proportions rendered under the grid.
@@ -231,6 +246,24 @@ type TokenUsageStat struct {
 	// rather than the live feed, so the tile can say so instead of implying
 	// a freshness it does not have.
 	Recorded bool `json:"recorded,omitempty"`
+}
+
+// TokenUsageModelStat is one vocabulary member's lifetime accounting, split
+// by the same closed category vocabulary the daily breakdown uses. The four
+// class tiles above say what the account spent on cache reads; this says
+// WHICH MODEL spent them, which is the one lifetime question an aggregate
+// tile cannot answer.
+//
+// Key is a machine key, never display copy — the reader resolves the written
+// name from the model vocabulary, exactly as it does for a breakdown row, so
+// this package's source stays free of a model name.
+type TokenUsageModelStat struct {
+	// Key is the model vocabulary member the totals belong to.
+	Key string `json:"key"`
+	// Totals maps a category key to that member's lifetime count in it. A
+	// class the member never spent is absent rather than zero, and a member
+	// that spent nothing at all never reaches this type.
+	Totals map[string]int64 `json:"totals"`
 }
 
 // Stat units. The frontend formats by unit — compact digits for token
@@ -1673,6 +1706,15 @@ var fetchConfigBytes []byte
 //go:embed config/models.json
 var modelsConfigBytes []byte
 
+// sourcesConfigBytes embeds the source vocabulary: every source key the wire
+// carries and the written name a reader prints for it — data, never Go
+// source, exactly like the two config files beside it. It is the SECOND file
+// of one rule (issue #267): models.json names every model, this names every
+// reporting tool, and no compiled artifact but these bytes spells either.
+//
+//go:embed config/sources.json
+var sourcesConfigBytes []byte
+
 // builtinPanels is the explicit registry: every panel the site serves, in
 // index order. Adding a panel is a conscious edit plus its data files —
 // there is no discovery, no reflection, and no way to register from outside.
@@ -1970,6 +2012,11 @@ var usageSeriesStatKeys = map[string]string{
 	"cache-read":  UnitTokens,
 	"cache-write": UnitTokens,
 	"sessions":    UnitCount,
+	// The longest single session the record shows, in SECONDS (issue #267).
+	// It is a lifetime-class figure and not a series-derived one: a daily
+	// series carries totals per day and nothing about where one session
+	// ended and the next began, so no function of the series could define it.
+	"longest-session": UnitSeconds,
 }
 
 // categoryServeOrder is the CLOSED category vocabulary AND the canonical
@@ -2035,6 +2082,39 @@ type modelsMember struct {
 // A breaking reshape mints a new marker; it never bends this one.
 const modelsSchema = "usage-models/v1"
 
+// sourcesDocument is the strict on-disk shape of the embedded SOURCE
+// vocabulary (schema usage-sources/v1) — the second data file of the one rule
+// models.json states (issue #267). A source key is what the wire carries; the
+// written name is what a reader prints beside a graph, and before this file
+// there was nowhere to declare one, so the name lived in a component. Two
+// data files, one rule: nothing compiled spells either.
+type sourcesDocument struct {
+	// Schema must equal sourcesSchema.
+	Schema string `json:"schema"`
+	// Sources are the reporting tools, in declaration order.
+	Sources []sourcesMember `json:"sources"`
+}
+
+// sourcesMember is one reporting tool: the machine key every stage of the
+// pipeline addresses it by, the written name a reader prints, and the model
+// vocabulary GROUP it belongs to — so a reader can colour a source the way it
+// colours the models under it without a second table saying who owns whom.
+type sourcesMember struct {
+	Key    string `json:"key"`
+	Name   string `json:"name"`
+	Vendor string `json:"vendor"`
+}
+
+// sourcesSchema is the exact schema marker the embedded source vocabulary
+// declares. A breaking reshape mints a new marker; it never bends this one.
+const sourcesSchema = "usage-sources/v1"
+
+// maxSourceNameBytes bounds a written source name. It is a RENDERING bound
+// rather than a storage one: the name heads a panel block, and a name past
+// this length is a data edit nobody looked at rather than a heading anyone
+// meant to ship.
+const maxSourceNameBytes = 40
+
 // modelServeOrder is the CLOSED model vocabulary AND the canonical order its
 // rows are SERVED in — the same two jobs categoryServeOrder does, for the
 // second breakdown (issue #170), now READ from the embedded vocabulary rather
@@ -2055,7 +2135,20 @@ const modelsSchema = "usage-models/v1"
 // bytes are compiled in and no runtime input can reach them, so the load
 // panics rather than degrading to an empty vocabulary that would silently
 // refuse every models section for the life of the process.
-var modelServeOrder = mustLoadModelVocabulary(modelsConfigBytes)
+// modelGroupOrder rides beside it: the set of vendor groups the file
+// declares, which the SOURCE vocabulary below must name a member of. One
+// reading of one file produces both, so the two can never be measured from
+// different bytes.
+var modelServeOrder, modelGroupOrder = mustLoadModelVocabulary(modelsConfigBytes)
+
+// sourceVocabulary is the source key to written name map, validated at init
+// exactly as the model vocabulary is and for exactly its reasons: the bytes
+// are compiled in, a fault is a build defect, and a half-loaded vocabulary
+// would leave a source the page cannot name. The ORIGIN never prints a name —
+// the page resolves it from the same file — so what this var buys the binary
+// is the validation, and what it buys the pipeline is the guarantee that a
+// pushed source label always has a name waiting for it.
+var sourceVocabulary = mustLoadSourceVocabulary(sourcesConfigBytes, modelGroupOrder)
 
 // maxSeriesModels bounds the per-model breakdown the way maxSeriesCategories
 // bounds the category one, and it is the vocabulary's own size: the file
@@ -2142,6 +2235,20 @@ type usageSeriesSource struct {
 	// carrying null is a figure nobody measured and refuses rather than
 	// publishing a zero.
 	Stats map[string]*int64 `json:"stats,omitempty"`
+	// ModelStats carries the per-model lifetime classes (issue #267). Absent
+	// as a SECTION under the captured-stats rule, not the derived one: a
+	// source whose snapshot ships the section must refresh it on every push,
+	// and a source whose snapshot ships none owes nothing and cannot mint it.
+	// Values are POINTERS for Derived's reason — a class present carrying
+	// null is a figure nobody measured and refuses rather than publishing a
+	// zero.
+	ModelStats []usageSeriesModelStat `json:"modelStats,omitempty"`
+}
+
+// usageSeriesModelStat is one pushed per-model lifetime row.
+type usageSeriesModelStat struct {
+	Key    string            `json:"key"`
+	Totals map[string]*int64 `json:"totals"`
 }
 
 // usageSeriesSection mirrors TokenUsageSeries' on-disk form.

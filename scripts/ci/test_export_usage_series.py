@@ -575,7 +575,8 @@ class MergeSourceTest(unittest.TestCase):
             path = os.path.join(scratch, "merge.json")
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(document, handle)
-            return export_usage_series.load_merge_source(path, MERGE_NOW)
+            section, captured, _document = export_usage_series.load_merge_source(path, MERGE_NOW)
+            return section, captured
 
     def test_well_formed_document_is_admitted_in_full(self):
         section, captured = self.load(merge_document())
@@ -957,7 +958,7 @@ class ExportTest(unittest.TestCase):
     def test_export_emits_only_dates_and_integers(self):
         with tempfile.TemporaryDirectory() as root:
             self.tree(root)
-            sources, counters = export_usage_series.export(
+            sources, counters, _material = export_usage_series.export(
                 root, "alpha", [], MERGE_NOW
             )
         self.assertEqual(set(sources), {"alpha"})
@@ -1004,7 +1005,7 @@ class ExportTest(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as root:
                 self.tree(root)
-                sources, _counters = export_usage_series.export(
+                sources, _counters, _material = export_usage_series.export(
                     root, "alpha", [], MERGE_NOW
                 )
         finally:
@@ -1019,7 +1020,7 @@ class ExportTest(unittest.TestCase):
             with open(merge_path, "w", encoding="utf-8") as handle:
                 json.dump(merge_document(), handle)
             try:
-                sources, _counters = export_usage_series.export(
+                sources, _counters, _material = export_usage_series.export(
                     root, "alpha", [("beta", merge_path)], MERGE_NOW
                 )
             finally:
@@ -1079,7 +1080,7 @@ class DatasetTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        sources, _ = export_usage_series.export(
+        sources, _, _material = export_usage_series.export(
             self.root,
             "alpha",
             [],
@@ -1125,7 +1126,10 @@ class DatasetTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertIsNone(source["stats"])
+        # The walked source carries no activity cache here, so the only
+        # lifetime-class figure it can measure is the one a WALK defines: the
+        # longest session span (issue #267).
+        self.assertEqual(source["stats"], {"longest-session": 75_600})
         self.assertEqual(source["windows"], sources["alpha"]["windows"])
         self.assertEqual(source["derived"], sources["alpha"]["derived"])
         self.assertEqual(source["capturedAt"], sources["alpha"]["capturedAt"])
@@ -1167,7 +1171,7 @@ class DatasetTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        sources, _ = export_usage_series.export(
+        sources, _, _material = export_usage_series.export(
             self.root, "alpha", [], MERGE_NOW, history_store=self.history / "alpha.json"
         )
         dataset = export_usage_series.build_dataset(sources, self.history, MERGE_NOW)
@@ -1205,19 +1209,30 @@ class DatasetTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        sources, _ = export_usage_series.export(
+        sources, _, _material = export_usage_series.export(
             self.root, "alpha", [], MERGE_NOW, activity_cache=cache, history_store=self.history / "alpha.json"
         )
         dataset = export_usage_series.build_dataset(sources, self.history, MERGE_NOW)
         self.assertEqual(
             dataset["sources"]["alpha"]["stats"],
-            {"input": 1, "output": 2, "cache-read": 3, "cache-write": 4, "lifetime": 10, "sessions": 5},
+            {
+                "input": 1,
+                "output": 2,
+                "cache-read": 3,
+                "cache-write": 4,
+                "lifetime": 10,
+                "sessions": 5,
+                # The walk's own longest session span (issue #267): this
+                # fixture's tree spans 2026-08-10T12:00 to 2026-08-11T09:00
+                # inside one file, which is 21 hours.
+                "longest-session": 75_600,
+            },
         )
 
     def test_a_source_without_a_store_carries_its_served_days_only(self):
         merge = self.scratch / "merge.json"
         merge.write_text(json.dumps(merge_document()), encoding="utf-8")
-        sources, _ = export_usage_series.export(
+        sources, _, _material = export_usage_series.export(
             self.root, "alpha", [("beta", merge)], MERGE_NOW, history_store=self.history / "alpha.json"
         )
         dataset = export_usage_series.build_dataset(sources, self.history, MERGE_NOW)
@@ -1572,6 +1587,223 @@ class MainTest(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertFalse(os.path.exists(out))
             self.assertNotIn(LEAK_PROSE, stderr)
+
+
+class MaterialSeamTest(unittest.TestCase):
+    """The out-of-band half of one run (issue #267).
+
+    `export` returns the wire document AND the material the workstation's
+    lifelong ledger is built from — every source's complete capture document
+    with its ledger block, plus that block on its own. Two things must both
+    be true and neither implies the other: the material must CARRY the block,
+    and the wire must not.
+    """
+
+    def tree(self, root):
+        write_tree(
+            root,
+            {
+                "a-private-project/session.jsonl": [
+                    transcript_line(),
+                    transcript_line(
+                        timestamp="2026-08-11T09:00:00Z",
+                        requestId="req_b",
+                        message={"id": "msg_b", "usage": {"output_tokens": 3}},
+                    ),
+                ]
+            },
+        )
+
+    def test_the_walked_source_yields_its_capture_and_its_ledger(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.tree(root)
+            sources, _counters, material = export_usage_series.export(
+                root, "alpha", [], MERGE_NOW
+            )
+        self.assertEqual(set(material), {"alpha"})
+        # The walked source has no capture FILE, so its document is the one
+        # the capture tool would have printed: its own stdout shape, stamped
+        # with this run's instant.
+        self.assertEqual(
+            material["alpha"]["capture"]["generatedAt"],
+            MERGE_NOW.strftime(export_usage_series.INSTANT_FORMAT),
+        )
+        block = material["alpha"]["ledgerBlock"]
+        self.assertEqual(block["schema"], capture.LEDGER_SCHEMA)
+        capture.assert_ledger_block(block)
+        self.assertIs(material["alpha"]["capture"][capture.LEDGER_KEY], block)
+        # And the wire document is stripped: the guard the export already runs
+        # refuses the key by name, so this is the observable half of it.
+        self.assertNotIn(capture.LEDGER_KEY, sources["alpha"])
+
+    def test_a_merge_source_yields_the_document_it_was_loaded_from(self):
+        document = merge_document()
+        document[capture.LEDGER_KEY] = {
+            "schema": capture.LEDGER_SCHEMA,
+            "sessions": [
+                {
+                    "startedAt": "2026-08-10T09:00:00Z",
+                    "endedAt": "2026-08-10T10:00:00Z",
+                    "total": 30,
+                    "categories": {"input": 30},
+                    "models": [capture.MODEL_OTHER],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as root:
+            self.tree(root)
+            merge = os.path.join(root, "merge.json")
+            with open(merge, "w", encoding="utf-8") as handle:
+                json.dump(document, handle)
+            sources, _counters, material = export_usage_series.export(
+                root, "alpha", [("beta", merge)], MERGE_NOW
+            )
+        self.assertEqual(set(material), {"alpha", "beta"})
+        self.assertEqual(material["beta"]["capture"], document)
+        self.assertEqual(material["beta"]["ledgerBlock"], document[capture.LEDGER_KEY])
+        # `load_merge_source` builds its section from an ALLOWLIST rather than
+        # by filtering a copy, so the block was never in the section to strip.
+        self.assertNotIn(capture.LEDGER_KEY, sources["beta"])
+
+    def test_a_merge_source_with_no_ledger_reports_none_rather_than_guessing(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.tree(root)
+            merge = os.path.join(root, "merge.json")
+            with open(merge, "w", encoding="utf-8") as handle:
+                json.dump(merge_document(), handle)
+            _sources, _counters, material = export_usage_series.export(
+                root, "alpha", [("beta", merge)], MERGE_NOW
+            )
+        self.assertIsNone(material["beta"]["ledgerBlock"])
+
+    def test_a_hostile_merge_ledger_refuses_the_whole_run(self):
+        # Admitted and never copied is not the same as trusted: a merge file's
+        # ledger is validated against the capture tool's own guard, so a
+        # hostile one is a refusal rather than a pass-through into a file on
+        # the owner's disk.
+        document = merge_document()
+        document[capture.LEDGER_KEY] = {
+            "schema": capture.LEDGER_SCHEMA,
+            "sessions": [
+                {
+                    "startedAt": "2026-08-10T09:00:00Z",
+                    "endedAt": "2026-08-10T10:00:00Z",
+                    "total": 30,
+                    "categories": {"input": 30},
+                    "models": [capture.MODEL_OTHER],
+                    "cwd": "/home/someone/work/a-private-project",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as root:
+            self.tree(root)
+            merge = os.path.join(root, "merge.json")
+            with open(merge, "w", encoding="utf-8") as handle:
+                json.dump(document, handle)
+            with self.assertRaises(CaptureError) as caught:
+                export_usage_series.export(root, "alpha", [("beta", merge)], MERGE_NOW)
+        self.assertIn("outside its declared shape", str(caught.exception))
+        self.assertNotIn("a-private-project", str(caught.exception))
+
+    def test_the_wire_document_can_never_carry_the_block(self):
+        # The guard is the proof, not the strip: a section that somehow
+        # regained the key refuses before anything is written.
+        with self.assertRaises(CaptureError) as caught:
+            capture.assert_only_dates_and_integers(
+                {"alpha": {capture.LEDGER_KEY: {"schema": capture.LEDGER_SCHEMA}}},
+                "sources",
+                extra_keys=frozenset({"alpha"}),
+            )
+        self.assertIn("never reaches the wire", str(caught.exception))
+
+
+class MergeSourceModelStatsTest(unittest.TestCase):
+    """A merge source's per-model lifetime section (issue #267).
+
+    Checked HERE as well as at the origin so a broken producer cannot push a
+    document the origin rejects every five minutes until somebody reads a
+    log. What this can prove is the shape and the two vocabularies; the
+    `Σ members ≤ the class tile` invariant stays the origin's, because only
+    the origin sees the snapshot's tile inventory.
+    """
+
+    def load(self, members):
+        document = merge_document(modelStats=members)
+        with tempfile.TemporaryDirectory() as scratch:
+            path = os.path.join(scratch, "merge.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(document, handle)
+            section, _captured, _document = export_usage_series.load_merge_source(
+                path, MERGE_NOW
+            )
+        return section
+
+    def refuses(self, members, needle):
+        with self.assertRaises(CaptureError) as caught:
+            self.load(members)
+        self.assertIn(needle, str(caught.exception))
+
+    def test_a_well_formed_section_is_admitted_in_vocabulary_class_order(self):
+        member = capture.MODEL_KEYS[1]
+        section = self.load(
+            [{"key": member, "totals": {"output": 2, "input": 1}}]
+        )
+        self.assertEqual(
+            section["modelStats"],
+            [{"key": member, "totals": {"input": 1, "output": 2}}],
+        )
+
+    def test_every_rule_has_an_input_that_breaks_it(self):
+        member = capture.MODEL_KEYS[1]
+        for name, members, needle in (
+            ("an empty section", [], "malformed modelStats section"),
+            ("a member that is not an object", ["nope"], "member is malformed"),
+            (
+                "a member field outside the shape",
+                [{"key": member, "totals": {"input": 1}, "cwd": "/home/someone"}],
+                "member is malformed",
+            ),
+            (
+                "a key outside the model vocabulary",
+                [{"key": "private-feature", "totals": {"input": 1}}],
+                "outside the model vocabulary",
+            ),
+            (
+                "one key declared twice",
+                [
+                    {"key": member, "totals": {"input": 1}},
+                    {"key": member, "totals": {"output": 1}},
+                ],
+                "declared twice",
+            ),
+            (
+                "a class outside the category vocabulary",
+                [{"key": member, "totals": {"private-class": 1}}],
+                "outside the category vocabulary",
+            ),
+            (
+                "a figure that is not a bounded count",
+                [{"key": member, "totals": {"input": -1}}],
+                "total is malformed",
+            ),
+            (
+                "a figure past the shared count bound",
+                [{"key": member, "totals": {"input": capture.MAX_COUNT + 1}}],
+                "total is malformed",
+            ),
+            (
+                "a member carrying nothing",
+                [{"key": member, "totals": {"input": 0}}],
+                "carries nothing",
+            ),
+            (
+                "a member with no totals at all",
+                [{"key": member, "totals": {}}],
+                "carries no totals",
+            ),
+        ):
+            with self.subTest(name=name):
+                self.refuses(members, needle)
 
 
 if __name__ == "__main__":

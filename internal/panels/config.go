@@ -92,12 +92,81 @@ func applyTitles(definitions []panelDefinition, titles map[string]string) {
 // subset nobody reviewed. Refusing to start is the loud, fail-closed answer,
 // and loadModelVocabulary below is a pure function so every refusal it can
 // reach is exercised by tests rather than by a broken binary.
-func mustLoadModelVocabulary(raw []byte) []string {
-	serveOrder, err := loadModelVocabulary(raw)
+func mustLoadModelVocabulary(raw []byte) ([]string, map[string]bool) {
+	serveOrder, groups, err := loadModelVocabulary(raw)
 	if err != nil {
 		panic("panels: the embedded model vocabulary is unusable: " + err.Error())
 	}
-	return serveOrder
+	return serveOrder, groups
+}
+
+// mustLoadSourceVocabulary loads the embedded SOURCE vocabulary or stops the
+// program, for mustLoadModelVocabulary's reason exactly: the bytes are
+// compiled in, so a fault is a build defect no runtime input can reach, and
+// a half-loaded vocabulary would leave a source the page cannot name.
+func mustLoadSourceVocabulary(raw []byte, groups map[string]bool) map[string]string {
+	names, err := loadSourceVocabulary(raw, groups)
+	if err != nil {
+		panic("panels: the embedded source vocabulary is unusable: " + err.Error())
+	}
+	return names
+}
+
+// loadSourceVocabulary strictly decodes the embedded source vocabulary — the
+// second data file of the one rule the model vocabulary states (issue #267).
+// A source KEY is what the wire carries: the pushed document's source labels,
+// the snapshot's own labels and the fetch config's are all that key, and a
+// key is not display copy. What a reader prints beside a graph is the NAME,
+// and until this file existed there was nowhere to declare one, so the page
+// printed the key or spelled the name in a component — a fourth table of
+// exactly the kind issue #302 retired for models.
+//
+// The rules are the model vocabulary's, narrowed to what a source is:
+//
+//   - the schema marker is the one this code understands;
+//   - every key is label-shaped and declared once, so one key cannot name two
+//     sources and a display name can never travel as a key;
+//   - every name is present, bounded and declared once, so a blank heading
+//     cannot ship and two sources cannot render identically;
+//   - every vendor is a GROUP KEY of the model vocabulary, so the two data
+//     files cannot come to disagree about who a source belongs to.
+//
+// The origin reads nothing but those rules: it never prints a name. The page
+// imports the same bytes, which is what keeps the name out of every compiled
+// artifact that is not this file.
+func loadSourceVocabulary(raw []byte, groups map[string]bool) (map[string]string, error) {
+	var document sourcesDocument
+	if err := decodeStrict(raw, &document); err != nil {
+		return nil, err
+	}
+	if document.Schema != sourcesSchema {
+		return nil, fmt.Errorf("source vocabulary: schema %q is not %q", document.Schema, sourcesSchema)
+	}
+	if len(document.Sources) == 0 {
+		return nil, errors.New("source vocabulary: no sources")
+	}
+	names := make(map[string]string, len(document.Sources))
+	written := make(map[string]bool, len(document.Sources))
+	for _, source := range document.Sources {
+		if !isLabelShaped(source.Key) {
+			return nil, fmt.Errorf("source vocabulary: %q is not a machine key", source.Key)
+		}
+		if _, ok := names[source.Key]; ok {
+			return nil, fmt.Errorf("source vocabulary: %q is declared twice", source.Key)
+		}
+		if source.Name == "" || len(source.Name) > maxSourceNameBytes {
+			return nil, fmt.Errorf("source vocabulary: %q carries no written name inside the %d byte bound", source.Key, maxSourceNameBytes)
+		}
+		if written[source.Name] {
+			return nil, fmt.Errorf("source vocabulary: %q repeats a written name; two sources would render identically", source.Key)
+		}
+		if !groups[source.Vendor] {
+			return nil, fmt.Errorf("source vocabulary: %q names a vendor the model vocabulary does not group", source.Key)
+		}
+		written[source.Name] = true
+		names[source.Key] = source.Name
+	}
+	return names, nil
 }
 
 // loadModelVocabulary strictly decodes the embedded model vocabulary and
@@ -119,25 +188,30 @@ func mustLoadModelVocabulary(raw []byte) []string {
 // A fault in any of them refuses the whole file rather than dropping the
 // offending member: a vocabulary with a hole is a pipeline whose three
 // readers disagree, which is the failure this file exists to make impossible.
-func loadModelVocabulary(raw []byte) ([]string, error) {
+// It returns the serve order AND the set of group keys, because the source
+// vocabulary beside it declares which group each source belongs to and the
+// two files may never disagree about who exists (issue #267). Deriving the
+// set here rather than re-decoding the file for it means there is one
+// reading of these bytes, not two.
+func loadModelVocabulary(raw []byte) ([]string, map[string]bool, error) {
 	var document modelsDocument
 	if err := decodeStrict(raw, &document); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if document.Schema != modelsSchema {
-		return nil, fmt.Errorf("model vocabulary: schema %q is not %q", document.Schema, modelsSchema)
+		return nil, nil, fmt.Errorf("model vocabulary: schema %q is not %q", document.Schema, modelsSchema)
 	}
 	if err := validateModelMember(document.Residual); err != nil {
-		return nil, fmt.Errorf("model vocabulary residual: %w", err)
+		return nil, nil, fmt.Errorf("model vocabulary residual: %w", err)
 	}
 	if document.Residual.Slot != 0 {
-		return nil, errors.New("model vocabulary: the residual must hold the neutral slot 0")
+		return nil, nil, errors.New("model vocabulary: the residual must hold the neutral slot 0")
 	}
 	if len(document.Residual.IDs) != 0 || document.Residual.PrefixStrip {
-		return nil, errors.New("model vocabulary: the residual is the fold of everything else and can never be named by an identifier")
+		return nil, nil, errors.New("model vocabulary: the residual is the fold of everything else and can never be named by an identifier")
 	}
 	if len(document.Groups) == 0 {
-		return nil, errors.New("model vocabulary: no groups")
+		return nil, nil, errors.New("model vocabulary: no groups")
 	}
 	serveOrder := []string{document.Residual.Key}
 	keys := map[string]bool{document.Residual.Key: true}
@@ -145,44 +219,44 @@ func loadModelVocabulary(raw []byte) ([]string, error) {
 	groups := map[string]bool{}
 	for _, group := range document.Groups {
 		if !isLabelShaped(group.Key) || group.Label == "" {
-			return nil, errors.New("model vocabulary: every group needs a label-shaped key and a written label")
+			return nil, nil, errors.New("model vocabulary: every group needs a label-shaped key and a written label")
 		}
 		if groups[group.Key] {
-			return nil, fmt.Errorf("model vocabulary: group %q is declared twice", group.Key)
+			return nil, nil, fmt.Errorf("model vocabulary: group %q is declared twice", group.Key)
 		}
 		groups[group.Key] = true
 		if len(group.Members) == 0 {
-			return nil, fmt.Errorf("model vocabulary: group %q has no members", group.Key)
+			return nil, nil, fmt.Errorf("model vocabulary: group %q has no members", group.Key)
 		}
 		slots := map[int]bool{}
 		for _, member := range group.Members {
 			if err := validateModelMember(member); err != nil {
-				return nil, fmt.Errorf("model vocabulary: group %q: %w", group.Key, err)
+				return nil, nil, fmt.Errorf("model vocabulary: group %q: %w", group.Key, err)
 			}
 			if member.Slot == document.Residual.Slot {
-				return nil, fmt.Errorf("model vocabulary: %q takes the residual's neutral slot", member.Key)
+				return nil, nil, fmt.Errorf("model vocabulary: %q takes the residual's neutral slot", member.Key)
 			}
 			if slots[member.Slot] {
-				return nil, fmt.Errorf("model vocabulary: group %q paints two members with slot %d", group.Key, member.Slot)
+				return nil, nil, fmt.Errorf("model vocabulary: group %q paints two members with slot %d", group.Key, member.Slot)
 			}
 			slots[member.Slot] = true
 			if keys[member.Key] {
-				return nil, fmt.Errorf("model vocabulary: %q is declared twice", member.Key)
+				return nil, nil, fmt.Errorf("model vocabulary: %q is declared twice", member.Key)
 			}
 			keys[member.Key] = true
 			for _, identifier := range member.IDs {
 				if identifier == "" || identifier != strings.ToLower(identifier) {
-					return nil, fmt.Errorf("model vocabulary: %q carries an identifier that is not lowercase", member.Key)
+					return nil, nil, fmt.Errorf("model vocabulary: %q carries an identifier that is not lowercase", member.Key)
 				}
 				if identifiers[identifier] {
-					return nil, fmt.Errorf("model vocabulary: an identifier folds to two members, including %q", member.Key)
+					return nil, nil, fmt.Errorf("model vocabulary: an identifier folds to two members, including %q", member.Key)
 				}
 				identifiers[identifier] = true
 			}
 			serveOrder = append(serveOrder, member.Key)
 		}
 	}
-	return serveOrder, nil
+	return serveOrder, groups, nil
 }
 
 // validateModelMember holds one member to the shape every stage assumes: a

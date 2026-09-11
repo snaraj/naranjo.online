@@ -235,38 +235,53 @@ admitted, and an oversized one was truncated, atomically installed over the
 last good file, and only then reported as a checksum mismatch.
 
 The ceiling is measured, not guessed, and the measurement has been REDONE
-four times — at the 2026-08-24 round-3 review, when a required per-source
+five times — at the 2026-08-24 round-3 review, when a required per-source
 `capturedAt` and mandatory window and derived sections made the printed
 figures stale; again for issue #170, which added the per-model
 partition; again for issue #276, which grew the derived set to five and
-added the captured-stats section; and again for issue #302, which more than
-doubled the model vocabulary. The structural maximum the origin can
-admit is one document
+added the captured-stats section; again for issue #302, which more than
+doubled the model vocabulary; and again for issue #267, which added the
+per-model LIFETIME split and the longest-session tile. The structural maximum
+the origin can admit is one document
 covering both shipped snapshot sources, each at the 732-day series bound with
 the complete five-key category vocabulary, the complete thirteen-key model
-vocabulary over its own 70-day window, the complete six-key captured-stats
-vocabulary, and every required section present.
-Compact-encoded and sealed, that measures **119,836 bytes** at ten-digit daily
+vocabulary over its own 70-day window, the complete seven-key captured-stats
+vocabulary, the per-model lifetime split at every member times every
+accounting class, and every required section present.
+Compact-encoded and sealed, that measures **123,668 bytes** at ten-digit daily
 values — an order of magnitude above the shipped snapshot's own measured peak
-day of 1,911,380,289. Pretty-printed, the identical document is 237,884
-bytes, so compact output alone roughly halves it. 131,072 leaves **11,236
-bytes** of headroom: the same maximum still seals to 130,462 bytes at
-eleven-digit values and only crosses the ceiling at twelve, where it
-reaches 141,088.
+day. 131,072 leaves **7,404 bytes** of headroom.
 
-The models section spent one decimal digit of that headroom — it was three
-before #170 — and the sixth model member (issue #299) spent the second:
+**The one-further-digit claim is spent, and this paragraph records that rather
+than dropping it.** The same maximum used to seal inside the ceiling at
+eleven-digit values; it now reaches **134,426** there, and 145,184 at twelve.
+The per-model lifetime split costs 3,904 bytes at eleven digits — thirteen
+vocabulary members times five accounting classes on both sources — against the
+610 bytes the ceiling had left, and the longest-session tile costs 60 more.
+Neither lever was pulled to buy it back: the ceiling is one number five stages
+agree on, and the window is a product decision about how deep the per-model
+breakdown reaches. `CapParityTest` therefore carries the gap as the ratchet
+pair `AGENTS.md` prescribes — a green pin on the measured behaviour plus a
+named pending-contract test that reddens as an unexpected success the day the
+digit returns, forcing this paragraph to be rewritten rather than left to rot.
+
+The models section spent one decimal digit of the original headroom — it was
+three before #170 — and the sixth model member (issue #299) spent the second:
 every member costs one integer per window day on every source, so a member is
 a measured decision, not a free edit. Issue #302 paid that price the other
 way round. Seven named members joined at once, which at the old 92-day window
 put the eleven-digit maximum over the ceiling; the ceiling is one number five
 stages agree on and moving it would move all five, so the WINDOW was cut to
-ten weeks instead and the one-further-digit claim above is the same claim it
-always was. That is precisely the trade the window bounds. One
+ten weeks instead. That is precisely the trade the window bounds. One
 integer per day per member over the full 732-day series would cost roughly
 ten times what the window costs and would not fit under this ceiling at
 all, which is why the section declares the range it covers instead of
 quietly covering fewer days than the series above it.
+
+The per-model LIFETIME split is the cheaper shape of the same idea and pays a
+different price: one integer per member per class rather than per member per
+DAY, so it is a fixed cost the window does not bound. That is why it fits at
+all — and why it still spent the last digit.
 
 These figures are no longer transcribed into a test assertion. `CapParityTest`
 BUILDS the maximum document from the shipped snapshot's own labels and the
@@ -288,25 +303,50 @@ not (2026-08-25 round-4 review, finding 7). The two bound different bytes:
 this one bounds the sealed FILE, the response budget bounds the finished
 ENVELOPE — the payload merged onto the embedded snapshot, plus the envelope
 around it — so the served bytes always exceed the transported ones. The
-maximal document the origin admits measures the gap at +875 bytes (103,633
-sealed, 104,508 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
+maximal document the origin admits measures the gap at +1,625 bytes (117,503
+sealed, 119,128 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
 `internal/panels/dataroot_test.go` logs both), and a larger snapshot widens
 it. A file sealed at exactly 131,072 bytes is therefore refused at serve
 time. What equality buys is only that the last step no longer hides a
 SMALLER ceiling than the four before it; what makes an over-budget document
 safe is the refusal itself, which keeps the last good response serving.
 
-### The model vocabulary is one data file (issue #302)
+That pair is measured over the sections the SNAPSHOT also ships, which is why
+it is smaller than the producer-side maximum above. A pushed section a
+source's snapshot ships none of — a per-model lifetime split on a source that
+shows no such surface — is transported, validated, and then discarded, so it
+adds to the sealed file and nothing at all to the envelope. The transport
+ceiling answers to the larger figure; the serve budget answers to this one.
 
-`internal/panels/config/models.json` (`usage-models/v1`) is the ONLY place a
-model key, a written name, a palette slot, a vendor group or a raw model
-identifier is spelled. The origin embeds it, `capture_usage_series.py` reads
-it from the repository beside itself, and the page imports it at build time;
-before this it was three hand-kept tables held together by a regex test that
-compared them, and adding a model meant editing three files in step. Adding a
-model or a vendor group is now one data edit plus a release, and a test sweeps
+### The vocabularies are data files (issues #302 and #267)
+
+TWO FILES, ONE RULE. `internal/panels/config/models.json` (`usage-models/v1`)
+is the ONLY place a model key, a written name, a palette slot, a vendor group
+or a raw model identifier is spelled, and
+`internal/panels/config/sources.json` (`usage-sources/v1`) is the ONLY place a
+reporting tool's key and written name are. The origin embeds both,
+`capture_usage_series.py` reads the model file from the repository beside
+itself, and the page imports both at build time;
+before this the model vocabulary was three hand-kept tables held together by a
+regex test that compared them, and adding a model meant editing three files in
+step. Adding a
+model, a vendor group or a source is now one data edit plus a release, and a
+test sweeps
 every production source in Go, TypeScript, Svelte, CSS and Python to prove no
-fourth table has appeared.
+fourth table has appeared — for every key and every written name in BOTH
+files.
+
+The source file declares, per source: the machine key the wire carries (the
+pushed document's source labels, the snapshot's own labels and the fetch
+config's are all that one key), the written name a reader prints beside a
+graph, and the model-vocabulary GROUP the source belongs to. Keys are
+label-shaped and unique, names are non-empty, bounded and unique — two
+sources that rendered identically would be a defect nobody could see — and
+every vendor must be a group the model file declares, so the two files cannot
+come to disagree about who exists. The ORIGIN reads none of the names: it
+validates the file at init and a test proves every snapshot and fetch-config
+source label is a key of it, so a push can never name a source the page has no
+written name for. Printing the name is the page's job, from the same bytes.
 
 The file declares, per member: the machine key that crosses the wire, the
 written name every reader resolves, the palette slot the entity owns inside
@@ -403,6 +443,65 @@ percent. To re-baseline after a
 drift review: read the vendor surface again, replace the entry's `total`
 and `asOf` together, and land it through review like any other artifact
 change.
+
+## The lifelong ledger's material (issue #267)
+
+The panel serves a windowed, sealed, byte-bounded document. The workstation's
+lifelong tracker answers different questions, needs more depth than the wire
+can carry, and runs entirely on the owner's own disk — so the capture emits
+what it needs as ONE extra top-level section the export strips before sealing.
+
+**`ledger` never reaches the wire.** `assert_only_dates_and_integers` refuses
+the key BY NAME, so a wire document carrying one is a refusal rather than a
+leak, and `export()` returns the block out of band beside the wire document
+(per source: the complete capture document it read, and that block on its
+own). It is the only section that emits an INSTANT or a vocabulary KEY as a
+value, so it answers to its own guard, `assert_ledger_block` — a structural
+walk that reaches every field by name and admits only closed sets: this
+file's schema marker, a model key, an accounting-class key, a calendar date,
+an RFC 3339 UTC second, and bounded counts. A session identifier, a working
+directory, a git branch, a title or a prompt byte cannot ride under a
+friendly key, because a key nobody reached for is a key nobody copies.
+
+**`modelCategories` is the joint of model against accounting class**, day
+indexed over the full depth the walk partitions rather than the seventy-day
+wire window: the block is read off local disk and pays no payload ceiling. A
+marginal cannot be recovered from two other marginals, so the joint is
+accumulated in the SAME loop that builds the aggregate, the class split and
+the model split — one walk, four indexes, no second chance to disagree — and
+the producer refuses a joint whose two marginals are not exactly the day's own
+splits. It covers only days the emitted document still owns: the history store
+can override a walked day, and a joint refining a split nobody serves would be
+a tracker disagreeing with the panel. When the store owns every such day the
+section is ABSENT rather than empty, which an ordinary pruning run reaches.
+
+**`sessions` is one entry per record FILE the walk billed a token to** — one
+file is one session in both record shapes — carrying the span from its first
+admitted record to its last, its total, its class partition, and the distinct
+model keys in first-appearance order. Nothing else. Under the message shape's
+GLOBAL de-duplication a record replayed into a second file was already spent
+where it was first seen, so it counts there and the second file's entry never
+sees it. A file that admitted nothing gets no entry, and neither does one
+whose records carry no readable instant: a session with no span is not a
+session.
+
+**Two wire figures come out of the same walk.** `longest-session` joins the
+captured-stats vocabulary in SECONDS, with one definition for every source —
+first admitted record to last, of one session. The producing tool's own
+roll-up reports exactly that in milliseconds where it reports it at all (the
+conversion floors, because a tile is a magnitude), and the walk's own session
+spans measure it where it does not, so a source with no roll-up fills the tile
+instead of freezing it. A roll-up that records the figure and reports it
+malformed refuses the run: absent is a state, broken is a fault.
+`modelStats` carries the lifetime token classes PER MODEL, folded through the
+model vocabulary exactly like every other identifier, accrued past the cache's
+own as-of day through the joint above so the split moves with the class tiles
+it sits under. The origin admits it under the captured-stats completeness
+rule — a source whose snapshot ships the section must refresh it on every
+push, a source whose snapshot ships none owes nothing and cannot mint one —
+and enforces `Σ members ≤ each class tile`. It is `≤` and not `=` because the
+per-model accrual covers the days the walk owns while the class tile also
+accrues days the history store supplied.
 
 ## Workstation setup
 

@@ -16,6 +16,7 @@
 package panels
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -105,6 +106,11 @@ var vendorMarks = []string{
 	// what it reports, not for where it comes from, so the host belongs in
 	// config data and the compiled binary carries no coupling to it.
 	"git" + "hub",
+	// The written SOURCE name the second vocabulary file declares (issue
+	// #267). Until config/sources.json existed there was nowhere to declare
+	// what a source is CALLED, so the name would have landed in a component
+	// or here; it is data now, and this needle is what keeps it there.
+	"cla" + "ude",
 }
 
 // productionSources parses every non-test Go file of this package.
@@ -185,11 +191,115 @@ func TestVendorNamesStayOutOfProductionSource(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		content := strings.ToLower(string(data))
-		for _, mark := range vendorMarks {
-			if strings.Contains(content, mark) {
-				t.Errorf("%s contains the vendor name %q: vendors appear only as data labels inside snapshots and config, never in Go source", name, mark)
-			}
+		for _, mark := range spelledVendors(string(data)) {
+			t.Errorf("%s contains the vendor name %q: vendors appear only as data labels inside snapshots and config, never in Go source", name, mark)
 		}
+	}
+}
+
+// spelledVendors is the scan itself, lifted out of the sweep so the sweep can
+// be shown to FAIL. A guard that cannot redden is decoration, and the sweep
+// above reads an always-clean tree — so on its own it proves only that the
+// tree is clean today, never that a dirty one would be caught.
+func spelledVendors(content string) []string {
+	lowered := strings.ToLower(content)
+	var found []string
+	for _, mark := range vendorMarks {
+		if strings.Contains(lowered, mark) {
+			found = append(found, mark)
+		}
+	}
+	return found
+}
+
+// TestTheVendorSweepCanFail is the non-vacuity half. Every mark gets a source
+// line that reintroduces it — case-folded, because a display name is
+// capitalised and the sweep must not be defeated by a capital letter — and a
+// clean line must stay clean.
+//
+// The written SOURCE name (issue #267) is the case this earns its keep on:
+// `"Claude Code"` is display copy that would look perfectly at home beside a
+// panel title, and config/sources.json is the only place it may be spelled.
+func TestTheVendorSweepCanFail(t *testing.T) {
+	t.Parallel()
+	if len(vendorMarks) == 0 {
+		t.Fatal("the sweep has nothing to look for")
+	}
+	for _, mark := range vendorMarks {
+		titled := strings.ToUpper(mark[:1]) + mark[1:]
+		found := spelledVendors(`const name = "` + titled + ` Code"`)
+		if len(found) != 1 || found[0] != mark {
+			t.Errorf("a source spelling %q was not caught; the sweep found %v", titled, found)
+		}
+	}
+	if found := spelledVendors("// the vendor group renders its own block"); len(found) != 0 {
+		t.Errorf("ordinary prose tripped the sweep: %v", found)
+	}
+}
+
+// TestTheVendorMarkListCoversTheShippedVocabularies closes the hole the
+// mutation audit found in the pair above: TestTheVendorSweepCanFail iterates
+// `vendorMarks`, so DELETING a mark removes a subject rather than failing a
+// check, and the sweep would then quietly stop looking for a name it used to
+// catch. Nothing in a list-driven pin notices its own list getting shorter.
+//
+// So the list is pinned against the DATA it mirrors, read at test time: every
+// written name and every vendor group the two shipped vocabulary files carry
+// must be covered by some mark. This file still spells no vendor — the
+// subjects come out of config/sources.json and config/models.json, which is
+// exactly where they are allowed to live.
+//
+// One honest limit: the version-control HOST mark is not derived here,
+// because a host lives in the fetch config's endpoint URLs rather than in a
+// vocabulary field, and parsing one out would be a second, weaker derivation.
+// It stays hand-kept, and the list may never shrink below what this covers.
+func TestTheVendorMarkListCoversTheShippedVocabularies(t *testing.T) {
+	t.Parallel()
+	var sources struct {
+		Sources []struct {
+			Name   string `json:"name"`
+			Vendor string `json:"vendor"`
+		} `json:"sources"`
+	}
+	readVocabulary(t, "config/sources.json", &sources)
+	var models struct {
+		Groups []struct {
+			Key   string `json:"key"`
+			Label string `json:"label"`
+		} `json:"groups"`
+	}
+	readVocabulary(t, "config/models.json", &models)
+	var subjects []string
+	for _, source := range sources.Sources {
+		subjects = append(subjects, source.Name, source.Vendor)
+	}
+	for _, group := range models.Groups {
+		subjects = append(subjects, group.Key, group.Label)
+	}
+	if len(subjects) < 4 {
+		t.Fatalf("only %d vendor-bearing fields found; the pin has almost nothing to cover", len(subjects))
+	}
+	for _, subject := range subjects {
+		if subject == "" {
+			t.Error("a shipped vocabulary carries an empty vendor-bearing field")
+			continue
+		}
+		if len(spelledVendors(subject)) == 0 {
+			t.Errorf("no vendorMarks entry covers a shipped vocabulary field (%d bytes); deleting a mark silently stops the sweep looking for it", len(subject))
+		}
+	}
+}
+
+// readVocabulary decodes one shipped vocabulary file into the caller's shape.
+// Read from disk rather than from the embed so a failure names the file an
+// editor would open.
+func readVocabulary(t *testing.T, name string, into any) {
+	t.Helper()
+	raw, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	if err := json.Unmarshal(raw, into); err != nil {
+		t.Fatalf("parse %s: %v", name, err)
 	}
 }

@@ -448,12 +448,21 @@ type visitorTokenUsageData struct {
 }
 
 type visitorTokenUsageSource struct {
-	Label    string                     `json:"label"`
-	Account  string                     `json:"account"`
-	Windows  []visitorTokenUsageWindow  `json:"windows"`
-	Stats    []visitorTokenUsageStat    `json:"stats"`
-	Series   *visitorTokenUsageSeries   `json:"series"`
-	Insights []visitorTokenUsageInsight `json:"insights"`
+	Label   string                    `json:"label"`
+	Account string                    `json:"account"`
+	Windows []visitorTokenUsageWindow `json:"windows"`
+	Stats   []visitorTokenUsageStat   `json:"stats"`
+	// ModelStats is the per-model lifetime split (issue #267): the same
+	// closed model vocabulary the daily breakdown uses, keyed by machine key
+	// because the reader resolves the written name from the vocabulary file.
+	ModelStats []visitorTokenUsageModelStat `json:"modelStats"`
+	Series     *visitorTokenUsageSeries     `json:"series"`
+	Insights   []visitorTokenUsageInsight   `json:"insights"`
+}
+
+type visitorTokenUsageModelStat struct {
+	Key    string           `json:"key"`
+	Totals map[string]int64 `json:"totals"`
 }
 
 // visitorTokenUsageStat, -Series, and -Insight are the additive token-usage
@@ -477,6 +486,18 @@ type visitorTokenUsageSeries struct {
 	// fetched, and says so instead of borrowing the panel's freshness. Live
 	// mapping never sets it.
 	Recorded bool `json:"recorded"`
+	// The two independent partitions of the same days: by accounting class
+	// and by model. Each row optionally declares the TRAILING window it
+	// covers, so a reader is told the range it is looking at rather than
+	// shown a truncation it cannot see.
+	Categories []visitorTokenUsageCategory `json:"categories"`
+	Models     []visitorTokenUsageCategory `json:"models"`
+}
+
+type visitorTokenUsageCategory struct {
+	Key       string  `json:"key"`
+	StartDate string  `json:"startDate"`
+	Totals    []int64 `json:"totals"`
 }
 
 type visitorTokenUsageInsight struct {

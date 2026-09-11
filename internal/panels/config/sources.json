@@ -1,0 +1,7 @@
+{
+  "schema": "usage-sources/v1",
+  "sources": [
+    {"key": "anthropic", "name": "Claude Code", "vendor": "anthropic"},
+    {"key": "codex", "name": "Codex", "vendor": "openai"}
+  ]
+}

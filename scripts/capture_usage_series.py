@@ -78,8 +78,10 @@ file names, project directory names, session identifiers and machine-local
 paths. NONE of that may reach the repository, and the git index is public.
 So the only values this program is capable of emitting are:
 
-  * calendar dates, as YYYY-MM-DD, derived from a timestamp; and
-  * non-negative integers.
+  * calendar dates, as YYYY-MM-DD, derived from a timestamp;
+  * non-negative integers; and
+  * members of a CLOSED vocabulary this repository already ships — a model
+    key, an accounting-class key, or this file's own schema marker.
 
 Nothing else is retained past the line that produced it. Message identifiers
 are held only inside an in-memory de-duplication set and are never written or
@@ -88,6 +90,25 @@ named, because an error string carrying a path is a leak with a friendly face.
 `assert_only_dates_and_integers` re-proves the whole emission immediately
 before anything is written or printed, so a future edit that starts carrying a
 project name has to defeat an explicit check rather than slip past review.
+
+THE LEDGER BLOCK IS THE ONE SECTION THAT NEVER REACHES THE WIRE (issue #267).
+The workstation's lifelong tracker needs two measurements the panel does not:
+the day-indexed JOINT of model against accounting class, at the full depth the
+walk partitions rather than the sealed payload's window, and one entry per
+record FILE the walk admitted a token from. Both ride the capture's stdout
+under `ledger`, and the export STRIPS them before the document is sealed —
+`assert_only_dates_and_integers` refuses the key by name, so a wire document
+carrying one is a refusal rather than a leak.
+
+That block is the only place an INSTANT and a vocabulary KEY are emitted as
+values, so it answers to its own guard rather than widening the wire's.
+`assert_ledger_block` is a structural walk, not a recursive shape test: every
+field is reached by name, every string is a member of a closed set — a model
+key, a category key, this file's schema marker, or an RFC 3339 UTC instant —
+and a session carries NO identifier, path, working directory, branch, title or
+prompt byte. A record replayed into a second file counts in the file it was
+first SEEN in, because the message shape's de-duplication is global across the
+walk; the second file's entry simply never sees it.
 
 WHAT IT COMPUTES, and why it matches the live mapper exactly. Under the
 `messages` shape a day's total is `input_tokens + output_tokens +
@@ -191,6 +212,14 @@ import sys
 # below is the truth — a string can match this pattern and still name a day
 # no calendar has (2026-99-99), so shape alone must never admit anything.
 DAY_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# The instant form the ledger block records a session's span in: RFC 3339,
+# UTC, second precision — the same spelling `generatedAt` and `capturedAt`
+# already use, so the workstation ledger reads one time format everywhere.
+# Shape ONLY, exactly as DAY_PATTERN is: `valid_instant` below re-parses it
+# against the real calendar, because 2026-99-99T99:99:99Z satisfies these
+# digits and names no moment.
+INSTANT_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 # The shape a field NAME in the emission may take. Keys are this file's own
 # vocabulary rather than anything read out of a transcript, so this is a
@@ -429,13 +458,50 @@ EMISSION_KEYS = frozenset(
         "longest-streak",
         "active-days",
         "tracked-days",
-        # The captured-stats section and the two of its keys the category
+        # The captured-stats section and the three of its keys the category
         # vocabulary does not already carry (also declared below as STATS_*).
         "stats",
         "lifetime",
         "sessions",
+        "longest-session",
+        # The per-model lifetime classes (issue #267): a LIST of
+        # {key, totals} objects, so `key` is a field name here and the model
+        # key it carries is admitted by the membership rule in
+        # _assert_emission — never by shape.
+        "modelStats",
+        "key",
     }
 ).union(CATEGORY_KEYS).union(MODEL_KEYS)
+
+# The one key the emission guard refuses BY NAME rather than by absence. The
+# ledger block is machine-local material for the workstation tracker and the
+# only section of a capture that carries instants and vocabulary keys as
+# VALUES; the export strips it before sealing, and a wire document that still
+# carries it is refused here with a message that says which rule it broke
+# rather than the generic "outside the closed emission vocabulary" (issue
+# #267). It is deliberately NOT a member of EMISSION_KEYS.
+LEDGER_KEY = "ledger"
+
+# The exact schema marker the ledger block declares. A breaking reshape mints
+# a new marker; it never bends this one.
+LEDGER_SCHEMA = "usage-capture-ledger/v1"
+
+# The ledger block's own section names, declared once so the builder and the
+# guard cannot come to disagree about what a ledger contains.
+LEDGER_MODEL_CATEGORIES_KEY = "modelCategories"
+LEDGER_MEMBERS_KEY = "members"
+LEDGER_SESSIONS_KEY = "sessions"
+LEDGER_MODEL_KEY = "model"
+LEDGER_CATEGORY_KEY = "category"
+LEDGER_STARTED_KEY = "startedAt"
+LEDGER_ENDED_KEY = "endedAt"
+
+# The per-model lifetime-class section's field names (issue #267). It rides
+# the WIRE beside `stats`, so its shape is admitted by the emission guard and
+# by the origin; the ledger block above is the section that does not.
+MODEL_STATS_KEY = "modelStats"
+MODEL_STATS_MEMBER_KEY = "key"
+MODEL_STATS_TOTALS_KEY = "totals"
 
 # The record shapes the walk knows how to read, named for what the record
 # CONTAINS rather than for the tool that wrote it: a shape is a journal
@@ -598,6 +664,16 @@ ACTIVITY_CACHE_USAGE_FIELDS = (
     ("cacheReadInputTokens", "cache-read"),
     ("cacheCreationInputTokens", "cache-write"),
 )
+# The cache's own longest-session record, and the field inside it that is the
+# span. The tool reports MILLISECONDS; the served tile is seconds, so the
+# conversion FLOORS — a tile is a magnitude, and rounding a duration up would
+# report a second the record does not show (issue #267). The record also
+# carries a session identifier, a message count and a timestamp beside the
+# duration; none of them is read, because none of them is a figure this
+# pipeline serves and one of them is exactly what requirement 12 forbids.
+ACTIVITY_CACHE_LONGEST_KEY = "longestSession"
+ACTIVITY_CACHE_DURATION_FIELD = "duration"
+MILLISECONDS_PER_SECOND = 1000
 
 # The durable per-source history store (issue #234). Every source this
 # pipeline reads is VOLATILE: the transcript trees are retention-pruned on
@@ -651,6 +727,15 @@ STAT_TRACKED_DAYS = "tracked-days"
 # snapshot already shows, so a key here can never ADD a tile.
 STAT_LIFETIME = "lifetime"
 STAT_SESSIONS = "sessions"
+# The longest single session the record shows, in SECONDS (issue #267). One
+# definition for every source, whichever way it is measured: the span from a
+# session's first admitted record to its last. The producing tool's own
+# roll-up reports it in milliseconds where it reports it at all, and the walk
+# measures the identical quantity from the ledger's session spans where it
+# does not — so a source with no roll-up still fills the tile rather than
+# leaving it frozen, which is the defect issue #276 closed for the other
+# lifetime-class figures.
+STAT_LONGEST_SESSION = "longest-session"
 STATS_KEYS = (
     STAT_LIFETIME,
     "input",
@@ -658,12 +743,21 @@ STATS_KEYS = (
     "cache-read",
     "cache-write",
     STAT_SESSIONS,
+    STAT_LONGEST_SESSION,
 )
 
 # The key order one source is written back in, matching the field order of
 # TokenUsageSource in internal/panels/types.go so the snapshot reads like the
 # struct it decodes into.
-SOURCE_KEY_ORDER = ("label", "account", "windows", "stats", "series", "insights")
+SOURCE_KEY_ORDER = (
+    "label",
+    "account",
+    "windows",
+    "stats",
+    "modelStats",
+    "series",
+    "insights",
+)
 
 
 def new_counters():
@@ -1050,13 +1144,22 @@ def open_record_file(record, counters):
         return None
 
 
-def read_records(root, counters):
+def read_records(root, counters, sessions=None):
     """Yield (day, total, parts, model) rows from every message-shaped record.
 
     Every value this generator produces is already reduced to a date and an
     integer; the parsed record itself never escapes the loop body. Files that
     cannot be opened or lines that will not parse are skipped and tallied in
     `counters`, never named.
+
+    `sessions`, when a list is supplied, collects ONE entry per record file
+    that admitted at least one token — the ledger block's session list (issue
+    #267). It is optional because the panel emission needs none of it, and
+    the walk must stay one walk: a second pass over the tree would be a second
+    chance to disagree with the first about what it read. A file whose records
+    are all replays of records already seen admits nothing and gets no entry,
+    which is the honest reading — the tokens were billed where they were first
+    measured.
     """
     seen = set()
     for record in admitted_records(root, counters):
@@ -1064,15 +1167,20 @@ def read_records(root, counters):
         handle = open_record_file(record, counters)
         if handle is None:
             continue
+        opened = new_session()
         with handle:
             for line in bounded_lines(handle, counters):
                 reduced = reduce_line(line, seen, counters)
-                if reduced is not None:
-                    counters["counted"] += 1
-                    yield reduced
+                if reduced is None:
+                    continue
+                counters["counted"] += 1
+                day, instant, total, parts, model = reduced
+                note_session(opened, instant, total, parts, model)
+                yield day, total, parts, model
+        close_session(sessions, opened)
 
 
-def read_running_totals(root, counters):
+def read_running_totals(root, counters, sessions=None):
     """Yield (day, advance, parts, model) rows from every running-totals record.
 
     The running total is per FILE — every journal in the owner's tree opens
@@ -1100,6 +1208,10 @@ def read_running_totals(root, counters):
 
     Each line is decoded ONCE and offered to both readers; the decoded record
     never leaves this loop, exactly as in the message shape.
+
+    `sessions` collects the ledger block's per-file entries exactly as it does
+    on the message path (issue #267): one file is one session in both shapes,
+    and the entry spans the file's first admitted advance to its last.
     """
     for record in admitted_records(root, counters):
         counters["files"] += 1
@@ -1108,6 +1220,7 @@ def read_running_totals(root, counters):
             continue
         previous = {field: 0 for field in RUNNING_FIELDS}
         member = MODEL_OTHER
+        opened = new_session()
         with handle:
             for line in bounded_lines(handle, counters):
                 decoded = decoded_record(line)
@@ -1120,7 +1233,7 @@ def read_running_totals(root, counters):
                 reduced = running_totals_of(decoded)
                 if reduced is None:
                     continue
-                day, running = reduced
+                day, instant, running = reduced
                 if running[RUNNING_TOTAL_FIELD] == previous[RUNNING_TOTAL_FIELD]:
                     counters["duplicates"] += 1
                     previous = running
@@ -1138,11 +1251,82 @@ def read_running_totals(root, counters):
                 if advance <= 0:
                     continue
                 counters["counted"] += 1
-                yield day, advance, running_parts(advances, advance, counters), member
+                parts = running_parts(advances, advance, counters)
+                note_session(opened, instant, advance, parts, member)
+                yield day, advance, parts, member
+        close_session(sessions, opened)
+
+
+def new_session():
+    """The per-file accumulator one ledger session entry is built from.
+
+    Four fields and NOTHING ELSE, and the omissions are the design (issue
+    #267). The record carries a session identifier, a working directory, a
+    git branch, a title and the prompt text itself; a session entry carries
+    the span, the total, the class partition and the members in first
+    appearance order, because those four are the only things the workstation
+    tracker asks of it and every other field is a requirement-12 leak with a
+    plausible reason attached. `assert_ledger_block` re-proves the shape
+    before anything is written, so a future edit that starts carrying a title
+    has to defeat an explicit check.
+    """
+    return {
+        LEDGER_STARTED_KEY: None,
+        LEDGER_ENDED_KEY: None,
+        HISTORY_TOTAL_KEY: 0,
+        "categories": {},
+        "models": [],
+    }
+
+
+def note_session(opened, instant, total, parts, model):
+    """Fold one ADMITTED record into the session its file is accumulating.
+
+    Admitted is the operative word: the message shape's de-duplication runs
+    before this, so a record replayed into a second file was already counted
+    in the file it was first seen in and never reaches here twice. The span
+    takes the extremes rather than assuming the file is ordered — a journal
+    is appended to, but an out-of-order record would otherwise silently
+    invert a span and produce a negative duration downstream.
+
+    A record whose instant could not be read still contributes its tokens;
+    it simply cannot move the span, because a span is a measurement and a
+    missing timestamp is not one.
+    """
+    opened[HISTORY_TOTAL_KEY] += total
+    if parts:
+        for key, value in parts.items():
+            opened["categories"][key] = opened["categories"].get(key, 0) + value
+    if model not in opened["models"]:
+        opened["models"].append(model)
+    if instant is None:
+        return
+    if opened[LEDGER_STARTED_KEY] is None or instant < opened[LEDGER_STARTED_KEY]:
+        opened[LEDGER_STARTED_KEY] = instant
+    if opened[LEDGER_ENDED_KEY] is None or instant > opened[LEDGER_ENDED_KEY]:
+        opened[LEDGER_ENDED_KEY] = instant
+
+
+def close_session(sessions, opened):
+    """Append one finished file's session entry, or drop it.
+
+    A file that admitted no token is not a session: it is a file the walk
+    read and billed nothing for — an all-replay resume, a journal of tool
+    calls, a record shape this walk cannot read. Emitting it would put a
+    zero-token row in the tracker for every such file, which says nothing and
+    costs a row to say it. A file that billed tokens but carries no readable
+    instant is dropped for the other half of the same rule: its span is
+    unmeasurable, and a session with no span is not a session either.
+    """
+    if sessions is None or opened[HISTORY_TOTAL_KEY] <= 0:
+        return
+    if opened[LEDGER_STARTED_KEY] is None or opened[LEDGER_ENDED_KEY] is None:
+        return
+    sessions.append(opened)
 
 
 def reduce_line(line, seen, counters):
-    """Reduce one transcript line to (day, total, parts, model), or None.
+    """Reduce one transcript line to (day, instant, total, parts, model), or None.
 
     De-duplication is load-bearing rather than tidy. The tool replays earlier
     assistant messages into later transcript files when a session is resumed
@@ -1180,11 +1364,17 @@ def reduce_line(line, seen, counters):
     if day is None:
         return None
     parts = usage_parts(usage)
-    return day, sum(parts.values()), parts, model_key(message.get(MESSAGE_MODEL_FIELD), counters)
+    return (
+        day,
+        utc_instant(stamp),
+        sum(parts.values()),
+        parts,
+        model_key(message.get(MESSAGE_MODEL_FIELD), counters),
+    )
 
 
 def reduce_running_line(line):
-    """Reduce one running-totals line to (day, running total), or None.
+    """Reduce one running-totals line to (day, instant, running total), or None.
 
     No de-duplication set here, and that is the point of the shape: identity
     is not what protects this walk from a replay, ARITHMETIC is. A repeated
@@ -1223,7 +1413,15 @@ def declared_model_of(record):
 
 
 def running_totals_of(record):
-    """(day, cumulative fields) from a decoded running-totals record, or None."""
+    """(day, instant, cumulative fields) from a running-totals record, or None.
+
+    The instant is the record's own timestamp in UTC, which the ledger's
+    session spans read; the day beside it is the WORKSTATION'S local day, and
+    the two are deliberately different clocks. A day is a bucket the vendors'
+    own surfaces agree with (issue #276), while a span is a duration, and a
+    duration measured across a DST boundary in local time would report an
+    hour nobody worked.
+    """
     payload = record.get("payload")
     if not isinstance(payload, dict):
         return None
@@ -1239,7 +1437,7 @@ def running_totals_of(record):
     day = local_day(stamp)
     if day is None:
         return None
-    return day, running_fields(running)
+    return day, utc_instant(stamp), running_fields(running)
 
 
 def running_total(usage):
@@ -1394,6 +1592,57 @@ def local_day(stamp):
     return moment.astimezone().date().isoformat()
 
 
+def utc_instant(stamp):
+    """One record's timestamp as an RFC 3339 UTC second, or None.
+
+    UTC rather than local, and that is the counterpart of `local_day`'s
+    ruling rather than a contradiction of it. A DAY is a bucket, and the
+    vendors' own surfaces bucket in the workstation's local days (issue
+    #276). A SPAN is a duration between two instants, and two local
+    wall-clock readings either side of a DST transition differ by an hour
+    nobody worked — so the ledger's session spans are measured on the one
+    clock that never steps.
+
+    Sub-second precision is DROPPED rather than rounded: the tile the span
+    feeds is measured in whole seconds, and a truncating conversion can
+    never report a second the record does not show.
+    """
+    try:
+        moment = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=datetime.timezone.utc)
+    return (
+        moment.astimezone(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+
+
+def valid_instant(value):
+    """True only for a real RFC 3339 UTC second with no extra bytes.
+
+    The pair `valid_calendar_day` is: `fullmatch` pins the exact shape
+    including the string's end, and the calendar parse then refuses the
+    digits that name no moment (2026-99-99T99:99:99Z satisfies the pattern).
+    """
+    if not isinstance(value, str) or not INSTANT_PATTERN.fullmatch(value):
+        return False
+    try:
+        datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return True
+
+
+def instant_span_seconds(started, ended):
+    """Whole seconds from one ledger instant to another, never negative."""
+    first = datetime.datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ")
+    last = datetime.datetime.strptime(ended, "%Y-%m-%dT%H:%M:%SZ")
+    return max(int((last - first).total_seconds()), 0)
+
+
 def usage_parts(usage):
     """One message's usage fields as its own partition, by category key.
 
@@ -1425,13 +1674,27 @@ def daily_series(rows):
     breakdown, and the attribution are the same records read once — a second
     walk would be a second chance to disagree.
 
-    Returns (series, categories, models, partitioned days), where `categories`
-    and `models` map a vocabulary key to a day-indexed list over the same
-    contiguous window the series covers. The caller windows them.
+    Returns (series, categories, models, partitioned days, joint), where
+    `categories` and `models` map a vocabulary key to a day-indexed list over
+    the same contiguous window the series covers, and `joint` maps a
+    (model, category) pair to {day: count}. The caller windows them.
+
+    THE JOINT IS THE THIRD ACCUMULATOR IN THIS ONE LOOP (issue #267), and it
+    has to be: a marginal cannot be recovered from two other marginals, so
+    the day's model split and the day's class split say nothing about which
+    model spent the cache reads. Building it here means all four indexes are
+    the same records read once — a second walk would be a second chance to
+    disagree — and it costs nothing the loop was not already holding, because
+    `parts` and `model` arrive on the SAME row.
+
+    It is never sealed and never served: it rides the ledger block, which the
+    export strips. Only days the record could partition contribute, which is
+    what makes the caller's invariant exact rather than approximate.
     """
     totals_by_day = {}
     parts_by_day = {}
     models_by_day = {}
+    joint = {}
     uncategorised = set()
     for day, total, parts, model in rows:
         totals_by_day[day] = totals_by_day.get(day, 0) + total
@@ -1443,6 +1706,8 @@ def daily_series(rows):
         carried = parts_by_day.setdefault(day, {})
         for key, value in parts.items():
             carried[key] = carried.get(key, 0) + value
+            cell = joint.setdefault((model, key), {})
+            cell[day] = cell.get(day, 0) + value
     if not totals_by_day:
         raise CaptureError("no usage records found under the transcript root")
     days = sorted(totals_by_day)
@@ -1463,7 +1728,7 @@ def daily_series(rows):
     categories = day_indexed(parts_by_day, window, CATEGORY_KEYS)
     models = day_indexed(models_by_day, window, MODEL_KEYS)
     partitioned = [day for day in window if day not in uncategorised]
-    return series, categories, models, partitioned
+    return series, categories, models, partitioned, joint
 
 
 def day_indexed(by_day, window, vocabulary):
@@ -1719,6 +1984,40 @@ def activity_days(document, counters):
     return by_day
 
 
+def admitted_lifetime_usage(document):
+    """The cache's per-model lifetime accounting, validated ONCE for two readers.
+
+    `lifetime_stats` sums it into the four token classes and `model_stats`
+    folds it into per-model rows (issue #267); before this function they were
+    one validation and one that trusted the first had already run, which is
+    an order dependency nothing declares and a reader cannot see. Every
+    refusal below is the refusal of the WHOLE run, for lifetime_stats' stated
+    reason: the origin refuses a document that leaves a lifetime-class tile
+    unrefreshed, so a cache that stops carrying this accounting must stop the
+    push loudly here.
+
+    The returned map is keyed by the tool's RAW identifier, because the two
+    readers fold differently — one sums across every identifier, the other
+    resolves each to a vocabulary member first — and folding here would throw
+    away the only thing the second one needs.
+    """
+    usage = document.get(ACTIVITY_CACHE_USAGE_KEY)
+    if not isinstance(usage, dict) or not usage:
+        raise CaptureError("the activity cache carries no lifetime usage accounting")
+    admitted = {}
+    for identifier, entry in usage.items():
+        if not isinstance(entry, dict):
+            raise CaptureError("the activity cache carries a malformed lifetime entry")
+        row = {}
+        for field, key in ACTIVITY_CACHE_USAGE_FIELDS:
+            value = entry.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise CaptureError("the activity cache carries a malformed lifetime count")
+            row[key] = value
+        admitted[identifier] = row
+    return admitted
+
+
 def lifetime_stats(document):
     """The cache's lifetime accounting as the closed captured-stats set.
 
@@ -1736,17 +2035,9 @@ def lifetime_stats(document):
     every tick. A missing field, a non-integer, a negative, a bool, or a sum
     past the shared count bound all name the defect and push nothing.
     """
-    usage = document.get(ACTIVITY_CACHE_USAGE_KEY)
-    if not isinstance(usage, dict) or not usage:
-        raise CaptureError("the activity cache carries no lifetime usage accounting")
     stats = {key: 0 for _, key in ACTIVITY_CACHE_USAGE_FIELDS}
-    for entry in usage.values():
-        if not isinstance(entry, dict):
-            raise CaptureError("the activity cache carries a malformed lifetime entry")
-        for field, key in ACTIVITY_CACHE_USAGE_FIELDS:
-            value = entry.get(field)
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise CaptureError("the activity cache carries a malformed lifetime count")
+    for row in admitted_lifetime_usage(document).values():
+        for key, value in row.items():
             stats[key] += value
     stats[STAT_LIFETIME] = sum(stats.values())
     sessions = document.get(ACTIVITY_CACHE_SESSIONS_KEY)
@@ -1787,6 +2078,271 @@ def accrue_after_cache(stats, document, series, categories, partitioned):
     if any(value > MAX_COUNT for value in stats.values()):
         raise CaptureError("the activity cache lifetime figures exceed the shared count bound")
     return stats
+
+
+def cached_longest_session(document):
+    """The cache's own longest-session span in whole seconds, or None.
+
+    ABSENT IS A STATE, BROKEN IS A REFUSAL, and the two are not the same
+    thing (issue #267). A cache that never records a longest session simply
+    has no figure, and the walk measures the identical quantity from its own
+    session spans — so the tile fills rather than freezing. A cache that
+    records one and reports it as a string, a float, a boolean or a negative
+    is CORRUPT, and quietly preferring the weaker measurement over a
+    corrupted stronger one would publish a figure while hiding the fault
+    that produced it.
+
+    Milliseconds FLOOR to seconds: a tile is a magnitude, and rounding a
+    duration up reports a second the record does not show.
+    """
+    if document is None:
+        return None
+    longest = document.get(ACTIVITY_CACHE_LONGEST_KEY)
+    if not isinstance(longest, dict) or ACTIVITY_CACHE_DURATION_FIELD not in longest:
+        return None
+    duration = longest[ACTIVITY_CACHE_DURATION_FIELD]
+    if not isinstance(duration, int) or isinstance(duration, bool) or duration < 0:
+        raise CaptureError("the activity cache carries a malformed longest-session duration")
+    return duration // MILLISECONDS_PER_SECOND
+
+
+def longest_session_seconds(document, sessions):
+    """The longest single session the record shows, in whole seconds.
+
+    ONE DEFINITION, TWO WAYS OF MEASURING IT, and the definition is what
+    makes the tile comparable across sources: the span from a session's
+    FIRST admitted record to its LAST. The producing tool's own roll-up
+    reports exactly that where it reports it at all, and where it does not,
+    the walk's own session spans measure it — the same quantity from the same
+    records the totals above it came from.
+
+    A walk that admitted tokens but could measure no span refuses the run.
+    The origin requires every lifetime-class tile its snapshot ships to be
+    refreshed, so emitting nothing here would refuse the push at the far end
+    with no explanation; refusing here names the defect where somebody can
+    read it.
+    """
+    cached = cached_longest_session(document)
+    if cached is not None:
+        return cached
+    spans = [
+        instant_span_seconds(session[LEDGER_STARTED_KEY], session[LEDGER_ENDED_KEY])
+        for session in sessions
+    ]
+    if not spans:
+        raise CaptureError(
+            "no session of the record carries a measurable span, so the longest "
+            "session cannot be measured"
+        )
+    return max(spans)
+
+
+def model_stats(document, counters):
+    """The cache's lifetime classes, per vocabulary member (issue #267).
+
+    The four class tiles say what the whole account spent on cache reads;
+    this says which MODEL spent them, which is the one lifetime question the
+    aggregate tiles cannot answer. Raw identifiers fold through `model_key`
+    exactly as every other model identifier in this file does — two ids
+    folding to one member are summed, and an identifier the vocabulary does
+    not name lands on the residual, which is a legitimate member here rather
+    than a defect.
+
+    A member whose classes all measure nothing is DROPPED, and so is a class
+    that measures nothing inside a member, for the reason `usage_parts` drops
+    a zero class: a zero here is not the reading "no cache reads", it is a
+    row the cache carried for a model it holds no accounting for. Placeholder
+    rows draw a named entity at nought beside entities that were used.
+    """
+    folded = {}
+    for identifier, row in admitted_lifetime_usage(document).items():
+        member = folded.setdefault(model_key(identifier, counters), {})
+        for key, value in row.items():
+            member[key] = member.get(key, 0) + value
+    return folded
+
+
+def accrue_model_stats(folded, document, joint, owned):
+    """Carry the per-model classes over the days after the cache's own.
+
+    The SAME accrual `accrue_after_cache` applies to the class tiles, applied
+    per model through the ledger's joint (issue #288's rule, issue #267's
+    decomposition): the cache is exact as of the day it was last recomputed
+    and frozen after it, so every day the walk owns and partitions strictly
+    after that day accrues onto the member that spent it.
+
+    It is EXACT rather than apportioned, which is why the joint had to exist:
+    the joint is the measurement "this member spent this class on this day",
+    so accruing from it adds the same tokens the class tile accrues, split
+    the way the records split them. Days the history store overrode are not
+    the walk's and carry no joint, so they accrue onto the class tiles and
+    not onto the members — which is precisely why the invariant the origin
+    enforces is `Σ members ≤ the class tile` rather than equality.
+    """
+    as_of = document.get(ACTIVITY_CACHE_COMPUTED_KEY)
+    if not valid_calendar_day(as_of):
+        raise CaptureError("the activity cache carries no calendar as-of day for its accounting")
+    eligible = {day for day in owned if day > as_of}
+    for (member, key), by_day in joint.items():
+        for day, value in by_day.items():
+            if day not in eligible:
+                continue
+            row = folded.setdefault(member, {})
+            row[key] = row.get(key, 0) + value
+    return folded
+
+
+def model_stats_section(folded):
+    """The wire form of the per-model classes: vocabulary order, no empty rows."""
+    section = []
+    for member in MODEL_KEYS:
+        totals = {key: value for key, value in (folded.get(member) or {}).items() if value > 0}
+        if not totals:
+            continue
+        ordered = {key: totals[key] for key in CATEGORY_KEYS if key in totals}
+        if sum(ordered.values()) > MAX_COUNT:
+            raise CaptureError("a per-model lifetime figure exceeds the shared count bound")
+        section.append({MODEL_STATS_MEMBER_KEY: member, MODEL_STATS_TOTALS_KEY: ordered})
+    return section
+
+
+def ledger_days(window, owned):
+    """The contiguous run of walk-owned partitioned days the joint indexes.
+
+    A day index list rather than a date list, because the caller reads the
+    series' own day-indexed rows at the same offsets. The run ENDS at the
+    newest owned day and reaches back while every day before it is owned —
+    the same trailing-contiguity `trailing_offset` enforces on the wire
+    sections, for the same reason: a day-indexed list carries one start date,
+    so a hole in the middle of a "joint" would pass unnoticed.
+    """
+    last = None
+    for index, day in enumerate(window):
+        if day in owned:
+            last = index
+    if last is None:
+        return []
+    first = last
+    while first > 0 and window[first - 1] in owned:
+        first -= 1
+    return list(range(first, last + 1))
+
+
+def ledger_model_categories(joint, window, indexes):
+    """The day-indexed joint of model key against accounting class.
+
+    NOT WINDOWED BY THE PAYLOAD BUDGET, and that is the point of putting it
+    here rather than on the wire (issue #267): the served model breakdown
+    covers a declared trailing MAX_MODEL_DAYS because every member costs one
+    integer per day per source against the sealed ceiling, while this block
+    is read off the workstation's own disk and pays no such toll. It covers
+    the full depth the walk partitions.
+
+    A member with an all-zero row is omitted for `day_indexed`'s reason: it
+    adds a pair to the tracker's vocabulary and contributes exactly nothing.
+    The residual is a legitimate member here — tokens whose model the record
+    never named are a real reading, not a gap.
+    """
+    days = [window[index] for index in indexes]
+    members = []
+    for member in MODEL_KEYS:
+        for key in CATEGORY_KEYS:
+            by_day = joint.get((member, key))
+            if not by_day:
+                continue
+            row = [by_day.get(day, 0) for day in days]
+            if not any(row):
+                continue
+            members.append(
+                {
+                    LEDGER_MODEL_KEY: member,
+                    LEDGER_CATEGORY_KEY: key,
+                    "totals": row,
+                }
+            )
+    return {"startDate": days[0], LEDGER_MEMBERS_KEY: members}
+
+
+def assert_joint_marginals(members, indexes, categories, models):
+    """Refuse a joint whose two marginals are not the day's own splits.
+
+    The whole claim of a joint is that it refines two partitions the document
+    already publishes, so the claim is checked in both directions on every
+    day it covers: summing the joint over categories must reproduce that
+    day's model split, and summing it over models must reproduce that day's
+    category split. A joint that merely sums to the day TOTAL would satisfy
+    an arithmetic identity while attributing one model's cache reads to
+    another.
+
+    Checked here, in the producer, for `assert_partition`'s reason: the
+    workstation ledger is built from these bytes, and a joint that disagrees
+    with the series printed beside it is a tracker quietly disagreeing with
+    the panel.
+    """
+    for position, index in enumerate(indexes):
+        by_model = {}
+        by_category = {}
+        for member in members:
+            value = member["totals"][position]
+            key = member[LEDGER_MODEL_KEY]
+            by_model[key] = by_model.get(key, 0) + value
+            key = member[LEDGER_CATEGORY_KEY]
+            by_category[key] = by_category.get(key, 0) + value
+        for name, summed, rows in (
+            ("model", by_model, models),
+            ("category", by_category, categories),
+        ):
+            for key in summed:
+                if key not in rows:
+                    raise CaptureError(
+                        "the ledger joint names a %s the day %d split does not carry" % (name, index)
+                    )
+            for key, values in rows.items():
+                if summed.get(key, 0) != values[index]:
+                    raise CaptureError(
+                        "the ledger joint sums to a different figure than the %s split on day %d"
+                        % (name, index)
+                    )
+
+
+def ledger_block(joint, window, owned, categories, models, sessions):
+    """The machine-local material block, proven before it is returned.
+
+    It never reaches the wire: `assert_only_dates_and_integers` refuses the
+    key by name, and the export strips the block and hands it to the
+    workstation ledger out of band (issue #267).
+
+    THE JOINT IS ABSENT WHEN THERE IS NO JOINT, which is a state a real run
+    reaches: the history store can override every day the fresh walk
+    partitioned — an ordinary pruning run does exactly that — and the joint is
+    then a refinement of splits this document no longer serves. Absent rather
+    than empty, and absent rather than a refusal: the sessions beside it are
+    still a measurement worth keeping, and failing a panel push because the
+    tracker's cross-tabulation is empty would be a machine-local concern
+    breaking a public one.
+    """
+    block = {"schema": LEDGER_SCHEMA}
+    indexes = ledger_days(window, owned)
+    if indexes:
+        section = ledger_model_categories(joint, window, indexes)
+        assert_joint_marginals(section[LEDGER_MEMBERS_KEY], indexes, categories, models)
+        block[LEDGER_MODEL_CATEGORIES_KEY] = section
+    block[LEDGER_SESSIONS_KEY] = [ledger_session(entry) for entry in sessions]
+    assert_ledger_block(block)
+    return block
+
+
+def ledger_session(entry):
+    """One accumulated session in its emitted shape, keys in a fixed order."""
+    return {
+        LEDGER_STARTED_KEY: entry[LEDGER_STARTED_KEY],
+        LEDGER_ENDED_KEY: entry[LEDGER_ENDED_KEY],
+        HISTORY_TOTAL_KEY: entry[HISTORY_TOTAL_KEY],
+        "categories": {
+            key: entry["categories"][key] for key in CATEGORY_KEYS if key in entry["categories"]
+        },
+        "models": list(entry["models"]),
+    }
 
 
 def extend_with_cache(series, categories, models, partitioned, cached):
@@ -1952,10 +2508,13 @@ def merge_history(series, categories, models, partitioned, stored):
     day absent from both sides stays absent, rendered as the zero-inside-the-
     window the series contract already defines. Nothing here invents a day.
 
-    Returns (series, categories, models, partitioned, remembered) where
-    `remembered` is the merged per-day index for the caller to write back —
-    the same union the emission serves, so the store and the served series
-    cannot disagree.
+    Returns (series, categories, models, partitioned, remembered, overridden)
+    where `remembered` is the merged per-day index for the caller to write
+    back — the same union the emission serves, so the store and the served
+    series cannot disagree — and `overridden` names the days the STORE won.
+    Those days are the fresh walk's no longer, so the ledger's joint (issue
+    #267) drops them: a joint measured from records the emission then
+    replaced would sum to a figure this document does not serve.
     """
     start = datetime.date.fromisoformat(series["startDate"])
     window = [
@@ -1978,12 +2537,14 @@ def merge_history(series, categories, models, partitioned, stored):
             "categories": parts if day in partitioned_in and sum(parts.values()) == total else None,
             "models": amounts if amounts and sum(amounts.values()) == total else None,
         }
+    overridden = set()
     for day, entry in stored.items():
         current = merged.get(day)
         if current is None or current[HISTORY_TOTAL_KEY] < entry[HISTORY_TOTAL_KEY]:
             merged[day] = entry
+            overridden.add(day)
     if not merged:
-        return series, categories, models, partitioned, merged
+        return series, categories, models, partitioned, merged, overridden
     days = sorted(merged)
     first = min(datetime.date.fromisoformat(days[0]), start)
     last = max(
@@ -2019,6 +2580,7 @@ def merge_history(series, categories, models, partitioned, stored):
         day_indexed(models_by_day, union, MODEL_KEYS),
         [day for day in union if day in kept],
         merged,
+        overridden,
     )
 
 
@@ -2194,12 +2756,138 @@ def assert_only_dates_and_integers(value, where="emission", extra_keys=frozenset
       hole: a bare top-level boolean is refused, and a list re-seeds
       `allow_bool` false, so even `recorded: [true]` is refused.
 
+    * a string is ALSO admitted under a key spelled exactly `key` when it is a
+      member of the closed model vocabulary — the one place the wire carries
+      an identifier as a value, the per-model lifetime rows of issue #267.
+      Stated as widely as the `recorded` rule above and bounded the same way:
+      the guard keys off the NAME, so a `key` field nested anywhere inside an
+      admitted document would also be admitted, and what bounds the hole is
+      that MEMBERSHIP in a reviewed vocabulary is required rather than shape.
+      A session identifier, a path or a project name is not a member, so the
+      H1 lesson — `private-feature` is perfectly label-shaped — is answered
+      rather than reopened. A list re-seeds the permission false, exactly as
+      it re-seeds `allow_bool`.
+
+    * the ledger key is refused BY NAME wherever it appears, because a capture
+      legitimately produces it and an export must legitimately strip it
+      before anything is sealed.
+
     Any refusal names only the FIELD, never the value.
     """
-    _assert_emission(value, where, frozenset(extra_keys), False)
+    _assert_emission(value, where, frozenset(extra_keys), False, False)
 
 
-def _assert_emission(value, where, extra_keys, allow_bool):
+def assert_ledger_block(block):
+    """Refuse a ledger block that carries anything but its declared shape.
+
+    THE SECOND GUARD, and it exists because the block is the one section that
+    legitimately emits an INSTANT and a vocabulary KEY as values — widening
+    `assert_only_dates_and_integers` to admit those would have widened them
+    for the wire too, where neither belongs (issue #267).
+
+    It is a STRUCTURAL walk rather than a recursive membership test, and that
+    is deliberate. The recursive guard answers "is every value of some shape",
+    which is the right question for a document of day-indexed integers; this
+    block has a fixed shape, so the stronger question is "is every field the
+    field it claims to be", reached by NAME. A session record carries a
+    session identifier, a working directory, a git branch, a title and the
+    prompt text; none of them can ride here under a friendly key, because a
+    key nobody reached for is a key nobody copies.
+
+    Every string is a member of something closed: this file's schema marker,
+    a model key, an accounting-class key, a calendar date, or an RFC 3339 UTC
+    second. Every integer is a count under the shared bound. Requirement 12
+    is answered by construction — a path, an id or a prompt is none of those.
+    """
+    if not isinstance(block, dict) or set(block) - {LEDGER_MODEL_CATEGORIES_KEY} != {
+        "schema",
+        LEDGER_SESSIONS_KEY,
+    }:
+        raise CaptureError("the ledger block carries a section outside its declared shape")
+    if block["schema"] != LEDGER_SCHEMA:
+        raise CaptureError("the ledger block does not declare the expected schema")
+    if LEDGER_MODEL_CATEGORIES_KEY in block:
+        assert_ledger_joint(block[LEDGER_MODEL_CATEGORIES_KEY])
+    sessions = block[LEDGER_SESSIONS_KEY]
+    if not isinstance(sessions, list):
+        raise CaptureError("the ledger block carries no session list")
+    for session in sessions:
+        assert_ledger_session(session)
+
+
+def assert_ledger_joint(joint):
+    """Refuse a joint section that is not exactly a start date and members."""
+    if not isinstance(joint, dict) or set(joint) != {"startDate", LEDGER_MEMBERS_KEY}:
+        raise CaptureError("the ledger joint carries a field outside its declared shape")
+    if not valid_calendar_day(joint["startDate"]):
+        raise CaptureError("the ledger joint carries no calendar start date")
+    members = joint[LEDGER_MEMBERS_KEY]
+    if not isinstance(members, list):
+        raise CaptureError("the ledger joint carries no member list")
+    seen = set()
+    for member in members:
+        if not isinstance(member, dict) or set(member) != {
+            LEDGER_MODEL_KEY,
+            LEDGER_CATEGORY_KEY,
+            "totals",
+        }:
+            raise CaptureError("a ledger joint member carries a field outside its declared shape")
+        if member[LEDGER_MODEL_KEY] not in MODEL_KEYS:
+            raise CaptureError("a ledger joint member names a model outside the vocabulary")
+        if member[LEDGER_CATEGORY_KEY] not in CATEGORY_KEYS:
+            raise CaptureError("a ledger joint member names a class outside the vocabulary")
+        pair = (member[LEDGER_MODEL_KEY], member[LEDGER_CATEGORY_KEY])
+        if pair in seen:
+            raise CaptureError("a ledger joint member is declared twice")
+        seen.add(pair)
+        assert_ledger_counts(member["totals"], "a ledger joint member")
+
+
+def assert_ledger_session(session):
+    """Refuse one session entry that is not exactly a span and a partition."""
+    if not isinstance(session, dict) or set(session) != {
+        LEDGER_STARTED_KEY,
+        LEDGER_ENDED_KEY,
+        HISTORY_TOTAL_KEY,
+        "categories",
+        "models",
+    }:
+        raise CaptureError("a ledger session carries a field outside its declared shape")
+    for key in (LEDGER_STARTED_KEY, LEDGER_ENDED_KEY):
+        if not valid_instant(session[key]):
+            raise CaptureError("a ledger session carries no RFC 3339 instant for its span")
+    if session[LEDGER_ENDED_KEY] < session[LEDGER_STARTED_KEY]:
+        raise CaptureError("a ledger session ends before it starts")
+    assert_ledger_counts([session[HISTORY_TOTAL_KEY]], "a ledger session")
+    parts = session["categories"]
+    if not isinstance(parts, dict):
+        raise CaptureError("a ledger session carries no class partition")
+    for key in parts:
+        if key not in CATEGORY_KEYS:
+            raise CaptureError("a ledger session names a class outside the vocabulary")
+    assert_ledger_counts(list(parts.values()), "a ledger session")
+    if sum(parts.values()) > session[HISTORY_TOTAL_KEY]:
+        raise CaptureError("a ledger session partition sums past the session's own total")
+    members = session["models"]
+    if not isinstance(members, list) or len(set(members)) != len(members):
+        raise CaptureError("a ledger session names a model twice")
+    for member in members:
+        if member not in MODEL_KEYS:
+            raise CaptureError("a ledger session names a model outside the vocabulary")
+
+
+def assert_ledger_counts(values, where):
+    """Every figure in the block is a count under the shared bound."""
+    if not isinstance(values, list):
+        raise CaptureError("%s carries no day-indexed counts" % where)
+    for value in values:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise CaptureError("%s carries a figure that is not a count" % where)
+        if value > MAX_COUNT:
+            raise CaptureError("%s carries a count above the shared bound" % where)
+
+
+def _assert_emission(value, where, extra_keys, allow_bool, allow_model_key):
     if isinstance(value, bool):
         if allow_bool:
             return
@@ -2213,20 +2901,42 @@ def _assert_emission(value, where, extra_keys, allow_bool):
     if isinstance(value, str):
         if valid_calendar_day(value):
             return
+        if allow_model_key and value in MODEL_KEYS:
+            return
         raise CaptureError("%s carries a string that is not a calendar date" % where)
     if isinstance(value, list):
         for index, item in enumerate(value):
-            _assert_emission(item, "%s[%d]" % (where, index), extra_keys, False)
+            # BOTH permissions re-seed false here, and that is what bounds
+            # them: a `recorded` or a `key` field holding a LIST is refused
+            # even though the field name that granted the permission is right
+            # above it.
+            _assert_emission(item, "%s[%d]" % (where, index), extra_keys, False, False)
         return
     if isinstance(value, dict):
         for key, item in value.items():
             if not isinstance(key, str) or not KEY_PATTERN.fullmatch(key):
                 raise CaptureError("%s carries a key that is not a field name" % where)
+            if key == LEDGER_KEY:
+                # Named rather than merely absent from the vocabulary, because
+                # this is the one key a correct capture really does produce and
+                # a correct EXPORT really must strip (issue #267). "Outside the
+                # closed emission vocabulary" would read as a typo; this reads
+                # as the rule it is.
+                raise CaptureError(
+                    "%s carries the ledger block, which is machine-local material "
+                    "and never reaches the wire" % where
+                )
             if key not in EMISSION_KEYS and key not in extra_keys:
                 raise CaptureError(
                     "%s carries a key outside the closed emission vocabulary" % where
                 )
-            _assert_emission(item, "%s.%s" % (where, key), extra_keys, key == "recorded")
+            _assert_emission(
+                item,
+                "%s.%s" % (where, key),
+                extra_keys,
+                key == "recorded",
+                key == MODEL_STATS_MEMBER_KEY,
+            )
         return
     raise CaptureError("%s carries a value that is neither a date nor an integer" % where)
 
@@ -2252,12 +2962,20 @@ def capture(
     aggregate series, the two windowed breakdowns with their own start dates,
     the complete window set, the complete derived-tile set, and — when an
     activity cache supplies the tool's own lifetime accounting — the
-    captured-stats section (issue #276). It is one
+    captured-stats section (issue #276) and the per-model lifetime classes
+    (issue #267). It is one
     shape, produced by one function, so "capture a second tool's series and
     merge it" needs no hand assembly and no second definition of what a valid
     section is — which is exactly how a hand-written merge file came to be
     missing the sections the loader requires, refusing every export until a
     human noticed (2026-08-27).
+
+    It also carries the `ledger` block, which is the ONE section that is not
+    part of that shape: machine-local material for the workstation tracker,
+    refused by the emission guard and stripped by the export before anything
+    is sealed (issue #267). It rides the capture's stdout so that a merge
+    source and a walked source supply it identically, for the same one-shape
+    reason every other section is produced here.
     """
     if record_format not in RECORD_FORMATS:
         raise CaptureError("unknown record format")
@@ -2269,7 +2987,17 @@ def capture(
         today = datetime.datetime.now().astimezone().date()
     counters = new_counters()
     reader = read_records if record_format == FORMAT_MESSAGES else read_running_totals
-    series, categories, models, partitioned = daily_series(reader(root, counters))
+    sessions = []
+    series, categories, models, partitioned, joint = daily_series(
+        reader(root, counters, sessions)
+    )
+    # The days whose emitted split is still the WALK's own, which is what the
+    # ledger's joint is a refinement of. It starts as everything the walk
+    # partitioned and only ever shrinks: the cache's union adds days the walk
+    # never saw, the store can replace a walked day with a remembered one, and
+    # a verified reading can overwrite one outright. A joint kept over a day
+    # the emission then replaced would refine a split nobody serves.
+    owned = set(partitioned)
     stats = None
     cache_document = None
     if activity_cache is not None:
@@ -2290,23 +3018,37 @@ def capture(
             # Seeded so the union window reaches every verified day; the
             # figure itself is imposed after the merge, in both directions.
             stored.setdefault(day, {HISTORY_TOTAL_KEY: total, "categories": None, "models": None})
-        series, categories, models, partitioned, remembered = merge_history(
+        series, categories, models, partitioned, remembered, overridden = merge_history(
             series, categories, models, partitioned, stored
         )
         series, categories, models, partitioned, remembered = apply_verified_readings(
             series, categories, models, partitioned, remembered, readings, today
         )
+        owned -= overridden
+        owned -= set(readings)
         write_history_store(history_store, remembered)
     elif verified_readings is not None:
         raise CaptureError("verified readings are applied through a history store; none is configured")
+    owned &= set(partitioned)
     if stats is not None:
         # AFTER the store, so the accrual reads the deepest series this run
         # serves — the same days the panel draws.
         stats = accrue_after_cache(stats, cache_document, series, categories, partitioned)
+        stats[STAT_LONGEST_SESSION] = longest_session_seconds(cache_document, sessions)
+    else:
+        # A source with no roll-up still measures the one lifetime-class
+        # figure a WALK can measure on its own (issue #267). The others are
+        # the tool's accounting and stay absent rather than being guessed.
+        stats = {STAT_LONGEST_SESSION: longest_session_seconds(None, sessions)}
     section = {"series": series}
     totals = series["totals"]
     start = datetime.date.fromisoformat(series["startDate"])
     window = [(start + datetime.timedelta(days=offset)).isoformat() for offset in range(len(totals))]
+
+    # Built BEFORE the wire sections are windowed, from the full-depth day
+    # indexes, because the ledger pays no payload ceiling and must not
+    # inherit a window that exists to pay one.
+    ledger = ledger_block(joint, window, owned, categories, models, sessions)
 
     offset = trailing_offset(window, set(partitioned)) if categories else None
     if offset is None:
@@ -2353,10 +3095,19 @@ def capture(
 
     section["windows"] = windows_from(series, categories, offset, today)
     section["derived"] = derived_figures(series)
-    if stats is not None:
-        section["stats"] = stats
-    # Proven clean before anything is printed, written, or spliced.
+    section["stats"] = stats
+    if cache_document is not None:
+        members = model_stats_section(
+            accrue_model_stats(model_stats(cache_document, counters), cache_document, joint, owned)
+        )
+        if members:
+            section[MODEL_STATS_KEY] = members
+    # Proven clean before anything is printed, written, or spliced. The ledger
+    # is attached AFTER it, because the guard refuses the key by name — that
+    # refusal is what keeps the block off the wire, so the block cannot be
+    # inside the document the guard walks.
     assert_only_dates_and_integers(section, "section")
+    section[LEDGER_KEY] = ledger
     return section, counters
 
 
