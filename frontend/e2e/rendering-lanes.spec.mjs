@@ -870,10 +870,17 @@ test('Rime holds a reserved 44px box at both viewports, flies where motion is we
       expect(declared.timing, `Rime's frames are tweened (${declared.timing}), not stepped`).toContain(
         'steps('
       );
+      /* The floor is per project, measured: a desktop engine draws 30-plus
+         distinct frames in 600 ms and the one-step mutant three; the two
+         emulated phones on a hosted runner without a GPU drew five (WebKit,
+         iOS profile), which is still a moving sheet and still not the mutant,
+         so their floor sits between the two rather than above what the
+         runner can paint. */
+      const floor = test.info().project.use.isMobile ? 4 : 8;
       expect(
         frames.length,
-        `Rime drew only ${frames.length} distinct frames in 600ms: ${frames.slice(0, 4).join(' / ')}`
-      ).toBeGreaterThanOrEqual(8);
+        `Rime drew only ${frames.length} distinct frames in 600ms (floor ${floor}): ${frames.slice(0, 4).join(' / ')}`
+      ).toBeGreaterThanOrEqual(floor);
     }
 
     /* THE KEYBOARD ORDER IS UNCHANGED. He is a picture, so he must not be in

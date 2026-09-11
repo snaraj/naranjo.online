@@ -56,7 +56,18 @@ const glyphNames = Object.keys(icons);
  * pins: an absence pin over raw text matches prose no browser ever reads, so
  * a comment EXPLAINING that a component no longer prints a host satisfied
  * "the host is gone" — and a comment could equally have hidden a real one. */
-const markup = (source) => source.replace(/<!--[\s\S]*?-->/g, '');
+/* Comments come out to a FIXPOINT, not in one pass: a single replace leaves
+   a `<!--` behind when one comment's removal joins two halves of another,
+   which is the incompleteness CodeQL's multi-character-sanitization rule
+   names; the loop runs until a pass changes nothing. */
+const stripComments = (source) => {
+  let out = source;
+  while (out !== (out = out.replace(/<!--[\s\S]*?-->/g, ''))) {
+    /* until a pass removes nothing */
+  }
+  return out;
+};
+const markup = (source) => stripComments(source);
 
 /* Every `<Icon .../>` in the tree, with the file it sits in. The component's
  * own file is excluded: it declares the prop, it does not call itself. */
@@ -309,12 +320,18 @@ function controls(source) {
 /* What a control says to someone who cannot see it: its markup with every
  * comment, every mark, and every wrapper element removed. Whatever is left is
  * text or an interpolation — the thing a screen reader would actually read. */
-const speech = (inner) =>
-  inner
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<Icon\b[^>]*?\/>/g, '')
-    .replace(/<[^>]*>/g, '')
-    .trim();
+const speech = (inner) => {
+  let out = inner;
+  while (
+    out !==
+    (out = stripComments(out)
+      .replace(/<Icon\b[^>]*?\/>/g, '')
+      .replace(/<[^>]*>/g, ''))
+  ) {
+    /* until a pass removes nothing */
+  }
+  return out.trim();
+};
 
 test('no control is a mark with nothing to say', () => {
   for (const [file, source] of Object.entries(componentSources)) {

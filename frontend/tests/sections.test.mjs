@@ -1311,7 +1311,7 @@ test('the table renders its stale line in the reserved head, and only when it ha
   );
   assert.match(
     shell,
-    /\{#if title\}<h2 class="panel-title">(?:\{#if mark\}<span class="panel-mark">.*?<\/span>\{\/if\})?\{title\}<\/h2>\{\/if\}/,
+    /\{#if title\}<h2 class="panel-title"[^>]*>(?:\{#if mark\}<span class="panel-mark">.*?<\/span>\{\/if\})?\{title\}<\/h2>\{\/if\}/,
     'the title is optional; a bare head is the Projects table'
   );
   assert.match(

@@ -1556,10 +1556,22 @@ test('the chrome row is in the document, so no control owns a corner of the page
  * and everything that makes that safe is a source fact this pin holds. The
  * rendering lane of the same name measures the box and the moving frames in a
  * real engine; neither half replaces the other. */
+/* Comments come out to a FIXPOINT, not in one pass: a single replace leaves
+   a `<!--` behind when one comment's removal joins two halves of another,
+   which is the incompleteness CodeQL's multi-character-sanitization rule
+   names; the loop runs until a pass changes nothing. */
+const stripComments = (source) => {
+  let out = source;
+  while (out !== (out = out.replace(/<!--[\s\S]*?-->/g, ''))) {
+    /* until a pass removes nothing */
+  }
+  return out;
+};
+
 test('Rime is a picture in the chrome row, reserved, silent, and stepped only where motion is welcome (owner 2026-09-11, issue 314)', () => {
   const mark = componentSources['lib/components/RimeMark.svelte'];
   assert.ok(mark, 'the mark component is not where this pin expects it');
-  const markup = mark.replace(/<!--[\s\S]*?-->/g, '').trim();
+  const markup = stripComments(mark).trim();
 
   /* SILENT AND UNREACHABLE. SN. at the start of the row is the page's
      accessible mark; a decorative dragon that announced itself would be a
@@ -1580,7 +1592,7 @@ test('Rime is a picture in the chrome row, reserved, silent, and stepped only wh
   /* LAST IN THE ROW. After the reading mode, so the keyboard order through
      the chrome — the wordmark, the nav, the mode — gains nothing between any
      two of its stops. */
-  const header = componentSources['lib/components/PageHeader.svelte'].replace(/<!--[\s\S]*?-->/g, '');
+  const header = stripComments(componentSources['lib/components/PageHeader.svelte']);
   const chrome = /<div class="page-chrome">([\s\S]*?)<\/div>/.exec(header);
   assert.ok(chrome, 'the row’s end cluster is not where this pin expects it');
   assert.ok(

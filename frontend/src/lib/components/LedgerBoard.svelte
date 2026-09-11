@@ -84,7 +84,7 @@
             aria-label={card.ariaLabel}
             data-turned={card.turned ? 'true' : 'false'}>
             <span class="board-head">
-              <span class="board-label">{#if card.mark}<Icon name={card.mark} slot="row" />{/if}{card.label}</span>
+              <span class="board-name">{#if card.mark}<Icon name={card.mark} slot="cell" />{/if}<span class="board-label">{card.label}</span></span>
               {#if card.ctx}<span class="board-ctx">{card.ctx}</span>{/if}
             </span>
             {#if card.figure}

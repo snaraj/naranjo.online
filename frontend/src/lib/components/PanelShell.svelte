@@ -63,7 +63,7 @@
 
 <section class="panel-shell" data-panel-status={status} data-panel-generated-at={generatedAt}>
   <header class="panel-head">
-    {#if title}<h2 class="panel-title">{#if mark}<span class="panel-mark"><Icon name={mark} slot="row" /></span>{/if}{title}</h2>{/if}
+    {#if title}<h2 class="panel-title" class:panel-title-marked={mark !== undefined}>{#if mark}<span class="panel-mark"><Icon name={mark} slot="cell" /></span>{/if}{title}</h2>{/if}
     {#if note}<span class="panel-note" data-panel-note>{note}</span>{/if}
   </header>
   <div class="panel-body">
@@ -133,12 +133,22 @@
      and mounting pulled 28px out from under everything below it. Measured on
      a Pixel 5: `.panel-head` 42px before the envelope, 14px after. The words
      are still in the accessible name; what truncates is the drawing. */
-  /* The mark sits in the title's own inline flow, one gap token from the
-     first letter, so a title with no mark is laid out exactly as before. */
+  /* The mark is OUT of the line box on purpose: the head is a reserved row
+     exactly one line of the title's type tall (issue 292), and an inline mark
+     taller than that line would grow the row — measured, 12.1 px became 16.4
+     — so the title makes room for it with padding and the mark is positioned
+     into that room, centred on the line, costing the row nothing. */
+  .panel-title-marked {
+    position: relative;
+    padding-inline-start: calc(var(--icon-cell) + var(--icon-gap));
+  }
+
   .panel-mark {
-    display: inline-block;
-    margin-inline-end: var(--icon-gap);
-    vertical-align: -0.15em;
+    position: absolute;
+    inset-inline-start: 0;
+    inset-block-start: 50%;
+    display: inline-flex;
+    translate: 0 -50%;
   }
 
   .panel-title {

@@ -2723,10 +2723,18 @@ h1 {
   overflow: hidden;
 }
 
-.board-label {
+/* The card's name: its mark, when the canvas gave it one, beside the label —
+   a sibling of the label rather than a child of it, so the label stays the one
+   text node the payload wrote (the hostile-label lane reads it that way). The
+   mark is cell-sized so the head keeps the height of a head without one. */
+.board-name {
   display: inline-flex;
   align-items: center;
   gap: var(--icon-gap);
+  min-inline-size: 0;
+}
+
+.board-label {
   font-family: var(--font-mono);
   font-size: var(--ledger-label-size);
   letter-spacing: var(--ledger-label-tracking);
