@@ -81,7 +81,7 @@
     "listingEndpoint": "https://api.github.com/users/snaraj/repos?per_page=30&sort=pushed",
     "repositories": {
       "endpoint": "https://api.github.com/graphql",
-      "query": "query { viewer { pinnedItems(first: 6, types: REPOSITORY) { nodes { ... on Repository { name isPrivate } } } repositories(first: 50, ownerAffiliations: OWNER, privacy: PUBLIC, orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { name description isPrivate stargazerCount pushedAt latestRelease { tagName } pullRequests(states: [MERGED, CLOSED]) { totalCount } } } } }",
+      "query": "query { viewer { login pinnedItems(first: 6, types: REPOSITORY) { nodes { ... on Repository { name isPrivate } } } repositories(first: 50, ownerAffiliations: OWNER, privacy: PUBLIC, orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { name description isPrivate stargazerCount pushedAt latestRelease { tagName } pullRequests(states: [MERGED, CLOSED]) { totalCount } } } } }",
       "headers": { "Accept": "application/json", "Content-Type": "application/json" },
       "maxBytes": 262144,
       "contentType": "application/json"

@@ -262,6 +262,12 @@ func TestResponsesStayWithinTheOwnerBudgets(t *testing.T) {
 // the bound its own admission enforces.
 func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 	t.Parallel()
+	// The admission window is the log window plus its slack behind and its
+	// skew ahead; a span of that length can touch one more calendar date than
+	// the whole days it holds, plus the partial day at each end — which is
+	// two more dates than the window has days, not the window itself.
+	const admissionSpan = commitLogWindowDays*24*time.Hour + contributionWindowSlack + maxCommitFutureSkew
+	const maxPrivateDays = int(admissionSpan/(24*time.Hour)) + 2
 	payload := VCSActivityData{
 		TotalContributions: 99999,
 		Streak:             999,
@@ -270,7 +276,7 @@ func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 		Coverage:           CoverageComplete,
 		Weeks:              make([][]int, 0, maxCalendarDays/daysPerWeek+1),
 		RecentCommits:      make([]VCSCommit, 0, maxServedCommits),
-		PrivateActivity:    make([]VCSPrivateDay, 0, commitLogWindowDays),
+		PrivateActivity:    make([]VCSPrivateDay, 0, maxPrivateDays),
 	}
 	for range maxCalendarDays/daysPerWeek + 1 {
 		week := make([]int, daysPerWeek)
@@ -292,7 +298,7 @@ func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 			At:      "2026-09-11T23:08:18Z",
 		})
 	}
-	for index := range commitLogWindowDays {
+	for index := range maxPrivateDays {
 		payload.PrivateActivity = append(payload.PrivateActivity, VCSPrivateDay{
 			Date:          time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -index).Format(dayLayout),
 			Contributions: 9999,

@@ -546,13 +546,13 @@ type CodingProject struct {
 	// "not read" are both "no version to show", and neither is a number this
 	// panel may invent.
 	//
-	// ClosedPulls and Release are ADDITIVE options inside the existing kind,
-	// which is why coding-projects stays v1: a payload written before they
-	// existed decodes and renders unchanged. The pair they replaced —
-	// openIssues and openPulls — left with the columns that drew them and the
-	// second search document that produced them; both were optional too, so a
-	// reader that still looks for them draws its dash exactly as it always
-	// did for a payload that carried neither.
+	// ClosedPulls and Release arrived with coding-projects/v2 (issue #317).
+	// The pair they replaced — openIssues and openPulls — left with the
+	// columns that drew them and the second search document that produced
+	// them, and a field that leaves the wire is a breaking payload change, so
+	// the kind moved from v1 to v2 rather than growing in place (the envelope
+	// doctrine). Both new fields are optional inside v2 for the reason above:
+	// "no release" and "not read" are both the owner's dash.
 	Release string `json:"release,omitempty"`
 	// Recorded marks a row served from the shipped snapshot rather than read
 	// live — the same provenance meaning it carries on a token-usage stat
@@ -1557,6 +1557,9 @@ type repositoriesData struct {
 
 // repositoriesViewer is the account the credential belongs to.
 type repositoriesViewer struct {
+	// Login is that account's own login, which mapRepositoryQuery checks
+	// against the configured account before any row is stamped with it.
+	Login string `json:"login"`
 	// PinnedItems is the account's own PINNED set, which is the owner's
 	// curation expressed where the owner already expresses it (owner
 	// directive, 2026-09-11): pinning a repository on the host is what puts

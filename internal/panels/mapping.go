@@ -408,6 +408,15 @@ func mapRepositoryQuery(raw []byte, spec *codingProjectsFetchSpec, now time.Time
 	if err := graphQLPayload(raw, "repository query", &data); err != nil {
 		return nil, nil, err
 	}
+	// The document asks the credential's OWN account for the repositories it
+	// owns, so every row is stamped with the configured account below — which
+	// is only honest if the credential belongs to that account. The answer
+	// says whose it is, and a credential minted for another account refuses
+	// the document rather than listing a stranger's repositories under the
+	// owner's link host. The login is not repeated in the refusal.
+	if data.Viewer.Login != spec.Account {
+		return nil, nil, errors.New("repository query: the credential does not belong to the configured account")
+	}
 	// The pinned set is matched by NAME against the listing below, and a
 	// pinned name the listing does not carry is simply not matched: a pin is a
 	// mark on a row that exists, never a row of its own. A PRIVATE pin is
@@ -451,8 +460,9 @@ func mapRepositoryQuery(raw []byte, spec *codingProjectsFetchSpec, now time.Time
 //
 // The OWNER is the reading producer's claim about who the row belongs to. The
 // public listing reports it per row and it is checked; the credentialed query
-// asks the credential's own account for repositories it OWNS, so the answer
-// cannot contain anyone else's and the field carries the configured account.
+// asks the credential's own account for repositories it OWNS, verifies that
+// the account answering is the configured one, and the field then carries the
+// configured account.
 type listingCandidate struct {
 	name        string
 	owner       string
@@ -494,7 +504,9 @@ func admitRepositories(entries []listingCandidate, spec *codingProjectsFetchSpec
 			return nil, nil, fmt.Errorf("repository listing: a row does not belong to the configured account")
 		}
 		if entry.private {
-			return nil, nil, fmt.Errorf("repository listing: %s claims to be private; the public listing may not carry it", entry.name)
+			// Unnamed on purpose: the refusal is logged, and a name the
+			// document calls private is not this panel's to hold anywhere.
+			return nil, nil, errors.New("repository listing: a row claims to be private; the public listing may not carry it")
 		}
 		if seen[entry.name] {
 			return nil, nil, fmt.Errorf("repository listing: %s is listed twice", entry.name)
@@ -818,9 +830,14 @@ func graphQLPayload(raw []byte, what string, into any) error {
 //
 //   - PRIVACY. A repository flagged private is counted into its days and is
 //     never named, never identified, and never asked about in the second
-//     document. A name that appears both private and public is not a bad row
-//     in a good document — it is a document that cannot be trusted about
-//     which is which — so it refuses everything.
+//     document. A name that appears both private and public under ONE owner
+//     is not a bad row in a good document — it is a document that cannot be
+//     trusted about which is which — so it refuses everything. The same name
+//     under two owners is a fork beside its upstream, which the host reports
+//     routinely, and is two repositories. Every refusal below names the entry
+//     by its POSITION in the document and never by its name: a refusal is
+//     logged, the entry it refuses may be the private one, and requirement 12
+//     holds for log lines exactly as it holds for the wire.
 //   - IDENTITY. A name outside the host's own grammar, or an owner login that
 //     is not the configured account, never becomes a named row. Foreign
 //     repositories are legitimate — the account contributes to other people's
@@ -847,37 +864,40 @@ func mapCommitContributions(raw []byte, owner string, now time.Time) (string, []
 	oldest := now.Add(-commitLogWindowDays * 24 * time.Hour).Add(-contributionWindowSlack)
 	newest := now.Add(maxCommitFutureSkew)
 	privateDays := make(map[string]*VCSPrivateDay, commitLogWindowDays)
-	seen := make(map[string]bool, len(collection.Repositories))
+	type repositoryKey struct{ owner, name string }
+	seen := make(map[repositoryKey]bool, len(collection.Repositories))
 	candidates := make([]contributionRepo, 0, len(collection.Repositories))
 	total := 0
-	for _, entry := range collection.Repositories {
+	for index, entry := range collection.Repositories {
 		reference := entry.Repository
+		position := index + 1
 		if !isRepositoryName(reference.Name) {
-			return "", nil, nil, fmt.Errorf("commit contributions: %q is not a repository name", reference.Name)
+			return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries a name outside the host's grammar", position)
 		}
-		if seen[reference.Name] {
-			return "", nil, nil, fmt.Errorf("commit contributions: %s appears twice", reference.Name)
+		key := repositoryKey{owner: reference.Owner.Login, name: reference.Name}
+		if seen[key] {
+			return "", nil, nil, fmt.Errorf("commit contributions: entry %d appears twice", position)
 		}
-		seen[reference.Name] = true
+		seen[key] = true
 		if !isNodeIdentifier(reference.ID) {
-			return "", nil, nil, fmt.Errorf("commit contributions: %s carries no node identity", reference.Name)
+			return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries no node identity", position)
 		}
 		days := entry.Contributions.Nodes
 		if len(days) > maxContributionDays {
-			return "", nil, nil, fmt.Errorf("commit contributions: %s reports %d dated buckets, over the %d bound", reference.Name, len(days), maxContributionDays)
+			return "", nil, nil, fmt.Errorf("commit contributions: entry %d reports %d dated buckets, over the %d bound", position, len(days), maxContributionDays)
 		}
 		var latest time.Time
 		counted := 0
 		for _, day := range days {
 			at, err := time.Parse(time.RFC3339, day.OccurredAt)
 			if err != nil {
-				return "", nil, nil, fmt.Errorf("commit contributions: %s: bucket instant %q: %w", reference.Name, day.OccurredAt, err)
+				return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries a bucket instant that does not parse: %w", position, err)
 			}
 			if at.Before(oldest) || at.After(newest) {
-				return "", nil, nil, fmt.Errorf("commit contributions: %s: bucket %s falls outside the requested window", reference.Name, at.UTC().Format(time.RFC3339))
+				return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries a bucket at %s, outside the requested window", position, at.UTC().Format(time.RFC3339))
 			}
 			if day.CommitCount < 0 {
-				return "", nil, nil, fmt.Errorf("commit contributions: %s reports a negative count", reference.Name)
+				return "", nil, nil, fmt.Errorf("commit contributions: entry %d reports a negative count", position)
 			}
 			total += day.CommitCount
 			counted += day.CommitCount

@@ -854,7 +854,7 @@ func repositoriesAnswer(rows ...queriedRepo) string {
 			`"stargazerCount":%d,"pushedAt":%s,"latestRelease":%s,"pullRequests":{"totalCount":%d}}`,
 			row.name, row.description, row.private, row.stars, pushed, release, row.closedPulls))
 	}
-	return fmt.Sprintf(`{"data":{"viewer":{"repositories":{"nodes":[%s]}}}}`, strings.Join(entries, ","))
+	return fmt.Sprintf(`{"data":{"viewer":{"login":"owner","repositories":{"nodes":[%s]}}}}`, strings.Join(entries, ","))
 }
 
 // projectsSpecWithQuery is projectsSpec with the credentialed document named,
@@ -2614,7 +2614,7 @@ func TestTheCredentialNeverReachesAServedByteOrALogLine(t *testing.T) {
 func TestThePinnedSetMarksRowsAndNeverInventsOne(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
-	answer := fmt.Sprintf(`{"data":{"viewer":{"pinnedItems":{"nodes":[%s]},"repositories":{"nodes":[%s]}}}}`,
+	answer := fmt.Sprintf(`{"data":{"viewer":{"login":"fixture-owner","pinnedItems":{"nodes":[%s]},"repositories":{"nodes":[%s]}}}}`,
 		strings.Join([]string{
 			`{"name":"alpha","isPrivate":false}`,
 			// A pinned PRIVATE repository whose name is ALSO the name of a
@@ -2692,7 +2692,7 @@ func TestAPinnedRowSurvivesTheRecencyCap(t *testing.T) {
 	// The OLDEST repository is the pinned one, so a cap that only kept the
 	// newest would drop it.
 	oldest := fmt.Sprintf("repo-%02d", maxCodingProjectSources+2)
-	answer := fmt.Sprintf(`{"data":{"viewer":{"pinnedItems":{"nodes":[{"name":%q,"isPrivate":false}]},"repositories":{"nodes":[%s]}}}}`,
+	answer := fmt.Sprintf(`{"data":{"viewer":{"login":"fixture-owner","pinnedItems":{"nodes":[{"name":%q,"isPrivate":false}]},"repositories":{"nodes":[%s]}}}}`,
 		oldest, strings.Join(rows, ","))
 	listed, _, err := mapRepositoryQuery([]byte(answer), pinnedFixtureSpec(), now)
 	if err != nil {
@@ -2722,4 +2722,131 @@ func TestAPinnedRowSurvivesTheRecencyCap(t *testing.T) {
 // against: the account pin and nothing the mapping does not read.
 func pinnedFixtureSpec() *codingProjectsFetchSpec {
 	return &codingProjectsFetchSpec{Account: "fixture-owner"}
+}
+
+// TestARefusedPrivateEntryIsNeverNamedInALogLine is the other half of
+// requirement 12 for the discovery document: the happy path above proves a
+// private repository never reaches the wire, and this proves a private entry
+// that makes the document REFUSE never reaches a log line either. Every
+// drift a single entry can carry is applied to the private one, the round is
+// run through the real producer with its logger captured, and the refusal is
+// asserted to have been logged — so the search for the name is a search of a
+// line that exists.
+func TestARefusedPrivateEntryIsNeverNamedInALogLine(t *testing.T) {
+	t.Parallel()
+	const secret = "a-private-name-that-must-not-travel"
+	one := []fixtureContributionDay{{at: windowDay(1), count: 1}}
+	for name, entries := range map[string][]fixtureContributionRepo{
+		"a negative count": {
+			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: windowDay(1), count: -1}}},
+		},
+		"an unparseable bucket instant": {
+			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: "yesterday", count: 1}}},
+		},
+		"a bucket outside the window": {
+			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: windowDay(commitLogWindowDays + 3), count: 1}}},
+		},
+		"no node identity": {
+			{id: "", name: secret, private: true, days: one},
+		},
+		"more dated buckets than the bound": {
+			{id: "R_secret", name: secret, private: true, days: func() []fixtureContributionDay {
+				days := make([]fixtureContributionDay, 0, maxContributionDays+1)
+				for index := range maxContributionDays + 1 {
+					days = append(days, fixtureContributionDay{at: windowDay(index % commitLogWindowDays), count: 1})
+				}
+				return days
+			}()},
+		},
+		"the same name again under the same owner": {
+			{id: "R_secret", name: secret, private: true, days: one},
+			{id: "R_secret2", name: secret, private: true, days: one},
+		},
+		"a name outside the host's grammar": {
+			{id: "R_secret", name: secret + " with a space", private: true, days: one},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			doer := newCapturingDoer(map[string]cannedAnswer{
+				"/graphql/contributions": {contentType: "application/json", body: contributionsAnswer(entries, nil)},
+			})
+			source, err := NewFetchSource(SnapshotSource{Name: "snapshots/vcs-activity.json"}, liveTestConfig(),
+				panelFetchSpecs{vcs: activitySpecWithCommits()})
+			if err != nil {
+				t.Fatalf("build source: %v", err)
+			}
+			source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			rows, _, _, _, ok := source.commitSection(t.Context(), doer, func(string) string { return "fixture-token-value" },
+				source.specs.vcs.Commits, commitRoundNow)
+			if ok || len(rows) != 0 {
+				t.Fatalf("a drifted discovery answer served %d rows, ok=%t; the refusal is the case", len(rows), ok)
+			}
+			if !strings.Contains(out.String(), "commit round failed") {
+				t.Fatalf("the refusal was not logged, so nothing here was searched: %s", out.String())
+			}
+			if strings.Contains(out.String(), secret) {
+				t.Errorf("a log line names the private repository: %s", out.String())
+			}
+		})
+	}
+}
+
+// TestAForkBesideItsUpstreamIsTwoRepositories pins the repeat rule's key: a
+// name is repeated only when it is repeated under ONE owner. The ordinary
+// fork-and-pull workflow puts the same name under two owners in one window,
+// and the host reports both; refusing that would serve the last good list for
+// a month for no reason a reader could see. The owner's copy becomes a named
+// row and the foreign one is counted and not listed, exactly as any foreign
+// repository is.
+func TestAForkBesideItsUpstreamIsTwoRepositories(t *testing.T) {
+	t.Parallel()
+	answer := contributionsAnswer([]fixtureContributionRepo{
+		{id: "R_upstream", name: "shared-name", owner: "somebody-else", days: []fixtureContributionDay{{at: windowDay(1), count: 3}}},
+		{id: "R_fork", name: "shared-name", owner: "fixture-owner", days: []fixtureContributionDay{{at: windowDay(2), count: 1}}},
+	}, nil)
+	_, repos, days, err := mapCommitContributions([]byte(answer), "fixture-owner", commitRoundNow)
+	if err != nil {
+		t.Fatalf("a fork beside its upstream was refused: %v", err)
+	}
+	if len(repos) != 1 || repos[0].id != "R_fork" || repos[0].name != "shared-name" {
+		t.Fatalf("named rows = %+v, want the owner's copy alone", repos)
+	}
+	if len(days) != 0 {
+		t.Errorf("public repositories produced private days: %+v", days)
+	}
+}
+
+// TestTheRepositoryQueryRefusesAnotherAccountsAnswer covers the two refusals
+// the credentialed repository document can raise about identity, and pins
+// that neither names what it refuses: the credential's account is checked
+// against the configured one before any row is stamped with it, and a row
+// the answer calls private refuses the document without carrying the name
+// into the error the refresh loop will log.
+func TestTheRepositoryQueryRefusesAnotherAccountsAnswer(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	const stranger = "somebody-else"
+	foreign := strings.Replace(repositoriesAnswer(queriedRepo{name: "alpha", description: `"x"`, stars: 1, pushedAt: "2026-09-10T10:00:00Z"}),
+		`"login":"owner"`, `"login":"`+stranger+`"`, 1)
+	if _, _, err := mapRepositoryQuery([]byte(foreign), projectsSpec(), now); err == nil {
+		t.Fatal("another account's repositories were admitted under the configured account")
+	} else if !strings.Contains(err.Error(), "configured account") {
+		t.Fatalf("refusal = %v, want the account check named", err)
+	} else if strings.Contains(err.Error(), stranger) {
+		t.Errorf("the refusal repeats the stranger's login: %v", err)
+	}
+	const secret = "a-private-name-that-must-not-travel"
+	hidden := repositoriesAnswer(
+		queriedRepo{name: "alpha", description: `"x"`, stars: 1, pushedAt: "2026-09-10T10:00:00Z"},
+		queriedRepo{name: secret, private: true, description: `"x"`, stars: 1, pushedAt: "2026-09-10T10:00:00Z"},
+	)
+	if _, _, err := mapRepositoryQuery([]byte(hidden), projectsSpec(), now); err == nil {
+		t.Fatal("a private row in the credentialed answer was admitted")
+	} else if !strings.Contains(err.Error(), "private") {
+		t.Fatalf("refusal = %v, want the privacy claim named", err)
+	} else if strings.Contains(err.Error(), secret) {
+		t.Errorf("the refusal names the private repository: %v", err)
+	}
 }
