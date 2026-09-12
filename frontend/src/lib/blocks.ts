@@ -308,17 +308,11 @@ export type LedgerTableRow = {
   readonly key: string;
   /* The row's leading cell, as navigation the information layer validated. */
   readonly link: ActivityLink;
-  /* A small word set after the name for a row that is on this table for a
-   * reason the rows around it are not (owner design decision, 2026-09-11,
-   * issue 318). Absent on every row that needs none, which is why it is
-   * optional rather than an empty string: "no chip" and "a chip with no word"
-   * are different states and only one of them is ever meant.
-   *
-   * The description cell left with the same directive. The column was the
-   * widest thing in the row and the section holds HALF a sheet now, so the
-   * four figures and the name are what a repository gets; the description is
-   * one click away on the row's own link. */
-  readonly chip?: string;
+  /* No chip and no description. The description cell left with the owner's
+   * 2026-09-11 directive — the column was the widest thing in the row and the
+   * section holds HALF a sheet now — and the `latest` chip left with the
+   * ruling of 2026-09-12 that retired the row it labelled. A row is its name
+   * and its four figures. */
   /* How long since the row's own last change — the same counter the other
    * three are, so its provenance and its exact instant reach a reader the same
    * way theirs do. It sits in its own column rather than in the cluster. */
@@ -351,9 +345,36 @@ export type LedgerSpreadProps = {
   /* The log column's own head, its anchor, its rows and its empty line. */
   readonly logHead: string;
   readonly logAnchor: string;
+  /* The id of the list itself, which is what the phone's disclosure control
+   * names in `aria-controls` — the anchor above addresses the whole column,
+   * head included, and a control that claimed to operate the head would be
+   * describing something it does not touch. It arrives as data for the same
+   * reason `logAnchor` does: this contract is where the page's addresses
+   * live. */
+  readonly logListId: string;
   readonly logRows: readonly CommitLogRow[];
   readonly logNote: string;
-  readonly staleNote?: string;
+  /* Present only when the log holds more rows than a phone shows at once; see
+   * LogDisclosure. Absent means there is nothing to reveal, and a control that
+   * revealed nothing would be a promise the page cannot keep. */
+  readonly logDisclosure?: LogDisclosure;
+};
+
+/* THE PHONE LOG'S DISCLOSURE (owner ruling, 2026-09-12: on a phone the commit
+ * log is "an endless scroll field that I have to fight out of"). The log stops
+ * being a scroll region at that width and shows a few rows with a control that
+ * reveals the rest inline, so the page's own scroll is the only scroll.
+ *
+ * Every word and every number is the ADAPTER's: the count in "show all N" is a
+ * figure, and a component that composed it would be formatting. Whether this
+ * object exists at all is the threshold — the adapter builds one only when
+ * there are rows the collapsed log does not show. */
+export type LogDisclosure = {
+  /* How many rows the collapsed log shows. */
+  readonly collapsed: number;
+  /* The words the control wears, in both of its states. */
+  readonly more: string;
+  readonly fewer: string;
 };
 
 /* One selectable calendar in the trackers' calendar block: a heatmap and the

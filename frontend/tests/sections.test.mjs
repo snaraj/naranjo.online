@@ -34,15 +34,12 @@ import {
 } from '../src/lib/work.ts';
 import {
   codingProjectsPanelId,
-  latestRowChip,
   projectColumns,
   projectHost,
   projectLinkLabel,
   projects,
   projectsCapturedOn,
   projectsEmptyNote,
-  projectsStaleAfterMs,
-  projectsStaleNote,
   projectTableHeads,
   projectTableProps,
   projectUrl,
@@ -903,13 +900,15 @@ test('the experience section carries four complete real entries, newest first', 
  * and drew each only when it held something, because a card that reserved an
  * empty <p> for content it did not have was the defect.
  *
- * The table's half of that claim moved rather than lapsed (owner design
- * decision, 2026-09-11, issue 318). The description cell it used to be about
- * is gone — the section holds half a sheet now — and what replaced it is a
- * cell drawn only for the row that has something in it: the `latest` chip. So
- * the claim is the same claim, against the one optional cell the table still
- * has: it is present exactly on the row that earned it and absent everywhere
- * else, never an empty box held open. */
+ * The table's half of that claim moved TWICE and lapsed neither time. The
+ * description cell it used to be about went with the owner's 2026-09-11
+ * directive — the section holds half a sheet now — and the `latest` chip that
+ * replaced it went with the ruling of 2026-09-12 that retired the row it
+ * labelled. The table has no optional cell left at all, which is the strongest
+ * form of the claim rather than its absence, and the SHEET's one remaining
+ * conditional region is in the log beside it: the phone's disclosure control,
+ * drawn only when there are rows it would reveal. So the claim is the same
+ * claim, against the shape that still carries it. */
 test('a row draws only the body it has, and every shipped row has one', () => {
   // The drawer is a region drawn from data, and the row's own points are what
   // fill it; an entry with none would open onto an empty box.
@@ -917,23 +916,31 @@ test('a row draws only the body it has, and every shipped row has one', () => {
   for (const row of roleLedgerProps.rows) {
     assert.ok(row.points.length > 0, `the ledger ships "${row.key}" with an empty drawer`);
   }
-  // The chip is conditional in BOTH directions: the markup draws it only when
-  // the row carries one...
-  assert.match(ledgerSpread, /\{#if row\.chip\}<span class="table-chip">\{row\.chip\}<\/span>\{\/if\}/);
-  // ...and no row ever carries an empty one, which would be a box with nothing
-  // in it drawn by a truthy test that happens to be false.
-  const chips = projectTableProps(
+  /* THE RETIRED CELL STAYS RETIRED, in both places it could come back: the
+     markup draws no chip, and no row the adapter builds carries a field for one
+     — a live payload with an unpinned newest repository is exactly the shape
+     that used to produce one. */
+  assert.doesNotMatch(ledgerSpread, /table-chip/);
+  const live = projectTableProps(
     projectsEnvelope([
       { name: 'kept', description: 'x', stars: 1, pushedAt: '2026-09-01T09:00:00Z', pinned: true },
       { name: 'newest', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' }
     ])
-  )
-    .rows.map((row) => row.chip)
-    .filter((chip) => chip !== undefined);
-  assert.deepEqual(chips, [latestRowChip]);
-  for (const row of projectTableProps(null).rows) {
-    assert.equal(row.chip, undefined, `the captured face marked "${row.key}" latest`);
+  );
+  assert.deepEqual(live.rows.map((row) => row.link.text), ['kept']);
+  for (const row of [...live.rows, ...projectTableProps(null).rows]) {
+    assert.ok(!('chip' in row), `the row "${row.key}" carries a chip field again`);
   }
+  /* And the log's disclosure is conditional in BOTH directions: the markup
+     draws it only when the adapter built one, and the adapter builds one only
+     when there are rows the collapsed list does not show — never an empty
+     control held open for a list that has nothing behind it. */
+  assert.match(ledgerSpread, /\{#if logDisclosure !== undefined && !wide\}/);
+  assert.equal(
+    projectsCommitsProps([null, null]).logDisclosure,
+    undefined,
+    'an empty log built a control with nothing to reveal'
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1102,53 +1109,55 @@ test('a payload name outside the repository grammar refuses the whole payload', 
   }
 });
 
-test('a card looks stale when its envelope says so (issue 281, defect 2)', () => {
+/* THE FRESHNESS LINE IS GONE FROM THIS SECTION (owner ruling, 2026-09-12, on
+ * the live page: "DATA THROUGH SEP 12, 2026 · LAST CAPTURE JUST NOW" goes).
+ *
+ * Issue 281's defect 2 was the opposite failure — the envelope said stale while
+ * the card LOOKED fresh — and the answer then was a line in the shell's head.
+ * The owner has now read that line on the shipped page and struck it: the
+ * figures in both columns are dated in their own rows, an unavailable panel
+ * renders its honest empty note where its rows would be, and a caption dating
+ * the whole sheet was a fourth statement of facts that already state
+ * themselves. What REPLACES the old pin is this one — the three envelope
+ * shapes that each used to produce a line, proved to produce none, and the
+ * builder that composed them proved absent from the module rather than merely
+ * unused, because an unused exported builder is one import away from coming
+ * back. */
+test('the repositories table composes no freshness line, in any envelope state (owner 2026-09-12)', async () => {
   const now = Date.parse('2026-09-01T12:30:00Z');
-  const repos = [{ name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' }];
-  // A fresh ok panel carries no note, and neither does the pre-envelope face.
-  assert.equal(projectTableProps(projectsEnvelope(repos), now).staleNote, undefined);
-  assert.equal(projectTableProps(null, now).staleNote, undefined);
-  // The non-ok fixture: the origin says stale, and the card SAYS SO, dated by
-  // the envelope's own generatedAt — status plus timestamp, nothing invented.
-  const stale = projectTableProps(
-    projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T07:30:00Z' }),
-    now
-  );
-  assert.equal(stale.staleNote, 'stale · data as of 5h ago');
-  // The status half ALONE, unmasked by age: a refused-row round marks the
-  // envelope stale while stamping a CURRENT generatedAt (defect 1's refusal
-  // path), so the timestamp above — 5h old, past the 2h threshold — cannot
-  // distinguish the origin's verdict from mere aging. This fixture can: five
-  // minutes old, well inside the threshold, the note must come from the
-  // status. Review receipt 5497788881 caught this input missing.
-  const freshStale = projectTableProps(
-    projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T12:25:00Z' }),
-    now
-  );
-  assert.equal(freshStale.staleNote, 'stale · data as of 5m ago');
-  // Unavailable renders the captured face and says which face it is.
-  const unavailable = projectTableProps(
-    projectsEnvelope([], { status: 'unavailable', generatedAt: undefined, data: null }),
-    now
-  );
-  assert.equal(unavailable.staleNote, 'live repository data unavailable · showing captured figures');
-  assert.equal(unavailable.rows.length, shownProjectRows);
-  // An ok envelope whose generatedAt stopped advancing is the wedged-loop
-  // state a status alone cannot see: past the threshold the card says so.
-  const wedged = projectsEnvelope(repos, {
-    generatedAt: new Date(now - projectsStaleAfterMs - 60_000).toISOString(),
-  });
-  assert.match(projectTableProps(wedged, now).staleNote, /^stale · data as of /);
-  // Executed at the seam too: the note builder itself, from both sides of
-  // the threshold, so the boundary is arithmetic rather than luck.
-  assert.equal(
-    projectsStaleNote(projectsEnvelope(repos, { generatedAt: new Date(now - projectsStaleAfterMs + 60_000).toISOString() }), now),
-    undefined
-  );
-  assert.notEqual(
-    projectsStaleNote(projectsEnvelope(repos, { generatedAt: new Date(now - projectsStaleAfterMs - 60_000).toISOString() }), now),
-    undefined
-  );
+  const repos = [
+    { name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z', pinned: true }
+  ];
+  const states = [
+    ['a fresh ok panel', projectsEnvelope(repos)],
+    ['the pre-envelope captured face', null],
+    ['the origin saying stale', projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T07:30:00Z' })],
+    /* The status half ALONE, unmasked by age: a refused-row round marks the
+       envelope stale while stamping a CURRENT generatedAt (defect 1's refusal
+       path), which is the input that used to prove the note came from the
+       status rather than from the clock. */
+    ['a freshly-stamped stale panel', projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T12:25:00Z' })],
+    ['an unavailable panel', projectsEnvelope([], { status: 'unavailable', generatedAt: undefined, data: null })],
+    /* An ok envelope whose generatedAt stopped advancing — the wedged-loop
+       state a status alone cannot see, which is what the two-hour threshold was
+       for. Four hours past it here. */
+    ['a wedged refresh loop', projectsEnvelope(repos, { generatedAt: '2026-09-01T06:30:00Z' })]
+  ];
+  for (const [name, envelope] of states) {
+    const props = projectTableProps(envelope, now);
+    assert.equal(props.staleNote, undefined, `${name} composed a stale note`);
+    assert.ok(!('staleNote' in props), `${name} carries a staleNote field for one to come back on`);
+  }
+  // The captured face still renders, which is what makes "no note" a statement
+  // about the caption rather than about an empty table.
+  assert.equal(projectTableProps(projectsEnvelope([], { status: 'unavailable', data: null }), now).rows.length, shownProjectRows);
+  /* THE BUILDER IS GONE, not merely unread. It had one caller, and a module
+     that still exported it would be one import away from the line returning. */
+  const module = await read('../src/lib/projects.ts');
+  assert.doesNotMatch(module, /projectsStaleNote|projectsStaleAfterMs/);
+  for (const phrase of ['data as of', 'showing captured figures', 'is not current']) {
+    assert.ok(!module.includes(phrase), `the retired line's words are still spelled in the module: "${phrase}"`);
+  }
 });
 
 /* THE STALE LINE LEFT THE HEAD ALTOGETHER (owner directive, 2026-09-12, issue
@@ -1171,6 +1180,11 @@ test('the panel head reserves its row and draws no freshness line', async () => 
   assert.ok(!shell.includes('note'), 'the shell takes a note prop again');
   assert.ok(!shell.includes('panel-note'), 'the shell draws a freshness line again');
   assert.ok(!shell.includes('data-panel-note'), 'the shell still marks a freshness line');
+  /* The repositories sheet hands the shell status and provenance and nothing
+     else (owner ruling, 2026-09-12), so the reserved head row is what keeps
+     its geometry with nothing in it. */
+  assert.match(ledgerSpread, /<PanelShell \{status\} \{generatedAt\}>/);
+  assert.doesNotMatch(ledgerSpread, /note=/, 'the sheet hands the shell a note again');
   assert.ok(
     !(await read('../src/styles.css')).includes('--panel-note'),
     'the note token family outlived the note'

@@ -6489,7 +6489,7 @@ test('the name is two lines, the chrome row has one rule, the calendar opens on 
  * own accessible text, and the three counters keep one line of their own. A
  * table that merely shrank would fail the phone half by taking the document
  * sideways; one that collapsed and lost a counter fails the inventory. */
-test('the repo table is one right-anchored ruled row per repository, aligned across rows, and it collapses on a phone (issue 188; owner 2026-09-03, issue 287; 2026-09-11, issue 318)', async ({
+test('the repo table is one right-anchored ruled row per repository, aligned across rows, and it collapses on a phone (issue 188; owner 2026-09-03, issue 287; 2026-09-12)', async ({
   page,
 }) => {
   await visit(page);
@@ -6500,14 +6500,13 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
   const rowCount = await rows.count();
   expect(rowCount, 'the repository table rendered no rows').toBeGreaterThan(1);
 
-  /* THE ROSTER IS SELECTED, NOT TRUNCATED (owner design decision, 2026-09-11,
-     issue 318): the owner's pinned set plus the one most recently pushed
-     repository outside it. The bound is read from the origin's own envelope
-     rather than from a number typed here — the table draws exactly the pinned
-     rows the payload flagged plus one, that roster is larger than what is
-     drawn, and the ONE unpinned row is the newest push outside the set and
-     wears the chip that says so. A build that dropped a pinned row, drew them
-     all, or marked the wrong row fails here. */
+  /* THE ROSTER IS SELECTED, NOT TRUNCATED (owner ruling, 2026-09-12: "remove
+     latest, this makes no sense"): the owner's pinned set, and nothing outside
+     it. The bound is read from the origin's own envelope rather than from a
+     number typed here — the table draws exactly the rows the payload flagged,
+     that roster is larger than what is drawn, and the newest push on the wire
+     is NOT on the table unless it is pinned. A build that dropped a pinned row,
+     drew them all, or let an unpinned one back in fails here. */
   await expect(page.locator('#projects .table-caption'), 'the roster caption came back').toHaveCount(0);
   const roster = await page.evaluate(async () => {
     const response = await fetch('/api/panels/coding-projects');
@@ -6519,32 +6518,34 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
     return {
       total: repos.length,
       pinned: ordered.filter((repo) => repo.pinned === true).map((repo) => repo.name),
-      latest: ordered.find((repo) => repo.pinned !== true)?.name ?? null,
+      newestUnpinned: ordered.find((repo) => repo.pinned !== true)?.name ?? null,
     };
   });
   expect(roster, 'the origin served no roster to bound the table against').not.toBeNull();
   expect(roster.pinned.length, 'the served roster flags no pinned repositories at all').toBeGreaterThan(0);
-  expect(roster.latest, 'the served roster is entirely pinned; the chip claim has no subject').not.toBeNull();
+  expect(
+    roster.newestUnpinned,
+    'the served roster is entirely pinned, so "nothing outside the set" has no subject'
+  ).not.toBeNull();
   expect(rowCount, `the table drew ${rowCount} rows of a ${roster.total}-repository roster`).toBe(
-    roster.pinned.length + 1
+    roster.pinned.length
   );
   expect(roster.total, 'the roster is meant to be larger than the rows the table shows').toBeGreaterThan(rowCount);
   const drawnNames = await rows.locator('.table-link').allTextContents();
+  expect([...drawnNames].sort(), 'the table is not exactly the pinned set').toEqual(
+    [...roster.pinned].sort()
+  );
   expect(
-    [...drawnNames].sort(),
-    'the table is not the pinned set plus the one latest repository outside it'
-  ).toEqual([...roster.pinned, roster.latest].sort());
-  /* ONE chip, on that one row, and it is a WORD rather than a colour — the
-     dataviz floor: a value is never carried by colour alone. */
-  const chips = page.locator('#projects .table-chip');
-  await expect(chips, 'the latest row wears no chip, or more than one row does').toHaveCount(1);
-  await expect(chips, 'the chip says nothing a reader could read').not.toHaveText('');
-  const chipRow = await chips.evaluate(
-    (node) => node.closest('.table-row')?.querySelector('.table-link')?.textContent?.trim() ?? ''
-  );
-  expect(chipRow, 'the chip is on a row that is not the latest one outside the pinned set').toBe(
-    roster.latest
-  );
+    drawnNames,
+    `the newest unpinned repository (${roster.newestUnpinned}) is still on the table`
+  ).not.toContain(roster.newestUnpinned);
+  /* AND NO ROW WEARS A WORD. The chip existed to explain the seventh row's
+     presence and left with it; a returning one would be a cell drawn over a
+     claim nothing supports. */
+  await expect(
+    page.locator('#projects .table-chip'),
+    'a row wears a chip again'
+  ).toHaveCount(0);
 
   const overlapsVertically = (first, second) =>
     first.y < second.y + second.height && second.y < first.y + first.height;
@@ -11807,9 +11808,9 @@ for (const width of [1440, 390]) {
   });
 }
 
-/* THE LOG RESERVES SEVEN ROWS AND SCROLLS FOR THE REST (owner design decision,
- * 2026-09-11, issue 318: "seven rows ... to match the seven repository rows";
- * ten at issue #315), and the reserve is a HEIGHT the engine gave the box
+/* THE LOG RESERVES SIX ROWS AND SCROLLS FOR THE REST ON A DESKTOP (owner
+ * ruling, 2026-09-12, which retired the seventh "latest" row; seven at issue
+ * 318, ten at issue #315), and the reserve is a HEIGHT the engine gave the box
  * rather than a number in a stylesheet. The claim is the zero-CLS one: the box
  * is exactly as tall as its reserve whether it holds three rows or thirty, so
  * a payload landing after first paint moves nothing under the reader — and it
@@ -11817,75 +11818,292 @@ for (const width of [1440, 390]) {
  * asked for and the reason this lane counts the table's rows rather than
  * typing a number.
  *
- * Measured at both viewports because the row pitch is taller on a phone — the
- * repository stacks over the subject there — and a reserve computed from one
- * width while the rows are drawn at another is a box that clips its own last
- * row. */
-for (const width of [1440, 390]) {
-  test(`the commit log holds its reserve and scrolls inside it at ${width}px (owner 2026-09-11, issue 318)`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width, height: 900 });
-    await visit(page);
-    const measured = await page.evaluate(() => {
+ * A PHONE DOES THE OPPOSITE, and it has a lane of its own below: there the box
+ * takes no overflow at all. */
+test('the commit log holds its reserve and scrolls inside it at 1440px (owner 2026-09-12)', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await visit(page);
+  const measured = await page.evaluate(() => {
+    const box = window.document.querySelector('.commit-rows');
+    if (box === null) {
+      return null;
+    }
+    /* The paired column's own row count: the reserve is expressed in terms
+       of the table beside it, so the lane asks the page how many rows that
+       table drew rather than restating the number the stylesheet has. */
+    const paired = window.document.querySelectorAll('#projects .table-row').length;
+    const rows = [...box.querySelectorAll('.commit-row')];
+    const pitch = parseFloat(
+      getComputedStyle(window.document.documentElement).getPropertyValue('--commit-row-height')
+    );
+    const rem = parseFloat(getComputedStyle(window.document.documentElement).fontSize);
+    return {
+      clientHeight: Math.round(box.clientHeight),
+      scrollHeight: Math.round(box.scrollHeight),
+      overflowY: getComputedStyle(box).overflowY,
+      rows: rows.length,
+      rowHeights: [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))],
+      paired,
+      reserve: Math.round(pitch * rem * paired),
+      /* The box's own right edge against the card's: a scrollbar may take
+         width from the row, and must never push the box past its column. */
+      boxRight: Math.round(box.getBoundingClientRect().right),
+      cardRight: Math.round(box.parentElement.getBoundingClientRect().right),
+      /* No control here: the disclosure belongs to the width that has no
+         scroll, and a `display: none` one would still be in the tree. */
+      controls: window.document.querySelectorAll('#projects .commit-disclosure').length,
+    };
+  });
+  expect(measured, 'the sheet drew no log box').not.toBeNull();
+  /* The two columns hold the same number of rows, which is the owner's own
+     wording for the pairing and the reason the reserve is expressible at
+     all. Six is what the pinned set comes to. */
+  expect(measured.paired, 'the repositories table drew no rows to pair against').toBe(6);
+  // THE RESERVE: six rows at the pitch this viewport draws them at.
+  expect(
+    measured.clientHeight,
+    `the log box is ${measured.clientHeight}px, want the ${measured.reserve}px ${measured.paired}-row reserve`
+  ).toBe(measured.reserve);
+  expect(measured.overflowY, 'the log box does not scroll for the rows past its reserve').toBe(
+    'auto'
+  );
+  // Every row is drawn at the pitch the reserve is computed from, or the
+  // box and its contents are two different measurements.
+  expect(
+    measured.rowHeights,
+    `rows are drawn at ${measured.rowHeights}px, not the ${measured.reserve / measured.paired}px pitch`
+  ).toEqual([measured.reserve / measured.paired]);
+  // And the box never widens past the card it sits in, whatever the engine
+  // charged for its scrollbar.
+  expect(measured.boxRight).toBeLessThanOrEqual(measured.cardRight);
+  // The shipped snapshot carries more rows than the reserve holds, which is
+  // what makes the scroll real rather than theoretical.
+  expect(
+    measured.rows,
+    `the log drew ${measured.rows} rows; the reserve holds ${measured.paired}, so fewer would not exercise the scroll`
+  ).toBeGreaterThan(measured.paired);
+  expect(measured.scrollHeight).toBeGreaterThan(measured.clientHeight);
+  expect(measured.controls, 'the phone’s disclosure control rendered at a desktop width').toBe(0);
+});
+
+/* THE PHONE LOG IS NOT A SCROLL TRAP (owner ruling, 2026-09-12, on the live
+ * page: at 390px the log is "quite busy ... an endless scroll field that I have
+ * to fight out of").
+ *
+ * Every claim here is about boxes the engine produced, because every one of
+ * them is a thing a thumb meets: the box has no scroll of its own to capture a
+ * gesture meant for the page, the collapsed list is five rows and a control
+ * that says what pressing it does, the press reveals the whole log inline, and
+ * nothing ABOVE the log moves when it does. The document never goes sideways in
+ * either state. */
+test('at 390 the log shows five rows and a control, and the only scroll is the page’s (owner 2026-09-12)', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await visit(page);
+
+  const shape = () =>
+    page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
       const box = window.document.querySelector('.commit-rows');
-      if (box === null) {
-        return null;
-      }
-      /* The paired column's own row count: the reserve is expressed in terms
-         of the table beside it, so the lane asks the page how many rows that
-         table drew rather than restating the number the stylesheet has. */
-      const paired = window.document.querySelectorAll('#projects .table-row').length;
-      const rows = [...box.querySelectorAll('.commit-row')];
-      const pitch = parseFloat(
-        getComputedStyle(window.document.documentElement).getPropertyValue('--commit-row-height')
-      );
-      const rem = parseFloat(getComputedStyle(window.document.documentElement).fontSize);
+      const list = window.document.querySelector('.commit-list');
+      const control = window.document.querySelector('.commit-disclosure');
+      const section = window.document.getElementById('projects');
+      const head = window.document.querySelector('#projects .spread-log-head');
+      const table = window.document.querySelector('#projects .spread-column');
+      const box2 = (node) => {
+        if (node === null) return null;
+        const rect = node.getBoundingClientRect();
+        return { top: round(rect.top + window.scrollY), height: round(rect.height), right: round(rect.right) };
+      };
       return {
         clientHeight: Math.round(box.clientHeight),
         scrollHeight: Math.round(box.scrollHeight),
         overflowY: getComputedStyle(box).overflowY,
-        rows: rows.length,
-        rowHeights: [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))],
-        paired,
-        reserve: Math.round(pitch * rem * paired),
-        /* The box's own right edge against the card's: a scrollbar may take
-           width from the row, and must never push the box past its column. */
-        boxRight: Math.round(box.getBoundingClientRect().right),
-        cardRight: Math.round(box.parentElement.getBoundingClientRect().right),
+        rows: list.querySelectorAll('.commit-row').length,
+        listId: list.id,
+        control:
+          control === null
+            ? null
+            : {
+                tag: control.tagName,
+                type: control.getAttribute('type'),
+                expanded: control.getAttribute('aria-expanded'),
+                controls: control.getAttribute('aria-controls'),
+                text: control.textContent.trim(),
+                height: round(control.getBoundingClientRect().height),
+                width: round(control.getBoundingClientRect().width),
+                marks: control.querySelectorAll('svg').length,
+              },
+        listWidth: round(list.getBoundingClientRect().width),
+        sectionBox: box2(section),
+        headBox: box2(head),
+        tableBox: box2(table),
+        boxTop: box2(box).top,
+        documentWidth: window.document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
       };
     });
-    expect(measured, 'the sheet drew no log box').not.toBeNull();
-    /* The two columns hold the same number of rows, which is the owner's own
-       wording for the pairing and the reason the reserve is expressible at
-       all. Seven is what the pinned set plus the latest comes to. */
-    expect(measured.paired, 'the repositories table drew no rows to pair against').toBe(7);
-    // THE RESERVE: seven rows at the pitch this viewport draws them at.
-    expect(
-      measured.clientHeight + (measured.overflowY === 'auto' ? 0 : 0),
-      `the log box is ${measured.clientHeight}px, want the ${measured.reserve}px ${measured.paired}-row reserve`
-    ).toBe(measured.reserve);
-    expect(measured.overflowY, 'the log box does not scroll for the rows past its reserve').toBe(
-      'auto'
-    );
-    // Every row is drawn at the pitch the reserve is computed from, or the
-    // box and its contents are two different measurements.
-    expect(
-      measured.rowHeights,
-      `rows are drawn at ${measured.rowHeights}px, not the ${measured.reserve / measured.paired}px pitch`
-    ).toEqual([measured.reserve / measured.paired]);
-    // And the box never widens past the card it sits in, whatever the engine
-    // charged for its scrollbar.
-    expect(measured.boxRight).toBeLessThanOrEqual(measured.cardRight);
-    // The shipped snapshot carries more rows than the reserve holds, which is
-    // what makes the scroll real rather than theoretical.
-    expect(
-      measured.rows,
-      `the log drew ${measured.rows} rows; the reserve holds ${measured.paired}, so fewer would not exercise the scroll`
-    ).toBeGreaterThan(measured.paired);
-    expect(measured.scrollHeight).toBeGreaterThan(measured.clientHeight);
+
+  /* The wire's own row count, so "the rest" is a number the origin served
+     rather than one typed here. */
+  const served = await page.evaluate(async () => {
+    const response = await fetch('/api/panels/vcs-activity');
+    const envelope = await response.json();
+    return Array.isArray(envelope?.data?.recentCommits) ? envelope.data.recentCommits.length : null;
   });
-}
+  expect(served, 'the origin served no commits to collapse').not.toBeNull();
+  expect(served, 'the served log already fits in five rows; the disclosure has no subject').toBeGreaterThan(5);
+
+  const collapsed = await shape();
+  /* NO SCROLL OF ITS OWN: the box is exactly as tall as what is in it, and its
+     overflow is the initial one. Either half alone would still trap a thumb. */
+  expect(
+    collapsed.scrollHeight,
+    `the collapsed log scrolls inside itself (${collapsed.scrollHeight} > ${collapsed.clientHeight})`
+  ).toBe(collapsed.clientHeight);
+  expect(collapsed.overflowY, 'the log still takes an overflow of its own on a phone').toBe('visible');
+  // FIVE ROWS, and a control under them that says how many the press brings.
+  expect(collapsed.rows, 'the collapsed log does not show five rows').toBe(5);
+  expect(collapsed.control, 'the collapsed log drew no control to reveal the rest').not.toBeNull();
+  expect(collapsed.control.tag, 'the control is not a real button').toBe('BUTTON');
+  expect(collapsed.control.type, 'a button inside no form still declares its type').toBe('button');
+  expect(collapsed.control.expanded, 'the control does not report its state').toBe('false');
+  expect(collapsed.control.controls, 'the control does not name the list it grows').toBe(
+    collapsed.listId
+  );
+  expect(collapsed.listId, 'the list has no id for the control to name').not.toBe('');
+  expect(collapsed.control.text, 'the control says nothing a reader could read').toBe(
+    `show all ${served}`
+  );
+  expect(collapsed.control.marks, 'the control draws a mark instead of saying what it does').toBe(0);
+  // The touch floor, measured rather than declared.
+  expect(collapsed.control.height, 'the control is under the 44px touch floor').toBeGreaterThanOrEqual(44);
+  /* AND IT TAKES THE LOG'S WHOLE WIDTH. A <button> is one of the few elements
+     whose own `auto` width does not fill its parent, so this is a real claim
+     rather than a default: the same control laid out as a plain block measured
+     99px of a 358px column, which is a target a thumb has to find under a list
+     that spans the screen. */
+  expect(
+    collapsed.control.width,
+    `the control is ${collapsed.control.width}px under a ${collapsed.listWidth}px list`
+  ).toBeCloseTo(collapsed.listWidth, 0);
+  expect(
+    collapsed.documentWidth,
+    `the collapsed log took the document sideways (${collapsed.documentWidth} > ${collapsed.viewportWidth})`
+  ).toBeLessThanOrEqual(collapsed.viewportWidth + subPixel);
+
+  /* THE ENGINE'S OWN SHIFT LEDGER, armed just before the press, and scoped to
+     the complement of what a disclosure is ALLOWED to move. Opening a list
+     grows it: the log's own box changes, the section around it changes with it,
+     and everything after it on the page moves down — that is the reader's own
+     press doing exactly what they pressed for, and the owner's ruling asks for
+     it in preference to a box they have to fight out of.
+
+     What must not move is anything ABOVE or BESIDE the log: the section's top
+     edge, the repositories column, the log's own head. So an entry is counted
+     when it names a node that is neither inside the log, nor an ancestor of it,
+     nor anywhere after it in the document — which is exactly that set, and is
+     a set the engine can genuinely report. `hadRecentInput` is deliberately NOT
+     filtered here: filtering it would excuse every shift a click causes, which
+     is the whole of what this press does, and the channel would report nothing
+     whatever the page did. A node the entry cannot name is counted too — an
+     unattributable shift is the one most worth hearing about. */
+  const watching = await page.evaluate(() => {
+    const types = PerformanceObserver.supportedEntryTypes ?? [];
+    if (!types.includes('layout-shift')) return false;
+    const box = window.document.querySelector('.commit-rows');
+    window.__logShift = [];
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const above = [...(entry.sources ?? [])].filter((source) => {
+          const node = source.node;
+          if (!(node instanceof Element)) return true;
+          if (box.contains(node) || node.contains(box)) return false;
+          return (
+            (box.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) === 0
+          );
+        });
+        if (above.length === 0) continue;
+        window.__logShift.push({
+          value: entry.value,
+          moved: above.map((source) => `${source.node?.tagName ?? 'unnamed'}.${source.node?.className ?? ''}`),
+        });
+      }
+    }).observe({ type: 'layout-shift', buffered: false });
+    return true;
+  });
+
+  await page.locator('.commit-disclosure').click();
+  await settled(page);
+  const expanded = await shape();
+
+  // EVERY ROW, inline, and the control now offers the way back.
+  expect(expanded.rows, `pressing the control revealed ${expanded.rows} rows, not the ${served} served`).toBe(
+    served
+  );
+  expect(expanded.control.expanded, 'the control does not report its new state').toBe('true');
+  expect(expanded.control.text, 'the control offers no way back').toBe('show fewer');
+  /* STILL NO SCROLL OF ITS OWN: the log grew into the page rather than into a
+     box, which is the whole of the owner's ruling. */
+  expect(
+    expanded.scrollHeight,
+    `the expanded log scrolls inside itself (${expanded.scrollHeight} > ${expanded.clientHeight})`
+  ).toBe(expanded.clientHeight);
+  expect(expanded.clientHeight, 'the expanded log is no taller than the collapsed one').toBeGreaterThan(
+    collapsed.clientHeight
+  );
+  expect(
+    expanded.documentWidth,
+    `the expanded log took the document sideways (${expanded.documentWidth} > ${expanded.viewportWidth})`
+  ).toBeLessThanOrEqual(expanded.viewportWidth + subPixel);
+
+  /* NOTHING ABOVE THE LOG MOVED. The section's own top, the table column
+     beside it and the log's head are all where they were; the section is
+     TALLER by exactly the log's growth, which is the reader's own press
+     expanding the thing they pressed on. */
+  expect(expanded.sectionBox.top, 'the section moved when the log opened').toBeCloseTo(
+    collapsed.sectionBox.top,
+    1
+  );
+  expect(expanded.tableBox.height, 'the repositories column changed size when the log opened').toBeCloseTo(
+    collapsed.tableBox.height,
+    1
+  );
+  expect(expanded.headBox.top, 'the log’s head moved when the log opened').toBeCloseTo(
+    collapsed.headBox.top,
+    1
+  );
+  expect(expanded.boxTop, 'the log box itself moved instead of growing').toBeCloseTo(collapsed.boxTop, 1);
+  expect(
+    expanded.sectionBox.height - collapsed.sectionBox.height,
+    'the section grew by something other than the log’s own growth'
+  ).toBeCloseTo(expanded.clientHeight - collapsed.clientHeight, 1);
+
+  const shifts = await page.evaluate(() => window.__logShift ?? null);
+  if (watching) {
+    expect(
+      shifts,
+      `the press moved something above or beside the log: ${JSON.stringify(shifts)}`
+    ).toEqual([]);
+  } else {
+    expect(shifts, 'the layout-shift observer was armed but reported nothing at all').toBeNull();
+  }
+
+  // AND BACK: the control closes what it opened, and the page returns to the
+  // shape it started in.
+  await page.locator('.commit-disclosure').click();
+  await settled(page);
+  const closed = await shape();
+  expect(closed.rows, 'the control cannot close what it opened').toBe(5);
+  expect(closed.control.text).toBe(`show all ${served}`);
+  expect(closed.sectionBox.height, 'closing the log left the section a different size').toBeCloseTo(
+    collapsed.sectionBox.height,
+    1
+  );
+});
 
 /* ===========================================================================
  * 02 / PROJECTS · COMMITS — the sheet's paired section
@@ -11976,7 +12194,7 @@ test('at 1440 the two columns fill the sheet with no dead space (owner 2026-09-1
       cardLeft: round(card.getBoundingClientRect().left),
       cardRight: round(card.getBoundingClientRect().right),
       tableEnds: [...spread.querySelectorAll('.table-row')].map(rowEnd),
-      logEnds: [...spread.querySelectorAll('.commit-row')].slice(0, 7).map(rowEnd),
+      logEnds: [...spread.querySelectorAll('.commit-row')].slice(0, 6).map(rowEnd),
       headEnd: rowEnd(spread.querySelector('.table-head')),
       logHeadRight: round(
         spread.querySelector('.spread-log-head').getBoundingClientRect().right

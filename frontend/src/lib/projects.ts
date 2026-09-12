@@ -63,7 +63,7 @@ import {
   type LedgerTableRow
 } from './blocks.ts';
 import { formatWhole } from './grid.ts';
-import { panelAge, panelKinds } from './panels.ts';
+import { panelKinds } from './panels.ts';
 import type { CodingProjectRow, CodingProjectsData, PanelEnvelope } from './panels';
 import type { TipDetail } from './tooltip.ts';
 
@@ -463,44 +463,6 @@ function viewInstant([project, live]: ProjectView): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-/* projectsStaleAfterMs is how far behind the wall clock the envelope's own
- * generatedAt may fall before the card must SAY its data has stopped
- * advancing, even while the status still reads ok — the wedged-loop state a
- * status alone cannot see, the same #267 gap the usage panel's threshold
- * closes. The credentialed origin refreshes this panel each minute, with a
- * quarter-hour anonymous fallback, and its rate-limit cooldown tops out at
- * fifteen minutes. Two hours is therefore far past every legitimate quiet
- * spell: a stall, not a nap. */
-export const projectsStaleAfterMs = 2 * 60 * 60 * 1000;
-
-/* projectsStaleNote is the honest staleness line (issue 281, defect 2: the
- * envelope said stale while the card LOOKED fresh). It renders in three
- * proven states and invents nothing: the origin says stale — the retained
- * figures are real and the note dates them by the envelope's own generatedAt;
- * the origin says unavailable — the captured fallback renders and the note
- * says which face the reader is seeing; or the origin says ok but its
- * generatedAt has fallen past projectsStaleAfterMs. A fresh ok panel, and the
- * pre-envelope captured face, carry no note. */
-export function projectsStaleNote(
-  envelope: PanelEnvelope | null,
-  now: number = Date.now()
-): string | undefined {
-  if (envelope === null) {
-    return undefined;
-  }
-  if (envelope.status === 'unavailable') {
-    return 'live repository data unavailable · showing captured figures';
-  }
-  const at = envelope.generatedAt === undefined ? Number.NaN : Date.parse(envelope.generatedAt);
-  const aged = !Number.isNaN(at) && now - at > projectsStaleAfterMs;
-  if (envelope.status !== 'stale' && !aged) {
-    return undefined;
-  }
-  const age = panelAge(envelope.generatedAt, new Date(now));
-  return age === '' ? 'stale · the last successful read is not current' : `stale · data as of ${age}`;
-}
-
-
 /* ---------------------------------------------------------------------------
  * The ledger table (owner directive, 2026-09-03, issue 287; re-cut for the
  * paired sheet, 2026-09-11, issue 318)
@@ -532,33 +494,30 @@ export const projectTableHeads: readonly string[] = [
   'Updated'
 ];
 
-/* HOW MANY ROWS EACH COLUMN OF THE SHEET HOLDS (owner design decision,
- * 2026-09-11, issue 318): the owner's six pinned repositories plus the one
- * most recently pushed outside them. It was four while the section was a
- * full-width table of the most recent (2026-09-03).
+/* HOW MANY ROWS EACH COLUMN OF THE SHEET HOLDS (owner ruling, 2026-09-12:
+ * "remove latest, this makes no sense"). SIX, which is the host's own ceiling
+ * on a pinned set — the table is the owner's curation and nothing else, so the
+ * bound is the curation's own size rather than a number chosen for the box. It
+ * was seven while a seventh row rode along for being the most recent push, and
+ * four while the section was a full-width table of the most recent
+ * (2026-09-03).
  *
  * ONE constant, TWO seats. The commit column beside this one reserves the same
- * number of rows — "seven rows ... to match the seven repository rows" — so a
- * second number would be the two columns free to disagree about a height they
- * are paired on. lib/commits.ts and the stylesheet's reserve both read this,
- * and tests/activity.test.mjs recomputes the box from it. */
-export const shownProjectRows = 7;
+ * number of rows — the two columns of one section are paired on a height — so
+ * a second number would be the two free to disagree about it. The stylesheet's
+ * reserve reads this through tests/activity.test.mjs, which recomputes the
+ * box's own calc from this constant rather than from a number typed twice. */
+export const shownProjectRows = 6;
 
 export const projectsEmptyNote = 'no repositories reported';
 
-/* The word the one non-pinned row wears (owner design decision, 2026-09-11,
- * issue 318). The other rows are on the table because the owner pinned them;
- * this one is there because it moved most recently, and without the word that
- * difference is invisible. It is the page's own word, so it lives here beside
- * the rule that decides which row gets it. */
-export const latestRowChip = 'latest';
-
-/* WHICH REPOSITORIES THE TABLE SHOWS (owner design decision, 2026-09-11,
- * issue 318, option B on the design canvas): the owner's PINNED set — the one
- * GitHub already lets the owner curate, carried on the wire as `pinned: true`
- * (issue #317) — plus the ONE most recently pushed repository outside it,
- * wearing the `latest` chip. Push order decides the whole list, so the chip's
- * row is simply the first non-pinned one in an already-descending list.
+/* WHICH REPOSITORIES THE TABLE SHOWS (owner ruling, 2026-09-12: "remove
+ * latest, this makes no sense"). The owner's PINNED set — the curation GitHub
+ * already lets the owner maintain, carried on the wire as `pinned: true`
+ * (issue #317) — in push order, and nothing else. A seventh row rode along for
+ * being the most recently pushed repository outside the set until this ruling;
+ * it wore a `latest` chip to explain why it was there, and a row that needs a
+ * word to justify its own presence is a row the table is better without.
  *
  * It is the curation the owner actually maintains, in the place they maintain
  * it: a repository promoted or dropped on the host changes this table on the
@@ -573,36 +532,33 @@ export const latestRowChip = 'latest';
  *     ever promote a repository that is on the wire — a pinned repository the
  *     account keeps private is simply absent from the answer and is absent
  *     here too, with nothing said about it.
- *   * It never pads. Five pinned repositories render as five plus the latest,
- *     not as seven with two rows of filler.
+ *   * It never pads. Three pinned repositories render as three rows, not as
+ *     six with three rows of filler.
  *   * It never overflows the pair. The host's pinned set holds at most six, so
- *     seven is the whole table; a payload claiming more is bounded by the same
- *     constant the commit column reserves its rows from, because the two
- *     columns are paired on one height.
- *   * It says nothing when there is nothing to say. A payload with no `pinned`
- *     flag anywhere — an origin older than issue #317, mid-rollout — is not a
- *     payload with an empty pinned set: the table falls back to the first
- *     rows by push, exactly as it did before this directive, and renders no
- *     chip at all rather than marking a row "latest" among rows that were
- *     never a pinned set.
- *
- * The boolean in each pair is whether that row is the marked one. */
-function selectedViews(ordered: readonly ProjectView[]): readonly (readonly [ProjectView, boolean])[] {
+ *     six is the whole table; a payload claiming more is cut at the same
+ *     constant the commit column reserves its rows from, keeping the most
+ *     recently pushed of them, because the two columns are paired on one
+ *     height.
+ *   * It falls back rather than emptying. A payload with no `pinned` flag
+ *     anywhere — an origin older than issue #317, mid-rollout — is not a
+ *     payload with an empty pinned set, and rendering it as one would blank
+ *     the table on a wire that is merely older. Those payloads keep the
+ *     pre-directive face: the first rows by push. */
+function selectedViews(ordered: readonly ProjectView[]): readonly ProjectView[] {
   const isPinned = ([, live]: ProjectView): boolean => live?.pinned === true;
   if (!ordered.some(isPinned)) {
-    return ordered.slice(0, shownProjectRows).map((view) => [view, false] as const);
+    return ordered.slice(0, shownProjectRows);
   }
-  const latest = ordered.find((view) => !isPinned(view));
-  return ordered
-    .filter((view) => isPinned(view) || view === latest)
-    .slice(0, shownProjectRows)
-    .map((view) => [view, view === latest] as const);
+  return ordered.filter(isPinned).slice(0, shownProjectRows);
 }
 
 export function projectTableProps(
   envelope: PanelEnvelope | null,
   now?: number
-): Omit<LedgerSpreadProps, 'logHead' | 'logAnchor' | 'logRows' | 'logNote'> {
+): Omit<
+  LedgerSpreadProps,
+  'logHead' | 'logAnchor' | 'logListId' | 'logRows' | 'logNote' | 'logDisclosure'
+> {
   const payload =
     envelope !== null && envelope.kind === panelKinds.codingProjects
       ? parseCodingProjects(envelope.data)
@@ -613,7 +569,7 @@ export function projectTableProps(
       ? payload.repos.map((row) => [capturedByName.get(row.name), row] as const)
       : projects.map((project) => [project, undefined] as const);
   const ordered = views.toSorted((left, right) => viewInstant(right) - viewInstant(left));
-  const rows: LedgerTableRow[] = selectedViews(ordered).map(([[project, live], marked]) => {
+  const rows: LedgerTableRow[] = selectedViews(ordered).map(([project, live]) => {
     const name = project?.name ?? live?.name ?? '';
     const columns = projectColumns(project, live, now);
     return {
@@ -623,21 +579,18 @@ export function projectTableProps(
         href: projectUrl({ name }),
         label: projectLinkLabel({ name })
       },
-      ...(marked ? { chip: latestRowChip } : {}),
       updated: columns.updated,
       counts: columns.counts
     };
   });
   /* No title: the section head "02 / Projects · Commits" already names this
      sheet, and the origin's own "Coding Projects" beneath it was one label too
-     many (owner directive, 2026-09-04, issue 292). The shell keeps the head
-     row at the title's height for the stale line. */
+     many (owner directive, 2026-09-04, issue 292). */
   return {
     status: envelope?.status ?? 'unavailable',
     generatedAt: envelope?.generatedAt,
     heads: projectTableHeads,
     rows,
-    emptyNote: projectsEmptyNote,
-    staleNote: projectsStaleNote(envelope, now)
+    emptyNote: projectsEmptyNote
   };
 }

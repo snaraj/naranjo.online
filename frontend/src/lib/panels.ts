@@ -650,61 +650,6 @@ function startWatch<Data = unknown>(
  * the thirty-second poll and the visibility catch-up — is what refreshes a
  * panel, exactly as before. */
 
-/* panelStaleAfterMs is how far behind the wall clock an ok envelope's own
- * generatedAt may fall before a panel must SAY its data has stopped advancing
- * (issue #276; the observability half of #267). Two full days: the usage
- * pipeline pushes each minute and the origin re-reads every thirty seconds,
- * the fetched panels refresh on a minute TTL, and a workstation
- * legitimately sleeps overnight — a day-granularity series cannot honestly
- * alarm at sub-day lag, while two days of silence is a stalled producer. */
-export const panelStaleAfterMs = 48 * 60 * 60 * 1000;
-
-/* NO PANEL HEAD DRAWS THIS ANY MORE (owner directive, 2026-09-12, issue 323).
- * It was the one idiom every panel worded its freshness in, rendered in the
- * shell's reserved head row; the owner read the result on the live page and
- * removed the drawing. The shell still publishes the same reading as data
- * attributes, which is what an audit or a later presentation reads. The last
- * callers are the paired section's own two notes (lib/commits.ts and
- * lib/projects.ts), and this goes with the last of them.
- *
- * panelStaleNote is the honest data-through line, or undefined while the
- * payload is fresh. Exactly two states produce
- * it, both proven by the envelope rather than inferred: the origin already
- * SAYS stale (it refused a newer document, kept its last good one past a
- * failed refresh, or is serving its cold-start snapshot), or the origin says
- * ok but its generatedAt has fallen beyond panelStaleAfterMs — the stalled
- * producer the origin structurally cannot tell from quiet. `through` is the
- * newest calendar day the payload's data reaches; absent, the capture age
- * stands alone. The unavailable state is not this line's business: that
- * renders the panel's empty face, and a note under it would date data nobody
- * is shown. No invented freshness either way — every word restates a field
- * the envelope carries. */
-export function panelStaleNote(
-  status: PanelStatus,
-  generatedAt: string | undefined,
-  through: string | undefined,
-  now: Date = new Date()
-): string | undefined {
-  if (status === 'unavailable') {
-    return undefined;
-  }
-  const at = generatedAt === undefined ? Number.NaN : Date.parse(generatedAt);
-  const aged = !Number.isNaN(at) && now.getTime() - at > panelStaleAfterMs;
-  if (status !== 'stale' && !aged) {
-    return undefined;
-  }
-  const parts: string[] = [];
-  const day = through === undefined ? '' : formatDateRange(through, through);
-  if (day !== '') {
-    parts.push(`data through ${day}`);
-  }
-  const age = panelAge(generatedAt, now);
-  if (age !== '') {
-    parts.push(`last capture ${age}`);
-  }
-  return parts.length > 0 ? parts.join(' · ') : undefined;
-}
-
 /* panelAge renders an ISO instant as a coarse human age. Its one live caller
  * is lib/activity.ts, which stamps each recent-commit row with how long ago
  * that commit landed.

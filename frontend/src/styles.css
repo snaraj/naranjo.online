@@ -2486,11 +2486,10 @@ h1 {
   text-align: end;
 }
 
-/* The name and its chip are ONE cell, so the chip sits against the name it
-   qualifies rather than in a track of its own that every other row would leave
-   empty. The cell is the row's flexible track, so a long repository name
-   ellipsizes inside it — and the chip does not, because it is the shorter of
-   the two and the one that says why the row is here at all.
+/* The name is the row's flexible track. The cell held a second thing until the
+   owner's ruling of 2026-09-12 — the `latest` chip, set against the name it
+   qualified — and it is a flex cell still, because the link inside it keeps its
+   own floor while the cell keeps the track's width.
 
    The cell CLIPS rather than letting its contents decide its width, and the
    link inside it keeps its own 44px floor: a repository whose name is shorter
@@ -2528,22 +2527,6 @@ h1 {
 .table-link:focus-visible {
   color: var(--ledger-highlight);
   text-decoration: underline;
-}
-
-/* THE `latest` CHIP (owner design decision, 2026-09-11, issue 318): the sheet's
-   mono label in a hairline box, muted, and deliberately in NO colour of its
-   own — the page spends its one mark on text, and a chip that said "this row is
-   different" with a hue would be encoding a value by colour alone, which the
-   dataviz floor forbids. The word IS the channel. */
-.table-chip {
-  flex: none;
-  padding: 0.0625rem 0.3125rem;
-  border: var(--ledger-hairline) solid var(--ledger-rule);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-  color: var(--ledger-muted);
 }
 
 /* THE MARK SLOT IS FIXED AND THE FIGURE FILLS THE REST (owner directive,
@@ -2673,22 +2656,22 @@ h1 {
    adapter's own constant — so the box and the number of rows it holds cannot
    drift apart.
 
-   SEVEN, because the table beside it shows seven (owner design decision,
-   2026-09-11, issue 318: "seven rows ... to match the seven repository rows").
-   The two columns of the paired section are one picture and the reserve is the
-   one place that pairing is expressible as a length — so the constant this
-   recomputes from is `shownProjectRows` in lib/projects.ts, the SAME number
-   the table selects its rows with, rather than a second one for this box to
-   disagree with.
+   SIX, because the table beside it shows six (owner ruling, 2026-09-12: the
+   seventh, "latest" row went, and the table is the pinned set). The two columns
+   of the paired section are one picture and the reserve is the one place that
+   pairing is expressible as a length — so the constant this recomputes from is
+   `shownProjectRows` in lib/projects.ts, the SAME number the table selects its
+   rows with, rather than a second one for this box to disagree with.
 
-   IT SCROLLS FOR THE REST (owner directive, 2026-09-11, issue 315 — written
-   hashless because three digits after a hash read as a hex color to the
-   stylesheet's own color sweep). The log lists every contribution now, which
-   is more rows than any reserve should hold open; a box that GREW to fit them
-   would move every section under it the moment a payload landed, which is the
-   shift the reserve exists to prevent. So the box keeps its exact height
+   IT SCROLLS FOR THE REST ON A DESKTOP (owner directive, 2026-09-11, issue 315
+   — written hashless because three digits after a hash read as a hex color to
+   the stylesheet's own color sweep). The log lists every contribution now,
+   which is more rows than any reserve should hold open; a box that GREW to fit
+   them would move every section under it the moment a payload landed, which is
+   the shift the reserve exists to prevent. So the box keeps its exact height
    whatever arrives and the rows past it scroll inside it — the page's layout
-   is decided before the data, and stays decided.
+   is decided before the data, and stays decided. A PHONE does not do this, and
+   the phone block below says why.
 
    There is deliberately NO `scrollbar-gutter` reservation here, and that is
    this repository's own measured ruling rather than an omission: a reserved
@@ -2702,8 +2685,52 @@ h1 {
    no-reading-hints ruling): the scrollbar and the clipped row are the
    affordance. */
 .commit-rows {
-  block-size: calc(7 * var(--commit-row-height));
+  block-size: calc(6 * var(--commit-row-height));
   overflow-y: auto;
+}
+
+/* THE PHONE LOG'S DISCLOSURE (owner ruling, 2026-09-12). Declared here rather
+   than inside the phone block because it is the control's whole appearance and
+   the component renders it at one width only — a rule split across two places
+   would be the same button described twice. It wears the head row's face: this
+   is chrome the sheet rules, not a figure.
+
+   FULL WIDTH AND AT THE TOUCH FLOOR, because it is the one thing under the log
+   a finger aims at, and a control narrower than its own row is a target a thumb
+   has to find. The width is its GRID COLUMN's, taken by stretching rather than
+   declared here (see the phone block), so the touch-floor sweep can still
+   measure both of its axes in pixels. The floor is a MINIMUM so a wrapped word
+   grows the box rather than being clipped by it, and the collapsed reserve is
+   computed from the same token, so an unwrapped control costs exactly what the
+   reserve holds open for it. */
+.commit-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--control-target);
+  margin-block-start: var(--ledger-cell-gap);
+  padding: 0;
+  border: var(--ledger-hairline) solid var(--ledger-rule);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+  color: var(--ledger-muted);
+  cursor: pointer;
+}
+
+.commit-disclosure:hover {
+  background: var(--ledger-raised);
+  color: var(--ledger-ink);
+}
+
+/* The ring is INSET, like the sheet's other full-width controls: an outset one
+   on a control that already reaches its column's edge would be drawn outside
+   the column, and on a phone that is the document scrolling sideways. */
+.commit-disclosure:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
 }
 
 .commit-row {
@@ -3487,6 +3514,47 @@ h1 {
     padding-inline: 0.25rem;
     font-size: 0.625rem;
     letter-spacing: 0.06em;
+  }
+
+  /* THE LOG IS NOT A SCROLL REGION HERE (owner ruling, 2026-09-12, on the live
+     page: at this width the log is "quite busy ... an endless scroll field that
+     I have to fight out of"). A box that scrolls inside a page that scrolls is
+     two scrolls under one thumb, and the inner one captures the gesture meant
+     for the outer — which is the fight the owner described. So the box keeps no
+     fixed height and takes no overflow of its own: it shows the first rows, a
+     control under them reveals the rest inline (LedgerSpread.svelte), and the
+     page's own scroll is the only scroll.
+
+     IT STILL RESERVES, and the reserve is the COLLAPSED log rather than the
+     whole of it: five rows plus the control and the gap above it, which is
+     exactly what the box holds the moment a payload lands. Without it the empty
+     box would be one note tall and the arriving rows would push every section
+     under them down the page — the zero-CLS floor, broken by the same arrival
+     the desktop reserve exists to absorb. A MINIMUM rather than a height,
+     because the reader's own press is allowed to grow it; nothing else is.
+
+     The five is `phoneLogRows` in lib/commits.ts, which is the number the
+     component slices with, and a frontend test recomputes this calc from it so
+     the box and the slice cannot come to hold different numbers of rows. */
+  .commit-rows {
+    /* ONE COLUMN, so the list and the control under it both take the log's
+       full width without either of them declaring a width: a grid item
+       stretches to its column, and a <button> is one of the few elements whose
+       own `auto` width does NOT fill its parent — measured in Chromium at
+       390px, where the same control laid out as a plain block came to 99px of
+       a 358px column. Declaring `inline-size: 100%` instead would put a
+       percentage on a control the touch-floor sweep measures in pixels
+       (tests/experience.test.mjs), which is a guard going blind rather than a
+       control getting wider. `align-content: start` keeps the rows their own
+       height inside the reserve below rather than stretching to fill it. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    block-size: auto;
+    min-block-size: calc(
+      5 * var(--commit-row-height) + var(--control-target) + var(--ledger-cell-gap)
+    );
+    overflow-y: visible;
   }
 
   /* A COMMIT ROW IS TWO LINES HERE TOO, and the short identity is not one of

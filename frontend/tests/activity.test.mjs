@@ -19,11 +19,17 @@ import {
   isValidRepoSlug,
   parseVCSActivity
 } from '../src/lib/activity.ts';
-import { contributionCalendarProps, projectsCommitsProps } from '../src/lib/commits.ts';
+import {
+  commitLogListId,
+  contributionCalendarProps,
+  logCollapseWord,
+  logExpandWord,
+  phoneLogRows,
+  projectsCommitsProps
+} from '../src/lib/commits.ts';
 import { spreadFromRem } from '../src/lib/columnWidth.ts';
 import { calendarColumns, pendingWeeks, toColumns } from '../src/lib/grid.ts';
 import {
-  latestRowChip,
   projectHost,
   projectHostLabel,
   projectTableProps,
@@ -775,8 +781,8 @@ test('the strip owns fixed geometry and its own overflow', () => {
      with the caption itself (issue 323). Nothing under the grid can shift the
      page because there is nothing under the grid. */
   assert.ok(!sheet.includes('commit-caption'), 'the sheet still reserves a caption row');
-  // SEVEN rows at the 44px touch floor (owner design decision, 2026-09-11,
-  // issue 318; ten since issue #315, five since issue 157): every entry row can
+  // SIX rows at the 44px touch floor (owner ruling, 2026-09-12; seven since
+  // issue 318, ten since issue #315, five since issue 157): every entry row can
   // carry two real links, so the reservation is a multiplication of the reserve
   // by the row's own floor rather than a decorative-text height, and this pin
   // recomputes it from the constant the TABLE BESIDE IT selects its rows with —
@@ -802,8 +808,8 @@ test('the strip owns fixed geometry and its own overflow', () => {
   assert.ok(pitches[1] > pitches[0], 'the phone pitch must be the taller one');
   assert.ok(pitches[0] >= rowFloorRem, 'the row pitch dropped under the touch floor');
   // The row separator is an INSET SHADOW, never a border (owner directive,
-  // 2026-08-25): a border would add its pixel to every row's box and seven of
-  // them would push the last row out of a reservation that is exactly seven
+  // 2026-08-25): a border would add its pixel to every row's box and six of
+  // them would push the last row out of a reservation that is exactly six
   // rows tall — the zero-CLS reserve turned into a clipped row.
   assert.match(sheet, /\.commit-row \{[^}]*box-shadow: inset 0 -1px 0 var\(--ledger-rule/);
   assert.match(sheet, /\.commit-row:last-child \{[^}]*box-shadow: none/);
@@ -816,19 +822,25 @@ test('the strip owns fixed geometry and its own overflow', () => {
   // adapter used to hand the component exactly the rows the box could hold;
   // the box scrolls now, so every row the wire carried renders and the WIRE's
   // own cap is what bounds the list. A cap in the adapter would be the page
-  // quietly deciding the record stops at seven, which is the defect the owner
+  // quietly deciding the record stops at six, which is the defect the owner
   // reported in the first place.
   //
-  // SEVEN is the owner's pairing (issue 318: "seven rows ... to match the seven
-  // repository rows"), and it is ONE constant: the table's own row count. A
-  // second number here would be the two columns free to disagree about a height
-  // they share, which is exactly the drift the reserve exists to prevent.
-  assert.equal(shownProjectRows, 7);
-  assert.match(sheet, /\.commit-rows \{[^}]*overflow-y: auto/);
-  // And the box's HEIGHT is the thing that never moves: a reserve that grew
-  // with its rows would push every section under it down the moment a payload
-  // landed.
-  assert.doesNotMatch(sheet, /\.commit-rows \{[^}]*min-block-size/);
+  // SIX is the owner's pairing after the ruling of 2026-09-12 retired the
+  // "latest" row, and it is ONE constant: the table's own row count. A second
+  // number here would be the two columns free to disagree about a height they
+  // share, which is exactly the drift the reserve exists to prevent.
+  assert.equal(shownProjectRows, 6);
+  // The DESKTOP rule, read on its own: the box scrolls there and reserves an
+  // exact height, so it declares an overflow and no minimum. Scoped to the
+  // base rule rather than to the whole sheet, because the phone block below
+  // deliberately declares the opposite — a sheet-wide `doesNotMatch` would
+  // read that override as this rule breaking.
+  const baseCommitRows = /\.commit-rows \{([^}]*)\}/.exec(sheet)?.[1] ?? '';
+  assert.match(baseCommitRows, /overflow-y: auto/);
+  // And the box's HEIGHT is the thing that never moves on a desktop: a reserve
+  // that grew with its rows would push every section under it down the moment a
+  // payload landed.
+  assert.doesNotMatch(baseCommitRows, /min-block-size/);
   const overfull = projectsCommitsProps([
     null,
     {
@@ -862,10 +874,10 @@ test('the strip owns fixed geometry and its own overflow', () => {
 });
 
 /* ---------------------------------------------------------------------------
- * The sheet's LEFT column: which repositories it shows (owner design decision,
- * 2026-09-11, issue 318, option B on the design canvas). The owner's pinned
- * set — GitHub's own curation, on the wire since issue 317 — plus the ONE most
- * recently pushed repository outside it, wearing the `latest` chip.
+ * The sheet's LEFT column: which repositories it shows (owner ruling,
+ * 2026-09-12: "remove latest, this makes no sense"). The owner's pinned set —
+ * GitHub's own curation, on the wire since issue 317 — and nothing outside it.
+ * A seventh row rode along for being the most recent push until that ruling.
  *
  * The rule is EXECUTED against payloads rather than pinned as source, because
  * every way it can go wrong is a payload shape: a flag that is absent, a
@@ -875,9 +887,9 @@ test('the strip owns fixed geometry and its own overflow', () => {
 
 /* Twelve repositories, six pinned, each with its own push instant so the order
  * is the data's rather than a tie-break's. `r00` is the newest and is NOT
- * pinned, so it is the `latest` row; the pinned six are scattered through the
- * order on purpose, so a selection that merely sliced the seven most recent
- * would draw a visibly different set. */
+ * pinned, so a selection that merely sliced the most recent rows would draw a
+ * visibly different set; the pinned six are scattered through the order on
+ * purpose for the same reason. */
 function repoFixture(pinnedNames = ['r01', 'r03', 'r05', 'r07', 'r09', 'r11'], count = 12) {
   const pinned = new Set(pinnedNames);
   return Array.from({ length: count }, (_, index) => {
@@ -907,47 +919,52 @@ function projectsPanel(repos) {
 
 const drawn = (repos) => projectTableProps(projectsPanel(repos), Date.parse('2026-01-12T12:00:00Z'));
 
-test('the table draws the pinned set plus the one latest repository outside it (owner 2026-09-11, issue 318)', () => {
+test('the table draws the pinned set and nothing outside it (owner ruling, 2026-09-12)', () => {
   const rendered = drawn(repoFixture());
-  // Six pinned plus one, ordered by push descending — which puts the latest
-  // first here because it IS the newest push on the wire.
+  // The six pinned rows, in push order, and `r00` — the newest push on the
+  // wire — is NOT among them, because it is not pinned.
   assert.deepEqual(
     rendered.rows.map((row) => row.link.text),
-    ['r00', 'r01', 'r03', 'r05', 'r07', 'r09', 'r11'],
-    'the table is not the pinned set plus the latest, in push order'
+    ['r01', 'r03', 'r05', 'r07', 'r09', 'r11'],
+    'the table is not the pinned set in push order'
   );
   assert.equal(rendered.rows.length, shownProjectRows);
-  // Exactly one chip, on the row that is not pinned.
-  assert.deepEqual(
-    rendered.rows.filter((row) => row.chip !== undefined).map((row) => row.link.text),
-    ['r00']
-  );
-  assert.equal(rendered.rows[0].chip, latestRowChip);
-  assert.equal(latestRowChip, 'latest');
+  /* NO ROW WEARS A WORD any more (owner ruling, 2026-09-12). The chip existed
+     to explain the seventh row's presence; with every row on the table for the
+     same reason there is nothing left to explain, and the field it rode on is
+     gone from the props rather than merely unset — a field nothing writes is a
+     field the next payload shape can quietly start writing again. */
+  for (const row of rendered.rows) {
+    assert.deepEqual(
+      Object.keys(row).toSorted(),
+      ['counts', 'key', 'link', 'updated'],
+      `the row "${row.key}" carries a field the table stopped drawing`
+    );
+  }
   /* The control that makes the claim mean something: without the pinned flags
-     the SAME twelve rows select the seven most recent, which is a different
-     set — so the assertion above is about the flags rather than about a slice
-     that happened to agree with them. */
+     the SAME twelve rows select the six most recent, which is a different set
+     — so the assertion above is about the flags rather than about a slice that
+     happened to agree with them. */
   const unflagged = drawn(repoFixture([]));
   assert.deepEqual(
     unflagged.rows.map((row) => row.link.text),
-    ['r00', 'r01', 'r02', 'r03', 'r04', 'r05', 'r06'],
+    ['r00', 'r01', 'r02', 'r03', 'r04', 'r05'],
     'a payload with no pinned flag must fall back to the most recent by push'
   );
-  // ...and it says nothing: there is no pinned set for a row to be latest
-  // beside, so no row is marked.
-  assert.deepEqual(unflagged.rows.filter((row) => row.chip !== undefined), []);
 });
 
-test('the pinned rule never pads, never overflows the pair, and never conjures a row', () => {
+test('the pinned rule never pads, never overflows six, and never conjures a row', () => {
   const now = Date.parse('2026-01-12T12:00:00Z');
   /* FEWER THAN SIX PINNED — which is also what a pinned PRIVATE repository
      looks like from here: the wire carries only public repositories, so a
      pinned private one is simply not in the answer. The table shows what
-     exists plus the latest and pads nothing. */
+     exists and pads nothing, and the newest push outside the set stays out of
+     it however recent it is. */
   const three = drawn(repoFixture(['r02', 'r04', 'r06']));
-  assert.deepEqual(three.rows.map((row) => row.link.text), ['r00', 'r02', 'r04', 'r06']);
-  assert.deepEqual(three.rows.filter((row) => row.chip !== undefined).map((row) => row.link.text), ['r00']);
+  assert.deepEqual(three.rows.map((row) => row.link.text), ['r02', 'r04', 'r06']);
+  /* EXACTLY ONE pinned row is a one-row table, not a row plus five of filler. */
+  const one = drawn(repoFixture(['r08']));
+  assert.deepEqual(one.rows.map((row) => row.link.text), ['r08']);
   /* A NAME NOBODY SERVED cannot become a row. The flag lives ON a row, so the
      only repositories the selection can choose from are the ones the payload
      carried — here, three of them, one of which is flagged. */
@@ -956,37 +973,29 @@ test('the pinned rule never pads, never overflows the pair, and never conjures a
     { name: 'newest', description: 'x', stars: 1, pushedAt: '2026-01-11T00:00:00Z' },
     { name: 'older', description: 'x', stars: 1, pushedAt: '2026-01-02T00:00:00Z' }
   ]);
-  assert.deepEqual(short.rows.map((row) => row.link.text), ['newest', 'kept']);
-  assert.equal(short.rows[0].chip, latestRowChip);
+  assert.deepEqual(short.rows.map((row) => row.link.text), ['kept']);
   /* MORE PINNED THAN THE PAIR RESERVES: the two columns share one height, so
-     the table can never draw more rows than the log holds open. */
+     the table can never draw more rows than the log holds open — and the six it
+     keeps are the six most recently pushed of the set, which is the same order
+     the rest of the table is in rather than a second rule. */
   const many = drawn(repoFixture(['r00', 'r01', 'r02', 'r03', 'r04', 'r05', 'r06', 'r07', 'r08']));
   assert.equal(many.rows.length, shownProjectRows);
-  assert.deepEqual(many.rows.map((row) => row.link.text), ['r00', 'r01', 'r02', 'r03', 'r04', 'r05', 'r06']);
-  /* EVERY DRAWN ROW PINNED: the repositories outside the set are all older
-     than the seven the pair holds, so nothing inside the table wears the chip
-     rather than the last row wearing it by accident. */
-  assert.deepEqual(many.rows.filter((row) => row.chip !== undefined), []);
+  assert.deepEqual(many.rows.map((row) => row.link.text), ['r00', 'r01', 'r02', 'r03', 'r04', 'r05']);
   /* A TIE between two pushes is resolved by the payload's own order rather
      than by chance: both instants are equal, the sort is stable, and the row
-     the payload listed first is the latest. */
+     the payload listed first is drawn first. */
   const tied = projectTableProps(
     projectsPanel([
-      { name: 'pinned-one', description: 'x', stars: 1, pushedAt: '2026-01-05T00:00:00Z', pinned: true },
-      { name: 'tie-first', description: 'x', stars: 1, pushedAt: '2026-01-09T00:00:00Z' },
-      { name: 'tie-second', description: 'x', stars: 1, pushedAt: '2026-01-09T00:00:00Z' }
+      { name: 'tie-first', description: 'x', stars: 1, pushedAt: '2026-01-09T00:00:00Z', pinned: true },
+      { name: 'tie-second', description: 'x', stars: 1, pushedAt: '2026-01-09T00:00:00Z', pinned: true },
+      { name: 'loud-but-loose', description: 'x', stars: 1, pushedAt: '2026-01-11T00:00:00Z' }
     ]),
     now
   );
-  /* ONE non-pinned row, not both halves of the tie: `tie-second` is as recent
-     as `tie-first` and is still outside the table, because "the one most
-     recently pushed outside the pinned set" is one row however close the next
-     one is. */
-  assert.deepEqual(tied.rows.map((row) => row.link.text), ['tie-first', 'pinned-one']);
   assert.deepEqual(
-    tied.rows.filter((row) => row.chip !== undefined).map((row) => row.link.text),
-    ['tie-first'],
-    'a tie must mark the row the payload listed first, not both and not neither'
+    tied.rows.map((row) => row.link.text),
+    ['tie-first', 'tie-second'],
+    'a tie must keep the order the payload listed, and an unpinned row must stay off the table however recent it is'
   );
   /* A NON-BOOLEAN FLAG is drift and refuses the whole payload — the captured
      face renders instead, which is the fail-closed direction issue 281 chose
@@ -1008,24 +1017,26 @@ test('the pinned rule never pads, never overflows the pair, and never conjures a
   assert.equal(drawn(repoFixture([])).rows.length, shownProjectRows);
 });
 
-/* ONE HEAD ROW, TWO PANELS, ONE LINE. The paired section has a single reserved
- * head and two envelopes behind it, so the note has to choose — and the choice
- * is not arbitrary: the sheet opens with the repositories, so their staleness
- * is what the head describes, and the contributions panel's own line is the
- * fallback for exactly the case where the table has nothing to say. Without
- * the fallback a wedged contributions panel would be silent while its column
- * quietly stopped advancing; without the precedence, two caveats would compete
- * for one row. */
-test('the sheet’s one head line is the table’s, and the log’s when the table has none', () => {
+/* THE SECTION SPEAKS NO FRESHNESS LINE (owner ruling, 2026-09-12, on the live
+ * page: "DATA THROUGH SEP 12, 2026 · LAST CAPTURE JUST NOW" goes). It composed
+ * one from whichever of its two envelopes had something to say; the figures in
+ * both columns are dated in their own rows, and an unavailable panel still
+ * renders its honest empty note where its rows would be.
+ *
+ * The claim is EXECUTED against the exact envelope shapes that used to produce
+ * each of the three lines, because "no note" is only worth pinning against the
+ * inputs that once made one. The channel is checked too: no field of the props
+ * carries the sentence by another name. */
+test('the paired section composes no freshness line from either of its envelopes (owner 2026-09-12)', () => {
   const now = new Date('2026-09-11T12:00:00Z');
-  const projects = {
+  const projectsEnvelope = {
     schema: 'panel/v1',
     id: 'coding-projects',
     kind: 'coding-projects/v2',
     title: 'Coding Projects',
     generatedAt: '2026-09-11T11:59:00Z',
     status: 'ok',
-    data: { repos: [{ name: 'kept', description: 'x', stars: 1, pushedAt: '2026-09-11T09:00:00Z' }] }
+    data: { repos: [{ name: 'kept', description: 'x', stars: 1, pushedAt: '2026-09-11T09:00:00Z', pinned: true }] }
   };
   const stalledActivity = {
     schema: 'panel/v1',
@@ -1036,24 +1047,215 @@ test('the sheet’s one head line is the table’s, and the log’s when the tab
     generatedAt: '2026-08-28T00:12:00Z',
     data: { ...goodActivity, endDate: '2026-08-28' }
   };
-  // A fresh table and a stalled log: the head carries the log's line, because
-  // the table has none to carry.
-  const fromLog = projectsCommitsProps([projects, stalledActivity], now);
-  assert.equal(fromLog.staleNote, 'data through Aug 28, 2026 · last capture 14d ago');
-  // A stale TABLE outranks it: one row, one caveat, and it is the one about
-  // what the sheet opens with.
-  const fromTable = projectsCommitsProps(
-    [{ ...projects, status: 'stale', generatedAt: '2026-09-11T07:00:00Z' }, stalledActivity],
-    now
-  );
-  assert.equal(fromTable.staleNote, 'stale · data as of 5h ago');
-  // Both fresh: no line at all, which is what keeps this from being the
-  // retired freshness badge.
+  const shapes = [
+    ['a fresh table and a stalled log', [projectsEnvelope, stalledActivity]],
+    ['a stale table', [{ ...projectsEnvelope, status: 'stale', generatedAt: '2026-09-11T07:00:00Z' }, stalledActivity]],
+    ['an unavailable table', [{ ...projectsEnvelope, status: 'unavailable', data: null }, stalledActivity]],
+    ['a table whose generatedAt stopped advancing', [{ ...projectsEnvelope, generatedAt: '2026-09-10T00:00:00Z' }, stalledActivity]],
+    ['no envelopes at all', [null, null]]
+  ];
+  for (const [name, envelopes] of shapes) {
+    const props = projectsCommitsProps(envelopes, now);
+    assert.equal(props.staleNote, undefined, `${name} composed a stale note`);
+    assert.ok(!('staleNote' in props), `${name} carries a staleNote field for one to come back on`);
+    /* And no other field is carrying the same sentence under a different name:
+       the exact words the three retired lines were built from must not reach
+       the reader through any channel of these props. The SENTENCES are scanned
+       rather than the bare word "stale", because the envelope's own `status`
+       legitimately carries that word as DATA and always has — it is what the
+       shell reads to draw the panel's state, and a scan that caught it would be
+       pinning against provenance rather than against a caption. */
+    const rendered = JSON.stringify(props).toLowerCase();
+    for (const phrase of ['data through', 'last capture', 'stale · ', 'data as of', 'showing captured figures']) {
+      assert.ok(!rendered.includes(phrase), `${name} put "${phrase}" back into the section's props`);
+    }
+  }
+  /* The CONTRIBUTIONS panel composes none either: the line left every head at
+     once (issue 323), so no section of the page dates its data in words, and
+     the envelope's own status attribute is what an audit reads. */
+  const calendar = contributionCalendarProps([stalledActivity, null], now);
+  assert.equal(calendar.staleNote, undefined, 'the calendar composed a stale note');
+  assert.ok(!('staleNote' in calendar), 'the calendar carries a staleNote field for one to come back on');
+});
+
+/* ---------------------------------------------------------------------------
+ * THE PHONE LOG IS NOT A SCROLL TRAP (owner ruling, 2026-09-12, on the live
+ * page: at that width the commit log is "quite busy ... an endless scroll
+ * field that I have to fight out of").
+ *
+ * Three separate decisions have to agree for that to be true, and each one is
+ * pinned where it is made: the STYLESHEET stops giving the box a height and an
+ * overflow of its own and reserves the collapsed log instead, the ADAPTER
+ * decides whether there is anything to reveal, and the COMPONENT slices
+ * against the adapter's own number and draws a real control. The rendered
+ * proof at both widths is the browser lane; what is pinned here is that each
+ * decision is made at all, and made from one constant.
+ * ------------------------------------------------------------------------ */
+
+/* The phone block that holds the log, whitespace-normalised. The sheet states
+ * ONE phone WIDTH (tests/sections.test.mjs pins that) across more than one
+ * block, so the block is selected by the rule it is being read for rather than
+ * by position — slicing from the first `max-width` would read the base rules
+ * that sit between the two. Normalised because the declarations below are
+ * written across lines for reading, and a pin that matched the line breaks
+ * would be a pin on the formatting rather than on the rule. */
+const phoneBlock = (() => {
+  const blocks = sheet
+    .split('@media (max-width: 45rem) {')
+    .slice(1)
+    .map((block) => block.split(/\n@media /)[0].replace(/\s+/g, ' '));
+  const holdingTheLog = blocks.filter((block) => block.includes('.commit-rows {'));
   assert.equal(
-    projectsCommitsProps([projects, { ...stalledActivity, status: 'ok', generatedAt: '2026-09-11T11:00:00Z', data: { ...goodActivity, endDate: '2026-09-11' } }], now)
-      .staleNote,
-    undefined
+    holdingTheLog.length,
+    1,
+    `the log's phone rule is declared in ${holdingTheLog.length} phone blocks; it is one rule`
   );
+  return holdingTheLog[0];
+})();
+
+test('on a phone the log reserves its collapsed self and takes no overflow (owner 2026-09-12)', () => {
+  const phoneRule = /\.commit-rows \{([^}]*)\}/.exec(phoneBlock)?.[1] ?? '';
+  assert.ok(phoneRule !== '', 'the phone block no longer overrides the log box at all');
+  /* NO HEIGHT OF ITS OWN and NO OVERFLOW OF ITS OWN — the two halves of "this
+     is not a scroll region". Both are stated rather than merely absent,
+     because the base rule declares each of them and an override that only
+     dropped one would leave a box that still traps a thumb. */
+  assert.match(phoneRule, /block-size: auto;/, 'the phone box kept a fixed height, so it still clips its rows');
+  assert.match(
+    phoneRule,
+    /overflow-y: visible;/,
+    'the phone box still takes an overflow of its own; the inner scroll is the trap the owner reported'
+  );
+  /* IT STILL RESERVES, and the reserve is the COLLAPSED log: five rows plus
+     the control under them and the gap above it. Recomputed from
+     `phoneLogRows` — the same constant the component slices with — and from the
+     two tokens the control is actually laid out with, so a box computed from
+     one set of numbers while its contents are drawn from another is not
+     expressible here either. */
+  assert.match(
+    phoneRule,
+    new RegExp(
+      `min-block-size: calc\\( ${phoneLogRows} \\* var\\(--commit-row-height\\) \\+ var\\(--control-target\\) \\+ var\\(--ledger-cell-gap\\) \\);`
+    ),
+    'the collapsed reserve is no longer five rows plus the control it is drawn with'
+  );
+  // And the control IS laid out with exactly those two tokens, or the reserve
+  // and the thing it reserves for are two different measurements.
+  const control = /\.commit-disclosure \{([^}]*)\}/.exec(sheet.replace(/\s+/g, ' '))?.[1] ?? '';
+  assert.match(control, /min-block-size: var\(--control-target\);/);
+  assert.match(control, /margin-block-start: var\(--ledger-cell-gap\);/);
+  /* The control declares no width, which is how every other full-width control
+     on this sheet takes its column — and it is what keeps the touch-floor sweep
+     in tests/experience.test.mjs able to measure both of its axes. */
+  assert.doesNotMatch(control, /inline-size:/);
+});
+
+test('the adapter builds a disclosure only when the log hides rows (owner 2026-09-12)', () => {
+  const now = new Date('2026-08-11T12:00:00Z');
+  const withCommits = (count) =>
+    projectsCommitsProps(
+      [
+        null,
+        {
+          schema: 'panel/v1',
+          id: activityPanelId,
+          kind: 'vcs-activity/v1',
+          title: 'Fixture Activity',
+          status: 'ok',
+          data: {
+            ...goodActivity,
+            recentCommits: Array.from({ length: count }, (_, index) => ({
+              repo: 'fixture-repo',
+              message: `fixture: subject ${index}`,
+              at: '2026-08-11T00:12:00Z'
+            }))
+          }
+        }
+      ],
+      now
+    );
+  /* THE THRESHOLD, from both sides and ON it. A log the collapsed list already
+     shows whole has nothing to reveal, so there is no control — a button
+     reading "show all 5" that changed nothing would be the honest-states floor
+     breaking on a control. */
+  for (const count of [0, 1, phoneLogRows - 1, phoneLogRows]) {
+    const props = withCommits(count);
+    assert.equal(props.logRows.length, count);
+    assert.equal(
+      props.logDisclosure,
+      undefined,
+      `a ${count}-row log built a control with nothing to reveal`
+    );
+    assert.ok(!('logDisclosure' in props), `a ${count}-row log carries the field for one to come back on`);
+  }
+  /* ONE ROW PAST IT is where the control starts, and it says how many rows the
+     press would bring — the figure is the adapter's, because a component that
+     composed it would be formatting. */
+  const justOver = withCommits(phoneLogRows + 1);
+  assert.deepEqual(justOver.logDisclosure, {
+    collapsed: phoneLogRows,
+    more: `show all ${phoneLogRows + 1}`,
+    fewer: 'show fewer'
+  });
+  // The wire's own cap, which is the real payload's shape.
+  const full = withCommits(30);
+  assert.equal(full.logRows.length, 30, 'every row the wire carried still reaches the component');
+  assert.equal(full.logDisclosure.collapsed, phoneLogRows);
+  assert.equal(full.logDisclosure.more, 'show all 30');
+  assert.equal(full.logDisclosure.fewer, logCollapseWord);
+  // The words are the module's, spelled once: the component renders them and
+  // composes neither.
+  assert.equal(logExpandWord(30), 'show all 30');
+  assert.equal(logCollapseWord, 'show fewer');
+  // And the list the control names is the adapter's address, not one the
+  // component invented, and it is NOT the column's anchor: the anchor addresses
+  // the head too, and a control claiming to operate the head describes
+  // something it does not touch.
+  assert.equal(full.logListId, commitLogListId);
+  assert.notEqual(full.logListId, full.logAnchor);
+});
+
+test('the log draws its collapsed slice and a real disclosure, and neither on a desktop', () => {
+  /* THE SLICE IS THE ADAPTER'S NUMBER. A literal here would be the same fact
+     in two places, which is how the box and the list come to hold different
+     numbers of rows. */
+  assert.match(
+    spread,
+    /logRows\.slice\(0, logDisclosure\.collapsed\)/,
+    'the collapsed log no longer slices against the adapter’s own count'
+  );
+  /* AND ONLY WHERE THERE IS SOMETHING TO REVEAL AND ROOM TO NEED IT: both
+     conditions guard the slice, so a desktop draws the whole log and a phone
+     with nothing hidden draws it too. */
+  assert.match(spread, /logDisclosure !== undefined && !wide && !expanded/);
+  /* A REAL BUTTON, with the disclosure's two required attributes and the
+     list's own id in `aria-controls`. A div with a click handler would carry
+     none of the keyboard operation or the role this brings for free. */
+  assert.match(spread, /<button\s+class="commit-disclosure"\s+type="button"\s+aria-expanded=\{expanded\}\s+aria-controls=\{logListId\}/);
+  assert.match(spread, /onclick=\{\(\) => \(expanded = !expanded\)\}/);
+  /* WORDS, NOT A MARK: the control prints the adapter's two words and draws no
+     glyph, so a reader who cannot see a drawing still reads what pressing it
+     does. */
+  assert.match(spread, /\{expanded \? logDisclosure\.fewer : logDisclosure\.more\}<\/button>/);
+  assert.ok(
+    !/class="commit-disclosure"[\s\S]*?<Icon/.test(spread),
+    'the disclosure grew a mark; it is a control a reader reads'
+  );
+  /* ABSENT ON A DESKTOP rather than hidden, for the reason the short identity
+     beside it is: a `display: none` control is still something a screen reader
+     can be walked into, and there is nothing for it to do where the box keeps
+     its reserve and scrolls. */
+  assert.match(spread, /\{#if logDisclosure !== undefined && !wide\}/);
+  assert.doesNotMatch(sheet, /\.commit-disclosure \{[^}]*display: none/);
+  /* THE STATE IS COMPONENT-LOCAL AND NEVER PERSISTED (owner ruling: the log
+     opens closed). A stored answer would decide the page's height before a
+     reader has looked at it. */
+  assert.match(spread, /let expanded = \$state\(false\);/);
+  assert.doesNotMatch(spread, /localStorage|sessionStorage|document\.cookie/);
+  /* The list is a real element with the id the control names, and the rows sit
+     inside it — so `aria-controls` points at the thing that grows rather than
+     at the box around it. */
+  assert.match(spread, /<div class="commit-list" id=\{logListId\}>/);
 });
 
 /* THE SHORT IDENTITY IS NOT RENDERED ON A PHONE (owner directive, 2026-09-11:
