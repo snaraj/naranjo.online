@@ -453,6 +453,14 @@ func validateCodingProjectsSpec(spec *codingProjectsFetchSpec) error {
 		if err := validateQueryDocument("coding-projects repositories document", spec.Repositories); err != nil {
 			return err
 		}
+		// The mapper refuses an answer whose viewer login is not the
+		// configured account; a document that never selects the login would
+		// make every credentialed round refuse at runtime. That is fail-closed,
+		// but it is the wrong place to learn it: the selection is required
+		// here, at construction, the way the variables above are.
+		if !selectsViewerLogin(spec.Repositories.Query) {
+			return errors.New("coding-projects fetch spec: the repositories document does not select the viewer's login, so its answer could not be checked against the configured account")
+		}
 		if spec.KeyEnvName == "" {
 			return errors.New("coding-projects fetch spec: the repositories document requires a configured credential")
 		}
@@ -506,6 +514,17 @@ func validateVCSCommitsSpec(spec *vcsCommitsFetchSpec) error {
 // over the upstream's own defaults — a wrong answer rather than a failed one —
 // which is why this is a construction-time refusal rather than a runtime
 // check.
+// selectsViewerLogin reports whether a document opens its viewer block with
+// the viewer's own login — the selection the credentialed repository document
+// must carry so its answer can be checked against the configured account.
+// Braces are spaced out and whitespace collapsed first, so the check reads the
+// selection rather than the author's layout of it.
+func selectsViewerLogin(query string) bool {
+	spaced := strings.NewReplacer("{", " { ", "}", " } ").Replace(query)
+	normalized := strings.Join(strings.Fields(spaced), " ") + " "
+	return strings.Contains(normalized, "viewer { login ")
+}
+
 func validateQueryDocument(what string, spec *graphQLDocumentSpec, variables ...string) error {
 	if spec == nil {
 		return fmt.Errorf("%s: is required", what)

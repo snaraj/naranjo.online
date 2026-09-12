@@ -863,7 +863,7 @@ func projectsSpecWithQuery() *codingProjectsFetchSpec {
 	spec := projectsSpec()
 	spec.Repositories = &graphQLDocumentSpec{
 		Endpoint:    "https://api.example.test/graphql/repositories",
-		Query:       "query { repositories }",
+		Query:       "query { viewer { login repositories } }",
 		Headers:     map[string]string{"Accept": "application/json", "Content-Type": "application/json"},
 		MaxBytes:    1 << 17,
 		ContentType: "application/json",
@@ -1426,6 +1426,9 @@ func TestTheRepositoryQueryEndpointIsHostCheckedToo(t *testing.T) {
 		},
 		"a query with no credential to ride": func(s *codingProjectsFetchSpec) {
 			s.KeyEnvName, s.KeyHeader, s.AuthenticatedMinIntervalMinutes = "", "", 0
+		},
+		"a query that never asks whose repositories it lists": func(s *codingProjectsFetchSpec) {
+			s.Repositories.Query = "query { viewer { repositories } }"
 		},
 		"the listing itself": func(s *codingProjectsFetchSpec) {
 			s.ListingEndpoint = "https://elsewhere.example.net/users/owner/repos"
@@ -2740,8 +2743,10 @@ func TestARefusedPrivateEntryIsNeverNamedInALogLine(t *testing.T) {
 		"a negative count": {
 			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: windowDay(1), count: -1}}},
 		},
+		// The instant IS the name: a parse error quotes its input, so a
+		// wrapped one would carry the upstream's bytes into the log line.
 		"an unparseable bucket instant": {
-			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: "yesterday", count: 1}}},
+			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: secret, count: 1}}},
 		},
 		"a bucket outside the window": {
 			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: windowDay(commitLogWindowDays + 3), count: 1}}},

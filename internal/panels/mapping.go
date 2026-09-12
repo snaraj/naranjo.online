@@ -891,7 +891,9 @@ func mapCommitContributions(raw []byte, owner string, now time.Time) (string, []
 		for _, day := range days {
 			at, err := time.Parse(time.RFC3339, day.OccurredAt)
 			if err != nil {
-				return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries a bucket instant that does not parse: %w", position, err)
+				// Not wrapped: the parse error quotes the upstream's own bytes,
+				// and this entry may be the private one (requirement 12).
+				return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries a bucket instant that does not parse", position)
 			}
 			if at.Before(oldest) || at.After(newest) {
 				return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries a bucket at %s, outside the requested window", position, at.UTC().Format(time.RFC3339))

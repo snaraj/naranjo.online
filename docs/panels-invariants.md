@@ -50,8 +50,9 @@ Two payloads grew on 2026-09-11 and both were measured against the same
 `privateActivity`, one counted entry per day of the thirty-day log window. The
 MAXIMAL document — a full year of week columns at five-digit daily counts, 30
 commit rows each carrying a forty-hex identity, a hundred-character repository
-name and a subject at the truncation bound, plus 30 private days at their
-widest figures — measures **14,484 bytes** served, 116,588 under the ceiling.
+name and a subject at the truncation bound, plus 33 private days (every date
+the admission window, its slack and its skew can touch) at their widest
+figures — measures **14,667 bytes** served, 116,405 under the ceiling.
 Nothing a live round can produce is larger, because every term is at the bound
 its own admission enforces. `TestActivityPayloadFitsTheOwnerBudget` builds it
 and fails if it grows past 15,000 without somebody re-measuring.

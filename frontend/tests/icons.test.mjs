@@ -255,11 +255,15 @@ test('the shell states the family exactly once, and hides it from assistive tech
   /* Size is the slot's token, never a number: the three declared sizes are
      the only ones, and the component names no length of its own. */
   assert.match(iconComponent, /class="icon icon-\{slot\}"/);
-  for (const token of ['--icon-chrome', '--icon-row', '--icon-cell']) {
-    assert.match(iconComponent, new RegExp(`var\\(${token}\\)`), `the shell no longer reads ${token}`);
-    assert.match(styles, new RegExp(`\\s${token}:\\s*[\\d.]+rem;`), `${token} is not declared in styles.css`);
+  for (const token of ['--icon-chrome', '--icon-row', '--icon-cell', '--icon-gap']) {
+    if (token !== '--icon-gap') {
+      assert.match(iconComponent, new RegExp(`var\\(${token}\\)`), `the shell no longer reads ${token}`);
+    }
+    /* Declared exactly once: a second declaration of the same token is a
+       second copy free to disagree with the first (review of 588e64b). */
+    const declared = styles.match(new RegExp(`\\s${token}:\\s*[\\d.]+rem;`, 'g')) ?? [];
+    assert.equal(declared.length, 1, `${token} is declared ${declared.length} times in styles.css, not once`);
   }
-  assert.match(styles, /\s--icon-gap:\s*[\d.]+rem;/, 'the mark-to-word distance is not a token');
   const style = /<style>([\s\S]*)<\/style>/.exec(iconComponent)?.[1].replace(/\/\*[\s\S]*?\*\//g, '');
   assert.doesNotMatch(style, /color|background|fill|stroke/, 'the shell paints; its ink is inherited');
   /* Read as declarations rather than as a negative match: a lookahead after
