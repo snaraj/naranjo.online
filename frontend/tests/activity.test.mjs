@@ -6,6 +6,7 @@ import {
   activityCells,
   activityEntriesNote,
   activityPanelId,
+  activityStripEmptyNote,
   commitPullRequestNumber,
   commitReferenceLinkLabel,
   commitReferenceUrl,
@@ -536,11 +537,16 @@ test('the calendar renders through the one shared grid component', () => {
   // renders, so the strip's scroll position, its keyboard cursor and its
   // detail card all survive a set change instead of being three of each.
   assert.equal((component.match(/<ContributionGrid/g) ?? []).length, 1);
-  // Totals and streak ride UNDER the grid as plain text, so a count is never
-  // encoded by color alone. The words arrive as data with the figure — one
-  // caption per set, because the set the reader chose is the set the sentence
-  // has to be about.
-  assert.match(component, /<p class="commit-caption">\{active\.caption\}<\/p>/);
+  /* AND NOTHING UNDER IT (owner directive, 2026-09-12, issue 323; the standing
+     ruling already forbids a chart caption). The sentence under the grid
+     restated figures the grid's own cells, the segments and the board above
+     all carry — "30.4B tokens over 30 days · peak 3B · data through
+     2026-09-11" — so the block is the segments and the grid. The non-colour
+     channel the dataviz floor asks for is unaffected: every cell prints its
+     own count in its detail card, which is where a reader meets it. */
+  assert.ok(!component.includes('commit-caption'), 'the calendar draws a caption row again');
+  assert.ok(!component.includes('caption'), 'the calendar still reads a caption off its set');
+  assert.ok(!sheet.includes('commit-caption'), 'the sheet still styles a caption row');
 });
 
 test('the adapter renders the figures, the strip, and the noun the panel always showed', () => {
@@ -560,13 +566,14 @@ test('the adapter renders the figures, the strip, and the noun the panel always 
   assert.equal(rendered.title, undefined, 'the commit block grew a panel label back');
   assert.equal(rendered.status, 'ok');
   assert.equal(rendered.generatedAt, '2026-08-11T00:12:00Z');
-  /* The two headline figures are the calendar's own CAPTION now (owner
-     directive, 2026-09-03, issue 287): the section cycles three calendars and
-     each one states its own reading under the grid, so a figures row belonging
-     to only one of them would go stale the moment a reader pressed a segment.
-     The words are the same words. */
+  /* AND NO READING SENTENCE (owner directive, 2026-09-12, issue 323). The two
+     headline figures became the calendar's own caption at issue 287 and left
+     the page altogether here: "1,287 contributions · 9-day streak" over a grid
+     that draws every one of those days is the same fact twice, and the
+     standing ruling already forbids a chart caption. What a reader can still
+     read off any day is the day's own count, in the cell's detail card. */
   const contributions = rendered.sets[0];
-  assert.equal(contributions.caption, '1,287 contributions · 9-day streak');
+  assert.equal(contributions.caption, undefined, 'a set composed a reading sentence again');
   assert.equal(contributions.noun, 'contribution');
   assert.equal(contributions.stripLabel, 'contribution calendar: 2 weeks of daily counts, newest last');
   assert.deepEqual(contributions.columns, toColumns(activityCells(parseVCSActivity(goodActivity))));
@@ -578,7 +585,10 @@ test('the adapter renders the figures, the strip, and the noun the panel always 
      adapter: one mislabeled envelope, two blocks, one verdict. */
   assert.deepEqual(projectsCommitsProps([null, { ...envelope, kind: 'boss-log/v1' }]).logRows, []);
   assert.equal(mislabeled.sets[0].stripLabel, 'contribution calendar');
-  assert.equal(mislabeled.sets[0].caption, 'activity data unavailable');
+  /* The empty FACE is the grid's own note, which is where a reader meets it:
+     the caption that used to restate it is gone, and the note is not. */
+  assert.equal(mislabeled.sets[0].caption, undefined);
+  assert.equal(mislabeled.sets[0].emptyNote, activityStripEmptyNote);
 });
 
 /* THE CALENDAR TELLS THE TRUTH WHEN ITS PRODUCER STOPS (issue 285). The live
@@ -589,7 +599,7 @@ test('the adapter renders the figures, the strip, and the noun the panel always 
  * the window trails the reader's today, so every day past the payload's end
  * is a dated absence the reader can see growing; and the panel carries the
  * usage tracker's data-through line, from the one shared builder. */
-test('a stalled payload draws its missing days as dated absences up to today, under a stale line (issue 285)', async () => {
+test('a stalled payload draws its missing days as dated absences up to today, and says so only as data (issue 285, issue 323)', async () => {
   // A Sunday-start fortnight ending on Thursday 2026-08-20, exactly the shape
   // the origin serves: seven-day columns, the final one padded past endDate.
   const stalled = {
@@ -611,7 +621,14 @@ test('a stalled payload draws its missing days as dated absences up to today, un
   };
   const now = new Date('2026-09-03T10:00:00Z');
   const rendered = contributionCalendarProps([envelope, null], now);
-  assert.equal(rendered.staleNote, 'data through Aug 20, 2026 · last capture 14d ago');
+  /* THE LINE IS GONE, THE WINDOW IS NOT (owner directive, 2026-09-12, issue
+     323). Issue 285's repair was two halves: the window trails the reader's
+     today so every day past the payload's end is a dated absence the reader
+     can SEE growing, and the head carried a sentence dating the payload. The
+     owner removed the sentence after reading it on the live page; the half
+     that draws the gap is the half that was doing the work, and it is measured
+     in full below. */
+  assert.equal(rendered.staleNote, undefined, 'the calendar composed a stale line again');
 
   const columns = rendered.sets[0].columns;
   assert.equal(columns.length, pendingWeeks, 'the fixed trailing window lost its width');
@@ -632,22 +649,29 @@ test('a stalled payload draws its missing days as dated absences up to today, un
   // always did: the anchor changes nothing when the producer is live.
   const fresh = { ...envelope, status: 'ok' };
   const live = contributionCalendarProps([fresh, null], new Date('2026-08-20T12:00:00Z'));
-  assert.equal(live.staleNote, undefined);
   assert.deepEqual(live.sets[0].columns, calendarColumns(activityCells(parseVCSActivity(stalled))));
   // A producer a time zone ahead of the reader keeps its own end.
   const ahead = contributionCalendarProps([fresh, null], new Date('2026-08-19T23:30:00Z'));
   assert.deepEqual(ahead.sets[0].columns, live.sets[0].columns);
-  // An ok envelope whose generatedAt has silently stopped advancing says so too.
-  assert.equal(contributionCalendarProps([fresh, null], now).staleNote, 'data through Aug 20, 2026 · last capture 14d ago');
-  // The component hands the line to the shell's HEAD — the one row the card
-  // already reserves — never to its body, whose every region is a fixed box
-  // so the calendar's arrival costs no layout shift (the reserve lane).
-  assert.match(component, /<PanelShell \{status\} \{generatedAt\} note=\{staleNote\}>/);
+  /* WHAT THE PAGE STILL SAYS ABOUT STALENESS, it says as DATA. The envelope's
+     own status and instant ride the shell as attributes on every panel — an ok
+     envelope whose generatedAt has silently stopped advancing is still
+     auditable from the DOM — and what left is the sentence a reader was being
+     shown over the figures it qualified. */
+  assert.equal(contributionCalendarProps([fresh, null], now).staleNote, undefined);
+  assert.equal(contributionCalendarProps([envelope, null], now).status, 'stale');
+  assert.equal(
+    contributionCalendarProps([envelope, null], now).generatedAt,
+    '2026-08-20T09:50:34Z'
+  );
+  assert.match(component, /<PanelShell \{status\} \{generatedAt\}>/);
   assert.doesNotMatch(component, /\{title\}/, 'the commit block renders a panel label again (issue 294)');
-  assert.doesNotMatch(component, /staleNote\}<\/p>/, 'the stale line grew the reserved body');
+  assert.ok(!component.includes('staleNote'), 'the commit block carries a stale-note prop again');
   const shell = await readFile(new URL('../src/lib/components/PanelShell.svelte', import.meta.url), 'utf8');
-  assert.match(shell, /\{#if note\}<span class="panel-note" data-panel-note>\{note\}<\/span>\{\/if\}/);
-  assert.match(shell, /\.panel-note \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;/s);
+  assert.ok(!shell.includes('panel-note'), 'the shell draws a freshness line again');
+  assert.ok(!shell.includes('note'), 'the shell still takes a note prop');
+  assert.match(shell, /data-panel-status=\{status\}/);
+  assert.match(shell, /data-panel-generated-at=\{generatedAt\}/);
 });
 
 test('an empty commit list says so instead of showing invented history', () => {
@@ -746,9 +770,11 @@ test('the strip owns fixed geometry and its own overflow', () => {
      ledger redesign (owner directive, 2026-09-03, issue 287); what changed is
      which file states them, because the sheet's row rhythm is a page-level
      decision several sections share (styles.css) rather than one component's.
-     The caption under the grid is the figures row's successor and holds the
-     same line's height. */
-  assert.match(sheet, /\.commit-caption \{[^}]*min-block-size: 1\.25rem/);
+     The caption that used to close the block — and the two-line reserve the
+     phone held open for it, so pressing a segment could not grow it — left
+     with the caption itself (issue 323). Nothing under the grid can shift the
+     page because there is nothing under the grid. */
+  assert.ok(!sheet.includes('commit-caption'), 'the sheet still reserves a caption row');
   // SEVEN rows at the 44px touch floor (owner design decision, 2026-09-11,
   // issue 318; ten since issue #315, five since issue 157): every entry row can
   // carry two real links, so the reservation is a multiplication of the reserve

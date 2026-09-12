@@ -103,8 +103,11 @@ const dataDrivenNames = {
   /* The projects table's head marks and its counters' glyphs (issue 317). */
   '../src/lib/components/LedgerSpread.svelte': ['pull', 'tag', 'star', 'clock'],
   '../src/lib/projects.ts': ['star', 'pull', 'tag', 'clock'],
-  /* The board's title mark and the Sessions card's, decided by the adapter. */
-  '../src/lib/token-usage.ts': ['chip', 'sessions'],
+  /* The records card's mark, decided by the adapter. The board's own title
+     mark left with the title (owner directive, 2026-09-12, issue 323); `chip`
+     itself did not leave the page — the Trackers section head draws it, one
+     line above, which is where the page names the thing this board counts. */
+  '../src/lib/token-usage.ts': ['sessions'],
   /* The strip's lead mark, in the binding layer where the domain lives. */
   '../src/lib/blocks/bossTicker.ts': ['sword'],
   /* The gallery segment's mark, derived from what the set holds. */

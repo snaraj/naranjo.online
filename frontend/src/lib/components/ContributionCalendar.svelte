@@ -35,7 +35,7 @@
   import FeedCard from './FeedCard.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let { status, generatedAt, sets, staleNote }: ContributionCalendarProps = $props();
+  let { status, generatedAt, sets }: ContributionCalendarProps = $props();
 
   /* Which set is drawn, by KEY rather than by index: the payload decides how
      many sets there are (a source that reports no daily series contributes
@@ -50,7 +50,7 @@
 <!-- No panel label (owner directive, 2026-09-04, issue 294): the envelope's
   title names the version-control host, and a calendar that opens on a token
   series cannot wear it. The segments name every source, one line below. -->
-<PanelShell {status} {generatedAt} note={staleNote}>
+<PanelShell {status} {generatedAt}>
   <FeedCard variant="ledger">
     {#if sets.length > 0 && active}
       <div class="commit-segments">
@@ -72,7 +72,6 @@
           cardTitle={active.label}
           fullWidth />
       </div>
-      <p class="commit-caption">{active.caption}</p>
     {/if}
   </FeedCard>
 </PanelShell>

@@ -61,13 +61,11 @@ import {
   commitRepoUrl,
   commitShaUrl,
   commitTitleLink,
-  contributionsLabel,
   isValidCommitSha,
   parseVCSActivity
 } from './activity.ts';
 import type { CalendarSet, CommitLogRow, ContributionCalendarProps, LedgerSpreadProps } from './blocks.ts';
 import {
-  addDays,
   calendarColumns,
   formatMagnitude,
   formatWhole,
@@ -83,12 +81,7 @@ import type {
   VCSPrivateDay
 } from './panels';
 import { codingProjectsPanelId, projectTableProps } from './projects.ts';
-import {
-  sourceName,
-  tokenUsagePanelId,
-  tokenUsageSources,
-  usageDataThrough
-} from './token-usage.ts';
+import { sourceName, tokenUsagePanelId, tokenUsageSources } from './token-usage.ts';
 
 /* The panels each block binds, in the order its adapter reads them. The block
  * modules name them once, from here, so the order a binding declares and the
@@ -168,31 +161,6 @@ export function tokenSetLabel(source: string): string {
 
 export const contributionsEmptyNote = activityStripEmptyNote;
 export const tokenSeriesEmptyNote = 'no daily series captured';
-
-/* The contributions caption: the total the payload reported, worded against
- * the coverage it declared, and the streak beside it. */
-export function contributionsCaption(activity: VCSActivityData): string {
-  return `${formatWhole(activity.totalContributions)}${contributionsLabel(activity.coverage)} · ${formatWhole(activity.streak)}-day streak`;
-}
-
-/* One token source's caption. Every number in it is measured from the days the
- * payload actually carries: the sum over them, how many of them there are, the
- * largest single day, and the last day covered. */
-export function tokenCaption(source: TokenUsageSource): string {
-  const totals = source.series?.totals ?? [];
-  const days = totals.length;
-  const sum = seriesSum(totals);
-  const peak = totals.reduce((largest, value) => (value > largest ? value : largest), 0);
-  const through = source.series ? addDays(source.series.startDate, days - 1) : '';
-  const parts = [
-    `${formatMagnitude(sum)} tokens over ${formatWhole(days)} ${days === 1 ? 'day' : 'days'}`,
-    `peak ${formatMagnitude(peak)}`
-  ];
-  if (through !== '') {
-    parts.push(`data through ${through}`);
-  }
-  return parts.join(' · ');
-}
 
 /* The anchor every set's calendar ends on. It is the contributions window's
  * own last day — today while the producer is live, and the payload's own end
@@ -330,7 +298,6 @@ export function contributionCalendarProps(
     key: 'contributions',
     label: contributionsSetLabel,
     columns: activity === null ? [] : calendarColumns(activityCells(activity), pendingWeeks, anchor),
-    caption: activity === null ? contributionsEmptyNote : contributionsCaption(activity),
     noun: 'contribution',
     stripLabel:
       activity === null
@@ -360,7 +327,6 @@ export function contributionCalendarProps(
       key: source.label,
       label: tokenSetLabel(source.label),
       columns: calendarColumns(seriesCells(series.startDate, series.totals), pendingWeeks, anchor),
-      caption: tokenCaption(source),
       noun: 'token',
       stripLabel: `${sourceName(source.label)} token calendar: daily totals, newest last`,
       /* The note the grid would draw if this set were ever empty. The guard
@@ -384,19 +350,12 @@ export function contributionCalendarProps(
   return {
     status: activityEnvelope?.status ?? 'unavailable',
     generatedAt: activityEnvelope?.generatedAt,
-    sets,
-    /* The staleness line is the CALENDAR's, because the calendar is what this
-       block is; the token sets carry their own data-through inside their
-       captions, which is where a reader meets them. */
-    staleNote:
-      activityStaleNote(activityEnvelope, activity, now) ??
-      usageThroughNote(usageEnvelope, sources, now)
+    sets
   };
 }
 
-/* The contributions panel's own staleness line, read by both adapters below
- * so the calendar and the log cannot describe the same envelope two different
- * ways. */
+/* The contributions panel's own staleness line. The calendar's head stopped
+ * drawing one at issue 323, so the paired section below is the last reader. */
 function activityStaleNote(
   envelope: PanelEnvelope | null,
   activity: VCSActivityData | null,
@@ -451,19 +410,4 @@ export function projectsCommitsProps(
     logNote: activityEntriesNote,
     staleNote: table.staleNote ?? activityStaleNote(activityEnvelope, activity, now)
   };
-}
-
-/* The token panel's own data-through line, used only when the calendar has
- * nothing to say about staleness: two stale lines over one section would be
- * the same caveat twice, and the calendar's is the one that describes what the
- * section leads with. */
-function usageThroughNote(
-  envelope: PanelEnvelope | null,
-  sources: readonly TokenUsageSource[],
-  now: Date
-): string | undefined {
-  if (envelope === null) {
-    return undefined;
-  }
-  return panelStaleNote(envelope.status, envelope.generatedAt, usageDataThrough(sources), now);
 }

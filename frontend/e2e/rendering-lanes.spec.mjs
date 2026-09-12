@@ -1768,8 +1768,7 @@ test('every model row the card draws is a real member with a real rule', async (
  *
  * ONE PASS, because there is no longer a second state to walk into (owner
  * directive, 2026-09-11, issue 316). The lane used to press every card and
- * measure again; the press is gone, the inversion the adapter composed is
- * already on the board when it arrives, and clicking six cards to observe the
+ * measure again; the press is gone, and clicking six cards to observe the
  * identical geometry twice would be a lane measuring its own no-op.
  */
 test('every board card shows all of its own content (owner 2026-09-11)', async ({
@@ -1789,7 +1788,8 @@ test('every board card shows all of its own content (owner 2026-09-11)', async (
         };
         return {
           label: card.querySelector('.board-label')?.textContent.trim() ?? '',
-          turned: card.getAttribute('data-turned'),
+          paint: getComputedStyle(card).backgroundColor,
+          ink: getComputedStyle(card).color,
           scrollHeight: card.scrollHeight,
           clientHeight: card.clientHeight,
           rows: rows.length,
@@ -1825,10 +1825,8 @@ test('every board card shows all of its own content (owner 2026-09-11)', async (
         `"${card.label}" draws ${card.facts} facts ${at} and shows ${card.factsShown}`
       ).toBe(card.facts);
     }
-    /* Non-vacuity, three ways: a board whose cards all held a single short
-       figure would satisfy everything above without exercising the shapes that
-       clipped, and a board with no inverted card would leave the token remap
-       unmeasured by the one lane that reads every card. */
+    /* Non-vacuity: a board whose cards all held a single short figure would
+       satisfy everything above without exercising the shapes that clipped. */
     expect(
       Math.max(...observed.map((card) => card.rows)),
       `no card draws model rows at ${width}px; the shape that clipped is not on the page`
@@ -1837,10 +1835,17 @@ test('every board card shows all of its own content (owner 2026-09-11)', async (
       Math.max(...observed.map((card) => card.facts)),
       `no card draws a fact ladder at ${width}px`
     ).toBeGreaterThan(1);
+    /* AND EVERY CARD WEARS ONE PAINT (owner directive, 2026-09-12, issue 323:
+       "there is no reason for Codex to be black while the rest are not,
+       everything should follow the same pattern"). Measured as COMPUTED
+       colour on every card the board drew, at both widths, so a remap
+       restored in the sheet, the component or the adapter fails here whichever
+       of the three brought it back. */
+    const paints = new Set(observed.map((card) => `${card.paint} on ${card.ink}`));
     expect(
-      observed.filter((card) => card.turned === 'true').length,
-      `no card on the board is inverted at ${width}px; the adapter's rhythm is not on the page`
-    ).toBe(1);
+      [...paints],
+      `the board draws ${paints.size} different paints at ${width}px; every card must wear one`
+    ).toHaveLength(1);
   }
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -2087,8 +2092,7 @@ test('the daily line scrubs to a day and the card reads it, moving nothing (owne
     await settled(page);
     /* The follower source's own card: tokenCards composes the total, then one
        card per source in wire order, so the second source's card is the third
-       on the board. It is also the one the adapter draws inverted, which is
-       why the scrub is exercised on ink rather than on paper. */
+       on the board. */
     const card = page.locator('.board-card').nth(2);
     const figure = card.locator('.board-figure');
     const spark = card.locator('.spark');
@@ -2098,7 +2102,6 @@ test('the daily line scrubs to a day and the card reads it, moving nothing (owne
        box read before scrolling names a point no pointer can reach. Scrolled
        once, so every frame below is compared against the same origin. */
     await spark.scrollIntoViewIfNeeded();
-    await expect(card).toHaveAttribute('data-turned', 'true');
     const days = Number(await spark.getAttribute('aria-valuemax')) + 1;
     expect(days, `the staged line is ${days} days rather than the seven this lane reads`).toBe(7);
     const rest = (await figure.textContent()).trim();
@@ -2443,12 +2446,14 @@ test('the page spends its one mark on its own green, legible as text, in every r
  * board is clicked exactly as it used to be, and every paint the press used to
  * change is read before and after and must be IDENTICAL.
  *
- * The inversion itself is still measured, because removing the press must not
- * quietly remove the rhythm with it: the card the adapter composed inverted
- * really wears the swapped ink, in both motion preferences, with nothing
- * animating it into place.
+ * AND EVERY CARD WEARS THE SAME PAINT (owner directive, 2026-09-12, issue
+ * 323). The rhythm the press used to toggle is gone too — "there is no reason
+ * for Codex to be black while the rest are not, everything should follow the
+ * same pattern" — so the second half of this lane is the same measurement with
+ * the opposite expectation again: every card on the board is read, in both
+ * motion preferences, and they must all paint identically.
  */
-test('a card never repaints when it is clicked, and the composed inversion is still painted (owner 2026-09-11, issue 316)', async ({
+test('a card never repaints when it is clicked, and every card wears one paint (owner 2026-09-11 issue 316, 2026-09-12 issue 323)', async ({
   browser,
 }) => {
   for (const motion of ['no-preference', 'reduce']) {
@@ -2460,7 +2465,6 @@ test('a card never repaints when it is clicked, and the composed inversion is st
     await visit(page);
     const readCard = (card) =>
       card.evaluate((node) => ({
-        turned: node.getAttribute('data-turned'),
         pressed: node.getAttribute('aria-pressed'),
         tag: node.tagName.toLowerCase(),
         background: getComputedStyle(node).backgroundColor,
@@ -2479,28 +2483,30 @@ test('a card never repaints when it is clicked, and the composed inversion is st
        would read here as the press having changed something. */
     await card.click();
     await page.mouse.move(0, 0);
-    await expect(card).toHaveAttribute('data-turned', before.turned);
     const after = await readCard(card);
     expect(after.background, `clicking a card repainted its paper with motion ${motion}`).toBe(
       before.background
     );
     expect(after.ink, `clicking a card repainted its ink with motion ${motion}`).toBe(before.ink);
 
-    /* AND THE COMPOSED INVERSION IS REAL. Non-vacuity for everything above: a
-       board that had lost the [data-turned] remap entirely would satisfy every
-       "nothing changed" assertion perfectly. */
-    const inverted = page.locator('.board-card[data-turned="true"]').first();
-    await expect(inverted, 'no card on the board is inverted').toBeVisible();
-    const paint = await readCard(inverted);
-    expect(paint.background, 'an inverted card wears the same paper as a plain one').not.toBe(
-      before.background
-    );
-    expect(paint.background, "an inverted card's paper is not the plain card's ink").toBe(
-      before.ink
-    );
-    expect(paint.ink, "an inverted card's ink is not the plain card's paper").toBe(
-      before.background
-    );
+    /* AND NO CARD IS PAINTED DIFFERENTLY FROM ITS NEIGHBOURS. Every card the
+       board drew is read — not a sample — so a remap that came back on any one
+       of the six fails here, and the attribute that used to carry it is gone
+       from the DOM entirely. */
+    await expect(page.locator('.board-card[data-turned]')).toHaveCount(0);
+    const cards = page.locator('.board-card');
+    const drawn = await cards.count();
+    expect(drawn, 'the board drew no cards to compare').toBeGreaterThan(1);
+    for (let index = 0; index < drawn; index += 1) {
+      const paint = await readCard(cards.nth(index));
+      expect(
+        paint.background,
+        `card ${index} wears a different paper with motion ${motion}`
+      ).toBe(before.background);
+      expect(paint.ink, `card ${index} wears a different ink with motion ${motion}`).toBe(
+        before.ink
+      );
+    }
     await page.unrouteAll({ behavior: 'ignoreErrors' });
     await context.close();
   }
@@ -3684,10 +3690,21 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
   });
   await visit(page);
 
-  const totals = await page.locator('.commit-caption').innerText();
-  expect(totals, 'the panel fell back to its empty state on an old-shape payload').not.toContain(
-    'no activity data'
-  );
+  /* The calendar drew REAL DAYS rather than its empty face. Read off the grid
+     itself now: the sentence under it that used to carry this claim left with
+     every other chart caption (owner directive, 2026-09-12, issue 323), and
+     the cells are the stronger subject anyway — the empty face is one note in
+     place of the whole strip, so a measured cell is proof the payload was
+     admitted. */
+  await page.locator('.commit-segment').filter({ hasText: 'Contributions' }).click();
+  await expect(
+    page.locator('.grid-empty'),
+    'the panel fell back to its empty state on an old-shape payload'
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-grid-cell][data-grid-absent="false"]').first(),
+    'the calendar drew no measured day from an old-shape payload'
+  ).toBeVisible();
 
   const rows = page.locator('.commit-row');
   const rowCount = await rows.count();
@@ -6257,16 +6274,18 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
 });
 
 /* THE HEAD ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
- * issue 292). The Projects table renders no panel label, so its head holds
- * only the stale line when there is one — and a row whose height came from
- * its title alone would collapse to the note, then to nothing, and grow back
- * the moment a note arrived, which is the zero-CLS floor breaking in the one
- * row the shell keeps open for exactly that arrival. Measured rather than
- * trusted: the bare head is exactly as tall as every titled head on the page,
- * and stays so with its note taken away. Review finding 1 on PR #293 showed
+ * issue 292), AND NOW WITHOUT ANYTHING IN IT AT ALL (2026-09-12, issue 323).
+ *
+ * Most panels render no label, and their heads used to hold the data-through
+ * line when there was one. The owner removed that line from every head, so
+ * most heads are empty boxes — and a row whose height came from its contents
+ * would now be nothing at all, which is the zero-CLS floor breaking in the one
+ * row the shell keeps open for a later arrival. Measured rather than trusted:
+ * every bare head is exactly as tall as every titled head on the page, and no
+ * head anywhere carries a freshness line. Review finding 1 on PR #293 showed
  * the declaration could be deleted with every suite green; the source pin in
  * tests/sections.test.mjs and this lane are the two halves that close it. */
-test('a panel head with no title keeps the reserved row, with and without its note (issue 292)', async ({
+test('a panel head with no title keeps the reserved row, and no head draws a freshness line (issues 292, 323)', async ({
   page,
 }) => {
   await visit(page);
@@ -6275,28 +6294,37 @@ test('a panel head with no title keeps the reserved row, with and without its no
     const height = (head) => head.getBoundingClientRect().height;
     const titled = heads.filter((head) => head.querySelector('.panel-title') !== null);
     const bare = heads.filter((head) => head.querySelector('.panel-title') === null);
-    const before = bare.map(height);
-    for (const head of bare) head.querySelector('[data-panel-note]')?.remove();
-    const after = bare.map(height);
-    return { titled: titled.map(height), before, after };
+    return {
+      titled: titled.map(height),
+      bare: bare.map(height),
+      notes: window.document.querySelectorAll('[data-panel-note], .panel-note').length,
+      statuses: [...window.document.querySelectorAll('.panel-shell')].map((shell) =>
+        shell.getAttribute('data-panel-status')
+      ),
+    };
   });
   expect(measured.titled.length, 'no titled panel head to measure the reserve against').toBeGreaterThan(0);
-  /* Two bare heads now: the Projects table (issue 292) and the commits
-     calendar, which dropped its host label when it began opening on a token
-     series (issue 294). Each is measured; none is exempt. */
-  expect(measured.before.length, 'exactly two panels render without a label: Projects and the commits calendar').toBe(
-    2
+  /* Three bare heads now: the Projects table (issue 292), the commits calendar
+     (issue 294) and the token board, which lost its own title at issue 323.
+     Each is measured; none is exempt. */
+  expect(measured.bare.length, 'three panels render without a label: Projects, the calendar and the board').toBe(
+    3
   );
   const reserve = measured.titled[0];
   for (const height of measured.titled) {
     expect(height, 'titled heads disagree about the row height').toBeCloseTo(reserve, 1);
   }
-  for (const height of measured.before) {
+  for (const height of measured.bare) {
     expect(height, 'a head with no title is not as tall as one with').toBeCloseTo(reserve, 1);
   }
-  for (const height of measured.after) {
-    expect(height, 'taking the note away collapsed the head; the row is not reserved').toBeCloseTo(reserve, 1);
-  }
+  /* NO HEAD DRAWS A FRESHNESS LINE, and the reading it carried is still on the
+     page as data — which is the whole of what issue 323 removed and the whole
+     of what it kept. */
+  expect(measured.notes, 'a panel head draws a freshness line again').toBe(0);
+  expect(
+    measured.statuses.filter((status) => status !== null).length,
+    'panels stopped publishing their own status'
+  ).toBe(measured.statuses.length);
 });
 
 /* THE PHONE CHROME AND THE MASTHEAD (owner directives, 2026-09-04, issue 294),
@@ -6789,20 +6817,25 @@ test('the token panel detail card reads a human period phrase for the one lens t
   expect(dailyRows[0], 'the first row must be the raw count').toMatch(/^\d[\d,]*$/);
   expect(dailyRows[1], 'the daily card must read "on <month> <day>"').toMatch(/^on [A-Z][a-z]{2} \d{1,2}$/);
 
-  /* The SENTENCE under the strip describes the same graph in the same period,
-     read from the live DOM rather than from the source, because that is the
-     only place the two can be seen to agree. It is the active set's own
-     caption now, which is the same sentence in the same place — under the
-     graph it describes — composed per set rather than per card. */
-  const summary = (await page.locator('.commit-caption').first().textContent()).trim();
-  expect(summary, 'the sentence must count days and name a day peak').toMatch(
-    /tokens over [\d,]+ days? · peak /
-  );
-  /* And it is the DAILY sentence in particular: the three phrasings the other
-     lenses produce are what a stray default would put here instead. */
-  for (const retired of [/per week/, /per month/, /accumulated over/]) {
-    expect(summary, `the sentence reads a lens no reader can choose: "${summary}"`).not.toMatch(retired);
-  }
+  /* AND THERE IS NO SENTENCE UNDER THE STRIP AT ALL (owner directive,
+     2026-09-12, issue 323). This lane used to read a caption composed per set
+     — "30.4B tokens over 30 days · peak 3B · data through …" — and check it
+     described the daily graph rather than one of the retired lenses. The
+     caption is gone, so the detail card measured above IS the reading, and
+     what is asserted here is that nothing came back to restate it. */
+  await expect(
+    page.locator('.commit-caption'),
+    'a caption row came back under the calendar'
+  ).toHaveCount(0);
+  const under = await page.evaluate(() => {
+    const block = window.document.querySelector('.grid-block');
+    const card = block.closest('.panel-shell');
+    return [...card.querySelectorAll('p')].map((node) => node.textContent.trim());
+  });
+  expect(
+    under.filter((line) => /tokens over|peak |data through/.test(line)),
+    `the retired reading sentence is on the page again: ${under.join(' | ')}`
+  ).toHaveLength(0);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
@@ -8300,7 +8333,7 @@ test('the token board offers no display control, and every reported source still
           claimed: Number(block.getAttribute('data-grid-columns')),
           columns: block.querySelectorAll('[data-grid-cell]').length / 7,
           strip: strip.getAttribute('aria-label'),
-          caption: window.document.querySelector('.commit-caption').textContent.trim(),
+          captions: window.document.querySelectorAll('.commit-caption').length,
         };
       }, label)
     );
@@ -8315,10 +8348,11 @@ test('the token board offers no display control, and every reported source still
     expect(graph.strip, `"${graph.label}" still announces a lens or a window`).not.toMatch(
       /view|range|only/
     );
-    // The daily sentence, which states what the source actually captured.
-    expect(graph.caption, `"${graph.label}" renders no daily summary sentence`).toMatch(
-      /tokens over [\d,]+ days? · peak /
-    );
+    /* AND NO SENTENCE UNDER IT. Each set used to carry a reading composed from
+       the days it drew; the owner removed every chart caption (2026-09-12,
+       issue 323), so a set that grew one back fails on whichever segment
+       brought it. */
+    expect(graph.captions, `"${graph.label}" draws a caption row again`).toBe(0);
   }
   const [first, ...rest] = drawn;
   for (const graph of rest) {
@@ -11269,14 +11303,19 @@ function straightLine(x, y, dx, dy, steps) {
  * open — is measured directly by the master-on-demand lane earlier in this
  * file. */
 
-/* THE CALENDAR SAYS WHEN ITS DATA STOPPED, AND SHOWS THE DAYS SINCE (issue
- * 285). This lane's origin serves the embedded snapshot exactly as a cold
- * deployment does — status stale, endDate weeks back — which is the state the
- * live site was measured in: a total and a calendar two weeks old with nothing
- * saying so. The stale line is dated by the payload, and the window's right
- * edge is the reader's own week, with every day the payload never reached
- * drawn as a dated absence. Every engine, both viewport classes. */
-test('the contribution calendar carries a data-through line and trails today past a stalled payload (issue 285)', async ({
+/* THE CALENDAR SHOWS THE DAYS SINCE ITS DATA STOPPED (issue 285). This lane's
+ * origin serves the embedded snapshot exactly as a cold deployment does —
+ * status stale, endDate weeks back — which is the state the live site was
+ * measured in: a total and a calendar two weeks old with nothing saying so.
+ *
+ * Issue 285 answered that twice: a dated line in the head, and a window whose
+ * right edge is the reader's own week with every day the payload never reached
+ * drawn as a dated absence. The owner removed the line on 2026-09-12 (issue
+ * 323) after reading it on the live page; the DRAWN half is the half that was
+ * doing the work, and it is what this lane measures now — plus the machine
+ * readable status the line was worded from, which stays. Every engine, both
+ * viewport classes. */
+test('the contribution calendar trails today past a stalled payload, and says so only as data (issues 285, 323)', async ({
   page,
   request,
 }) => {
@@ -11293,24 +11332,28 @@ test('the contribution calendar carries a data-through line and trails today pas
      grid identifies its own card without a scoping attribute and without
      `:has()`, which this matrix may not assume in every engine. */
   const panel = page.locator('.panel-shell').filter({ has: page.locator('.grid-block') });
-  const stale = panel.locator('[data-panel-note]');
-  await expect(stale, 'the stale calendar carries no data-through line').toHaveCount(1);
-  await expect(stale).toHaveText(/^data through [A-Z][a-z]{2} \d{1,2}, \d{4} · last capture .+ ago$/);
-  /* In the head's reserved row, no taller than that row, and never past the
-     card's edge: the note is the one thing allowed to appear on arrival
-     precisely because it costs the card no height and no width. The commits
-     card wears no title any more (issue 294), so the row itself is the
-     measure, and the note keeps to its end column of it. */
+  /* NOT A WORD ABOUT IT IN THE HEAD (owner directive, 2026-09-12, issue 323),
+     and the reading the head used to word still published as data — measured
+     against the SAME stale envelope the assertion above proved this lane is
+     serving, so the claim is about a panel that genuinely has something to
+     report rather than about a fresh one with nothing to say. */
+  await expect(
+    panel.locator('[data-panel-note], .panel-note'),
+    'the calendar draws a data-through line again'
+  ).toHaveCount(0);
+  await expect(panel).toHaveAttribute('data-panel-status', 'stale');
   const head = await page.evaluate(() => {
     const card = window.document.querySelector('.grid-block').closest('.panel-shell');
     const row = card.querySelector('.panel-head').getBoundingClientRect();
-    const note = card.querySelector('[data-panel-note]').getBoundingClientRect();
-    const cardBox = card.getBoundingClientRect();
-    return { rowHeight: row.height, rowLeft: row.left, noteHeight: note.height, noteRight: note.right, cardRight: cardBox.right, noteLeft: note.left };
+    return { rowHeight: row.height, generatedAt: card.getAttribute('data-panel-generated-at') };
   });
-  expect(head.noteHeight, 'the note is taller than the head row it sits in').toBeLessThanOrEqual(head.rowHeight + subPixel);
-  expect(head.noteRight, 'the note runs past the card').toBeLessThanOrEqual(head.cardRight + subPixel);
-  expect(head.noteLeft, 'the note left its end column').toBeGreaterThan(head.rowLeft);
+  /* The row is still RESERVED, empty or not: it is the one place a later
+     addition can land without moving anything below it, and a head that
+     collapsed to nothing would give that back. */
+  expect(head.rowHeight, 'the reserved head row collapsed once nothing was drawn in it').toBeGreaterThan(0);
+  expect(head.generatedAt, 'the panel stopped publishing when it was generated').toMatch(
+    /^\d{4}-\d{2}-\d{2}T/
+  );
 
   /* The window ends on the Saturday of the reader's (UTC) week; the cells
      between the payload's last day and that Saturday are absences, and they

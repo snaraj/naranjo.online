@@ -2,9 +2,10 @@
  *
  * Three claims are pinned here, each in both directions:
  *
- *   - The contribution figure says which coverage it is, because the two
+ *   - The contribution payload declares which coverage it is, because the two
  *     producers count different things and the number moves by hundreds
- *     between them.
+ *     between them — admitted as a closed vocabulary, worded nowhere since the
+ *     captions left (owner directive, 2026-09-12, issue 323).
  *   - The Coding Projects feed renders what the host says now, falls back to
  *     the captured rows when it cannot, and marks exactly the figures that
  *     came from the capture.
@@ -13,10 +14,11 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { describe, it, test } from 'node:test';
 
-import { activityPanelId, contributionsLabel, parseVCSActivity } from '../src/lib/activity.ts';
+import { activityPanelId, parseVCSActivity } from '../src/lib/activity.ts';
 import { contributionCalendarProps, spreadPanelIds } from '../src/lib/commits.ts';
 import {
   codingProjectsPanelId,
@@ -53,20 +55,19 @@ const liveRow = (name, extra = {}) => ({
   ...extra
 });
 
-describe('the contribution figure names its coverage', () => {
-  it('words the narrower producer narrowly and the complete one plainly', () => {
-    // The whole reason the field exists: an anonymous read reports only what
-    // an anonymous reader may see, and serving that under one unlabelled
-    // "contributions" would make the figure change meaning by hundreds the day
-    // a credential is added or expires, with nothing on the page to say why.
-    assert.equal(contributionsLabel('public'), ' public contributions');
-    assert.equal(contributionsLabel('complete'), ' contributions');
-    // Absent is the pre-field payload state — a replica mid-rollout — and
-    // words the figure exactly as it always was.
-    assert.equal(contributionsLabel(undefined), ' contributions');
-  });
-
-  it('carries the coverage from the payload into the rendered figure', () => {
+describe('the contribution payload declares its coverage', () => {
+  /* THE WORD IT USED TO PUT ON THE PAGE IS GONE (owner directive, 2026-09-12,
+     issue 323). The field exists because the two producers count different
+     things: an anonymous read of the public document reports only what an
+     anonymous reader may see, a credentialed read reports the account holder's
+     whole record. The page WORDED that in the calendar's caption — "1,287
+     public contributions · 9-day streak" — and the caption left with every
+     other chart caption, so nothing on the page states a total for the
+     coverage to qualify.
+     What must not leave is the ADMISSION: coverage is still a closed
+     vocabulary the parser refuses free text in, because the day a figure is
+     worded from it again it must be one of exactly two values. */
+  it('carries the declared coverage through the parser, and words it nowhere', () => {
     const weeks = Array.from({ length: 5 }, () => [1, 0, 0, 0, 0, 0, 0]);
     const envelope = (coverage) => ({
       schema: 'panel/v1',
@@ -83,23 +84,25 @@ describe('the contribution figure names its coverage', () => {
         ...(coverage === undefined ? {} : { coverage })
       }
     });
-    /* The wording rides the calendar's own caption now (owner directive,
-       2026-09-03, issue 287): the commits section cycles three calendars and
-       each states its own reading, so the coverage word is measured where the
-       reader meets it rather than on a figures row one of the three owned. */
-    const captionOf = (coverage) => contributionCalendarProps([envelope(coverage), null]).sets[0].caption;
-    assert.equal(captionOf('public'), '5 public contributions · 0-day streak');
-    assert.equal(captionOf('complete'), '5 contributions · 0-day streak');
-    assert.equal(captionOf(undefined), '5 contributions · 0-day streak');
-    // ...and the builder itself is still the one place the two words differ.
-    assert.equal(contributionsLabel('public'), ' public contributions');
-    assert.equal(contributionsLabel('complete'), ' contributions');
+    assert.equal(parseVCSActivity(envelope('public').data).coverage, 'public');
+    assert.equal(parseVCSActivity(envelope('complete').data).coverage, 'complete');
+    assert.equal(parseVCSActivity(envelope(undefined).data).coverage, undefined);
+    /* And no set the calendar composes says anything about it: there is no
+       caption for the word to be printed in, whatever the payload declared. */
+    for (const coverage of ['public', 'complete', undefined]) {
+      const [set] = contributionCalendarProps([envelope(coverage), null]).sets;
+      assert.equal(set.caption, undefined, String(coverage));
+    }
+    /* The builder that worded the two cases is gone with the caption, so a
+       later edit cannot quietly re-point a line at one that still exists. */
+    const activity = readFileSync(new URL('../src/lib/activity.ts', import.meta.url), 'utf8');
+    assert.ok(!activity.includes('contributionsLabel'), 'the coverage wording outlived the caption');
   });
 
   it('refuses a coverage outside the closed vocabulary', () => {
-    // Coverage decides rendered COPY, so it is admitted by MEMBERSHIP: free
-    // text here would let a payload put arbitrary words beside the owner's
-    // contribution total.
+    // Coverage decides what a figure worded from it would SAY, so it is
+    // admitted by MEMBERSHIP: free text here would let a payload put arbitrary
+    // words beside the owner's contribution total the day one is printed again.
     const payload = (coverage) => ({
       totalContributions: 1,
       weeks: [[1, 0, 0, 0, 0, 0, 0]],

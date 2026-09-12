@@ -363,8 +363,6 @@ export type CalendarSet = {
   readonly key: string;
   readonly label: string;
   readonly columns: GridCell[][];
-  /* The set's own reading, under the grid. */
-  readonly caption: string;
   /* What one cell counts, singular. */
   readonly noun: string;
   /* The grid's accessible name. */
@@ -399,7 +397,6 @@ export type ContributionCalendarProps = {
   readonly status: PanelStatus;
   readonly generatedAt?: string;
   readonly sets: readonly CalendarSet[];
-  readonly staleNote?: string;
 };
 
 /* One model's row on a models card: its written name, how long its rule runs
@@ -488,11 +485,13 @@ export type SparklineProps = LedgerSpark & {
  * fixed template with blanks in it — and a card whose source said nothing
  * renders its own note rather than a zero.
  *
- * There is ONE face and NOTHING TO PRESS (owner directive, 2026-09-11, issue
- * 316: "these shouldn't change colour when I click on them"). A card whose
- * `turned` is set is drawn inverted through a single token remap and stays
- * that way; the inversion is the board's own rhythm, decided by the adapter,
- * and no reader can change it. */
+ * There is ONE FACE, NOTHING TO PRESS, and ONE PAINT. The press went at issue
+ * 316 ("these shouldn't change colour when I click on them"); the alternating
+ * ink it used to toggle went at issue 323, on the owner's reading of the live
+ * board — "there is no reason for Codex to be black while the rest are not,
+ * everything should follow the same pattern". So no card carries a state, a
+ * flag or an attribute that would let it be painted differently from the five
+ * beside it. */
 export type LedgerCard = {
   readonly key: string;
   readonly label: string;
@@ -525,10 +524,6 @@ export type LedgerCard = {
   readonly spark?: LedgerSpark;
   /* What the card says when it has nothing else to say. */
   readonly note?: string;
-  /* Whether the card is drawn inverted. The board's rhythm, decided by the
-     adapter over the sources it read, never by the component and never by a
-     reader. */
-  readonly turned?: boolean;
   readonly ariaLabel: string;
 };
 
@@ -563,16 +558,15 @@ export function scrubReading(
   return { figure, line: `${exact} · ${label}` };
 }
 
+/* NO TITLE AND NO MARK (owner directive, 2026-09-12, issue 323). The board's
+ * head row named it "TOKEN USAGE" under a section head that already says so,
+ * which is the same doubled label the Projects table lost at issue 292 — so
+ * the board is handed status and provenance and nothing else to draw. */
 export type LedgerBoardProps = {
-  readonly title: string;
-  /* The mark that leads the panel's title (the same decision, for the
-     board's own name: "Token usage — panel title mark"). */
-  readonly mark?: IconName;
   readonly status: PanelStatus;
   readonly generatedAt?: string;
   readonly cards: readonly LedgerCard[];
   readonly emptyNote: string;
-  readonly staleNote?: string;
 };
 
 /* One item of the scrolling strip: a small icon (or its initials fallback),
@@ -598,7 +592,6 @@ export type TickerProps = {
   readonly generatedAt?: string;
   readonly items: readonly TickerItem[];
   readonly emptyNote: string;
-  readonly staleNote?: string;
   /* The strip's accessible name. */
   readonly label: string;
   /* The lead item's picture, if the collection has one: a same-origin URL the

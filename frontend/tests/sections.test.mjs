@@ -1151,42 +1151,44 @@ test('a card looks stale when its envelope says so (issue 281, defect 2)', () =>
   );
 });
 
-/* THE STALE LINE MOVED TO THE ONE ROW EVERY PANEL ALREADY RESERVES (owner
- * directive of 2026-09-03, issue 287). The entry log rendered it above its own
- * list; the ledger's blocks render through PanelShell, whose head is the row
- * the card holds open for exactly "a later addition beside the title" — which
- * is where the calendar's own data-through line already went at issue 285. One
- * idiom, one place, one geometry, and it costs no layout shift because the row
- * is reserved whether or not there is a line for it.
+/* THE STALE LINE LEFT THE HEAD ALTOGETHER (owner directive, 2026-09-12, issue
+ * 323). It moved there at issue 287 — the head is the one row every panel
+ * already reserves, so a line arriving late cost no layout shift — and the
+ * owner removed it after reading the result on the live page: "DATA THROUGH
+ * SEP 11, 2026 · LAST CAPTURE 11H AGO" set over the figures it qualified.
  *
- * The claim is unchanged: the note renders only when the adapter proved there
- * is one, it reaches the reader BEFORE the figures it qualifies, and a static
- * surface passes none. */
-test('the table renders its stale line in the reserved head, and only when it has one', async () => {
+ * The row itself STAYS RESERVED, and that is the half this test now carries.
+ * A head whose height came from its title alone would be nothing at all on the
+ * panels that render no label, and the geometry a card reserves must not
+ * depend on what happens to be in the row today. Review finding 1 on PR #293
+ * showed the declaration could be deleted with every suite green; this pin and
+ * the rendering lane are the two halves that close it. */
+test('the panel head reserves its row and draws no freshness line', async () => {
   const shell = await read('../src/lib/components/PanelShell.svelte');
-  /* NO TITLE PROP AT ALL (owner directive, 2026-09-04, issue 292; the section
-     head names the sheet): the shell is handed status, provenance and the note
-     and nothing else, so the reserved head row is what keeps the geometry. */
-  assert.match(ledgerSpread, /<PanelShell \{status\} \{generatedAt\} note=\{staleNote\}>/);
-  assert.match(shell, /\{#if note\}<span class="panel-note" data-panel-note>\{note\}<\/span>\{\/if\}/);
+  /* NOTHING BUT AN OPTIONAL TITLE IS DRAWN IN IT. Swept over the whole file,
+     because the note lived in three places at once — a prop, an element and a
+     token family — and any one of them coming back is the same regression. */
+  assert.ok(!shell.includes('note'), 'the shell takes a note prop again');
+  assert.ok(!shell.includes('panel-note'), 'the shell draws a freshness line again');
+  assert.ok(!shell.includes('data-panel-note'), 'the shell still marks a freshness line');
   assert.ok(
-    shell.indexOf('data-panel-note') < shell.indexOf('<div class="panel-body">'),
-    'the stale line renders after the figures it qualifies'
+    !(await read('../src/styles.css')).includes('--panel-note'),
+    'the note token family outlived the note'
   );
-  // The static work history has no envelope and therefore no line to render;
-  // its props carry no channel for one at all.
+  /* THE READING STAYS MACHINE-READABLE. Status and provenance arrive on every
+     envelope and still ride this element as data attributes: a reading nobody
+     displays is still a reading the page can be audited for. */
+  assert.match(shell, /data-panel-status=\{status\}/);
+  assert.match(shell, /data-panel-generated-at=\{generatedAt\}/);
+  // The static work history has no envelope and no channel for a line at all.
   assert.equal(roleLedgerProps.staleNote, undefined, 'the static work history grew a stale note');
-  // The line is a token-inked reading, not an italic apology.
-  assert.match(styleBlock(shell), /\.panel-note \{[^}]*color: var\(--panel-muted/s);
   /* THE ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
      issue 292): the Projects table renders no panel label, so the head's
      height can no longer come from its h2. Pinned where it is decided — the
      row wears the title's face and size and declares one line of it as its
      minimum, the `lh` line box with an em fallback under it — and the
      rendering lane "a panel head with no title keeps the reserved row"
-     measures it in every engine. Deleting either declaration left the whole
-     suite green while the head collapsed to whatever happened to be in it
-     (review finding 1, PR #293). */
+     measures it in every engine. */
   const head = /\.panel-head \{([^}]*)\}/s.exec(styleBlock(shell));
   assert.ok(head, 'PanelShell no longer styles .panel-head');
   assert.match(head[1], /font-family: var\(--panel-title-family, inherit\);/, 'the head must wear the title face its lh is measured in');
@@ -1198,14 +1200,14 @@ test('the table renders its stale line in the reserved head, and only when it ha
   );
   assert.match(
     shell,
-    /\{#if title\}<h2 class="panel-title"[^>]*>(?:\{#if mark\}<span class="panel-mark">.*?<\/span>\{\/if\})?\{title\}<\/h2>\{\/if\}/,
-    'the title is optional; a bare head is the Projects table'
+    /\{#if title\}<h2 class="panel-title">\{title\}<\/h2>\{\/if\}/,
+    'the title is optional, and it is the only thing the head draws'
   );
-  assert.match(
-    styleBlock(shell),
-    /\.panel-note \{[^}]*grid-column: 2;/s,
-    'the note must keep the end column when there is no title beside it'
-  );
+  /* THE MARK THAT LED IT IS GONE TOO (issue 323). The board was the one panel
+     that passed one, and it passes no title now, so the positioned cell and
+     the padding that made room for it are dead weight rather than a reserve. */
+  assert.ok(!shell.includes('panel-mark'), 'the shell still draws a title mark');
+  assert.ok(!shell.includes('Icon'), 'the shell still imports the icon it stopped drawing');
   assert.equal(projectTableProps(null).title, undefined, 'the Projects table grew a panel label back');
   assert.doesNotMatch(ledgerSpread, /\{title\}/, 'the sheet passes a panel label again');
 });

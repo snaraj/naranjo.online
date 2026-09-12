@@ -893,21 +893,17 @@
   --panel-radius: 0rem;
   --panel-padding: 0rem;
   --panel-gap: 0rem;
-  /* Each block's own caption row: the ORIGIN's title for the panel and its
-     data-through line, both set as the sheet's mono label under the section
-     head. The title is origin-served data — it is what the envelope carries —
-     so it renders rather than being hidden: a heading a page receives and then
-     drops is a page deciding what its own backend meant. */
+  /* Each block's own caption row: the ORIGIN's title for the panel, set as the
+     sheet's mono label under the section head. The title is origin-served data
+     — it is what the envelope carries — so it renders rather than being
+     hidden: a heading a page receives and then drops is a page deciding what
+     its own backend meant. */
   --panel-title-size: var(--ledger-label-size);
   --panel-title-family: var(--font-mono);
   --panel-title-weight: 500;
   --panel-title-tracking: var(--ledger-label-tracking);
   --panel-title-transform: uppercase;
   --panel-heading: var(--ledger-muted);
-  --panel-note-size: var(--ledger-label-size);
-  --panel-note-family: var(--font-mono);
-  --panel-note-tracking: var(--ledger-label-tracking);
-  --panel-note-transform: uppercase;
   --panel-tip-surface: var(--color-surface-overlay);
   --usage-tile-surface: var(--color-surface);
   --panel-border: var(--card-border-color);
@@ -2669,19 +2665,6 @@ h1 {
   padding-block: 0.5rem;
 }
 
-.commit-caption {
-  margin: 0;
-  /* ONE LINE OF RESERVE, and see the phone override: a caption that grows when
-     the reader presses a segment is the reader's own action moving the page
-     under them, which is the shift the zero-CLS floor is actually about. */
-  min-block-size: 1.25rem;
-  padding-block-end: 0.375rem;
-  border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-figure-size);
-  color: var(--ledger-muted);
-}
-
 /* THE LOG'S BOX IS RESERVED (issue 285's reserve, kept through the redesign):
    exactly as tall as the rows it holds open, so a payload that lands a moment
    after first paint lands without moving the page. The number is a
@@ -2851,11 +2834,12 @@ h1 {
   }
 }
 
-/* THE CARD IS ITS OWN TOKEN LAYER, and that is what makes a turn one rule
-   rather than a rule per painted thing. Every colour inside a card reads one
-   of these five roles; the turned block below swaps what the roles point at,
-   so the whole card inverts — rules, muted text, tracks and fills together —
-   without a single component learning that it can be inverted. */
+/* THE CARD IS ITS OWN TOKEN LAYER. Every colour inside a card reads one of
+   these five roles, which is what let the board be restyled in one place — and
+   is now what makes "everything should follow the same pattern" (owner
+   directive, 2026-09-12, issue 323) a deletion rather than a sweep: the remap
+   that pointed the roles at their opposites on every second card is gone, so
+   the six cards are six reads of one declaration. */
 .board-card {
   --board-paper: var(--ledger-bg);
   --board-ink: var(--ledger-ink);
@@ -2890,22 +2874,6 @@ h1 {
 
 .board-card > * {
   min-inline-size: 0;
-}
-
-/* THE INVERSION IS THE BOARD'S RHYTHM, and it is this rule and nothing else
-   (owner directive, 2026-09-11; issue 316 retired the press that used to
-   toggle it). Paper becomes ink, ink becomes paper, and the muted role goes
-   to full paper rather than to a dimmer one: on ink there is no dimmer paper
-   to be had that keeps a small mono line legible, and the hierarchy is
-   already carried by size and weight. The raised role takes the muted ink,
-   which is the only value on the sheet that reads as a groove against ink
-   the way --ledger-raised reads as one against paper. */
-.board-card[data-turned='true'] {
-  --board-paper: var(--ledger-ink);
-  --board-ink: var(--ledger-bg);
-  --board-rule: var(--ledger-ink);
-  --board-muted: var(--ledger-bg);
-  --board-raised: var(--ledger-muted);
 }
 
 .board-head {
@@ -2975,17 +2943,30 @@ h1 {
 
    AND IT KEEPS THE HEIGHT OF THE CARD'S OWN LINES WHATEVER IT IS PRINTING.
    Scrubbing the daily line replaces these with ONE line (owner directive,
-   2026-09-11, issue 316), and without a reserve a two-line card would lose a
-   line's height the moment a pointer touched its chart — MEASURED as the
-   headline's box, which baseline alignment sizes from the taller of the
-   figure and this stack. The fact ladder under it is `flex: 1` with its rows
-   spread through the slack, so every one of them would move. The reserve is
-   the card's own line count, a dynamic length, and it therefore reaches this
-   sheet as a custom property rather than as a style string. `em` because the
-   unit that has to stay in step is this element's own line box: 1.4em is
-   exactly the line-height declared above it. */
+   2026-09-11, issue 316), and without a reserve a card would lose a line's
+   height the moment a pointer touched its chart — MEASURED as the headline's
+   box, which baseline alignment sizes from the taller of the figure and this
+   stack. The fact ladder under it is `flex: 1` with its rows spread through
+   the slack, so every one of them would move. The reserve is the card's own
+   line count, a dynamic length, and it therefore reaches this sheet as a
+   custom property rather than as a style string. `em` because the unit that
+   has to stay in step is this element's own line box: 1.4em is exactly the
+   line-height declared above it.
+
+   AND IT KEEPS ITS SEAT WHETHER OR NOT IT IS PRINTING ANYTHING, which is the
+   half the records move exposed (owner directive, 2026-09-12, issue 323). A
+   source card's two lines went to the records card, so its sub area is now
+   EMPTY until a pointer touches the chart — and an empty box has no text
+   baseline, so the headline's baseline alignment synthesized one from its
+   bottom margin edge and seated the box 4.39px lower than the same box with a
+   line in it. Measured in chromium at 1440px: the reserved area held its
+   height perfectly and still moved on the first scrub. The reserve is a BOX
+   the sheet states, so it is seated by that box's own edge rather than by
+   whatever happens to be inside it; the figure beside it is taller and decides
+   the row either way. */
 .board-sub {
   display: grid;
+  align-self: end;
   justify-items: end;
   font-family: var(--font-mono);
   font-size: var(--ledger-label-size);
@@ -3508,20 +3489,6 @@ h1 {
     letter-spacing: 0.06em;
   }
 
-  /* TWO LINES OF RESERVE, because at this width a token set's caption needs
-     two and the contributions caption needs one — and the reader chooses
-     between them by pressing a segment. A caption that grew on that press
-     moved the whole page under the hand that pressed it, which is the zero-CLS
-     floor breaking in the one place a reader can actually feel it: measured on
-     a Pixel 5, the commits section went from 809.6px to 828.2px on a segment
-     switch. The number is the TALLER state measured — two lines of the
-     caption's own type plus the rule's padding, 44.2px — rounded up to the
-     next half step, so the one-line state is padded out to meet it rather
-     than the two-line state being allowed to push. */
-  .commit-caption {
-    min-block-size: 2.875rem;
-  }
-
   /* A COMMIT ROW IS TWO LINES HERE TOO, and the short identity is not one of
      them: it is absent from the DOM at this width rather than hidden (see
      LedgerSpread.svelte — a hidden cell is still something a screen reader can
@@ -3581,7 +3548,6 @@ h1 {
   .ledger-chevron,
   .table-head,
   .table-row,
-  .commit-caption,
   .commit-row,
   .commit-segment,
   .board-card,

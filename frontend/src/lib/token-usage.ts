@@ -13,7 +13,6 @@ import type {
 } from './blocks.ts';
 import { addDays, cellPeriod, formatMagnitudeFixed, formatWhole } from './grid.ts';
 import { dayNumber, formatDateRange } from './periods.ts';
-import { panelStaleAfterMs, panelStaleNote } from './panels.ts';
 /* The model vocabulary is DATA and it lives in one file, outside this
    directory on purpose: the origin embeds the same bytes and the capture tool
    reads them, so no consumer keeps a copy that could disagree (issue #302).
@@ -27,7 +26,6 @@ import modelVocabulary from '../../../internal/panels/config/models.json' with {
 import sourceVocabulary from '../../../internal/panels/config/sources.json' with { type: 'json' };
 import type {
   PanelEnvelope,
-  PanelStatus,
   TokenUsageClassKey,
   TokenUsageClassTotals,
   TokenStatUnit,
@@ -974,48 +972,9 @@ export function modelShares(series: TokenUsageSeries): CategoryShare[] {
  * field, and the component that renders the result knows none of this file.
  * ------------------------------------------------------------------------ */
 
-/* The shell heading when an envelope arrives with an empty title (the
- * unavailablePanel fallback carries one); otherwise the ORIGIN's title. */
-export const tokenUsageFallbackTitle = 'Token usage';
-
 /* The two honest empty-state lines, verbatim from the retired component. */
 export const tokenUsageEmptyNote = 'No usage data available.';
 export const tokenUsageSourceEmptyNote = 'No usage recorded for this source yet.';
-
-/* The stale threshold and the line itself are the page's, not this panel's
- * (lib/panels.ts, issue 285): the contribution calendar renders the same
- * data-through idiom, and two builders would be two ways to word one fact. */
-export const usageStaleAfterMs = panelStaleAfterMs;
-
-/* usageDataThrough is the newest calendar day any source's series covers —
- * the day the graphs actually draw through, which is the honest way to date
- * a stale payload: not when the file was pushed, but how far the data it
- * carries reaches. Undefined when no source draws a series at all. */
-export function usageDataThrough(sources: readonly TokenUsageSource[]): string | undefined {
-  let through: string | undefined;
-  for (const source of sources) {
-    if (!source.series || source.series.totals.length === 0) {
-      continue;
-    }
-    const end = addDays(source.series.startDate, source.series.totals.length - 1);
-    if (through === undefined || (dayNumber(end) ?? -1) > (dayNumber(through) ?? -1)) {
-      through = end;
-    }
-  }
-  return through;
-}
-
-/* usageStaleNote is the panel's data-through line: the shared builder, dated
- * by the newest day any source's series covers (#267: "would the app catch
- * it?" used to be NO). */
-export function usageStaleNote(
-  status: PanelStatus,
-  generatedAt: string | undefined,
-  sources: readonly TokenUsageSource[],
-  now: Date = new Date()
-): string | undefined {
-  return panelStaleNote(status, generatedAt, usageDataThrough(sources), now);
-}
 
 /* ---------------------------------------------------------------------------
  * The six-card board (owner directive, 2026-09-11, issues 267 and 311)
@@ -1076,9 +1035,10 @@ export const totalCardLabel = 'Tokens tracked';
 export const lifetimeContext = 'lifetime';
 const combinedLineSubject = 'All sources';
 
-/* The session card's own copy. Its figure is a count of sessions and its
- * facts are records, so the label names the subject and the three rows name
- * themselves from their keys. */
+/* The records card's own copy. Its figure is a count of sessions and its facts
+ * are records — the page's own longest streak, and every source's streak and
+ * longest session — so the label names the subject and each row names itself
+ * from its key and the source that reported it. */
 export const sessionsCardLabel = 'Sessions';
 
 /* What heads a models card, in front of the source's written name. */
@@ -1132,22 +1092,6 @@ function windowFacts(source: TokenUsageSource): LedgerFact[] {
     term: windowTerm(window.period),
     value: `${formatTokenCount(window.inputTokens)} in · ${formatTokenCount(window.outputTokens)} out`
   }));
-}
-
-/* The lines beside a source's lifetime figure: its current streak and its
- * longest single session, both from stats it reported. A source reporting
- * neither gets no sub-line rather than a column of dashes. */
-function sourceSubline(source: TokenUsageSource): string[] {
-  const lines: string[] = [];
-  const streak = statValue(source, currentStreakKey);
-  if (streak !== undefined) {
-    lines.push(`${formatWhole(streak)}-day streak`);
-  }
-  const longest = statOf(source, longestSessionKey);
-  if (longest !== undefined && longest.value !== null) {
-    lines.push(`longest session ${formatStatValue(longest.value, longest.unit)}`);
-  }
-  return lines;
 }
 
 /* A source's current usage window, drawn as a meter under its figure. It is
@@ -1365,57 +1309,108 @@ function totalCard(sources: readonly TokenUsageSource[]): LedgerCard {
  * four accounting classes and the card that draws one with none are the same
  * function reading different data.
  *
- * EVERY SECOND SOURCE CARD OPENS INVERTED. It is the board's rhythm rather
- * than a fact about any source: the owner's board alternates ink and paper
- * across the top row, and stating it as "every other one" is what makes a
- * third source join that rhythm instead of needing a rule of its own. */
-function sourceCard(source: TokenUsageSource, index: number): LedgerCard {
+ * EVERY CARD WEARS THE SAME PAINT (owner directive, 2026-09-12, issue 323:
+ * "there is no reason for Codex to be black while the rest are not"). The
+ * alternating ink was the board's rhythm and nothing else — it said nothing
+ * about the source wearing it — so a reader was being told a difference that
+ * did not exist. It leaves with no replacement, which is the point.
+ *
+ * ITS STREAK AND ITS LONGEST SESSION ARE NOT HERE either: those are records,
+ * and the records card is where the owner put them (same directive), so a
+ * source card carries its lifetime figure, its accounting and its windows. */
+function sourceCard(source: TokenUsageSource): LedgerCard {
   const name = sourceName(source.label);
   const figure = statFigure(statOf(source, lifetimeKey));
   const facts = [
     ...classKeys.map((key) => statFact(source, key)).filter(present),
     ...windowFacts(source)
   ];
-  const sub = sourceSubline(source);
   const spark = sourceSpark(source, name);
   const empty = figure === unknownFigure && facts.length === 0 && spark === undefined;
   return {
     key: `source-${source.label}`,
     label: name,
     figure,
-    sub: sub.length === 0 ? undefined : sub,
     facts: facts.length === 0 ? undefined : facts,
     factColumns: 2,
     meter: sourceMeter(source),
     spark,
     note: empty ? tokenUsageSourceEmptyNote : undefined,
-    turned: index % 2 === 1,
     ariaLabel: `${name} lifetime tokens: ${figure}`
   };
 }
 
-/* Card four: the session record, from the first source that keeps one.
+/* The longest streak ANY source has ever run, as the stat that carries it, so
+ * the row is worded in the payload's own unit rather than in one invented
+ * here. A source that never reported the record is not a source with a record
+ * of nought — it is a source that said nothing — so it cannot win this. */
+function streakRecord(sources: readonly TokenUsageSource[]): TokenUsageStat | undefined {
+  let record: TokenUsageStat | undefined;
+  let best = -1;
+  for (const source of sources) {
+    const stat = statOf(source, longestStreakKey);
+    if (stat === undefined || stat.value === null || stat.value <= best) {
+      continue;
+    }
+    best = stat.value;
+    record = stat;
+  }
+  return record;
+}
+
+/* Card four: the records card. Its figure is the session count of whichever
+ * source keeps one.
  *
- * The current streak is marked when it HAS reached the longest — and the
- * longest is printed on the line directly above it, so the mark is the
- * redundant channel and a reader who sees no colour reads the same fact off
- * two equal numbers. */
+ * EVERY SOURCE'S STREAK AND LONGEST SESSION ARE HERE NOW (owner directive,
+ * 2026-09-12, issue 323). They used to ride as a sub-line on each source's own
+ * card, where they were two records printed under a lifetime total a reader is
+ * comparing across cards; the owner moved them to the card the other records
+ * are already on. One row per reported stat, per source in serve order, each
+ * named by the source it belongs to — through the vocabulary, like every other
+ * written name on this board — so a third source brings its two rows with no
+ * rule of its own, and a source that reported neither brings none rather than
+ * a pair of dashes.
+ *
+ * THE RECORD CLOSES THE LADDER. The longest streak ever run is one fact about
+ * the page rather than about a tool, so it is printed once, last, and a source
+ * whose current streak has REACHED it is marked. The mark is never the only
+ * channel: the record is printed on the same card, so a reader who sees no
+ * colour compares two equal numbers. */
 function sessionsCard(sources: readonly TokenUsageSource[]): LedgerCard {
   const keeper =
     sources.find((source) => statOf(source, sessionsKey) !== undefined) ?? sources[0];
   const figure = statFigure(statOf(keeper, sessionsKey));
-  const longest = statValue(keeper, longestStreakKey);
-  const current = statOf(keeper, currentStreakKey);
+  const record = streakRecord(sources);
+  const best = record === undefined || record.value === null ? undefined : record.value;
   const facts = [
-    statFact(keeper, longestSessionKey),
-    statFact(keeper, longestStreakKey),
-    current === undefined || current.value === null
+    ...sources.flatMap((source) => {
+      const name = sourceName(source.label);
+      const streak = statOf(source, currentStreakKey);
+      const longest = statOf(source, longestSessionKey);
+      return [
+        streak === undefined || streak.value === null
+          ? undefined
+          : {
+              key: `${source.label}-${currentStreakKey}`,
+              term: `${name} streak`,
+              value: formatStatValue(streak.value, streak.unit),
+              peak: best !== undefined && streak.value >= best
+            },
+        longest === undefined || longest.value === null
+          ? undefined
+          : {
+              key: `${source.label}-${longestSessionKey}`,
+              term: `${name} longest session`,
+              value: formatStatValue(longest.value, longest.unit)
+            }
+      ].filter(present);
+    }),
+    record === undefined || record.value === null
       ? undefined
       : {
-          key: currentStreakKey,
-          term: categoryLabel(currentStreakKey),
-          value: formatStatValue(current.value, current.unit),
-          peak: longest !== undefined && current.value >= longest
+          key: longestStreakKey,
+          term: categoryLabel(longestStreakKey),
+          value: formatStatValue(record.value, record.unit)
         }
   ].filter(present);
   return {
@@ -1457,7 +1452,15 @@ function classDetail(totals: TokenUsageClassTotals): string {
   return parts.join(' · ');
 }
 
-/* REAL MEMBERS ONLY, IN THE VOCABULARY'S ORDER.
+/* REAL MEMBERS ONLY, BY USAGE, LARGEST FIRST (owner directive, 2026-09-12,
+ * issue 323: "sort the entries of the model lists by usage").
+ *
+ * A card is a ranking once its rows are drawn as bars against the largest of
+ * them, and a ranking laid out in a fixed vocabulary order made the reader do
+ * the sort by eye. Ties fall back to the vocabulary rank, which is what keeps
+ * the DOM stable between refreshes: two members that carried the same amount
+ * must not swap places on a poll, because a row that moves under a reader is
+ * the zero-CLS floor breaking for no reading at all.
  *
  * The residual is dropped because it is not an entity: it is the fold of every
  * identifier the vocabulary does not name, and a bar beside named models
@@ -1474,7 +1477,10 @@ function classDetail(totals: TokenUsageClassTotals): string {
 function realMembers(readings: readonly ModelReading[]): ModelReading[] {
   return readings
     .filter((reading) => reading.key !== modelResidual.key && reading.total > 0)
-    .sort((first, second) => rankOf(first.key) - rankOf(second.key));
+    .sort(
+      (first, second) =>
+        second.total - first.total || rankOf(first.key) - rankOf(second.key)
+    );
 }
 
 function rankOf(key: string): number {
@@ -1563,21 +1569,14 @@ export function tokenCards(sources: readonly TokenUsageSource[]): LedgerCard[] {
  * envelope arrives — the same loading face every panel-bound block has: the
  * host renders nothing for null rather than reserving a box for a payload it
  * cannot describe yet. */
-export function tokenBoardProps(
-  envelope: PanelEnvelope | null,
-  now: Date = new Date()
-): LedgerBoardProps | null {
+export function tokenBoardProps(envelope: PanelEnvelope | null): LedgerBoardProps | null {
   if (envelope === null) {
     return null;
   }
-  const sources = tokenUsageSources(envelope.data);
   return {
-    title: envelope.title || tokenUsageFallbackTitle,
-    mark: 'chip',
     status: envelope.status,
     generatedAt: envelope.generatedAt,
-    cards: tokenCards(sources),
-    emptyNote: boardEmptyNote,
-    staleNote: usageStaleNote(envelope.status, envelope.generatedAt, sources, now)
+    cards: tokenCards(tokenUsageSources(envelope.data)),
+    emptyNote: boardEmptyNote
   };
 }

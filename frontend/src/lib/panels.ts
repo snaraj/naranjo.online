@@ -659,8 +659,16 @@ function startWatch<Data = unknown>(
  * alarm at sub-day lag, while two days of silence is a stalled producer. */
 export const panelStaleAfterMs = 48 * 60 * 60 * 1000;
 
-/* panelStaleNote is the honest data-through line every panel renders in ONE
- * idiom, or undefined while the payload is fresh. Exactly two states produce
+/* NO PANEL HEAD DRAWS THIS ANY MORE (owner directive, 2026-09-12, issue 323).
+ * It was the one idiom every panel worded its freshness in, rendered in the
+ * shell's reserved head row; the owner read the result on the live page and
+ * removed the drawing. The shell still publishes the same reading as data
+ * attributes, which is what an audit or a later presentation reads. The last
+ * callers are the paired section's own two notes (lib/commits.ts and
+ * lib/projects.ts), and this goes with the last of them.
+ *
+ * panelStaleNote is the honest data-through line, or undefined while the
+ * payload is fresh. Exactly two states produce
  * it, both proven by the envelope rather than inferred: the origin already
  * SAYS stale (it refused a newer document, kept its last good one past a
  * failed refresh, or is serving its cold-start snapshot), or the origin says

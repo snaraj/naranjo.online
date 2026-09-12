@@ -28,15 +28,11 @@ import {
   tokenBoardProps,
   tokenCards,
   tokenUsageEmptyNote,
-  tokenUsageFallbackTitle,
   tokenUsagePanelId,
   tokenUsageSourceEmptyNote,
   tokenUsageSources,
   totalCardLabel,
   unknownFigure,
-  usageDataThrough,
-  usageStaleAfterMs,
-  usageStaleNote,
   windowTerm
 } from '../src/lib/token-usage.ts';
 import { scrubReading } from '../src/lib/blocks.ts';
@@ -60,10 +56,9 @@ import { sparkBox, sparkIndexAt, sparkInset, sparklinePath, sparkPointAt } from 
  * display menu and the retired chrome from coming back has to sweep all of
  * them, or it would only be guarding the door they did not use.
  *
- * styles.css joins them for the same reason: the board's column ladder, its
- * card roles and the turn's token remap are page-level decisions the ledger's
- * other sections share, so the stylesheet is where they are stated and where
- * they must be pinned. */
+ * styles.css joins them for the same reason: the board's column ladder and its
+ * card roles are page-level decisions the ledger's other sections share, so the
+ * stylesheet is where they are stated and where they must be pinned. */
 const [component, commits, helper, manifest, binding, sheet, chart] = await Promise.all([
   readFile(new URL('../src/lib/components/LedgerBoard.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/components/ContributionCalendar.svelte', import.meta.url), 'utf8'),
@@ -291,27 +286,38 @@ describe('tokenUsageSources admission', () => {
 });
 
 describe('the board of cards: source contract', () => {
-  it('renders inside the shared PanelShell with the envelope status, age, and no per-card control', () => {
+  it('renders inside the shared PanelShell with the envelope status and age, and nothing in its head', () => {
     assert.match(component, /import PanelShell from '\.\/PanelShell\.svelte'/);
-    /* The shell receives the data-through line as well (owner directive of
-       2026-09-03, issue 287): the head is the one row a late line can appear
-       in without moving anything — the same arrangement the calendar uses. */
-    assert.match(component, /<PanelShell \{title\} \{mark\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
+    /* THE HEAD IS EMPTY (owner directive, 2026-09-12, issue 323). The board's
+       title row said "TOKEN USAGE" under a section head that already says so,
+       and its end column carried the data-through line; the owner removed
+       both, so the shell is handed status and provenance and nothing it could
+       draw. Status stays MACHINE-readable — data-panel-status is what a lane
+       or a later presentation reads — and that is asserted below. */
+    assert.equal(
+      /<PanelShell[^>]*>/.exec(component)?.[0],
+      '<PanelShell {status} {generatedAt}>',
+      'the board hands its shell something to draw in the head again'
+    );
     assert.match(component, /<\/PanelShell>/);
+    assert.ok(!component.includes('staleNote'), 'the board still carries a stale-note prop');
     // No panel offers a manual refresh any more (owner directive, issue 179):
     // this panel hands its shell no refresher and holds no watcher handle of
     // its own — the block host enrols it through watchPanel, which keeps
     // itself current, and a failed read logs an error instead of waiting on
     // a visitor to press a control that does not exist.
     assert.doesNotMatch(component, /\{refresh\}|const refresh =|watcher/);
-    // The envelope facts ride the adapter into the shell unchanged, and the
-    // empty-title fallback the unavailablePanel case needs is preserved.
-    const rendered = tokenBoardProps(envelopeFor(shippedPayload));
-    assert.equal(rendered.title, 'Fixture Usage');
-    assert.equal(rendered.status, 'ok');
-    assert.equal(rendered.generatedAt, '2026-08-11T03:00:00Z');
-    assert.equal(tokenBoardProps(envelopeFor(null, { title: '' })).title, tokenUsageFallbackTitle);
-    assert.equal(tokenUsageFallbackTitle, 'Token usage');
+    // The envelope facts ride the adapter into the shell unchanged — minus the
+    // two the board no longer draws: the origin's title is not carried at all
+    // now, so there is nothing to fall back to when an envelope arrives with
+    // an empty one.
+    const props = tokenBoardProps(envelopeFor(shippedPayload, { title: 'Fixture Usage' }));
+    assert.equal(props.status, 'ok');
+    assert.equal(props.generatedAt, '2026-08-11T03:00:00Z');
+    assert.equal(props.title, undefined, 'the board grew a panel label back');
+    assert.equal(props.mark, undefined, 'the board grew its title mark back');
+    assert.equal(props.staleNote, undefined, 'the board grew a data-through line back');
+    assert.ok(!helper.includes('tokenUsageFallbackTitle'), 'the fallback title outlived the title');
     // Before the first envelope the block renders NOTHING — the same face the
     // retired component's {#if envelope} guard gave the page.
     assert.equal(tokenBoardProps(null), null);
@@ -460,9 +466,9 @@ describe('the board of cards: source contract', () => {
        fill, the daily line's end mark, the scrubber's cursor and the height
        the sub area reserves are the genuinely dynamic lengths on this
        surface, and each reaches the DOM as a custom property Svelte writes
-       with setProperty rather than as a style string. Everything else —
-       which card is inverted, which severity paints, how many fact columns,
-       whether a cursor is lit — is a closed-set data attribute. */
+       with setProperty rather than as a style string. Everything else — which
+       severity paints, how many fact columns, whether a cursor is lit — is a
+       closed-set data attribute. */
     assert.match(component, /style:--board-fill=\{`\$\{row\.fillPct\}%`\}/);
     assert.match(component, /style:--board-fill=\{`\$\{card\.meter\.fillPct\}%`\}/);
     assert.match(component, /style:--board-sub-lines=\{card\.sub\?\.length \?\? 1\}/);
@@ -477,14 +483,15 @@ describe('the board of cards: source contract', () => {
     }
   });
 
-  it('inverts by remapping one token set, with no second face left in the DOM', () => {
-    /* THE INVERSION IS ONE TOKEN REMAP (owner directive, 2026-09-11). The
-       two-face machinery is gone with the reasons it existed: a rotated
-       pivot, the backface cull, the WebKit visibility swap, the aria-hidden
-       on whichever face was turned away, and the fixed box that clipped
-       whatever the far face could not fit. What replaces all of it is one
-       [data-turned] rule remapping the card's own paper and ink roles, so
-       nothing is hidden and nothing can be hidden by accident. */
+  it('declares the card roles once, with no second face and no remap left anywhere', () => {
+    /* ONE FACE, then ONE PAINT. The two-face machinery went at issue 316 with
+       the reasons it existed: a rotated pivot, the backface cull, the WebKit
+       visibility swap, the aria-hidden on whichever face was turned away, and
+       the fixed box that clipped whatever the far face could not fit. The
+       single [data-turned] token remap that replaced it went at issue 323 —
+       "there is no reason for Codex to be black while the rest are not,
+       everything should follow the same pattern" — so the card's five roles
+       are declared exactly once and nothing anywhere points them elsewhere. */
     for (const gone of ['board-pivot', 'board-face', 'data-face', 'rotateY', 'backface-visibility', 'perspective']) {
       assert.ok(!component.includes(gone), `the component still carries ${gone}`);
       assert.ok(!sheet.includes(gone), `the sheet still carries ${gone}`);
@@ -493,56 +500,57 @@ describe('the board of cards: source contract', () => {
     assert.match(
       sheet,
       /\.board-card \{[^}]*--board-paper: var\(--ledger-bg\);[\s\S]*?--board-ink: var\(--ledger-ink\)/,
-      'a card in the paper state must declare the roles the inversion swaps'
+      'the card must declare the roles every colour inside it reads'
     );
-    assert.match(
-      sheet,
-      /\.board-card\[data-turned='true'\] \{[^}]*--board-paper: var\(--ledger-ink\);[\s\S]*?--board-ink: var\(--ledger-bg\)/,
-      'the inversion must be one token remap, not a rule per painted thing'
+    /* THE REMAP IS GONE FROM ALL THREE PLACES IT LIVED — the sheet's rule, the
+       component's attribute and the adapter's flag. Swept together, because a
+       card painted differently from its neighbours coming back through any one
+       of the three is the same regression the owner threw out. */
+    assert.ok(!sheet.includes('data-turned'), 'the sheet still remaps a card\u2019s roles');
+    assert.ok(
+      !sheet.includes('--board-paper: var(--ledger-ink)'),
+      'a second paper role is still declared'
     );
+    for (const [name, source] of Object.entries({ component, helper })) {
+      assert.ok(!source.includes('data-turned'), `${name} still draws the turn attribute`);
+      assert.ok(!/\bturned\b/.test(rendered(source)), `${name} still carries a turn flag`);
+    }
   });
 
-  it('offers nothing to press, and paints the inversion the adapter composed', () => {
+  it('offers nothing to press, and gives every card the same paint', () => {
     /* "THESE SHOULDN'T CHANGE COLOUR WHEN I CLICK ON THEM" (owner directive,
-       2026-09-11, issue 316). The press revealed nothing — one face, one
-       token remap — so the whole control is gone: no button, no pressed
-       state, no click, and no state for a click to change. What stays is the
-       RHYTHM, which was always the adapter's: every second source card is
-       drawn inverted, and no reader can move it. */
+       2026-09-11, issue 316) took the control; "everything should follow the
+       same pattern" (2026-09-12, issue 323) took the rhythm the control used
+       to toggle. So there is no button, no pressed state, no click, no state
+       for a click to change — and no flag on any card that would let one be
+       painted differently from the five beside it. */
     const markup = rendered(component);
     assert.ok(!markup.includes('<button'), 'the board grew a control again');
     assert.ok(!markup.includes('aria-pressed'), 'a card still announces a pressed state');
     assert.ok(!markup.includes('onclick'), 'a card still takes a click');
-    assert.match(component, /<div\s+class="board-card"/);
-    assert.match(component, /data-turned=\{card\.turned \? 'true' : 'false'\}/);
-    /* The inversion is READ from the card the adapter composed rather than
-       held in the component: a Set keyed by card is exactly the machinery the
-       owner asked to be removed, and the turn vocabulary went with it. */
+    assert.match(
+      component,
+      /<div class="board-card" role="group" aria-label=\{card\.ariaLabel\}>/
+    );
     assert.doesNotMatch(component, /new Set\(/, 'the component kept a per-card state set');
     assert.doesNotMatch(component, /turnLabel|returnLabel/, 'the turn vocabulary outlived the turn');
     assert.doesNotMatch(helper, /boardTurnLabel|boardReturnLabel/, 'the adapter still writes turn copy');
 
-    /* EVERY SECOND SOURCE CARD IS INVERTED. It is the board's rhythm rather
-       than a fact about any source, which is what makes a third source join
-       that rhythm instead of needing a rule of its own. */
+    /* NO CARD THE ADAPTER COMPOSES CARRIES A TURN, at any source count — the
+       rhythm was stated as "every other one", so two sources and three sources
+       are both fixtures a restored rule would fail. */
     const cards = tokenBoardProps(envelopeFor(shippedPayload)).cards;
-    assert.deepEqual(
-      cards.filter((card) => card.key.startsWith('source-')).map((card) => card.turned === true),
-      [false, true]
-    );
     const three = tokenCards([
       { label: 'a', windows: [] },
       { label: 'b', windows: [] },
       { label: 'c', windows: [] }
     ]);
-    assert.deepEqual(
-      three.filter((card) => card.key.startsWith('source-')).map((card) => card.turned === true),
-      [false, true, false]
-    );
-    assert.ok(
-      cards.filter((card) => !card.key.startsWith('source-')).every((card) => card.turned === undefined),
-      'only the source cards carry the board\u2019s alternating rhythm'
-    );
+    for (const card of [...cards, ...three]) {
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(card, 'turned'),
+        `${card.key} still carries a turn key`
+      );
+    }
     // Every card still names itself, so the box a reader lands in is named.
     for (const card of cards) {
       assert.ok(card.ariaLabel.trim().length > 0, card.key);
@@ -972,11 +980,20 @@ describe('the board of cards: live surface', () => {
     assert.equal(set.noun, 'token');
     assert.equal(set.stripLabel, `${sourceName('s')} token calendar: daily totals, newest last`);
     assert.ok(set.columns.length > 0, 'a real series draws its window');
-    /* THE READING IS BUILT FROM THE DAYS THE PAYLOAD ACTUALLY CARRIES, never
-       from a sentence an adapter guessed at (issue 158's finding, carried
-       through the move): the sum, the day count, the peak and the last day
-       covered are all measured from the same totals the grid draws. */
-    assert.equal(set.caption, `${formatMagnitude(6)} tokens over 3 days · peak ${formatMagnitude(3)} · data through 2026-08-03`);
+    /* AND IT CARRIES NO READING SENTENCE (owner directive, 2026-09-12, issue
+       323; the standing ruling already forbids a chart caption). "30.4B tokens
+       over 30 days · peak 3B · data through 2026-09-11" restated four figures
+       the grid, the board and the cells already carry, so a set is now its
+       columns plus the words the grid itself needs — nothing composed for a
+       line under it. Swept over the contract, the component and the sheet,
+       because the row coming back through any one of the three is the same
+       regression. */
+    for (const candidate of drawn.sets) {
+      assert.equal(candidate.caption, undefined, `${candidate.key} still composes a caption`);
+    }
+    assert.ok(!commits.includes('commit-caption'), 'the calendar draws a caption row again');
+    assert.ok(!commits.includes('caption'), 'the calendar still hands a caption somewhere');
+    assert.ok(!sheet.includes('commit-caption'), 'the sheet still styles a caption row');
     // A windowless, statless source still states its honest empty face on its
     // own card; a source with figures does not.
     const board = tokenBoardProps(envelopeFor({ sources: [{ label: 's', windows: [] }] }));
@@ -1211,9 +1228,9 @@ describe('category lens helpers', () => {
     assert.doesNotMatch(helper, /lensValues/, 'the dead lens resolver is back');
     assert.doesNotMatch(helper, /totalLens/, 'the adapter grew back a second copy of the sentinel');
     assert.doesNotMatch(helper, /function usageActivitySummary/, 'the adapter grew back a window-blind sentence');
-    /* A category still carries no finished SENTENCE: the caption under the
-       graph is built by lib/commits.ts from the days actually drawn, so a
-       breakdown and a window cannot describe two different pictures. */
+    /* A category still carries no finished SENTENCE. There is no longer a
+       caption anywhere for one to be printed in (issue 323), and the adapter
+       must not grow a second home for the sentence that left. */
     assert.doesNotMatch(helper, /summary:/, 'the adapter grew back a sentence about a window it cannot see');
   });
 
@@ -1668,6 +1685,26 @@ describe('the models card is one card per source', () => {
     }))
   });
 
+  /* ONE SOURCE WHOSE MEMBERS CARRIED DIFFERENT AMOUNTS. `carrying` above gives
+     every member the identical row, which cannot say anything about an order;
+     this builds the series totals FROM the rows, so admission's per-day
+     equality holds and the only thing separating two rows is how much each
+     one carried. */
+  const weighted = (rows) => ({
+    sources: [
+      {
+        label: 'a-capture-tool',
+        windows: [],
+        series: {
+          startDate: '2026-08-10',
+          totals: [rows.reduce((sum, [, value]) => sum + value, 0)],
+          recorded: true,
+          models: rows.map(([key, value]) => ({ key, totals: [value] }))
+        }
+      }
+    ]
+  });
+
   const cardsOf = (payload) => tokenBoardProps(envelopeFor(payload)).cards;
   const modelCards = (payload) =>
     cardsOf(payload).filter((card) => card.key.startsWith('models-'));
@@ -1691,22 +1728,44 @@ describe('the models card is one card per source', () => {
     }
   });
 
-  it('renders exactly the members the envelope carries, in the vocabulary\u2019s order', () => {
+  it('renders exactly the members the envelope carries, by usage, largest first', () => {
+    /* BY USAGE (owner directive, 2026-09-12, issue 323: "sort the entries of
+       the model lists by usage"). A card is a ranking once its rows are drawn
+       as rules against the largest of them, and laying them out in a fixed
+       vocabulary order made the reader do the sort by eye.
+
+       The fixture makes the vocabulary order and the usage order DISAGREE —
+       the member the file serves FIRST carried the least — so a card that went
+       back to rank order fails here rather than passing by coincidence. */
     const [group] = vocabulary.groups;
-    /* Served BACKWARDS, so the order below is the vocabulary's rule rather
-       than the payload's accident. */
-    const keys = keysOf(group).slice(0, 3).reverse();
-    const [card] = modelCards(carrying([{ label: 'a-capture-tool', keys }]));
+    const keys = keysOf(group).slice(0, 3);
+    const [card] = modelCards(weighted(keys.map((key, index) => [key, index + 1])));
     assert.equal(card.models.length, keys.length);
     assert.deepEqual(
       card.models.map((row) => row.label),
-      keysOf(group).slice(0, 3).map(modelLabel),
-      'the rows are laid out in the vocabulary\u2019s serve order, not the payload\u2019s'
+      [...keys].reverse().map(modelLabel),
+      'the rows are laid out by usage, largest first'
     );
     for (const row of card.models) {
       assert.notEqual(row.reading, '0%');
       assert.ok(row.fillPct > 0, row.reading);
     }
+  });
+
+  it('breaks a tie by the vocabulary\u2019s rank, so a refresh never reorders the card', () => {
+    /* EQUAL TOTALS KEEP A DETERMINISTIC ORDER. The host rebuilds every card on
+       every poll, and two members that carried the same amount changing places
+       between two deliveries would be rows moving under a reader for no
+       reading at all. Served BACKWARDS, so what is measured is the rank rule
+       rather than the payload's accident. */
+    const [group] = vocabulary.groups;
+    const keys = keysOf(group).slice(0, 3);
+    const [card] = modelCards(weighted([...keys].reverse().map((key) => [key, 4])));
+    assert.deepEqual(
+      card.models.map((row) => row.label),
+      keys.map(modelLabel),
+      'tied members are not laid out in the vocabulary\u2019s serve order'
+    );
   });
 
   it('runs the longest row the card\u2019s full width and reads the rest against it', () => {
@@ -2301,93 +2360,65 @@ describe('count admission holds the shared numeric contract', () => {
   });
 });
 
-/* The honest data-through line (issue 276; the observability half of issue
- * 267). A stalled capture pipeline used to be invisible: the origin keeps
- * serving its last good payload at status ok, and nothing anywhere said the
- * figures were days old. The adapter now derives a stale note from fields
- * the envelope already carries — no invented freshness, no new wire data. */
-describe('the stale data-through note', () => {
+/* THE HONEST DATA-THROUGH LINE IS GONE FROM THE PAGE (owner directive,
+ * 2026-09-12, issue 323), and this is what replaces the suite that pinned it.
+ *
+ * Issue 276 added it for a real defect: a stalled capture pipeline was
+ * invisible, because the origin keeps serving its last good payload at status
+ * ok and nothing anywhere said the figures were days old. The owner read the
+ * result on the live page — "DATA THROUGH SEP 11, 2026 · LAST CAPTURE 11H AGO"
+ * over a board of figures — and removed the line.
+ *
+ * WHAT LEFT IS THE DRAWING, NOT THE MODEL. Every envelope still carries its
+ * status and its generatedAt, the shell still publishes both as data
+ * attributes, and every panel still renders its own unavailable state. So the
+ * pins below are the negative of the old ones: no adapter composes the line,
+ * no props type carries it, and no shell draws it — while the machine-readable
+ * reading is asserted to be exactly where it was. */
+describe('no panel head draws a freshness line', () => {
   const seriesSources = [
     { label: 'alpha', windows: [], series: { startDate: '2026-08-20', totals: [1, 0, 2], recorded: true } },
     { label: 'beta', windows: [], series: { startDate: '2026-08-25', totals: [3], recorded: true } }
   ];
-  const now = new Date('2026-09-01T12:00:00Z');
 
-  it('dates the payload by the newest day any series covers', () => {
-    assert.equal(usageDataThrough(seriesSources), '2026-08-25');
-    assert.equal(usageDataThrough([{ label: 's', windows: [] }]), undefined);
-    assert.equal(
-      usageDataThrough([{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [] } }]),
-      undefined
-    );
-  });
-
-  it('stays silent while the payload is fresh', () => {
-    const fresh = new Date(Date.parse('2026-08-25T12:00:00Z') + usageStaleAfterMs);
-    assert.equal(usageStaleNote('ok', '2026-08-25T12:00:00Z', seriesSources, fresh), undefined);
-  });
-
-  it('renders the note once generatedAt falls beyond the threshold', () => {
-    // 2026-08-25T12:00Z to 2026-09-01T12:00Z is seven days — far beyond the
-    // two-day allowance, so the pipeline has provably stalled.
-    assert.equal(
-      usageStaleNote('ok', '2026-08-25T12:00:00Z', seriesSources, now),
-      'data through Aug 25, 2026 · last capture 7d ago'
-    );
-    // One millisecond inside the threshold is still fresh: the bound is a
-    // strict exceedance, so the note can never flicker on a healthy panel.
-    const edge = new Date(Date.parse('2026-08-25T12:00:00Z') + usageStaleAfterMs + 1);
-    assert.notEqual(usageStaleNote('ok', '2026-08-25T12:00:00Z', seriesSources, edge), undefined);
-  });
-
-  it('renders on an origin-declared stale envelope whatever the age', () => {
-    assert.equal(
-      usageStaleNote('stale', '2026-09-01T11:00:00Z', seriesSources, now),
-      'data through Aug 25, 2026 · last capture 1h ago'
-    );
-  });
-
-  it('falls back to the capture age alone when no source draws a series', () => {
-    assert.equal(
-      usageStaleNote('stale', '2026-09-01T11:00:00Z', [{ label: 's', windows: [] }], now),
-      'last capture 1h ago'
-    );
-  });
-
-  it('says nothing on the unavailable state, which renders the empty face instead', () => {
-    assert.equal(usageStaleNote('unavailable', '2026-08-01T00:00:00Z', seriesSources, now), undefined);
-  });
-
-  it('says nothing when the envelope carries nothing to restate', () => {
-    // No generatedAt and no origin stale claim: silence, never a guess.
-    assert.equal(usageStaleNote('ok', undefined, seriesSources, now), undefined);
-    // Origin-stale with nothing datable at all: still no invented words.
-    assert.equal(usageStaleNote('stale', undefined, [{ label: 's', windows: [] }], now), undefined);
-  });
-
-  it('rides the adapter into the shell head, where a late line moves nothing', () => {
-    /* The line still arrives as adapter-built words the component never
-       composes. Where it RENDERS moved with the owner's directive of
-       2026-09-03 (issue 287): the board's body is a grid of fixed squares, so
-       the shell's head — the one row a card already reserves beside its title
-       — is the only place a late line can appear without moving anything.
-       That is the identical arrangement the calendar has used since issue 285,
-       so the page now has one home for this line rather than two. */
+  it('composes no line for a payload a week stale, which is the case that had one', () => {
+    /* The exact fixture the retired suite used: generatedAt seven days behind
+       the clock, far past the two-day allowance, on an ok envelope. It used to
+       produce "data through Aug 25, 2026 · last capture 7d ago". */
     const props = tokenBoardProps(
-      envelopeFor({ sources: seriesSources }, { generatedAt: '2026-08-25T12:00:00Z' }),
-      now
+      envelopeFor({ sources: seriesSources }, { generatedAt: '2026-08-25T12:00:00Z' })
     );
-    assert.equal(props.staleNote, 'data through Aug 25, 2026 · last capture 7d ago');
-    const fresh = tokenBoardProps(
-      envelopeFor({ sources: seriesSources }, { generatedAt: '2026-09-01T11:30:00Z' }),
-      now
+    assert.equal(props.staleNote, undefined, 'the board composed a data-through line again');
+    assert.equal(
+      contributionCalendarProps(tokenOnly({ sources: seriesSources })).staleNote,
+      undefined,
+      'the calendar composed a data-through line again'
     );
-    assert.equal(fresh.staleNote, undefined);
-    assert.match(component, /note=\{staleNote\}/);
-    assert.doesNotMatch(
-      component,
-      /class="board-note">\{staleNote\}/,
-      'the stale line grew the board body it must not move'
+    /* And the builders that worded it are gone from the adapter, so a later
+       edit cannot quietly re-point a prop at one that still exists. */
+    for (const gone of ['usageStaleNote', 'usageDataThrough', 'usageStaleAfterMs']) {
+      assert.ok(!helper.includes(gone), `${gone} outlived the line it built`);
+    }
+  });
+
+  it('draws no note in any shell, while status stays machine-readable', async () => {
+    const shell = await readFile(
+      new URL('../src/lib/components/PanelShell.svelte', import.meta.url),
+      'utf8'
+    );
+    assert.ok(!shell.includes('panel-note'), 'the shell draws a freshness line again');
+    assert.ok(!shell.includes('data-panel-note'), 'the shell still marks a freshness line');
+    assert.ok(!shell.includes('note'), 'the shell still takes a note prop');
+    assert.ok(!sheet.includes('--panel-note'), 'the note token family outlived the note');
+    /* THE READING ITSELF STAYS. A reading nobody displays is still a reading
+       the page can be audited for, which is what a rendering lane and any
+       later presentation read instead of re-deriving freshness. */
+    assert.match(shell, /data-panel-status=\{status\}/);
+    assert.match(shell, /data-panel-generated-at=\{generatedAt\}/);
+    assert.equal(
+      tokenBoardProps(envelopeFor(shippedPayload, { status: 'stale' })).status,
+      'stale',
+      'the board stopped carrying the envelope\u2019s own status'
     );
   });
 });
@@ -2628,11 +2659,17 @@ describe('the six-card board', () => {
     }
   });
 
-  it('gives each source card its figure, its classes, its windows and its own line', () => {
+  it('gives each source card its figure, its classes and its windows, and no records', () => {
+    /* THE RECORDS MOVED TO THE RECORDS CARD (owner directive, 2026-09-12,
+       issue 323). A source card used to print "27-day streak / longest session
+       1d 17h 55m" beside its lifetime figure — two records under a total the
+       reader is comparing across cards — so both moved to the card the other
+       records are already on, and the sub line went with them. */
     const card = cardsOf().find((candidate) => candidate.key === `source-${firstSource.key}`);
     assert.equal(card.label, firstSource.name);
     assert.equal(card.figure, formatTokenCount(44_900_000_000));
-    assert.deepEqual(card.sub, ['27-day streak', `longest session ${formatDuration(150_900)}`]);
+    assert.equal(card.sub, undefined, 'a source card printed a record beside its figure again');
+    assert.ok(!helper.includes('sourceSubline'), 'the sub-line builder outlived the sub line');
     assert.deepEqual(
       card.facts.map((fact) => [fact.term, fact.value]),
       [
@@ -2654,10 +2691,16 @@ describe('the six-card board', () => {
       ['today'],
       'a source with no accounting classes printed them anyway'
     );
-    assert.deepEqual(second.sub, ['22-day streak', `longest session ${formatDuration(80_940)}`]);
+    assert.equal(second.sub, undefined, 'a source card printed a record beside its figure again');
   });
 
-  it('reads the session record from whichever source keeps one, and marks a matched streak', () => {
+  it('gathers every source\u2019s streak and longest session, and closes on the record', () => {
+    /* THE RECORDS CARD (owner directive, 2026-09-12, issue 323). Its figure is
+       still the session count of whichever source keeps one; what joined it is
+       every source's streak and longest session, which used to ride as a sub
+       line on that source's own card. Two rows per source in SERVE order, each
+       named by the source through the vocabulary, then the record across
+       sources last. */
     const sessions = cardsOf().find((card) => card.key === 'sessions');
     assert.equal(sessions.label, sessionsCardLabel);
     assert.equal(sessions.figure, '54');
@@ -2665,14 +2708,22 @@ describe('the six-card board', () => {
     assert.deepEqual(
       sessions.facts.map((fact) => [fact.term, fact.value, fact.peak === true]),
       [
-        ['longest session', formatDuration(150_900), false],
-        ['longest streak', '27 days', false],
-        ['current streak', '27 days', true]
+        [`${firstSource.name} streak`, '27 days', true],
+        [`${firstSource.name} longest session`, formatDuration(150_900), false],
+        [`${secondSource.name} streak`, '22 days', false],
+        [`${secondSource.name} longest session`, formatDuration(80_940), false],
+        ['longest streak', '27 days', false]
       ]
     );
+    /* NO NAME IS SPELLED IN CODE. Every row's subject is the vocabulary's
+       written name for the key the wire carried, which is what makes a third
+       source bring two more rows with no rule of its own. */
+    for (const fact of sessions.facts) {
+      assert.ok(!fact.term.includes(firstSource.key), fact.term);
+      assert.ok(!fact.term.includes(secondSource.key), fact.term);
+    }
     /* THE MARK IS A MEASUREMENT, not decoration: a streak short of the record
-       is not marked, and the record it is measured against is printed on the
-       line above either way. */
+       is not marked, and the record is printed on the same card either way. */
     const behind = tokenCards([
       {
         label: 's',
@@ -2684,12 +2735,84 @@ describe('the six-card board', () => {
         ]
       }
     ]).find((card) => card.key === 'sessions');
-    assert.equal(behind.facts.find((fact) => fact.key === 'current-streak').peak, false);
-    // A source that never reported a record is offered no row for it.
+    assert.deepEqual(
+      behind.facts.map((fact) => [fact.term, fact.value, fact.peak === true]),
+      [
+        [`${sourceName('s')} streak`, '2 days', false],
+        ['longest streak', '27 days', false]
+      ]
+    );
+    /* THE RECORD IS THE RECORD ACROSS SOURCES, not the keeper's own: a second
+       source holding the longer one is what the last row must report, and a
+       streak that has reached IT is what carries the mark. */
+    const across = tokenCards([
+      {
+        label: 'a',
+        windows: [],
+        stats: [
+          { key: 'sessions', label: 'Sessions', value: 3, unit: 'count' },
+          { key: 'longest-streak', label: 'Longest streak', value: 9, unit: 'days' },
+          { key: 'current-streak', label: 'Current streak', value: 9, unit: 'days' }
+        ]
+      },
+      {
+        label: 'b',
+        windows: [],
+        stats: [
+          { key: 'longest-streak', label: 'Longest streak', value: 40, unit: 'days' },
+          { key: 'current-streak', label: 'Current streak', value: 40, unit: 'days' }
+        ]
+      }
+    ]).find((card) => card.key === 'sessions');
+    assert.deepEqual(
+      across.facts.map((fact) => [fact.term, fact.value, fact.peak === true]),
+      [
+        [`${sourceName('a')} streak`, '9 days', false],
+        [`${sourceName('b')} streak`, '40 days', true],
+        ['longest streak', '40 days', false]
+      ]
+    );
+    // A source that never reported a record is offered no row for it — an
+    // absent stat is "nobody said", and a ladder of dashes says that four
+    // times over while burying the rows that are true.
     const bare = tokenCards([{ label: 's', windows: [] }]).find((card) => card.key === 'sessions');
     assert.equal(bare.figure, unknownFigure);
     assert.equal(bare.facts, undefined);
     assert.equal(bare.note, tokenUsageSourceEmptyNote);
+    // A stat present but unreported is the same claim, and renders the same:
+    // no row, never the word `undefined` beside a unit.
+    const nulled = tokenCards([
+      {
+        label: 's',
+        windows: [],
+        stats: [
+          { key: 'current-streak', label: 'Current streak', value: null, unit: 'days' },
+          { key: 'longest-session', label: 'Longest session', value: null, unit: 'seconds' },
+          { key: 'longest-streak', label: 'Longest streak', value: null, unit: 'days' }
+        ]
+      }
+    ]).find((card) => card.key === 'sessions');
+    assert.equal(nulled.facts, undefined);
+  });
+
+  it('refuses a malformed streak at the boundary rather than rendering one', () => {
+    /* A NEGATIVE OR FRACTIONAL STREAK IS NOT A READING. Admission is where
+       that is decided — isCount admits only safe non-negative integers — so a
+       payload carrying one produces no sources at all and therefore no card,
+       rather than a records row reading "-3 days". */
+    for (const broken of [-3, 1.5, Number.NaN, '27']) {
+      const payload = {
+        sources: [
+          {
+            label: 's',
+            windows: [],
+            stats: [{ key: 'current-streak', label: 'Current streak', value: broken, unit: 'days' }]
+          }
+        ]
+      };
+      assert.deepEqual(tokenUsageSources(payload), [], String(broken));
+      assert.deepEqual(tokenBoardProps(envelopeFor(payload)).cards, [], String(broken));
+    }
   });
 
   it('gives the sessions figure to the source that reports one, whichever it is', () => {
@@ -2704,12 +2827,6 @@ describe('the six-card board', () => {
     assert.equal(keeper.figure, '9');
   });
 
-  it('never turns a card that is not a source card', () => {
-    for (const card of cardsOf()) {
-      if (card.key.startsWith('source-')) continue;
-      assert.equal(card.turned, undefined, card.key);
-    }
-  });
 });
 
 /* ---------------------------------------------------------------------------
