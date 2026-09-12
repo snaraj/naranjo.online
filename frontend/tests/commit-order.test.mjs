@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import { commitLogProps, leadTokenSource } from '../src/lib/commits.ts';
+import { contributionCalendarProps, leadTokenSource, projectsCommitsProps } from '../src/lib/commits.ts';
 import { parseVCSActivity } from '../src/lib/activity.ts';
 import { panelKinds } from '../src/lib/panels.ts';
 import { sourceName, tokenUsagePanelId } from '../src/lib/token-usage.ts';
@@ -38,7 +38,7 @@ const reporting = (label, totals) => ({
 });
 
 test('the most active token set goes first, the other token sets follow in payload order, contributions last', () => {
-  const keys = (payload) => commitLogProps([null, usage(payload)]).sets.map((set) => set.key);
+  const keys = (payload) => contributionCalendarProps([null, usage(payload)]).sets.map((set) => set.key);
 
   // The lead is MEASURED: the set whose series carries the most tokens.
   assert.equal(leadTokenSource([reporting('anthropic', [1, 2]), reporting('codex', [3, 4])]), 'codex');
@@ -92,13 +92,13 @@ test('the most active token set goes first, the other token sets follow in paylo
   // One reporting source leads by default, and no usage envelope at all
   // leaves the contributions calendar alone, as before.
   assert.deepEqual(keys([reporting('anthropic', [1, 2])]), ['anthropic', 'contributions']);
-  assert.deepEqual(commitLogProps([null, null]).sets.map((set) => set.key), ['contributions']);
+  assert.deepEqual(contributionCalendarProps([null, null]).sets.map((set) => set.key), ['contributions']);
 });
 
 test('the lead is the first segment the component draws, named by the vocabulary, and no panel label sits over it', () => {
   const [first, second] = sourceVocabulary.sources;
   assert.ok(second, 'the vocabulary declares one source, so the order has nothing to choose between');
-  const props = commitLogProps([
+  const props = contributionCalendarProps([
     null,
     usage([reporting(first.key, [1]), reporting(second.key, [2])])
   ]);
@@ -121,7 +121,13 @@ test('the lead is the first segment the component draws, named by the vocabulary
  * and a private row says only what the host's own wording says, with no name,
  * no identity and no destination. */
 test('private days interleave with the public commits, counted and never named', () => {
-  const props = commitLogProps([
+  /* The rows are the SHEET's right-hand column now (owner design decision,
+     2026-09-11, issue 318), built by the same walk they always were — so the
+     adapter this drives moved and the claim did not. The projects envelope is
+     null, which is the captured-fallback face: the left column is irrelevant
+     to the ordering claim and says so by being absent. */
+  const props = projectsCommitsProps([
+    null,
     {
       schema: 'panel/v1',
       id: 'vcs-activity',
@@ -143,16 +149,15 @@ test('private days interleave with the public commits, counted and never named',
           { date: '2026-09-08', contributions: 1, repositories: 1 }
         ]
       }
-    },
-    null
+    }
   ], new Date('2026-09-11T12:00:00Z'));
   // Newest first, one list, both kinds. A private day sorts by the END of its
   // day, so it sits above the commits of that same day rather than under them.
   assert.deepEqual(
-    props.rows.map((row) => row.source.text),
+    props.logRows.map((row) => row.source.text),
     ['public-repo', 'private', 'public-repo', 'private']
   );
-  const [, privateRow] = props.rows;
+  const [, privateRow] = props.logRows;
   // The host's own wording, and the plural derived rather than assumed.
   assert.equal(privateRow.title.text, '4 contributions in 2 private repositories');
   /* The key is composed rather than written out: a literal "private-<date>"
@@ -169,9 +174,9 @@ test('private days interleave with the public commits, counted and never named',
   // must never reach the wire, so there is nothing to shorten.
   assert.equal(privateRow.mark, '—');
   // The singular reads as a singular.
-  assert.equal(props.rows[3].title.text, '1 contribution in 1 private repository');
+  assert.equal(props.logRows[3].title.text, '1 contribution in 1 private repository');
   // Every row carries an age, and the private one's is the day's.
-  for (const row of props.rows) {
+  for (const row of props.logRows) {
     assert.ok(row.age.length > 0, 'a row carries no age');
   }
 });

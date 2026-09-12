@@ -16,15 +16,16 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, it, test } from 'node:test';
 
-import { contributionsLabel, parseVCSActivity } from '../src/lib/activity.ts';
-import { commitLogProps } from '../src/lib/commits.ts';
+import { activityPanelId, contributionsLabel, parseVCSActivity } from '../src/lib/activity.ts';
+import { contributionCalendarProps, spreadPanelIds } from '../src/lib/commits.ts';
 import {
   codingProjectsPanelId,
   projectHost,
   projectTableProps,
   parseCodingProjects,
   projectColumns,
-  projects
+  projects,
+  shownProjectRows
 } from '../src/lib/projects.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
@@ -86,7 +87,7 @@ describe('the contribution figure names its coverage', () => {
        2026-09-03, issue 287): the commits section cycles three calendars and
        each states its own reading, so the coverage word is measured where the
        reader meets it rather than on a figures row one of the three owned. */
-    const captionOf = (coverage) => commitLogProps([envelope(coverage), null]).sets[0].caption;
+    const captionOf = (coverage) => contributionCalendarProps([envelope(coverage), null]).sets[0].caption;
     assert.equal(captionOf('public'), '5 public contributions · 0-day streak');
     assert.equal(captionOf('complete'), '5 contributions · 0-day streak');
     assert.equal(captionOf(undefined), '5 contributions · 0-day streak');
@@ -114,18 +115,28 @@ describe('the contribution figure names its coverage', () => {
 });
 
 describe('the Coding Projects feed follows the host', () => {
-  it('renders the description the host carries right now', () => {
-    // The commission, exactly: the owner edits a description on the host and
-    // the site follows without a release.
+  it('renders the figures the host carries right now', () => {
+    /* The commission, exactly: the owner's repositories change on the host and
+       the site follows without a release. The DESCRIPTION is no longer one of
+       the figures it follows with — the column left the table when the section
+       became half a sheet (owner design decision, 2026-09-11, issue 318) — so
+       the claim is read off a counter the table still draws. The origin serves
+       the description either way; the page just has nowhere to print it. */
     const props = projectTableProps(
       projectsEnvelope(projects.map((project) => liveRow(project.name))),
       noon
     );
-    assert.equal(props.rows.length, Math.min(projects.length, 4));
+    assert.equal(props.rows.length, Math.min(projects.length, shownProjectRows));
+    const starsOf = (row) => row.counts.find((count) => count.key === 'stars').value;
+    assert.notEqual(
+      String(projects[0].stars),
+      '3',
+      'the captured row already carries the payload figure, so this fixture proves nothing'
+    );
     assert.equal(
-      props.rows[0].summary,
-      `${projects[0].name} as the host describes it now`,
-      'the feed served the captured description while the panel carried a newer one'
+      starsOf(props.rows[0]),
+      '3',
+      'the feed served the captured figure while the panel carried a newer one'
     );
     // Identity stays the captured module's: a payload can never introduce a
     // repository the owner did not list, rename one, or move a link.
@@ -135,7 +146,7 @@ describe('the Coding Projects feed follows the host', () => {
        order the adapter produced from an unbroken tie — which is exactly what
        makes this a pin on identity rather than on ordering (ordering has its
        own pin, against distinct instants). */
-    assert.equal(props.rows.length, 4);
+    assert.equal(props.rows.length, shownProjectRows);
     for (const row of props.rows) {
       assert.ok(
         projects.some((project) => project.name === row.link.text),
@@ -168,7 +179,7 @@ describe('the Coding Projects feed follows the host', () => {
     }
   });
 
-  it('falls back per row, serving the captured description for the row that fell back', () => {
+  it('falls back per row, serving the captured figures for the row that fell back', () => {
     // The origin degrades per row — five repositories read and one refused is
     // five live rows beside one that says it is not — and the page has to
     // render that mixture legibly rather than flattening it.
@@ -176,9 +187,10 @@ describe('the Coding Projects feed follows the host', () => {
     // repository, tallies included — so this fixture carries them, exactly as
     // the snapshot does.
     /* The two rows this scenario reads are chosen by PUSH ORDER rather than by
-       module index: the table draws the four most recent, and the captured
-       list is written in a maintenance order on purpose, so an index into it
-       is not a row the table necessarily renders. */
+       module index: the payload carries no `pinned` flag, so the table draws
+       the most recent rows by push, and the captured list is written in a
+       maintenance order on purpose — an index into it is not a row the table
+       necessarily renders. */
     const byRecency = projects.toSorted(
       (left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt)
     );
@@ -188,7 +200,7 @@ describe('the Coding Projects feed follows the host', () => {
        name tie-break and the two rows this scenario reads might not be drawn
        at all — a fixture whose own shape decides the assertion. */
     const rows = byRecency
-      .slice(0, 4)
+      .slice(0, shownProjectRows)
       .map((project) =>
         project.name === fellBack.name
           ? { ...liveRow(project.name), recorded: true, closedPulls: 3, release: 'v1.0.0' }
@@ -200,20 +212,26 @@ describe('the Coding Projects feed follows the host', () => {
     // by its captured one — so position is a property of the data here, not an
     // index into the module list.
     const rowFor = (name) => props.rows.find((row) => row.key === name);
+    const starsOf = (row) => row.counts.find((count) => count.key === 'stars').value;
     for (const count of [rowFor(fellBack.name).counts, rowFor(fellBack.name).updated].flat()) {
       assert.ok(!('marked' in count), `${count.key} carries a provenance mark`);
     }
+    assert.notEqual(
+      String(fellBack.stars),
+      '3',
+      'the captured row already carries the payload figure, so this fixture proves nothing'
+    );
     assert.equal(
-      rowFor(fellBack.name).summary,
-      fellBack.description,
-      'a recorded row served the payload description instead of the captured one'
+      starsOf(rowFor(fellBack.name)),
+      String(fellBack.stars),
+      'a recorded row served the payload figure instead of the captured one'
     );
     // The live row beside it is exactly as unmarked, and serves the host's
-    // description rather than the captured one.
+    // figures rather than the captured ones.
     for (const count of [rowFor(live.name).counts, rowFor(live.name).updated].flat()) {
       assert.ok(!('marked' in count), `${count.key} carries a provenance mark`);
     }
-    assert.notEqual(rowFor(live.name).summary, live.description);
+    assert.equal(starsOf(rowFor(live.name)), '3');
   });
 
   it('renders a tally the host did not report as unknown, never as zero', () => {
@@ -257,10 +275,10 @@ describe('the Coding Projects feed follows the host', () => {
     // on the date the module records, and the page marks them — rather than a
     // placeholder pretending to be data. It is also why this block has no
     // loading face and reserves nothing.
-    const capturedSummaries = projects
+    const capturedRoster = projects
       .toSorted((left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt))
-      .slice(0, 4)
-      .map((project) => project.description);
+      .slice(0, shownProjectRows)
+      .map((project) => project.name);
     for (const envelope of [
       null,
       projectsEnvelope([], { kind: 'vcs-activity/v1' }),
@@ -269,8 +287,16 @@ describe('the Coding Projects feed follows the host', () => {
     ]) {
       const props = projectTableProps(envelope, noon);
       assert.deepEqual(
-        props.rows.map((row) => row.summary),
-        capturedSummaries
+        props.rows.map((row) => row.link.text),
+        capturedRoster
+      );
+      /* And NO chip: a captured face carries no `pinned` flag, so there is no
+         pinned set for a "latest" row to be latest beside, and saying one row
+         is the newest of a set nobody selected would be a claim this face
+         cannot support. */
+      assert.deepEqual(
+        props.rows.filter((row) => row.chip !== undefined),
+        []
       );
       for (const entry of props.rows) {
         for (const count of [...entry.counts, entry.updated]) {
@@ -340,13 +366,17 @@ describe('the Coding Projects feed follows the host', () => {
   });
 });
 
-test('the Coding Projects block is bound to the panel, not to a frozen props object', async () => {
+test('the Projects · Commits block is bound to its panels, not to a frozen props object', async () => {
   // The structural half of the commission: a static binding cannot follow the
-  // host however good the adapter is, so the binding itself is pinned.
-  const binding = await read('../src/lib/blocks/codingProjects.ts');
-  assert.match(binding, /panelBlock\(/);
+  // host however good the adapter is, so the binding itself is pinned. It is a
+  // MULTI-panel binding since the sheet paired the two columns (owner design
+  // decision, 2026-09-11, issue 318) — the repositories and the contributions
+  // record, in that order.
+  const binding = await read('../src/lib/blocks/projectsCommits.ts');
+  assert.match(binding, /panelsBlock\(/);
   assert.doesNotMatch(binding, /staticBlock\(/);
-  assert.match(binding, /codingProjectsPanelId/);
+  assert.match(binding, /spreadPanelIds/);
+  assert.deepEqual(spreadPanelIds, [codingProjectsPanelId, activityPanelId]);
   assert.equal(codingProjectsPanelId, 'coding-projects');
 });
 
@@ -367,7 +397,7 @@ test('no source file prints a provenance sentence, and no detail carries one (is
   }
   // The table still renders each counter's detail through the one hover-detail
   // primitive; the detail names the phrase and carries no provenance row.
-  const table = await read('../src/lib/components/LedgerTable.svelte');
+  const table = await read('../src/lib/components/LedgerSpread.svelte');
   assert.match(table, /<DetailTip detail=\{count\.detail\} \/>/);
   const stars = projectColumns({ ...projects[0], stars: 1 }, undefined, noon).counts.find(
     (count) => count.key === 'stars'

@@ -308,8 +308,17 @@ export type LedgerTableRow = {
   readonly key: string;
   /* The row's leading cell, as navigation the information layer validated. */
   readonly link: ActivityLink;
-  /* The single-line description; an empty string renders the honest dash. */
-  readonly summary: string;
+  /* A small word set after the name for a row that is on this table for a
+   * reason the rows around it are not (owner design decision, 2026-09-11,
+   * issue 318). Absent on every row that needs none, which is why it is
+   * optional rather than an empty string: "no chip" and "a chip with no word"
+   * are different states and only one of them is ever meant.
+   *
+   * The description cell left with the same directive. The column was the
+   * widest thing in the row and the section holds HALF a sheet now, so the
+   * four figures and the name are what a repository gets; the description is
+   * one click away on the row's own link. */
+  readonly chip?: string;
   /* How long since the row's own last change — the same counter the other
    * three are, so its provenance and its exact instant reach a reader the same
    * way theirs do. It sits in its own column rather than in the cluster. */
@@ -317,23 +326,40 @@ export type LedgerTableRow = {
   readonly counts: readonly LedgerCount[];
 };
 
-export type LedgerTableProps = {
-  /* Absent for a table whose section head already names it (owner directive,
-   * 2026-09-04, issue 292): the shell renders no label and keeps the row. */
-  readonly title?: string;
+/* THE SHEET'S TWO COLUMNS (owner design decision, 2026-09-11, issue 318,
+ * option B on the design canvas): one block that draws a ruled table beside a
+ * ruled log, each with its own head row, and stacks them at a phone width.
+ *
+ * It is ONE props contract rather than two blocks side by side because the two
+ * columns are one picture the reader compares across — the repositories on the
+ * left and, beside them, what actually landed in them — and because the
+ * heights are paired: the log reserves exactly as many rows as the table
+ * shows, so the section's box is decided before either payload arrives.
+ *
+ * `logAnchor` is the id the log column answers to. The section carries one id
+ * for the nav; the log had a section of its own until this directive, and an
+ * address a reader already shared must keep landing them on it (issue 287's
+ * rule). It arrives as data so this contract, not a component, is where the
+ * page's addresses live. */
+export type LedgerSpreadProps = {
   readonly status: PanelStatus;
   readonly generatedAt?: string;
-  /* The column heads, in column order, exactly as they render. */
+  /* The table column's heads, in column order, exactly as they render. */
   readonly heads: readonly string[];
   readonly rows: readonly LedgerTableRow[];
   readonly emptyNote: string;
+  /* The log column's own head, its anchor, its rows and its empty line. */
+  readonly logHead: string;
+  readonly logAnchor: string;
+  readonly logRows: readonly CommitLogRow[];
+  readonly logNote: string;
   readonly staleNote?: string;
 };
 
-/* One selectable calendar in the commits block: a heatmap and the sentence
- * that reads it. Three of these render as one grid with a segmented control
- * over it, so a set carries everything the shared grid needs. */
-export type CommitLogSet = {
+/* One selectable calendar in the trackers' calendar block: a heatmap and the
+ * sentence that reads it. Three of these render as one grid with a segmented
+ * control over it, so a set carries everything the shared grid needs. */
+export type CalendarSet = {
   readonly key: string;
   readonly label: string;
   readonly columns: GridCell[][];
@@ -362,13 +388,17 @@ export type CommitLogRow = {
 /* No `title`: the block renders no panel label (owner directive, 2026-09-04,
  * issue 294). The envelope's title names one source — the version-control
  * host — and the calendar now opens on a token series, so a label over it
- * would be false; the segments underneath name every source themselves. */
-export type CommitLogProps = {
+ * would be false; the segments underneath name every source themselves.
+ *
+ * The LOG that used to ride under these sets left with the owner's 2026-09-11
+ * directive (issue 318): the rows are the right-hand column of the sheet's
+ * paired section now, and the calendar is a tracker among the trackers. What
+ * moved is which block renders them — the sets and the rows are built by the
+ * same two functions in lib/commits.ts they always were. */
+export type ContributionCalendarProps = {
   readonly status: PanelStatus;
   readonly generatedAt?: string;
-  readonly sets: readonly CommitLogSet[];
-  readonly rows: readonly CommitLogRow[];
-  readonly rowsNote: string;
+  readonly sets: readonly CalendarSet[];
   readonly staleNote?: string;
 };
 

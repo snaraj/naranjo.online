@@ -59,7 +59,7 @@
 import { ageDetail, relativeAge } from './age.ts';
 import {
   type LedgerCount,
-  type LedgerTableProps,
+  type LedgerSpreadProps,
   type LedgerTableRow
 } from './blocks.ts';
 import { formatWhole } from './grid.ts';
@@ -502,13 +502,15 @@ export function projectsStaleNote(
 
 
 /* ---------------------------------------------------------------------------
- * The ledger table (owner directive, 2026-09-03, issue 287)
+ * The ledger table (owner directive, 2026-09-03, issue 287; re-cut for the
+ * paired sheet, 2026-09-11, issue 318)
  *
- * The section became a ruled table of the four most recently pushed
- * repositories rather than a feed of cards. The head used to count the roster
- * they were chosen from ("latest 4 of <total> · by last push"); the owner cut
- * that line (2026-09-04, issue 292), so the table shows its four and says
- * nothing about the rest.
+ * The section became a ruled table rather than a feed of cards, and it is now
+ * the LEFT column of one section it shares with the commit log. Two things
+ * moved with that: the rows are the owner's pinned set plus the latest one
+ * outside it rather than the four most recently pushed, and the description
+ * column is gone — a half-sheet column holds a name and four figures, and a
+ * repository's own words are one click away on its own link.
  *
  * Everything the cards proved stays proved. The roster is still the payload's,
  * the order is still derived from each row's effective instant, the captured
@@ -524,25 +526,83 @@ export function projectsStaleNote(
  * would be a component that knows what it is showing. */
 export const projectTableHeads: readonly string[] = [
   'Repository',
-  'Description',
   'PRs closed',
   'Version',
   'Stars',
   'Updated'
 ];
 
-/* How many rows the table shows. The owner asked for the four most recent
- * (2026-09-03). */
-export const shownProjectRows = 4;
+/* HOW MANY ROWS EACH COLUMN OF THE SHEET HOLDS (owner design decision,
+ * 2026-09-11, issue 318): the owner's six pinned repositories plus the one
+ * most recently pushed outside them. It was four while the section was a
+ * full-width table of the most recent (2026-09-03).
+ *
+ * ONE constant, TWO seats. The commit column beside this one reserves the same
+ * number of rows — "seven rows ... to match the seven repository rows" — so a
+ * second number would be the two columns free to disagree about a height they
+ * are paired on. lib/commits.ts and the stylesheet's reserve both read this,
+ * and tests/activity.test.mjs recomputes the box from it. */
+export const shownProjectRows = 7;
 
 export const projectsEmptyNote = 'no repositories reported';
 
-/* The row's own dash, for a repository whose description the host does not
- * carry: an empty cell reads as a rendering fault, and this reads as what it
- * is. */
-const noDescription = '—';
+/* The word the one non-pinned row wears (owner design decision, 2026-09-11,
+ * issue 318). The other rows are on the table because the owner pinned them;
+ * this one is there because it moved most recently, and without the word that
+ * difference is invisible. It is the page's own word, so it lives here beside
+ * the rule that decides which row gets it. */
+export const latestRowChip = 'latest';
 
-export function projectTableProps(envelope: PanelEnvelope | null, now?: number): LedgerTableProps {
+/* WHICH REPOSITORIES THE TABLE SHOWS (owner design decision, 2026-09-11,
+ * issue 318, option B on the design canvas): the owner's PINNED set — the one
+ * GitHub already lets the owner curate, carried on the wire as `pinned: true`
+ * (issue #317) — plus the ONE most recently pushed repository outside it,
+ * wearing the `latest` chip. Push order decides the whole list, so the chip's
+ * row is simply the first non-pinned one in an already-descending list.
+ *
+ * It is the curation the owner actually maintains, in the place they maintain
+ * it: a repository promoted or dropped on the host changes this table on the
+ * next refresh with no release, exactly as issue 281's dynamic roster
+ * intended, while the table stops being "whatever was touched last".
+ *
+ * FOUR THINGS IT REFUSES TO DO, each one a hostile case rather than a
+ * preference:
+ *
+ *   * It never invents a row. The selection FILTERS the views the payload (or
+ *     the captured fallback) already produced, so a `pinned` flag can only
+ *     ever promote a repository that is on the wire — a pinned repository the
+ *     account keeps private is simply absent from the answer and is absent
+ *     here too, with nothing said about it.
+ *   * It never pads. Five pinned repositories render as five plus the latest,
+ *     not as seven with two rows of filler.
+ *   * It never overflows the pair. The host's pinned set holds at most six, so
+ *     seven is the whole table; a payload claiming more is bounded by the same
+ *     constant the commit column reserves its rows from, because the two
+ *     columns are paired on one height.
+ *   * It says nothing when there is nothing to say. A payload with no `pinned`
+ *     flag anywhere — an origin older than issue #317, mid-rollout — is not a
+ *     payload with an empty pinned set: the table falls back to the first
+ *     rows by push, exactly as it did before this directive, and renders no
+ *     chip at all rather than marking a row "latest" among rows that were
+ *     never a pinned set.
+ *
+ * The boolean in each pair is whether that row is the marked one. */
+function selectedViews(ordered: readonly ProjectView[]): readonly (readonly [ProjectView, boolean])[] {
+  const isPinned = ([, live]: ProjectView): boolean => live?.pinned === true;
+  if (!ordered.some(isPinned)) {
+    return ordered.slice(0, shownProjectRows).map((view) => [view, false] as const);
+  }
+  const latest = ordered.find((view) => !isPinned(view));
+  return ordered
+    .filter((view) => isPinned(view) || view === latest)
+    .slice(0, shownProjectRows)
+    .map((view) => [view, view === latest] as const);
+}
+
+export function projectTableProps(
+  envelope: PanelEnvelope | null,
+  now?: number
+): Omit<LedgerSpreadProps, 'logHead' | 'logAnchor' | 'logRows' | 'logNote'> {
   const payload =
     envelope !== null && envelope.kind === panelKinds.codingProjects
       ? parseCodingProjects(envelope.data)
@@ -553,13 +613,9 @@ export function projectTableProps(envelope: PanelEnvelope | null, now?: number):
       ? payload.repos.map((row) => [capturedByName.get(row.name), row] as const)
       : projects.map((project) => [project, undefined] as const);
   const ordered = views.toSorted((left, right) => viewInstant(right) - viewInstant(left));
-  const rows: LedgerTableRow[] = ordered.slice(0, shownProjectRows).map(([project, live]) => {
+  const rows: LedgerTableRow[] = selectedViews(ordered).map(([[project, live], marked]) => {
     const name = project?.name ?? live?.name ?? '';
-    const recorded = live === undefined || live.recorded === true;
     const columns = projectColumns(project, live, now);
-    const description = recorded
-      ? (project?.description ?? live?.description ?? '')
-      : live.description;
     return {
       key: name,
       link: {
@@ -567,15 +623,15 @@ export function projectTableProps(envelope: PanelEnvelope | null, now?: number):
         href: projectUrl({ name }),
         label: projectLinkLabel({ name })
       },
-      summary: description.length > 0 ? description : noDescription,
+      ...(marked ? { chip: latestRowChip } : {}),
       updated: columns.updated,
       counts: columns.counts
     };
   });
-  /* No title: the section head "02 / Projects" already names this table, and
-     the origin's own "Coding Projects" beneath it was one label too many
-     (owner directive, 2026-09-04, issue 292). The shell keeps the head row at
-     the title's height for the stale line. */
+  /* No title: the section head "02 / Projects · Commits" already names this
+     sheet, and the origin's own "Coding Projects" beneath it was one label too
+     many (owner directive, 2026-09-04, issue 292). The shell keeps the head
+     row at the title's height for the stale line. */
   return {
     status: envelope?.status ?? 'unavailable',
     generatedAt: envelope?.generatedAt,

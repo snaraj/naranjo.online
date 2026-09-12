@@ -1,12 +1,24 @@
-/* The commits block's adapter (owner directive, 2026-09-03, issue 287): one
- * section that shows a cycling calendar over a log of recent commits.
+/* The two multi-panel adapters the commit record feeds (owner directive,
+ * 2026-09-03, issue 287; split by the owner's 2026-09-11 directive, issue
+ * 318): a cycling calendar, and a log beside the repositories it happened in.
  *
- * IT READS TWO PANELS, and that is the whole reason this module exists rather
- * than the work living in lib/activity.ts. The calendar cycles between the
- * version-control contributions and each token source's daily series — three
- * pictures of the same year — so the section's props cannot be built from one
- * envelope. The block binding is a multi-panel one (lib/blocks.ts), the two
- * envelopes arrive here in the order the binding names them, and every domain
+ * THE SECTION SPLIT, THE CODE DID NOT. The commits section used to be one
+ * block — a calendar over a log. The owner's design decision moved the log
+ * into the sheet's paired section, beside the repositories table, and the
+ * calendar down into Trackers under the token cards. So this module now builds
+ * TWO props bags from the same pieces: `contributionCalendarProps` takes the
+ * sets, `projectsCommitsProps` takes the rows and hands the table half
+ * straight through from lib/projects.ts. Nothing is duplicated — the sets, the
+ * rows, the window anchor and every honest empty note are the same functions
+ * they were.
+ *
+ * BOTH READ SEVERAL PANELS, and that is the whole reason this module exists
+ * rather than the work living in lib/activity.ts. The calendar cycles between
+ * the version-control contributions and each token source's daily series —
+ * three pictures of the same year; the sheet pairs the repositories panel with
+ * the contributions one. Neither section's props can be built from one
+ * envelope. The block bindings are multi-panel ones (lib/blocks.ts), the
+ * envelopes arrive here in the order each binding names them, and every domain
  * word on the way through — a repository, a vendor, a commit — stays on this
  * side of the component boundary exactly as it does in every other adapter.
  *
@@ -53,7 +65,7 @@ import {
   isValidCommitSha,
   parseVCSActivity
 } from './activity.ts';
-import type { CommitLogProps, CommitLogRow, CommitLogSet } from './blocks.ts';
+import type { CalendarSet, CommitLogRow, ContributionCalendarProps, LedgerSpreadProps } from './blocks.ts';
 import {
   addDays,
   calendarColumns,
@@ -70,6 +82,7 @@ import type {
   VCSCommit,
   VCSPrivateDay
 } from './panels';
+import { codingProjectsPanelId, projectTableProps } from './projects.ts';
 import {
   sourceName,
   tokenUsagePanelId,
@@ -77,10 +90,25 @@ import {
   usageDataThrough
 } from './token-usage.ts';
 
-/* The two panels this block binds, in the order the adapter reads them. The
- * block module names them once, from here, so the order the binding declares
- * and the order this adapter unpacks can never disagree. */
-export const commitPanelIds: readonly string[] = [activityPanelId, tokenUsagePanelId];
+/* The panels each block binds, in the order its adapter reads them. The block
+ * modules name them once, from here, so the order a binding declares and the
+ * order the adapter unpacks can never disagree. */
+export const calendarPanelIds: readonly string[] = [activityPanelId, tokenUsagePanelId];
+export const spreadPanelIds: readonly string[] = [codingProjectsPanelId, activityPanelId];
+
+/* The id the commit column answers to (owner design decision, 2026-09-11,
+ * issue 318). The log had a numbered section of its own until that directive
+ * and the nav no longer links this word — but an address a reader already
+ * shared has to keep landing them on the log (issue 287's rule: never break a
+ * URL), so the column carries the old section's id and the page keeps
+ * resolving it. It is the PAGE's word, not the host's, which is why it is
+ * spelled here in the adapter and reaches the component as data. */
+export const commitColumnId = 'commits';
+
+/* The commit column's own ruled head. The table beside it names five columns;
+ * this one names the whole stream, because the owner's ruling is that it is
+ * every repository's record rather than a selection (issue #315). */
+export const commitColumnHead = 'Commits · every repository';
 
 /* How many characters of a commit identity the log prints. Seven is the
  * host's own convention for a human-readable short reference; the href always
@@ -219,7 +247,7 @@ export function privateRowText(day: VCSPrivateDay): string {
  * the rows its box could hold; the box is now a RESERVE that scrolls (owner
  * ruling, 2026-09-11), so every row the wire carried renders and the wire's own
  * cap is what bounds the list. A cap in this function would be the page
- * quietly deciding the record stops at ten. */
+ * quietly deciding the record stops at whatever the box happens to hold. */
 function logRows(activity: VCSActivityData, now: Date): CommitLogRow[] {
   const commits = activity.recentCommits;
   const days = activity.privateActivity ?? [];
@@ -283,10 +311,10 @@ function publicRow(commit: VCSCommit, index: number, now: Date): CommitLogRow {
   };
 }
 
-export function commitLogProps(
+export function contributionCalendarProps(
   envelopes: readonly (PanelEnvelope | null)[],
   now: Date = new Date()
-): CommitLogProps {
+): ContributionCalendarProps {
   const [activityEnvelope = null, usageEnvelope = null] = envelopes;
   const activity =
     activityEnvelope !== null && activityEnvelope.kind === panelKinds.vcsActivity
@@ -298,7 +326,7 @@ export function commitLogProps(
       : [];
   const anchor = windowAnchor(activity, now);
 
-  const contributions: CommitLogSet = {
+  const contributions: CalendarSet = {
     key: 'contributions',
     label: contributionsSetLabel,
     columns: activity === null ? [] : calendarColumns(activityCells(activity), pendingWeeks, anchor),
@@ -311,7 +339,7 @@ export function commitLogProps(
     emptyNote: contributionsEmptyNote,
     format: formatWhole
   };
-  const tokenSets: CommitLogSet[] = [];
+  const tokenSets: CalendarSet[] = [];
   /* A SOURCE WITH NO DAILY SERIES IS OFFERED NO SEGMENT (owner ruling,
      2026-08-24). Pushing a set for it would put a pressable segment over a
      grid that draws its 371-cell reserve and an empty note underneath — a
@@ -347,30 +375,81 @@ export function commitLogProps(
      stable partition rather than a sort comparator, so two payload orders
      that agree about the lead agree about everything. */
   const lead = leadTokenSource(sources);
-  const sets: CommitLogSet[] = [
+  const sets: CalendarSet[] = [
     ...tokenSets.filter((set) => set.key === lead),
     ...tokenSets.filter((set) => set.key !== lead),
     contributions
   ];
 
-  const rows: CommitLogRow[] = activity === null ? [] : logRows(activity, now);
-
   return {
     status: activityEnvelope?.status ?? 'unavailable',
     generatedAt: activityEnvelope?.generatedAt,
     sets,
-    rows,
-    rowsNote: activityEntriesNote,
     /* The staleness line is the CALENDAR's, because the calendar is what this
-       section leads with; the token sets carry their own data-through inside
-       their captions, which is where a reader meets them. */
+       block is; the token sets carry their own data-through inside their
+       captions, which is where a reader meets them. */
     staleNote:
-      panelStaleNote(
-        activityEnvelope?.status ?? 'unavailable',
-        activityEnvelope?.generatedAt,
-        activity?.endDate,
-        now
-      ) ?? usageThroughNote(usageEnvelope, sources, now)
+      activityStaleNote(activityEnvelope, activity, now) ??
+      usageThroughNote(usageEnvelope, sources, now)
+  };
+}
+
+/* The contributions panel's own staleness line, read by both adapters below
+ * so the calendar and the log cannot describe the same envelope two different
+ * ways. */
+function activityStaleNote(
+  envelope: PanelEnvelope | null,
+  activity: VCSActivityData | null,
+  now: Date
+): string | undefined {
+  return panelStaleNote(
+    envelope?.status ?? 'unavailable',
+    envelope?.generatedAt,
+    activity?.endDate,
+    now
+  );
+}
+
+/* THE SHEET'S PAIRED SECTION (owner design decision, 2026-09-11, issue 318):
+ * the repositories table from lib/projects.ts on the left, this module's
+ * commit rows on the right, in one props bag because they are one section.
+ *
+ * The two halves are handed through rather than rebuilt: the table half IS
+ * `projectTableProps`, with every rule it already proved — the payload's
+ * roster, the effective instant, the captured fallback face, the three honest
+ * staleness states and the one validated href shape — and the log half is the
+ * same `logRows` walk the calendar block used to render under its own grid.
+ *
+ * THE SHELL'S READING IS THE TABLE'S. One section, one head row, and the head
+ * holds one line: the sheet opens with the repositories, so their envelope is
+ * what the shell's status, timestamp and note describe, and the commits panel
+ * speaks for itself inside its own column — an unavailable one renders the
+ * log's honest empty note where its rows would be, which is a truer statement
+ * than a second caveat in a row that has space for one. The activity note is
+ * the fallback exactly where the table has nothing to say, so a wedged
+ * contributions panel is never silent.
+ *
+ * NOTHING IS SLICED. The log renders every row the wire carried and the box
+ * scrolls for the rest (issue #315); the RESERVE — how many rows the box holds
+ * open — is a stylesheet fact built from `shownProjectRows`, because it is the
+ * table beside it that decides how tall the pair is. */
+export function projectsCommitsProps(
+  envelopes: readonly (PanelEnvelope | null)[],
+  now: Date = new Date()
+): LedgerSpreadProps {
+  const [projectsEnvelope = null, activityEnvelope = null] = envelopes;
+  const table = projectTableProps(projectsEnvelope, now.getTime());
+  const activity =
+    activityEnvelope !== null && activityEnvelope.kind === panelKinds.vcsActivity
+      ? parseVCSActivity(activityEnvelope.data)
+      : null;
+  return {
+    ...table,
+    logHead: commitColumnHead,
+    logAnchor: commitColumnId,
+    logRows: activity === null ? [] : logRows(activity, now),
+    logNote: activityEntriesNote,
+    staleNote: table.staleNote ?? activityStaleNote(activityEnvelope, activity, now)
   };
 }
 

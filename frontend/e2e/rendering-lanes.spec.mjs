@@ -3712,18 +3712,19 @@ test('a resolvable commit row is real, keyboard-reachable navigation', async ({ 
 
   const engineTabsLinks = await engineTabsToPlainLinks(page);
 
-  /* This row's own natural tab-order boundary: .grid-strip is
-     ContributionGrid's ONE focusable region (the calendar's individual
-     cells carry no tabindex of their own), and it sits immediately before
-     the commit list in both the DOM and the tab order — the same "focus a
-     known preceding control, then real Tab" shape the nav test below uses,
-     anchored on a control that is neither of the two links this test
-     checks. It needs no scope any more (owner directive, 2026-09-03, issue
-     287): the retired token cards each drew a ContributionGrid of their own,
-     which is what used to make '.grid-strip' ambiguous, and the redesign
-     draws exactly one heatmap on the whole page — the segmented control
-     swaps that single grid's data rather than mounting a second copy. */
-  await page.locator('.grid-strip').evaluate((node) => node.focus());
+  /* This row's own natural tab-order boundary. It used to be `.grid-strip`,
+     the calendar's one focusable region, which sat immediately before the
+     commit list while the two shared a section; the owner's design decision of
+     2026-09-11 (issue 318) moved the calendar into Trackers and put the log in
+     the sheet's right-hand column, so the control immediately before the first
+     commit link is now the LAST counter of the repositories table in the left
+     column. Same shape — focus a known preceding control, then a real Tab —
+     anchored on a control that is neither of the two links this test checks. */
+  await page
+    .locator('#projects .table-row')
+    .last()
+    .locator('.table-age')
+    .evaluate((node) => node.focus());
   await page.keyboard.press('Tab');
   const repoFocus = await page.evaluate(() => {
     const el = window.document.activeElement;
@@ -3863,7 +3864,15 @@ test('a valid-SHA commit row with no resolvable reference is real, keyboard-reac
 
   const engineTabsLinks = await engineTabsToPlainLinks(page);
 
-  await page.locator('.grid-strip').evaluate((node) => node.focus());
+  /* The same anchor the reference-link lane uses, for the same reason: the
+     last counter of the repositories table is the control immediately before
+     the log's first row since the sheet paired the two columns (owner design
+     decision, 2026-09-11, issue 318). */
+  await page
+    .locator('#projects .table-row')
+    .last()
+    .locator('.table-age')
+    .evaluate((node) => node.focus());
   await page.keyboard.press('Tab'); // repo link
   await page.keyboard.press('Tab'); // message link (the sha-fallback anchor under test)
   const focus = await page.evaluate(() => {
@@ -4024,13 +4033,16 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
       );
     }
   }
-  /* And the reservation is still exactly the TEN rows the box holds open
-     (owner directive, 2026-09-11, issue #315; five until then), unchanged by
-     the rule the rows carry — ten of the row the page declares, and every
-     drawn row IS that declared row, so the token is what is drawn rather than
-     a coincidence the reserve happens to match. The box now holds MORE rows
-     than that and scrolls for them, which the lane below measures; what this
-     one pins is that the reserve did not become a minimum. */
+  /* And the reservation is still exactly the rows the box holds open (owner
+     design decision, 2026-09-11, issue 318: SEVEN, to match the seven
+     repository rows in the column beside it; ten at issue #315, five until
+     then), unchanged by the rule the rows carry — seven of the row the page
+     declares, and every drawn row IS that declared row, so the token is what
+     is drawn rather than a coincidence the reserve happens to match. The box
+     holds MORE rows than that and scrolls for them, which the lane below
+     measures; what this one pins is that the reserve did not become a
+     minimum. The number is read off the TABLE's own row count rather than
+     typed here, because the two columns are paired on one height. */
   expect(observed.rowToken, 'the commit rows declare no row height to reserve against').toBeGreaterThanOrEqual(
     touchFloorPx - subPixel
   );
@@ -4040,10 +4052,12 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
       `commit row ${index} is ${row.height}px against a declared ${observed.rowToken}px row`
     ).toBeCloseTo(observed.rowToken, 0);
   }
-  expect(observed.listHeight, 'the ten-row reservation changed size').toBeCloseTo(
-    10 * observed.rowToken,
-    0
-  );
+  const reserved = await page.locator('#projects .table-row').count();
+  expect(reserved, 'the repositories table drew no rows to pair the reserve against').toBeGreaterThan(0);
+  expect(
+    observed.listHeight,
+    `the ${reserved}-row reservation changed size; it must stay paired with the table beside it`
+  ).toBeCloseTo(reserved * observed.rowToken, 0);
 });
 
 test('the shortest admitted repo slug still clears the touch floor on both axes (issue 157)', async ({
@@ -4448,14 +4462,20 @@ test('the trackers stack renders token usage first and the game tracker last', a
       return 'unknown';
     })
   );
+  /* THREE BLOCKS, and the calendar is the middle one (owner design decision,
+     2026-09-11, issue 318: the segmented calendar sits "under the six token
+     cards and before the Old School RuneScape ticker"). It had a numbered
+     section of its own since issue 287; what brought it back is that it IS a
+     tracker — a year of daily counts the reader cycles between three sources,
+     which is exactly what the board above it and the strip below it are. */
   expect(order, 'the trackers no longer stack in the order the owner asked for').toEqual([
     'token-usage',
+    'vcs-activity',
     'boss-log',
   ]);
-  /* And the block that left is where the manifest sent it: in the Commits
-     section, which comes before Trackers on the page. A build that dropped it
-     reports zero heatmaps here; one that never moved it reports the section
-     the other way round. */
+  /* And it is the ONLY heatmap on the page, in the trackers section: a build
+     that mounted a second copy reports two, and one that left it behind in a
+     section of its own reports the wrong section. */
   const moved = await page.evaluate(() => {
     const sections = [...window.document.querySelectorAll('.page-section')].map((node) => node.id);
     const grid = window.document.querySelector('.grid-block');
@@ -4465,14 +4485,19 @@ test('the trackers stack renders token usage first and the game tracker last', a
       section: grid === null ? null : grid.closest('.page-section')?.id,
     };
   });
-  expect(moved.heatmaps, 'the version-control tracker is not on the page at all').toBe(1);
-  expect(moved.section, 'the version-control tracker did not land in its own section').toBe(
-    'commits'
+  expect(moved.heatmaps, 'the version-control tracker is not on the page exactly once').toBe(1);
+  expect(moved.section, 'the version-control tracker did not land in the trackers stack').toBe(
+    'trackers'
   );
-  expect(
-    moved.sections.indexOf('commits'),
-    `the sections render as ${moved.sections.join(', ')}; Commits no longer precedes Trackers`
-  ).toBeLessThan(moved.sections.indexOf('trackers'));
+  /* The sheet is FOUR sections now, in the owner's order, and the commits
+     section is gone as a section — its rows are the right-hand column of the
+     paired one. */
+  expect(moved.sections, 'the sheet no longer renders the owner’s four sections in order').toEqual([
+    'work',
+    'projects',
+    'trackers',
+    'gallery',
+  ]);
 });
 
 /* No link on this page wears a resting underline (owner directive,
@@ -6139,7 +6164,7 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
   await expect(
     page.locator('#projects .section-head .section-title'),
     'the Projects section stopped naming itself'
-  ).toHaveText('Projects');
+  ).toHaveText('Projects · Commits');
 });
 
 /* THE HEAD ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
@@ -6347,7 +6372,7 @@ test('the name is two lines, the chrome row has one rule, the calendar opens on 
  * own accessible text, and the three counters keep one line of their own. A
  * table that merely shrank would fail the phone half by taking the document
  * sideways; one that collapsed and lost a counter fails the inventory. */
-test('the repo table is one right-anchored ruled row per repository, aligned across rows, and it collapses on a phone (issue 188; owner 2026-09-03, issue 287)', async ({
+test('the repo table is one right-anchored ruled row per repository, aligned across rows, and it collapses on a phone (issue 188; owner 2026-09-03, issue 287; 2026-09-11, issue 318)', async ({
   page,
 }) => {
   await visit(page);
@@ -6358,24 +6383,51 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
   const rowCount = await rows.count();
   expect(rowCount, 'the repository table rendered no rows').toBeGreaterThan(1);
 
-  /* THE ROSTER IS TRUNCATED ON PURPOSE (owner ruling, 2026-09-03: the latest
-     four repositories, not all of them). The line that used to say so above
-     the table is gone (owner directive, 2026-09-04, issue 292), so the bound
-     is read from the origin's own envelope instead: the table draws exactly
-     the smaller of four and the roster the payload served, and that roster is
-     larger than what is drawn — a build that quietly dropped a row, or one
-     that quietly drew them all, fails here. */
+  /* THE ROSTER IS SELECTED, NOT TRUNCATED (owner design decision, 2026-09-11,
+     issue 318): the owner's pinned set plus the one most recently pushed
+     repository outside it. The bound is read from the origin's own envelope
+     rather than from a number typed here — the table draws exactly the pinned
+     rows the payload flagged plus one, that roster is larger than what is
+     drawn, and the ONE unpinned row is the newest push outside the set and
+     wears the chip that says so. A build that dropped a pinned row, drew them
+     all, or marked the wrong row fails here. */
   await expect(page.locator('#projects .table-caption'), 'the roster caption came back').toHaveCount(0);
   const roster = await page.evaluate(async () => {
     const response = await fetch('/api/panels/coding-projects');
     const envelope = await response.json();
-    return Array.isArray(envelope?.data?.repos) ? envelope.data.repos.length : null;
+    const repos = Array.isArray(envelope?.data?.repos) ? envelope.data.repos : null;
+    if (repos === null) return null;
+    const instant = (repo) => Date.parse(repo.pushedAt ?? '') || 0;
+    const ordered = [...repos].sort((left, right) => instant(right) - instant(left));
+    return {
+      total: repos.length,
+      pinned: ordered.filter((repo) => repo.pinned === true).map((repo) => repo.name),
+      latest: ordered.find((repo) => repo.pinned !== true)?.name ?? null,
+    };
   });
   expect(roster, 'the origin served no roster to bound the table against').not.toBeNull();
-  expect(rowCount, `the table drew ${rowCount} rows of a ${roster}-repository roster`).toBe(
-    Math.min(4, roster)
+  expect(roster.pinned.length, 'the served roster flags no pinned repositories at all').toBeGreaterThan(0);
+  expect(roster.latest, 'the served roster is entirely pinned; the chip claim has no subject').not.toBeNull();
+  expect(rowCount, `the table drew ${rowCount} rows of a ${roster.total}-repository roster`).toBe(
+    roster.pinned.length + 1
   );
-  expect(roster, 'the roster is meant to be larger than the four the table shows').toBeGreaterThan(rowCount);
+  expect(roster.total, 'the roster is meant to be larger than the rows the table shows').toBeGreaterThan(rowCount);
+  const drawnNames = await rows.locator('.table-link').allTextContents();
+  expect(
+    [...drawnNames].sort(),
+    'the table is not the pinned set plus the one latest repository outside it'
+  ).toEqual([...roster.pinned, roster.latest].sort());
+  /* ONE chip, on that one row, and it is a WORD rather than a colour — the
+     dataviz floor: a value is never carried by colour alone. */
+  const chips = page.locator('#projects .table-chip');
+  await expect(chips, 'the latest row wears no chip, or more than one row does').toHaveCount(1);
+  await expect(chips, 'the chip says nothing a reader could read').not.toHaveText('');
+  const chipRow = await chips.evaluate(
+    (node) => node.closest('.table-row')?.querySelector('.table-link')?.textContent?.trim() ?? ''
+  );
+  expect(chipRow, 'the chip is on a row that is not the latest one outside the pinned set').toBe(
+    roster.latest
+  );
 
   const overlapsVertically = (first, second) =>
     first.y < second.y + second.height && second.y < first.y + first.height;
@@ -6386,18 +6438,16 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
       const row = rows.nth(index);
       const rowBox = await row.boundingBox();
       const link = await row.locator('.table-link').boundingBox();
-      const summary = await row.locator('.table-summary').boundingBox();
       const age = await row.locator('.table-age').boundingBox();
       expect(rowBox, `row ${index} never rendered a box`).not.toBeNull();
       expect(link, `row ${index}'s repository name never rendered a box`).not.toBeNull();
-      expect(summary, `row ${index}'s description never rendered a box`).not.toBeNull();
       expect(age, `row ${index}'s age never rendered a box`).not.toBeNull();
       const counts = [];
       const countCount = await row.locator('.table-count').count();
       for (let cell = 0; cell < countCount; cell += 1) {
         counts.push(await row.locator('.table-count').nth(cell).boundingBox());
       }
-      shape.push({ rowBox, link, summary, age, counts });
+      shape.push({ rowBox, link, age, counts });
     }
     return shape;
   };
@@ -6409,7 +6459,7 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
     await settled(page);
     /* The column head is drawn beside the rows it names. */
     await expect(
-      page.locator('#projects .table-head'),
+      page.locator('#projects .table-head').first(),
       `at ${width}px the table lost its column head`
     ).toBeVisible();
     const shape = await measure();
@@ -6421,7 +6471,6 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
       expect(row.counts.length, `at ${width}px row ${index} lost a counter`).toBe(4);
       /* ONE LINE: every cell shares the row's own band. */
       for (const [name, cell] of [
-        ['description', row.summary],
         ['age', row.age],
         ...row.counts.map((count, cell) => [`counter ${cell}`, count]),
       ]) {
@@ -6449,10 +6498,6 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
         `at ${width}px row ${index}'s name column is at a different x than row 0's`
       ).toBeCloseTo(shape[0].link.x, 0);
       expect(
-        row.summary.x,
-        `at ${width}px row ${index}'s description column is at a different x than row 0's`
-      ).toBeCloseTo(shape[0].summary.x, 0);
-      expect(
         row.age.x,
         `at ${width}px row ${index}'s age column is at a different x than row 0's`
       ).toBeCloseTo(shape[0].age.x, 0);
@@ -6473,9 +6518,16 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
     /* The head goes: its labels are already in each cell's own accessible
        text, and a column head with no columns under it is chrome. */
     await expect(
-      page.locator('#projects .table-head'),
+      page.locator('#projects .table-head').first(),
       `at ${width}px the table kept a column head over collapsed rows`
     ).toBeHidden();
+    /* The LOG's head is the exception and stays: it is the only thing telling
+       a reader where the repositories stop and the commits start once the two
+       columns stack (owner design decision, 2026-09-11, issue 318). */
+    await expect(
+      page.locator('#projects .spread-log-head'),
+      `at ${width}px the stacked commit column lost the head that names it`
+    ).toBeVisible();
     const shape = await measure();
     const document = await page.evaluate(() => ({
       scrollWidth: window.document.documentElement.scrollWidth,
@@ -6491,17 +6543,23 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
          like the three beside it rather than as a bare number, because that
          is what keeps its numerals in a column with theirs. */
       expect(row.counts.length, `at ${width}px row ${index} lost a counter`).toBe(4);
-      /* STACKED, not squeezed: the description sits on its own line under the
-         name rather than beside it. A row that merely narrowed keeps them on
-         one line and fails here. */
+      /* STACKED, not squeezed: EXACTLY TWO LINES (owner directive, 2026-09-11:
+         "reduce the amount of new lines as much as possible"). The name takes
+         the first line and every figure — the age included — shares the
+         second. A row that merely narrowed keeps them on one line and fails
+         here; a row that kept its three-line shape fails on the age. */
       expect(
-        overlapsVertically(row.link, row.summary),
-        `at ${width}px row ${index} did not collapse; its description is still beside its name`
+        overlapsVertically(row.link, row.counts[0]),
+        `at ${width}px row ${index} did not collapse; its figures are still beside its name`
       ).toBe(false);
-      /* The three counters keep ONE line of their own, in order, and start at
+      expect(
+        overlapsVertically(row.counts[0], row.age),
+        `at ${width}px row ${index} spends a third line on its age`
+      ).toBe(true);
+      /* The four counters keep ONE line of their own, in order, and start at
          the row's own start edge. Before the collapse rule they shared a
          single grid area and drew on top of each other. */
-      for (const cell of [1, 2]) {
+      for (const cell of [1, 2, 3]) {
         expect(
           overlapsVertically(row.counts[0], row.counts[cell]),
           `at ${width}px row ${index}'s counter ${cell} left the counter line`
@@ -11286,17 +11344,18 @@ for (const viewport of markViewports) {
              boxless mark has to NAME why. Three reasons are legitimate: the
              enlarged stage is a closed <dialog>, the place label is
              display:none below 45rem by the chrome row's own rule, and the
-             projects table's head row is dropped by the phone restack (issue
-             317: every cell repeats its own word there). Anything else is a
-             mark nobody can see and nobody would notice. */
+             repositories table's column head goes with the same restack —
+             every cell under it repeats its own word (owner design decision,
+             2026-09-11, issue 318). Anything else is a mark nobody can see
+             and nobody would notice. */
           laidOut: mark.getClientRects().length > 0,
           hiddenBy:
             mark.closest('dialog:not([open])') !== null
               ? 'the closed stage'
               : mark.closest('.page-place') !== null
                 ? 'the place the phone rule hides'
-                : mark.closest('.table-head') !== null
-                  ? 'the table head the phone restack drops'
+                : mark.closest('.table-head:not(.spread-log-head)') !== null
+                  ? 'the column head the phone restack drops'
                   : 'nothing',
         })),
         /* The monogram column: one square per role, all the same size, and
@@ -11366,15 +11425,18 @@ for (const viewport of markViewports) {
       'the nav numbers sit at different heights; a mark has lifted one off the row'
     ).toBe(1);
 
-    expect(observed.navLinks, 'the nav renders the wrong number of links').toHaveLength(5);
+    /* FOUR links since the owner's design decision of 2026-09-11 (issue 318):
+       Projects and Commits are one section of two columns, and the calendar
+       went back into Trackers. */
+    expect(observed.navLinks, 'the nav renders the wrong number of links').toHaveLength(4);
     expect(
       observed.navLinks.map((link) => link.name),
       'the nav links lost the section words as their accessible names'
-    ).toEqual(['Professional Experience', 'Projects', 'Commits', 'Trackers', 'Gallery']);
+    ).toEqual(['Professional Experience', 'Projects · Commits', 'Trackers', 'Gallery']);
     expect(
       observed.navLinks.map((link) => link.text),
       'the nav prints something other than the sheet numbers'
-    ).toEqual(['01', '02', '03', '04', '05']);
+    ).toEqual(['01', '02', '03', '04']);
     for (const link of observed.navLinks) {
       /* The touch floor survives the words leaving: a link that is now a mark
          and two digits is a SMALLER box, which is exactly the direction that
@@ -11394,7 +11456,7 @@ for (const viewport of markViewports) {
   });
 }
 
-test('the keyboard still walks the chrome row: the wordmark, the five nav links, then the reading mode', async ({
+test('the keyboard still walks the chrome row: the wordmark, the four nav links, then the reading mode', async ({
   page,
 }) => {
   await visit(page);
@@ -11405,7 +11467,7 @@ test('the keyboard still walks the chrome row: the wordmark, the five nav links,
      rather than asserting a count of focusable things. */
   await page.locator('.page-mark').evaluate((node) => node.focus());
   const landed = [];
-  for (let step = 0; step < 6; step += 1) {
+  for (let step = 0; step < 5; step += 1) {
     await page.keyboard.press('Tab');
     landed.push(
       await page.evaluate(() => {
@@ -11444,11 +11506,18 @@ test('the keyboard still walks the chrome row: the wordmark, the five nav links,
     () => window.document.activeElement?.tagName === 'A'
   );
   test.skip(!engineTabsLinks, 'this engine does not put plain links in the tab order');
+  /* FOUR nav links since the owner's design decision of 2026-09-11 (issue
+     318), in the sheet's own order, and the reading mode still closes the
+     chrome row after them. */
   expect(
-    landed.slice(0, 5).map((stop) => stop.name),
+    landed.slice(0, 4).map((stop) => stop.name),
     'the tab order through the nav is no longer the sheet order'
-  ).toEqual(['Professional Experience', 'Projects', 'Commits', 'Trackers', 'Gallery']);
-  expect(landed[5].name, 'the reading mode no longer follows the nav in the tab order').toBe(
+  ).toEqual(['Professional Experience', 'Projects · Commits', 'Trackers', 'Gallery']);
+  expect(
+    landed.slice(0, 4).every((stop) => stop.classes.includes('section-link')),
+    'a stop between the wordmark and the reading mode is not a nav link'
+  ).toBe(true);
+  expect(landed[4].name, 'the reading mode no longer follows the nav in the tab order').toBe(
     'Reading mode'
   );
 });
@@ -11545,9 +11614,12 @@ for (const width of [1440, 390]) {
       // who cannot see the drawing.
       expect(measured.headVisible, 'the head row vanished at a desktop width').toBe(true);
       expect(measured.headMarks).toEqual(measured.columns[0].map((cell) => cell.markLeft));
+      /* FIVE heads: the description column left with the owner's design
+         decision of 2026-09-11 (issue 318), because the section holds half a
+         sheet now and a repository's own words are one click away on its own
+         link. */
       expect(measured.headWords).toEqual([
         'Repository',
-        'Description',
         'PRs closed',
         'Version',
         'Stars',
@@ -11561,18 +11633,22 @@ for (const width of [1440, 390]) {
   });
 }
 
-/* THE LOG RESERVES TEN ROWS AND SCROLLS FOR THE REST (owner directive,
- * 2026-09-11, issue #315), and the reserve is a HEIGHT the engine gave the box
+/* THE LOG RESERVES SEVEN ROWS AND SCROLLS FOR THE REST (owner design decision,
+ * 2026-09-11, issue 318: "seven rows ... to match the seven repository rows";
+ * ten at issue #315), and the reserve is a HEIGHT the engine gave the box
  * rather than a number in a stylesheet. The claim is the zero-CLS one: the box
  * is exactly as tall as its reserve whether it holds three rows or thirty, so
- * a payload landing after first paint moves nothing under the reader.
+ * a payload landing after first paint moves nothing under the reader — and it
+ * is exactly as tall as the TABLE beside it, which is the pairing the owner
+ * asked for and the reason this lane counts the table's rows rather than
+ * typing a number.
  *
  * Measured at both viewports because the row pitch is taller on a phone — the
  * repository stacks over the subject there — and a reserve computed from one
  * width while the rows are drawn at another is a box that clips its own last
  * row. */
 for (const width of [1440, 390]) {
-  test(`the commit log holds its reserve and scrolls inside it at ${width}px (owner 2026-09-11, issue #315)`, async ({
+  test(`the commit log holds its reserve and scrolls inside it at ${width}px (owner 2026-09-11, issue 318)`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -11582,6 +11658,10 @@ for (const width of [1440, 390]) {
       if (box === null) {
         return null;
       }
+      /* The paired column's own row count: the reserve is expressed in terms
+         of the table beside it, so the lane asks the page how many rows that
+         table drew rather than restating the number the stylesheet has. */
+      const paired = window.document.querySelectorAll('#projects .table-row').length;
       const rows = [...box.querySelectorAll('.commit-row')];
       const pitch = parseFloat(
         getComputedStyle(window.document.documentElement).getPropertyValue('--commit-row-height')
@@ -11593,18 +11673,23 @@ for (const width of [1440, 390]) {
         overflowY: getComputedStyle(box).overflowY,
         rows: rows.length,
         rowHeights: [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))],
-        reserve: Math.round(pitch * rem * 10),
+        paired,
+        reserve: Math.round(pitch * rem * paired),
         /* The box's own right edge against the card's: a scrollbar may take
            width from the row, and must never push the box past its column. */
         boxRight: Math.round(box.getBoundingClientRect().right),
         cardRight: Math.round(box.parentElement.getBoundingClientRect().right),
       };
     });
-    expect(measured, 'the commits section drew no log box').not.toBeNull();
-    // THE RESERVE: ten rows at the pitch this viewport draws them at.
+    expect(measured, 'the sheet drew no log box').not.toBeNull();
+    /* The two columns hold the same number of rows, which is the owner's own
+       wording for the pairing and the reason the reserve is expressible at
+       all. Seven is what the pinned set plus the latest comes to. */
+    expect(measured.paired, 'the repositories table drew no rows to pair against').toBe(7);
+    // THE RESERVE: seven rows at the pitch this viewport draws them at.
     expect(
       measured.clientHeight + (measured.overflowY === 'auto' ? 0 : 0),
-      `the log box is ${measured.clientHeight}px, want the ${measured.reserve}px ten-row reserve`
+      `the log box is ${measured.clientHeight}px, want the ${measured.reserve}px ${measured.paired}-row reserve`
     ).toBe(measured.reserve);
     expect(measured.overflowY, 'the log box does not scroll for the rows past its reserve').toBe(
       'auto'
@@ -11613,8 +11698,8 @@ for (const width of [1440, 390]) {
     // box and its contents are two different measurements.
     expect(
       measured.rowHeights,
-      `rows are drawn at ${measured.rowHeights}px, not the ${measured.reserve / 10}px pitch`
-    ).toEqual([measured.reserve / 10]);
+      `rows are drawn at ${measured.rowHeights}px, not the ${measured.reserve / measured.paired}px pitch`
+    ).toEqual([measured.reserve / measured.paired]);
     // And the box never widens past the card it sits in, whatever the engine
     // charged for its scrollbar.
     expect(measured.boxRight).toBeLessThanOrEqual(measured.cardRight);
@@ -11622,8 +11707,330 @@ for (const width of [1440, 390]) {
     // what makes the scroll real rather than theoretical.
     expect(
       measured.rows,
-      `the log drew ${measured.rows} rows; the reserve holds ten, so fewer would not exercise the scroll`
-    ).toBeGreaterThan(10);
+      `the log drew ${measured.rows} rows; the reserve holds ${measured.paired}, so fewer would not exercise the scroll`
+    ).toBeGreaterThan(measured.paired);
     expect(measured.scrollHeight).toBeGreaterThan(measured.clientHeight);
+  });
+}
+
+/* ===========================================================================
+ * 02 / PROJECTS · COMMITS — the sheet's paired section
+ * (owner design decision, 2026-09-11, issue 318, option B on the design canvas)
+ *
+ * Three claims an engine has to settle, because every one of them is about
+ * boxes rather than declarations: the two columns fill the sheet at the width
+ * the owner reviews it at, no row on a phone spends a third line, and the
+ * section does not move when its payloads land.
+ * ======================================================================== */
+
+test('the sheet numbers four sections and the paired one reads as one head (owner 2026-09-11, issue 318)', async ({
+  page,
+}) => {
+  await visit(page);
+  const observed = await page.evaluate(() => ({
+    sections: [...window.document.querySelectorAll('.page-section')].map((node) => ({
+      id: node.id,
+      number: node.querySelector('.section-number')?.textContent?.trim() ?? '',
+      title: node.querySelector('.section-title')?.textContent?.trim() ?? '',
+      heads: node.querySelectorAll('.section-head').length,
+    })),
+    /* The old address, resolved against the real document: #commits is no
+       longer a section and must still land a reader on the commits. */
+    commitsAnchor: window.document.getElementById('commits')?.className ?? null,
+    commitsInProjects:
+      window.document.getElementById('projects')?.contains(window.document.getElementById('commits')) ??
+      false,
+    logRowsUnderAnchor:
+      window.document.getElementById('commits')?.querySelectorAll('.commit-row').length ?? 0,
+    navHrefs: [...window.document.querySelectorAll('.section-link')].map((link) =>
+      link.getAttribute('href')
+    ),
+  }));
+  expect(
+    observed.sections.map((section) => [section.number, section.title]),
+    'the sheet no longer numbers the owner’s four sections in order'
+  ).toEqual([
+    ['01', 'Professional Experience'],
+    ['02', 'Projects · Commits'],
+    ['03', 'Trackers'],
+    ['04', 'Gallery'],
+  ]);
+  expect(
+    observed.sections.map((section) => section.id),
+    'a section id moved; an address a reader shared stopped resolving'
+  ).toEqual(['work', 'projects', 'trackers', 'gallery']);
+  // ONE head over the pair: two columns, one section, one rule.
+  for (const section of observed.sections) {
+    expect(section.heads, `${section.id} draws ${section.heads} section heads`).toBe(1);
+  }
+  /* #commits still resolves, inside the paired section, onto the column that
+     actually holds the commits — and the nav never links it, because the nav
+     is derived from the manifest and the manifest has four entries. */
+  expect(observed.commitsAnchor, 'the retired #commits address resolves to nothing').toContain(
+    'spread-column'
+  );
+  expect(observed.commitsInProjects, '#commits landed outside the paired section').toBe(true);
+  expect(observed.logRowsUnderAnchor, '#commits lands somewhere with no commits in it').toBeGreaterThan(0);
+  expect(observed.navHrefs, 'the nav links an address that is not a section').toEqual([
+    '#work',
+    '#projects',
+    '#trackers',
+    '#gallery',
+  ]);
+});
+
+test('at 1440 the two columns fill the sheet with no dead space (owner 2026-09-11, issue 318)', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await visit(page);
+  const measured = await page.evaluate(() => {
+    const round = (value) => Math.round(value * 100) / 100;
+    const spread = window.document.querySelector('.ledger-spread');
+    const columns = [...spread.children];
+    const card = spread.parentElement;
+    const rowEnd = (row) => {
+      const cells = [...row.children].filter((cell) => cell.getClientRects().length > 0);
+      return round(Math.max(...cells.map((cell) => cell.getBoundingClientRect().right)));
+    };
+    return {
+      columns: columns.length,
+      boxes: columns.map((column) => {
+        const rect = column.getBoundingClientRect();
+        return { left: round(rect.left), right: round(rect.right), width: round(rect.width) };
+      }),
+      cardLeft: round(card.getBoundingClientRect().left),
+      cardRight: round(card.getBoundingClientRect().right),
+      tableEnds: [...spread.querySelectorAll('.table-row')].map(rowEnd),
+      logEnds: [...spread.querySelectorAll('.commit-row')].slice(0, 7).map(rowEnd),
+      headEnd: rowEnd(spread.querySelector('.table-head')),
+      logHeadRight: round(
+        spread.querySelector('.spread-log-head').getBoundingClientRect().right
+      ),
+      documentWidth: window.document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+    };
+  });
+  expect(measured.columns, 'the paired section is not two columns').toBe(2);
+  // EQUAL HALVES, and the pair spans the sheet edge to edge.
+  expect(measured.boxes[0].width, 'the two columns are not equal halves').toBeCloseTo(
+    measured.boxes[1].width,
+    0
+  );
+  expect(measured.boxes[0].left, 'the left column does not start at the sheet’s edge').toBeCloseTo(
+    measured.cardLeft,
+    0
+  );
+  expect(measured.boxes[1].right, 'the right column stops short of the sheet’s edge').toBeCloseTo(
+    measured.cardRight,
+    0
+  );
+  /* NO DEAD SPACE INSIDE EITHER COLUMN (the owner's standing ruling, measured
+     at 1440): every row reaches its own column's end edge, so neither column
+     is a narrow strip in a wide track. The tolerance is the hairline the row
+     rules are drawn with plus the sub-pixel allowance. */
+  const reaches = (ends, edge, name) => {
+    expect(ends.length, `${name} drew no rows to measure`).toBeGreaterThan(0);
+    for (const [index, end] of ends.entries()) {
+      expect(
+        end,
+        `${name} row ${index} ends ${(edge - end).toFixed(1)}px short of its column's end edge`
+      ).toBeGreaterThanOrEqual(edge - 1 - subPixel);
+    }
+  };
+  reaches(measured.tableEnds, measured.boxes[0].right, 'the repositories column');
+  reaches([measured.headEnd], measured.boxes[0].right, 'the repositories head');
+  reaches(measured.logEnds, measured.boxes[1].right, 'the commits column');
+  expect(
+    measured.logHeadRight,
+    'the commit column’s head stops short of its own column'
+  ).toBeGreaterThanOrEqual(measured.boxes[1].right - 1 - subPixel);
+  expect(
+    measured.documentWidth,
+    `the paired section took the document sideways (${measured.documentWidth} > ${measured.viewportWidth})`
+  ).toBeLessThanOrEqual(measured.viewportWidth + subPixel);
+});
+
+test('at 390 the columns stack and no row of either spends a third line (owner 2026-09-11, issue 318)', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  /* A SUBJECT WITH NO SPACES, which is the hostile case for a one-line
+     ellipsis: a 200-character token cannot break anywhere, so a row that did
+     not clip would either wrap to a second subject line or push the document
+     sideways. Staged through the real envelope so admission is unchanged. */
+  const unbreakable = `fix:${'x'.repeat(200)}`;
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      { repo: 'naranjo.online', sha: '', message: unbreakable, at: '2026-09-11T00:00:00Z' },
+      ...envelope.data.recentCommits,
+    ];
+    await route.fulfill({ response, json: envelope });
+  });
+  await visit(page);
+
+  const measured = await page.evaluate(() => {
+    const round = (value) => Math.round(value);
+    const spread = window.document.querySelector('.ledger-spread');
+    const columns = [...spread.children].map((column) => column.getBoundingClientRect());
+    /* A ROW'S LINES, measured rather than counted from the markup: the leaves
+       that actually paint, merged into BANDS by whether their boxes overlap
+       vertically. Grouping by the top edge alone would be wrong — a 44px link
+       and the 16px chip centred beside it share one visual line and start at
+       two different y's — so two leaves are on one line exactly when their
+       boxes meet, which is what a reader sees.
+       The clipped words and the hover detail are excluded because neither is
+       in the row's flow: one is a 1px clip for the accessibility tree, the
+       other is a fixed-position tip. */
+    const lines = (row) => {
+      const leaves = [...row.querySelectorAll('*')].filter(
+        (node) =>
+          node.children.length === 0 &&
+          (node.textContent ?? '').trim() !== '' &&
+          node.closest('.table-clipped') === null &&
+          node.closest('.cell-tip') === null &&
+          node.getClientRects().length > 0
+      );
+      const rects = leaves
+        .map((leaf) => leaf.getBoundingClientRect())
+        .sort((first, second) => first.top - second.top);
+      let bands = 0;
+      let bandBottom = -Infinity;
+      for (const rect of rects) {
+        if (rect.top >= bandBottom - 0.5) {
+          bands += 1;
+          bandBottom = rect.bottom;
+        } else {
+          bandBottom = Math.max(bandBottom, rect.bottom);
+        }
+      }
+      return {
+        bands,
+        wrapped: leaves
+          .filter((leaf) => leaf.getClientRects().length > 1)
+          .map((leaf) => leaf.getAttribute('class')),
+        height: round(row.getBoundingClientRect().height),
+        text: row.textContent.trim().replace(/\s+/g, ' ').slice(0, 48),
+      };
+    };
+    return {
+      columns,
+      lineHeight: parseFloat(getComputedStyle(spread.querySelector('.commit-title')).lineHeight),
+      tableRows: [...spread.querySelectorAll('.table-row')].map(lines),
+      logRows: [...spread.querySelectorAll('.commit-row')].map(lines),
+      /* The short identity is not in the DOM at all at this width — not
+         hidden, absent — so a screen reader on a phone cannot be walked into
+         a hash the row does not show. */
+      marks: spread.querySelectorAll('.commit-mark').length,
+      documentWidth: window.document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+    };
+  });
+
+  // STACKED, repositories first: the second column starts below the first.
+  expect(measured.columns.length, 'the paired section is not two columns').toBe(2);
+  expect(
+    measured.columns[1].top,
+    'the two columns are still side by side at 390px'
+  ).toBeGreaterThanOrEqual(measured.columns[0].bottom - subPixel);
+
+  expect(measured.tableRows.length, 'no repository rows to measure').toBeGreaterThan(1);
+  expect(measured.logRows.length, 'no commit rows to measure').toBeGreaterThan(1);
+  for (const [name, rows] of [
+    ['repository', measured.tableRows],
+    ['commit', measured.logRows],
+  ]) {
+    for (const [index, row] of rows.entries()) {
+      expect(row.bands, `the ${name} row "${row.text}" spends ${row.bands} lines`).toBeLessThanOrEqual(2);
+      expect(
+        row.wrapped,
+        `the ${name} row "${row.text}" wrapped ${row.wrapped} instead of ellipsizing`
+      ).toEqual([]);
+      /* And the box agrees with the count: two lines of the row's own type
+         plus its padding, never a third. */
+      expect(
+        row.height,
+        `the ${name} row ${index} is ${row.height}px, more than two ${measured.lineHeight}px lines can account for`
+      ).toBeLessThanOrEqual(2 * measured.lineHeight + 24);
+    }
+  }
+  expect(measured.marks, 'the seven-character identity is still in the DOM on a phone').toBe(0);
+  expect(
+    measured.documentWidth,
+    `a 200-character unbreakable subject took the document sideways (${measured.documentWidth} > ${measured.viewportWidth})`
+  ).toBeLessThanOrEqual(measured.viewportWidth + subPixel);
+});
+
+/* ZERO CLS ACROSS THE ARRIVAL, at both viewports. The section's whole shape —
+ * the table's rows, the log's reserve — is decided before either payload
+ * lands, so the two envelopes are held at the route until the page has been
+ * measured and released afterwards: if the section's top or its height moves
+ * between the two reads, something under a reader's finger moved with it. */
+for (const width of [1440, 390]) {
+  test(`the paired section holds still while its payloads land at ${width}px (owner 2026-09-11, issue 318)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    let release = () => {};
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    for (const id of ['coding-projects', 'vcs-activity']) {
+      await page.route(`**/api/panels/${id}`, async (route) => {
+        await held;
+        await route.continue();
+      });
+    }
+    await page.goto('/');
+    /* The section is on the page with its captured face and its reserved log
+       box, and nothing else is still growing: the OTHER panels are ungated, so
+       they settle first and cannot be mistaken for this section moving. */
+    await expect(page.locator('#projects .table-row').first()).toBeVisible();
+    await expect(page.locator('#projects .commit-rows')).toHaveCount(1);
+    await expect(page.locator('.board-grid')).toHaveCount(1);
+    await expect(page.locator('.ticker-strip')).toHaveCount(1);
+    const shape = () =>
+      page.evaluate(() => {
+        const section = window.document.getElementById('projects');
+        const rect = section.getBoundingClientRect();
+        const box = window.document.querySelector('.commit-rows').getBoundingClientRect();
+        return {
+          top: Math.round((rect.top + window.scrollY) * 100) / 100,
+          height: Math.round(rect.height * 100) / 100,
+          reserve: Math.round(box.height * 100) / 100,
+          rows: window.document.querySelectorAll('#projects .commit-row').length,
+        };
+      });
+    let previous = null;
+    await expect
+      .poll(async () => {
+        const now = await shape();
+        const stable = previous !== null && now.height === previous.height;
+        previous = now;
+        return stable;
+      }, { message: 'the page never stopped growing before the gated payloads were released' })
+      .toBe(true);
+    const before = await shape();
+    expect(before.rows, 'the log drew rows before its payload was released').toBe(0);
+
+    release();
+    await settled(page);
+    const after = await shape();
+
+    expect(after.rows, 'the released payload drew no commit rows').toBeGreaterThan(0);
+    expect(
+      after.top,
+      `the section moved ${(after.top - before.top).toFixed(2)}px when its payloads landed`
+    ).toBeCloseTo(before.top, 1);
+    expect(
+      after.height,
+      `the section grew ${(after.height - before.height).toFixed(2)}px when its payloads landed`
+    ).toBeCloseTo(before.height, 1);
+    expect(
+      after.reserve,
+      `the log box grew ${(after.reserve - before.reserve).toFixed(2)}px when its rows arrived`
+    ).toBeCloseTo(before.reserve, 1);
   });
 }

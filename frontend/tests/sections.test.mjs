@@ -23,6 +23,8 @@ import test from 'node:test';
 
 import { relativeAge } from '../src/lib/age.ts';
 import { section, sectionHref, sectionOrdinal, staticBlock } from '../src/lib/blocks.ts';
+import { spreadFromRem, spreadMediaQuery } from '../src/lib/columnWidth.ts';
+import { commitColumnHead, commitColumnId, projectsCommitsProps } from '../src/lib/commits.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
 import {
   roleLedgerProps,
@@ -32,6 +34,7 @@ import {
 } from '../src/lib/work.ts';
 import {
   codingProjectsPanelId,
+  latestRowChip,
   projectColumns,
   projectHost,
   projectLinkLabel,
@@ -70,7 +73,7 @@ const [
   pageHeader,
   blockHost,
   ledgerLog,
-  ledgerTable,
+  ledgerSpread,
   mediaGallery,
 ] = await Promise.all([
   read('../src/App.svelte'),
@@ -82,7 +85,7 @@ const [
   read('../src/lib/components/PageHeader.svelte'),
   read('../src/lib/components/Block.svelte'),
   read('../src/lib/components/LedgerLog.svelte'),
-  read('../src/lib/components/LedgerTable.svelte'),
+  read('../src/lib/components/LedgerSpread.svelte'),
   read('../src/lib/components/MediaGallery.svelte'),
 ]);
 
@@ -93,10 +96,12 @@ const workSource = await read('../src/lib/work.ts');
 const [workBinding, mediaBinding, projectsBinding, galleryModule] = await Promise.all([
   read('../src/lib/blocks/workHistory.ts'),
   /* Renamed with its section (owner directive of 2026-09-03, issue 287): the
-     gallery is the sheet's own fifth section rather than half of Projects, so
+     gallery is the sheet's own last section rather than half of Projects, so
      the block that mounts it is named for the media it carries. */
   read('../src/lib/blocks/mediaGallery.ts'),
-  read('../src/lib/blocks/codingProjects.ts'),
+  /* Renamed with ITS section too (owner design decision, 2026-09-11, issue
+     318): the repositories and the commit log are one two-column block now. */
+  read('../src/lib/blocks/projectsCommits.ts'),
   /* The data module is executed above; its SOURCE is read too, because the
      optionality of a TypeScript field is erased before Node ever sees it —
      "this entry has no title" and "this field may be absent" are different
@@ -109,16 +114,16 @@ const [workBinding, mediaBinding, projectsBinding, galleryModule] = await Promis
    287) where it used to be the entry log and the gallery; every sweep below
    that walked the old pair walks all of them, so the redesign added surfaces
    to these guards rather than removing any. */
-const [commitLog, ledgerBoard, ticker] = await Promise.all([
-  read('../src/lib/components/CommitLog.svelte'),
+const [contributionCalendar, ledgerBoard, ticker] = await Promise.all([
+  read('../src/lib/components/ContributionCalendar.svelte'),
   read('../src/lib/components/LedgerBoard.svelte'),
   read('../src/lib/components/Ticker.svelte'),
 ]);
 
 const contentComponents = {
   LedgerLog: ledgerLog,
-  LedgerTable: ledgerTable,
-  CommitLog: commitLog,
+  LedgerSpread: ledgerSpread,
+  ContributionCalendar: contributionCalendar,
   LedgerBoard: ledgerBoard,
   Ticker: ticker,
   MediaGallery: mediaGallery,
@@ -156,7 +161,7 @@ const styleBlock = (source) => /<style[^>]*>([\s\S]*?)<\/style>/.exec(source)?.[
  * this list entirely and take its own pins with it, which is the quiet failure
  * an optional capture invites. */
 const manifestSections = [...manifest.matchAll(
-  /section\('([a-z-]+)', '([^']+)', \[([^\]]*)\], \{ mark: '([a-z-]+)'(, layout: 'stack')? \}\)/g
+  /section\('([a-z-]+)', '([^']+)', \[([^\]]*)\], \{\s*mark: '([a-z-]+)'(,\s*layout: 'stack')?\s*\}\)/g
 )].map(([, id, label, blocks, mark, stack]) => ({
   id,
   label,
@@ -169,46 +174,49 @@ const manifestSections = [...manifest.matchAll(
 // The manifest, the nav, and the sections it points at
 // ---------------------------------------------------------------------------
 
-/* FIVE SECTIONS, updated deliberately for the owner directive of 2026-09-03
- * (issue 287): the ledger gives each of the owner's five headings a numbered
- * section of its own. Commits leaves the trackers stack to lead a section that
- * cycles one calendar between three daily series, and the gallery leaves
- * Projects, where it had been a subheading, for the sheet's last section. The
- * IDS of the three surviving sections do not move — an id is the fragment a
- * nav link jumps to and an address a reader may already have shared. */
-test('the manifest names the owner’s five sections, in the order the page stacks them', () => {
+/* FOUR SECTIONS, updated deliberately for the owner's design decision of
+ * 2026-09-11 (issue 318, option B on the design canvas): Projects and Commits
+ * become ONE section of two columns, and the contribution calendar goes back
+ * into the trackers stack between the board and the ticker. The ledger had
+ * five since issue 287.
+ *
+ * The IDS of the surviving sections do not move — an id is the fragment a nav
+ * link jumps to and an address a reader may already have shared — and `commits`
+ * does not stop resolving just because it stopped being a section: the commit
+ * COLUMN carries it, which is pinned below. */
+test('the manifest names the owner’s four sections, in the order the page stacks them', () => {
   assert.deepEqual(
     manifestSections.map((entry) => entry.label),
-    ['Professional Experience', 'Projects', 'Commits', 'Trackers', 'Gallery'],
+    ['Professional Experience', 'Projects · Commits', 'Trackers', 'Gallery'],
     'the section labels are the owner’s words and their order is the page’s order'
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.id),
-    ['work', 'projects', 'commits', 'trackers', 'gallery']
+    ['work', 'projects', 'trackers', 'gallery']
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.blocks),
     [
       ['workHistory'],
-      ['codingProjects'],
-      ['commitLog'],
-      ['tokenBoard', 'bossTicker'],
+      ['projectsCommits'],
+      ['tokenBoard', 'contributionCalendar', 'bossTicker'],
       ['mediaGallery'],
     ],
     'each section holds exactly its blocks; reordering the page is moving one name here'
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.layout),
-    ['flow', 'flow', 'stack', 'stack', 'flow'],
-    'the two panel stacks are the sections whose blocks share one column'
+    ['flow', 'flow', 'stack', 'flow'],
+    'the one panel stack is the section whose blocks share one column'
   );
   /* EVERY SECTION CARRIES ITS MARK (owner design decision, 2026-09-11, issue
      313), here in the manifest beside the label it stands for — so the nav
      link and the section head read one entry and cannot draw two different
-     marks for one section. */
+     marks for one section. The combined section keeps `folder`: it is the
+     owner's projects, with what landed in them beside it. */
   assert.deepEqual(
     manifestSections.map((entry) => entry.mark),
-    ['work', 'folder', 'commit', 'chip', 'photo'],
+    ['work', 'folder', 'chip', 'photo'],
     'each section names the mark the nav and the section head both draw'
   );
   // The constructors the manifest is written in, executed with its own ids:
@@ -264,6 +272,32 @@ test('the empty About Me section is gone, and nothing renders in its place', asy
       `${path} survived the section it existed for`
     );
   }
+});
+
+/* THE OLD ADDRESS KEEPS RESOLVING (issue 287's rule: never break a URL).
+ * `#commits` named a section of its own until the owner's design decision of
+ * 2026-09-11 (issue 318) paired it with Projects, and a reader who bookmarked
+ * or shared that fragment must still land on the commits. So the COLUMN wears
+ * the id: the adapter names it once, hands it through as data, and the
+ * component renders it on the log's own wrapper.
+ *
+ * The nav never links it, and that is the other half of the claim — a nav link
+ * to a non-section would be a second address for one place, and the nav is
+ * derived from the manifest precisely so it cannot invent one. */
+test('the retired commits address still lands on the commits, and the nav never links it', () => {
+  assert.equal(commitColumnId, 'commits');
+  // The adapter hands it through; no component spells it.
+  assert.equal(projectsCommitsProps([null, null]).logAnchor, commitColumnId);
+  assert.match(ledgerSpread, /<div class="spread-column" id=\{logAnchor\}>/);
+  for (const [name, source] of Object.entries(componentSources)) {
+    assert.doesNotMatch(source, /id="commits"/, `${name} spells a page address of its own`);
+  }
+  // And it is not a section any more: the manifest names four, none of them
+  // this one, so the nav has nothing to point at it with.
+  assert.ok(
+    !manifestSections.some((entry) => entry.id === commitColumnId),
+    'the commits section came back; the sheet pairs it with Projects now'
+  );
 });
 
 test('every nav link lands on the section the manifest renders', () => {
@@ -858,11 +892,15 @@ test('the experience section carries four complete real entries, newest first', 
 /* THE SAME DOCTRINE, ONE SHAPE FEWER (owner directive of 2026-09-03, issue
  * 287). The card carried two body regions — a paragraph and a points list —
  * and drew each only when it held something, because a card that reserved an
- * empty <p> for content it did not have was the defect. The ledger splits
- * those two across two surfaces: the log's drawer holds the points, the
- * table's row holds the one-line summary. So the claim below is the same claim
- * against each of them — nothing this site ships is a row with nothing to say
- * — checked over every adapter that feeds either. */
+ * empty <p> for content it did not have was the defect.
+ *
+ * The table's half of that claim moved rather than lapsed (owner design
+ * decision, 2026-09-11, issue 318). The description cell it used to be about
+ * is gone — the section holds half a sheet now — and what replaced it is a
+ * cell drawn only for the row that has something in it: the `latest` chip. So
+ * the claim is the same claim, against the one optional cell the table still
+ * has: it is present exactly on the row that earned it and absent everywhere
+ * else, never an empty box held open. */
 test('a row draws only the body it has, and every shipped row has one', () => {
   // The drawer is a region drawn from data, and the row's own points are what
   // fill it; an entry with none would open onto an empty box.
@@ -870,15 +908,23 @@ test('a row draws only the body it has, and every shipped row has one', () => {
   for (const row of roleLedgerProps.rows) {
     assert.ok(row.points.length > 0, `the ledger ships "${row.key}" with an empty drawer`);
   }
-  // The table's summary is the other half, and a repository the host carries
-  // no description for renders the honest dash rather than an empty cell.
+  // The chip is conditional in BOTH directions: the markup draws it only when
+  // the row carries one...
+  assert.match(ledgerSpread, /\{#if row\.chip\}<span class="table-chip">\{row\.chip\}<\/span>\{\/if\}/);
+  // ...and no row ever carries an empty one, which would be a box with nothing
+  // in it drawn by a truthy test that happens to be false.
+  const chips = projectTableProps(
+    projectsEnvelope([
+      { name: 'kept', description: 'x', stars: 1, pushedAt: '2026-09-01T09:00:00Z', pinned: true },
+      { name: 'newest', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' }
+    ])
+  )
+    .rows.map((row) => row.chip)
+    .filter((chip) => chip !== undefined);
+  assert.deepEqual(chips, [latestRowChip]);
   for (const row of projectTableProps(null).rows) {
-    assert.ok(
-      row.summary.trim().length > 0,
-      `the projects table ships "${row.key}" with neither a description nor a dash`
-    );
+    assert.equal(row.chip, undefined, `the captured face marked "${row.key}" latest`);
   }
-  assert.match(ledgerTable, /<span class="table-summary">\{row\.summary\}<\/span>/);
 });
 
 // ---------------------------------------------------------------------------
@@ -1010,7 +1056,6 @@ test('the roster is the payload’s: a repository the module list has never hear
   assert.equal(entry.link.text, 'born-this-morning');
   assert.equal(entry.link.href, `${projectHost}/born-this-morning`);
   assert.equal(entry.link.label, 'born-this-morning on GitHub, opens in a new tab');
-  assert.equal(entry.summary, fresh.description);
   const byKey = new Map(entry.counts.map((count) => [count.key, count]));
   assert.equal(byKey.get('stars').value, '1');
   assert.equal(byKey.get('pulls').value, '2');
@@ -1110,7 +1155,10 @@ test('a card looks stale when its envelope says so (issue 281, defect 2)', () =>
  * surface passes none. */
 test('the table renders its stale line in the reserved head, and only when it has one', async () => {
   const shell = await read('../src/lib/components/PanelShell.svelte');
-  assert.match(ledgerTable, /<PanelShell \{title\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
+  /* NO TITLE PROP AT ALL (owner directive, 2026-09-04, issue 292; the section
+     head names the sheet): the shell is handed status, provenance and the note
+     and nothing else, so the reserved head row is what keeps the geometry. */
+  assert.match(ledgerSpread, /<PanelShell \{status\} \{generatedAt\} note=\{staleNote\}>/);
   assert.match(shell, /\{#if note\}<span class="panel-note" data-panel-note>\{note\}<\/span>\{\/if\}/);
   assert.ok(
     shell.indexOf('data-panel-note') < shell.indexOf('<div class="panel-body">'),
@@ -1150,6 +1198,7 @@ test('the table renders its stale line in the reserved head, and only when it ha
     'the note must keep the end column when there is no title beside it'
   );
   assert.equal(projectTableProps(null).title, undefined, 'the Projects table grew a panel label back');
+  assert.doesNotMatch(ledgerSpread, /\{title\}/, 'the sheet passes a panel label again');
 });
 
 test('the closed-pull tally and the released version are told with a mark and a figure (issue #317)', () => {
@@ -1199,22 +1248,53 @@ test('the closed-pull tally and the released version are told with a mark and a 
      <svg> of its own any more: there is exactly one place on the site that
      writes the viewBox, the stroke attributes and the assistive posture, and a
      second drawing of a star here would be a second weight to keep in step. */
-  assert.match(ledgerTable, /import Icon from '\.\/Icon\.svelte';/);
-  assert.match(ledgerTable, /<Icon name=\{count\.glyph\} slot="cell" \/>/);
-  assert.doesNotMatch(ledgerTable, /<svg/, 'the table draws a glyph of its own again');
-  assert.doesNotMatch(ledgerTable, /stroke-width=/, 'the family’s weight is restated in the table');
+  assert.match(ledgerSpread, /import Icon from '\.\/Icon\.svelte';/);
+  assert.match(ledgerSpread, /<Icon name=\{count\.glyph\} slot="cell" \/>/);
+  assert.doesNotMatch(ledgerSpread, /<svg/, 'the table draws a glyph of its own again');
+  assert.doesNotMatch(ledgerSpread, /stroke-width=/, 'the family’s weight is restated in the table');
   /* The words are hidden by CLIPPING, never by display:none or hidden, both of
      which would take them out of the accessibility tree and leave the mark
      carrying the figure alone. */
-  assert.match(ledgerTable, /<span class="table-clipped">\{count\.label\}<\/span>/);
+  assert.match(ledgerSpread, /<span class="table-clipped">\{count\.label\}<\/span>/);
   assert.match(styles, /\.table-clipped \{[^}]*clip-path: inset\(50%\)/s);
   assert.doesNotMatch(styles, /\.table-clipped \{[^}]*display: none/s);
   /* THE HEAD ROW IS WORDS TOO (owner directive, 2026-09-11, issue #317): the
      visible head is a mark, so the word it replaced has to reach a screen
      reader from the head itself — which is why the row is no longer hidden
      wholesale. */
-  assert.doesNotMatch(ledgerTable, /<div class="table-head" aria-hidden="true">/);
-  assert.match(ledgerTable, /<span class="table-clipped">\{head\}<\/span>/);
+  assert.doesNotMatch(ledgerSpread, /<div class="table-head" aria-hidden="true">/);
+  assert.match(ledgerSpread, /<span class="table-clipped">\{head\}<\/span>/);
+  /* EACH COLUMN HAS ITS OWN RULED HEAD (owner design decision, 2026-09-11,
+     issue 318). The table's names its five columns; the log's names the whole
+     stream, in the adapter's words, under the same class so the two heads are
+     drawn at one height by one rule rather than by two that must agree. */
+  assert.equal(commitColumnHead, 'Commits · every repository');
+  assert.equal(projectsCommitsProps([null, null]).logHead, commitColumnHead);
+  assert.match(
+    ledgerSpread,
+    /<div class="table-head spread-log-head">\s*<span class="table-label"><Icon name="commit" slot="cell" \/>\{logHead\}<\/span>/
+  );
+  assert.match(styles, /\.spread-log-head \{[^}]*grid-template-columns: minmax\(0, 1fr\);/s);
+  /* A VERSION LONGER THAN ITS CELL ELLIPSIZES rather than wrapping the row: a
+     wrapped figure is a row taller than the reserve the column beside it was
+     built from, which is the zero-CLS pairing breaking on a tag nobody chose
+     the length of. The cell is one unbreakable line that clips. */
+  const figure = /\.table-figure \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(figure, /overflow: hidden/);
+  assert.match(figure, /white-space: nowrap/);
+  assert.match(figure, /text-overflow: ellipsis/);
+  /* And the tag reaches the cell VERBATIM however long it is — the adapter
+     prints what the host released and the cell decides how much of it is
+     drawn, so nothing truncates a version into a different version. */
+  // Long, and inside the release-tag grammar issue 317 admits: a `+` would be
+  // refused by the payload gate, which would prove the gate rather than this.
+  const longTag = 'v0.0.0-release-candidate.1.build.2026091100000000';
+  const tagged = projectTableProps(
+    projectsEnvelope([
+      { name: 'x', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z', release: longTag }
+    ])
+  );
+  assert.equal(tagged.rows[0].counts.find((count) => count.key === 'release').value, longTag);
 });
 
 /* THE CLUSTER BECAME COLUMNS (owner directive of 2026-09-03, issue 287), and
@@ -1246,11 +1326,32 @@ test('the table places every counter in a declared track, and no figure moves an
   );
   assert.equal(rowRules.length, 1, 'the row has grown a second base shape again');
   assert.match(rowRules[0], /display:\s*grid/);
+  /* EVERY TRACK IS A minmax (owner design decision, 2026-09-11, issue 318):
+     the name track flexes, and each figure track takes its stated width
+     wherever there is room and shrinks below it rather than pushing the page
+     sideways when the table lives in half a sheet or a reader drags the
+     reading column in. A bare fixed track is what used to overflow. */
   assert.match(
     rowRules[0],
-    /grid-template-columns:\s*[0-9.]+rem minmax\(0, 1fr\)/,
-    'the description column must shrink under a long line instead of pushing the counters'
+    /grid-template-columns:\s*\n?\s*minmax\(0, 1fr\)(?:\s+minmax\(0, [0-9.]+rem\)){4};/,
+    'the name column must flex and every figure track must be able to shrink'
   );
+  /* And the LOG column beside it is declared the same way, for the same
+     reason: a subject that flexes between an age, a repository and an
+     identity, each of which can shrink. */
+  const logRule = /\.commit-row \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(
+    logRule,
+    /grid-template-columns:\s*\n?\s*minmax\(0, [0-9.]+rem\) minmax\(0, [0-9.]+rem\) minmax\(0, 1fr\) minmax\(0, [0-9.]+rem\);/,
+    'the commit row must flex on its subject and shrink on the rest'
+  );
+  /* THE TWO COLUMNS ARE EQUAL HALVES that fill the sheet (the no-dead-space
+     ruling) and can be narrowed (the no-sideways-scroll floor). Both claims
+     are one declaration. */
+  const spreadRule = /\.ledger-spread \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(spreadRule, /display:\s*grid/);
+  assert.match(spreadRule, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\);/);
+  assert.match(spreadRule, /gap:\s*0 var\(--ledger-spread-gap\);/);
   /* The head and the rows are laid on the SAME track list — one declaration
      for both — so a column head can never sit over a different column than the
      figures it names. */
@@ -1267,22 +1368,49 @@ test('the table places every counter in a declared track, and no figure moves an
   /* The BOUNDARY MOVED from 40rem to 45rem (owner directive of 2026-09-03,
      issue 287), and it moved because it was measured rather than chosen: the
      wide row's own tracks — 15rem for the name, four counter columns, five
-     1.5rem gaps — come to 680px, so a page column narrower than that overflows
+     1.5rem gaps — came to 680px, so a page column narrower than that overflowed
      the document sideways, which happened between 641px and 711px. The
-     restack now happens at 720px, where the wide layout genuinely stops
-     fitting. */
+     restack happens at 720px, where the wide layout genuinely stopped fitting,
+     and it is the SAME boundary the two columns stack at (owner design
+     decision, 2026-09-11, issue 318). */
   const phoneWidths = new Set(
     [...styles.matchAll(/@media \(max-width: ([^)]+)\)/g)].map(([, width]) => width.trim())
   );
   assert.equal(phoneWidths.size, 1, `the sheet disagrees about where a phone ends: ${[...phoneWidths].join(', ')}`);
-  assert.match(styles, /@media \(max-width: 45rem\)[\s\S]*?\.table-head \{\s*display: none;/);
-  assert.match(styles, /@media \(max-width: 45rem\)[\s\S]*?\.table-row \{[^}]*grid-template-areas:/);
-  /* And the phone's restack places each counter in a track of its own. Three
+  /* THE TABLE's head goes and the LOG's stays (owner design decision,
+     2026-09-11, issue 318): every cell under the table's head repeats its own
+     word, so five marks over a restacked row are five heads over nothing —
+     while the log's head is the only thing telling a reader where the
+     repositories stop and the commits start once the columns stack. */
+  assert.match(
+    styles,
+    /@media \(max-width: 45rem\)[\s\S]*?\.table-head:not\(\.spread-log-head\) \{\s*display: none;/
+  );
+  assert.match(styles, /@media \(max-width: 45rem\)[\s\S]*?\.ledger-spread \{[^}]*grid-template-columns: minmax\(0, 1fr\);/);
+  /* THE SCRIPT ASKS THE SAME QUESTION THE STYLESHEET DOES, and a media query
+     cannot read a token — so the number is stated in lib/columnWidth.ts and
+     this holds the two equal. The commit row's short identity is rendered
+     against it, so a drift here is a phone row that grows a third line. */
+  assert.equal(spreadFromRem, 45.0625);
+  assert.equal(spreadMediaQuery, '(min-width: 45.0625rem)');
+  assert.match(ledgerSpread, /\{#if wide\}<span class="commit-mark">\{row\.mark\}<\/span>\{\/if\}/);
+  assert.match(ledgerSpread, /browserMedia\(spreadMediaQuery\)\.matches/);
+  /* And the phone's restack keeps every counter in a track of its own. Three
      counters sharing ONE grid area are three counters drawn on top of each
      other — measured at 390px before this pin existed — so the count of them
-     is held at both ends: the desktop track list reserves exactly three, and
-     the phone names exactly three placements. */
+     is held at both ends: the desktop track list reserves exactly three
+     counters plus the age, and the phone declares exactly four equal tracks
+     with the name spanning the line above them. */
   assert.equal(projectTableProps(null, noonPlacement).rows[0].counts.length, 3);
+  assert.match(
+    styles,
+    /@media \(max-width: 45rem\)[\s\S]*?\.table-row \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 45rem\)[\s\S]*?\.table-name-cell \{\s*grid-column: 1 \/ -1;/,
+    'the name no longer spans the row, so the four counters share its line'
+  );
   /* THE MARK SLOT IS A DECLARED TRACK TOO (issue #317). A counter that packed
      its mark and its figure inline put the mark wherever the figure's own
      length left it, so a column of four-digit tallies drew its marks at a
@@ -1291,13 +1419,6 @@ test('the table places every counter in a declared track, and no figure moves an
   const countRule = /\.table-count \{([^}]*)\}/.exec(styles)?.[1] ?? '';
   assert.match(countRule, /display:\s*grid/);
   assert.match(countRule, /grid-template-columns:\s*var\(--icon-cell\) minmax\(0, 1fr\)/);
-  for (const nth of [3, 4, 5]) {
-    assert.match(
-      styles,
-      new RegExp(`@media \\(max-width: 45rem\\)[\\s\\S]*?\\.table-count:nth-child\\(${nth}\\) \\{\\s*grid-area:`),
-      `the phone gives the row's child ${nth} no track of its own`
-    );
-  }
 
   /* A digit may not jitter the column it sits in: the counters read tabular
      figures. That is a LIVE requirement rather than a precaution — the
@@ -1315,12 +1436,12 @@ test('the table places every counter in a declared track, and no figure moves an
   for (const count of [...row.counts, row.updated]) {
     assert.ok(count.label.trim().length > 0, `${count.key} carries no sentence for the tree`);
   }
-  assert.match(ledgerTable, /<span class="table-clipped">\{count\.label\}<\/span>/);
+  assert.match(ledgerSpread, /<span class="table-clipped">\{count\.label\}<\/span>/);
   /* Both are focus stops (owner directive, 2026-09-03, issue 287): each
      carries a detail, and a detail only a pointer can open is half the
      feature — the same reason the retired stat tiles carried a tabindex. */
-  assert.match(ledgerTable, /<span class="table-count table-age" tabindex="0" aria-label=\{row\.updated\.label\}>/);
-  assert.match(ledgerTable, /<span class="table-count" tabindex="0" aria-label=\{count\.label\}>/);
+  assert.match(ledgerSpread, /<span class="table-count table-age" tabindex="0" aria-label=\{row\.updated\.label\}>/);
+  assert.match(ledgerSpread, /<span class="table-count" tabindex="0" aria-label=\{count\.label\}>/);
   assert.match(styles, /\.table-count:focus-visible,\s*\.table-age:focus-visible \{[^}]*outline: 2px solid var\(--color-accent\)/);
   const clipped = /\.table-clipped \{([^}]*)\}/.exec(styles)?.[1] ?? '';
   assert.match(clipped, /clip-path:\s*inset\(50%\)/);

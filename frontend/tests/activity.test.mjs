@@ -16,12 +16,19 @@ import {
   commitTitleLink,
   isValidCommitSha,
   isValidRepoSlug,
-  parseVCSActivity,
-  shownEntryRows
+  parseVCSActivity
 } from '../src/lib/activity.ts';
-import { commitLogProps } from '../src/lib/commits.ts';
+import { contributionCalendarProps, projectsCommitsProps } from '../src/lib/commits.ts';
+import { spreadFromRem } from '../src/lib/columnWidth.ts';
 import { calendarColumns, pendingWeeks, toColumns } from '../src/lib/grid.ts';
-import { projectHost, projectHostLabel } from '../src/lib/projects.ts';
+import {
+  latestRowChip,
+  projectHost,
+  projectHostLabel,
+  projectTableProps,
+  projects,
+  shownProjectRows
+} from '../src/lib/projects.ts';
 import {
   applyScrollbarGutter,
   measureScrollbarPx,
@@ -496,14 +503,18 @@ describe('isValidCommitSha / commitShaUrl', () => {
 });
 
 /* The calendar's own component and binding moved with the owner's ledger
-   redesign (2026-09-03, issue 287): the contribution calendar is one of three
-   the COMMITS section cycles between, so the component is CommitLog and the
-   binding is a multi-panel one. The adapter these pins execute moved with it,
-   to lib/commits.ts, where the two envelopes meet. */
-const [component, manifest, binding, helpers, grid, sheet] = await Promise.all([
-  readFile(new URL('../src/lib/components/CommitLog.svelte', import.meta.url), 'utf8'),
+   redesign (2026-09-03, issue 287) and moved again with the sheet's paired
+   section (2026-09-11, issue 318): the contribution calendar is one of three
+   pictures the reader cycles between, it is a TRACKER now, and its block still
+   binds two panels. The log that used to ride under it is the sheet's
+   right-hand column, drawn by LedgerSpread — read here too, because the rows
+   and the reserve are still this payload's and the pins that describe them
+   belong beside the admission they come from. */
+const [component, spread, manifest, binding, helpers, grid, sheet] = await Promise.all([
+  readFile(new URL('../src/lib/components/ContributionCalendar.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/components/LedgerSpread.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/blocks/commitLog.ts', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/blocks/contributionCalendar.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/activity.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/components/ContributionGrid.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
@@ -542,7 +553,7 @@ test('the adapter renders the figures, the strip, and the noun the panel always 
     generatedAt: '2026-08-11T00:12:00Z',
     data: goodActivity
   };
-  const rendered = commitLogProps([envelope, null]);
+  const rendered = contributionCalendarProps([envelope, null]);
   /* No panel label (owner directive, 2026-09-04, issue 294): the envelope's
      title names one host and the calendar opens on a token series, so the
      adapter hands the shell no title at all rather than a false one. */
@@ -561,9 +572,11 @@ test('the adapter renders the figures, the strip, and the noun the panel always 
   assert.deepEqual(contributions.columns, toColumns(activityCells(parseVCSActivity(goodActivity))));
   // The payload renders only under its pinned kind: a mislabeled envelope is
   // the honest empty state, exactly as the retired component decided it.
-  const mislabeled = commitLogProps([{ ...envelope, kind: 'boss-log/v1' }, null]);
-  assert.deepEqual(mislabeled.rows, []);
+  const mislabeled = contributionCalendarProps([{ ...envelope, kind: 'boss-log/v1' }, null]);
   assert.deepEqual(mislabeled.sets[0].columns, []);
+  /* And the LOG half of the same payload refuses the same way, from the other
+     adapter: one mislabeled envelope, two blocks, one verdict. */
+  assert.deepEqual(projectsCommitsProps([null, { ...envelope, kind: 'boss-log/v1' }]).logRows, []);
   assert.equal(mislabeled.sets[0].stripLabel, 'contribution calendar');
   assert.equal(mislabeled.sets[0].caption, 'activity data unavailable');
 });
@@ -597,7 +610,7 @@ test('a stalled payload draws its missing days as dated absences up to today, un
     data: stalled
   };
   const now = new Date('2026-09-03T10:00:00Z');
-  const rendered = commitLogProps([envelope, null], now);
+  const rendered = contributionCalendarProps([envelope, null], now);
   assert.equal(rendered.staleNote, 'data through Aug 20, 2026 · last capture 14d ago');
 
   const columns = rendered.sets[0].columns;
@@ -618,14 +631,14 @@ test('a stalled payload draws its missing days as dated absences up to today, un
   // A fresh payload — endDate on the reader's today — renders exactly what it
   // always did: the anchor changes nothing when the producer is live.
   const fresh = { ...envelope, status: 'ok' };
-  const live = commitLogProps([fresh, null], new Date('2026-08-20T12:00:00Z'));
+  const live = contributionCalendarProps([fresh, null], new Date('2026-08-20T12:00:00Z'));
   assert.equal(live.staleNote, undefined);
   assert.deepEqual(live.sets[0].columns, calendarColumns(activityCells(parseVCSActivity(stalled))));
   // A producer a time zone ahead of the reader keeps its own end.
-  const ahead = commitLogProps([fresh, null], new Date('2026-08-19T23:30:00Z'));
+  const ahead = contributionCalendarProps([fresh, null], new Date('2026-08-19T23:30:00Z'));
   assert.deepEqual(ahead.sets[0].columns, live.sets[0].columns);
   // An ok envelope whose generatedAt has silently stopped advancing says so too.
-  assert.equal(commitLogProps([fresh, null], now).staleNote, 'data through Aug 20, 2026 · last capture 14d ago');
+  assert.equal(contributionCalendarProps([fresh, null], now).staleNote, 'data through Aug 20, 2026 · last capture 14d ago');
   // The component hands the line to the shell's HEAD — the one row the card
   // already reserves — never to its body, whose every region is a fixed box
   // so the calendar's arrival costs no layout shift (the reserve lane).
@@ -638,15 +651,22 @@ test('a stalled payload draws its missing days as dated absences up to today, un
 });
 
 test('an empty commit list says so instead of showing invented history', () => {
-  assert.match(component, /\{#if rows\.length === 0\}/);
-  assert.match(component, /\{rowsNote\}/);
+  /* The rows are the sheet's right-hand column (owner design decision,
+     2026-09-11, issue 318), so the empty branch is LedgerSpread's — same
+     class, same adapter word, a different file. */
+  assert.match(spread, /\{#if logRows\.length === 0\}/);
+  assert.match(spread, /\{logNote\}/);
   // The wording is the adapter's, verbatim from the retired component.
   assert.equal(activityEntriesNote, 'no recent commits reported');
-  const empty = commitLogProps([null, null]);
-  assert.equal(empty.rowsNote, 'no recent commits reported');
-  assert.equal(empty.sets[0].emptyNote, 'activity data unavailable');
-  assert.equal(empty.title, undefined, 'an empty commit block grew a panel label');
-  assert.equal(empty.status, 'unavailable');
+  const empty = projectsCommitsProps([null, null]);
+  assert.equal(empty.logNote, 'no recent commits reported');
+  assert.deepEqual(empty.logRows, []);
+  /* The calendar's own empty face is unchanged, and it still hands the shell
+     no title (owner directive, 2026-09-04, issue 294). */
+  const noCalendar = contributionCalendarProps([null, null]);
+  assert.equal(noCalendar.sets[0].emptyNote, 'activity data unavailable');
+  assert.equal(noCalendar.title, undefined, 'an empty calendar block grew a panel label');
+  assert.equal(noCalendar.status, 'unavailable');
 });
 
 test('the cell ramp is themeable custom properties with the validated dark defaults', () => {
@@ -729,12 +749,13 @@ test('the strip owns fixed geometry and its own overflow', () => {
      The caption under the grid is the figures row's successor and holds the
      same line's height. */
   assert.match(sheet, /\.commit-caption \{[^}]*min-block-size: 1\.25rem/);
-  // TEN rows at the 44px touch floor (owner directive, 2026-09-11, issue
-  // #315; five since issue 157): every entry row can carry two real links, so
-  // the reservation is a multiplication of the reserve by the row's own floor
-  // rather than a decorative-text height, and this pin recomputes it from
-  // shownEntryRows — so the box and the number of rows it holds open cannot
-  // drift apart.
+  // SEVEN rows at the 44px touch floor (owner design decision, 2026-09-11,
+  // issue 318; ten since issue #315, five since issue 157): every entry row can
+  // carry two real links, so the reservation is a multiplication of the reserve
+  // by the row's own floor rather than a decorative-text height, and this pin
+  // recomputes it from the constant the TABLE BESIDE IT selects its rows with —
+  // so the two columns of the paired section cannot come to hold different
+  // numbers of rows, and the box and its row count cannot drift apart.
   const rowFloorRem = 2.75;
   /* The reserve is DERIVED from the row's own pitch rather than restated, and
      the pitch is a token because a phone row is taller — the repository stacks
@@ -743,7 +764,7 @@ test('the strip owns fixed geometry and its own overflow', () => {
      recomputation refuses in both directions. */
   assert.match(
     sheet,
-    new RegExp(`\\.commit-rows \\{[^}]*block-size: calc\\(${shownEntryRows} \\* var\\(--commit-row-height\\)\\)`)
+    new RegExp(`\\.commit-rows \\{[^}]*block-size: calc\\(${shownProjectRows} \\* var\\(--commit-row-height\\)\\)`)
   );
   assert.match(sheet, /\.commit-row \{[^}]*block-size: var\(--commit-row-height\)/);
   assert.match(sheet, new RegExp(`\\.commit-row \\{[^}]*min-block-size: var\\(--control-target\\)`));
@@ -755,8 +776,8 @@ test('the strip owns fixed geometry and its own overflow', () => {
   assert.ok(pitches[1] > pitches[0], 'the phone pitch must be the taller one');
   assert.ok(pitches[0] >= rowFloorRem, 'the row pitch dropped under the touch floor');
   // The row separator is an INSET SHADOW, never a border (owner directive,
-  // 2026-08-25): a border would add its pixel to every row's box and ten of
-  // them would push the last row out of a reservation that is exactly ten
+  // 2026-08-25): a border would add its pixel to every row's box and seven of
+  // them would push the last row out of a reservation that is exactly seven
   // rows tall — the zero-CLS reserve turned into a clipped row.
   assert.match(sheet, /\.commit-row \{[^}]*box-shadow: inset 0 -1px 0 var\(--ledger-rule/);
   assert.match(sheet, /\.commit-row:last-child \{[^}]*box-shadow: none/);
@@ -769,15 +790,21 @@ test('the strip owns fixed geometry and its own overflow', () => {
   // adapter used to hand the component exactly the rows the box could hold;
   // the box scrolls now, so every row the wire carried renders and the WIRE's
   // own cap is what bounds the list. A cap in the adapter would be the page
-  // quietly deciding the record stops at ten, which is the defect the owner
+  // quietly deciding the record stops at seven, which is the defect the owner
   // reported in the first place.
-  assert.equal(shownEntryRows, 10);
+  //
+  // SEVEN is the owner's pairing (issue 318: "seven rows ... to match the seven
+  // repository rows"), and it is ONE constant: the table's own row count. A
+  // second number here would be the two columns free to disagree about a height
+  // they share, which is exactly the drift the reserve exists to prevent.
+  assert.equal(shownProjectRows, 7);
   assert.match(sheet, /\.commit-rows \{[^}]*overflow-y: auto/);
   // And the box's HEIGHT is the thing that never moves: a reserve that grew
   // with its rows would push every section under it down the moment a payload
   // landed.
   assert.doesNotMatch(sheet, /\.commit-rows \{[^}]*min-block-size/);
-  const overfull = commitLogProps([
+  const overfull = projectsCommitsProps([
+    null,
     {
       schema: 'panel/v1',
       id: activityPanelId,
@@ -792,10 +819,9 @@ test('the strip owns fixed geometry and its own overflow', () => {
           at: '2026-08-11T00:12:00Z'
         }))
       }
-    },
-    null
+    }
   ]);
-  assert.equal(overfull.rows.length, 30, 'every row the wire carried renders; the box scrolls for the rest');
+  assert.equal(overfull.logRows.length, 30, 'every row the wire carried renders; the box scrolls for the rest');
   // A wide window scrolls inside the strip, never the page.
   assert.match(grid, /\.grid-strip \{[^}]*overflow-x: auto/);
   // The panel is an ordinary block in the page's stack. It used to dock to
@@ -805,7 +831,229 @@ test('the strip owns fixed geometry and its own overflow', () => {
   // only existed because it floated. It takes the column's width now, so it
   // declares neither.
   assert.doesNotMatch(component, /position: fixed/, 'the panel must not dock again');
+  assert.doesNotMatch(spread, /position: fixed/, 'the sheet must not dock either');
   assert.doesNotMatch(sheet, /--page-activity-gutter/, 'a card reserves no gutter');
+});
+
+/* ---------------------------------------------------------------------------
+ * The sheet's LEFT column: which repositories it shows (owner design decision,
+ * 2026-09-11, issue 318, option B on the design canvas). The owner's pinned
+ * set — GitHub's own curation, on the wire since issue 317 — plus the ONE most
+ * recently pushed repository outside it, wearing the `latest` chip.
+ *
+ * The rule is EXECUTED against payloads rather than pinned as source, because
+ * every way it can go wrong is a payload shape: a flag that is absent, a
+ * pinned set smaller than six, a pinned set larger than the pair reserves, and
+ * a tie between two pushes. Each of those is a row a reader would see.
+ * ------------------------------------------------------------------------ */
+
+/* Twelve repositories, six pinned, each with its own push instant so the order
+ * is the data's rather than a tie-break's. `r00` is the newest and is NOT
+ * pinned, so it is the `latest` row; the pinned six are scattered through the
+ * order on purpose, so a selection that merely sliced the seven most recent
+ * would draw a visibly different set. */
+function repoFixture(pinnedNames = ['r01', 'r03', 'r05', 'r07', 'r09', 'r11'], count = 12) {
+  const pinned = new Set(pinnedNames);
+  return Array.from({ length: count }, (_, index) => {
+    const name = `r${String(index).padStart(2, '0')}`;
+    return {
+      name,
+      description: 'x',
+      stars: index,
+      // Descending: r00 is the newest push on the wire.
+      pushedAt: new Date(Date.UTC(2026, 0, 12 - index)).toISOString(),
+      ...(pinned.has(name) ? { pinned: true } : {})
+    };
+  });
+}
+
+function projectsPanel(repos) {
+  return {
+    schema: 'panel/v1',
+    id: 'coding-projects',
+    kind: 'coding-projects/v2',
+    title: 'Coding Projects',
+    generatedAt: '2026-01-12T00:00:00Z',
+    status: 'ok',
+    data: { repos }
+  };
+}
+
+const drawn = (repos) => projectTableProps(projectsPanel(repos), Date.parse('2026-01-12T12:00:00Z'));
+
+test('the table draws the pinned set plus the one latest repository outside it (owner 2026-09-11, issue 318)', () => {
+  const rendered = drawn(repoFixture());
+  // Six pinned plus one, ordered by push descending — which puts the latest
+  // first here because it IS the newest push on the wire.
+  assert.deepEqual(
+    rendered.rows.map((row) => row.link.text),
+    ['r00', 'r01', 'r03', 'r05', 'r07', 'r09', 'r11'],
+    'the table is not the pinned set plus the latest, in push order'
+  );
+  assert.equal(rendered.rows.length, shownProjectRows);
+  // Exactly one chip, on the row that is not pinned.
+  assert.deepEqual(
+    rendered.rows.filter((row) => row.chip !== undefined).map((row) => row.link.text),
+    ['r00']
+  );
+  assert.equal(rendered.rows[0].chip, latestRowChip);
+  assert.equal(latestRowChip, 'latest');
+  /* The control that makes the claim mean something: without the pinned flags
+     the SAME twelve rows select the seven most recent, which is a different
+     set — so the assertion above is about the flags rather than about a slice
+     that happened to agree with them. */
+  const unflagged = drawn(repoFixture([]));
+  assert.deepEqual(
+    unflagged.rows.map((row) => row.link.text),
+    ['r00', 'r01', 'r02', 'r03', 'r04', 'r05', 'r06'],
+    'a payload with no pinned flag must fall back to the most recent by push'
+  );
+  // ...and it says nothing: there is no pinned set for a row to be latest
+  // beside, so no row is marked.
+  assert.deepEqual(unflagged.rows.filter((row) => row.chip !== undefined), []);
+});
+
+test('the pinned rule never pads, never overflows the pair, and never conjures a row', () => {
+  const now = Date.parse('2026-01-12T12:00:00Z');
+  /* FEWER THAN SIX PINNED — which is also what a pinned PRIVATE repository
+     looks like from here: the wire carries only public repositories, so a
+     pinned private one is simply not in the answer. The table shows what
+     exists plus the latest and pads nothing. */
+  const three = drawn(repoFixture(['r02', 'r04', 'r06']));
+  assert.deepEqual(three.rows.map((row) => row.link.text), ['r00', 'r02', 'r04', 'r06']);
+  assert.deepEqual(three.rows.filter((row) => row.chip !== undefined).map((row) => row.link.text), ['r00']);
+  /* A NAME NOBODY SERVED cannot become a row. The flag lives ON a row, so the
+     only repositories the selection can choose from are the ones the payload
+     carried — here, three of them, one of which is flagged. */
+  const short = drawn([
+    { name: 'kept', description: 'x', stars: 1, pushedAt: '2026-01-10T00:00:00Z', pinned: true },
+    { name: 'newest', description: 'x', stars: 1, pushedAt: '2026-01-11T00:00:00Z' },
+    { name: 'older', description: 'x', stars: 1, pushedAt: '2026-01-02T00:00:00Z' }
+  ]);
+  assert.deepEqual(short.rows.map((row) => row.link.text), ['newest', 'kept']);
+  assert.equal(short.rows[0].chip, latestRowChip);
+  /* MORE PINNED THAN THE PAIR RESERVES: the two columns share one height, so
+     the table can never draw more rows than the log holds open. */
+  const many = drawn(repoFixture(['r00', 'r01', 'r02', 'r03', 'r04', 'r05', 'r06', 'r07', 'r08']));
+  assert.equal(many.rows.length, shownProjectRows);
+  assert.deepEqual(many.rows.map((row) => row.link.text), ['r00', 'r01', 'r02', 'r03', 'r04', 'r05', 'r06']);
+  /* EVERY DRAWN ROW PINNED: the repositories outside the set are all older
+     than the seven the pair holds, so nothing inside the table wears the chip
+     rather than the last row wearing it by accident. */
+  assert.deepEqual(many.rows.filter((row) => row.chip !== undefined), []);
+  /* A TIE between two pushes is resolved by the payload's own order rather
+     than by chance: both instants are equal, the sort is stable, and the row
+     the payload listed first is the latest. */
+  const tied = projectTableProps(
+    projectsPanel([
+      { name: 'pinned-one', description: 'x', stars: 1, pushedAt: '2026-01-05T00:00:00Z', pinned: true },
+      { name: 'tie-first', description: 'x', stars: 1, pushedAt: '2026-01-09T00:00:00Z' },
+      { name: 'tie-second', description: 'x', stars: 1, pushedAt: '2026-01-09T00:00:00Z' }
+    ]),
+    now
+  );
+  /* ONE non-pinned row, not both halves of the tie: `tie-second` is as recent
+     as `tie-first` and is still outside the table, because "the one most
+     recently pushed outside the pinned set" is one row however close the next
+     one is. */
+  assert.deepEqual(tied.rows.map((row) => row.link.text), ['tie-first', 'pinned-one']);
+  assert.deepEqual(
+    tied.rows.filter((row) => row.chip !== undefined).map((row) => row.link.text),
+    ['tie-first'],
+    'a tie must mark the row the payload listed first, not both and not neither'
+  );
+  /* A NON-BOOLEAN FLAG is drift and refuses the whole payload — the captured
+     face renders instead, which is the fail-closed direction issue 281 chose
+     for every other field of this row. */
+  const hostile = projectTableProps(
+    projectsPanel([{ name: 'kept', description: 'x', stars: 1, pushedAt: '2026-01-10T00:00:00Z', pinned: 'yes' }]),
+    now
+  );
+  assert.deepEqual(
+    hostile.rows.map((row) => row.link.text),
+    projects
+      .toSorted((left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt))
+      .slice(0, shownProjectRows)
+      .map((project) => project.name),
+    'a non-boolean pinned flag was admitted instead of refusing the payload'
+  );
+  // A flag that is merely ABSENT is not drift: that is the pre-issue-317 wire,
+  // and it renders exactly as it always did.
+  assert.equal(drawn(repoFixture([])).rows.length, shownProjectRows);
+});
+
+/* ONE HEAD ROW, TWO PANELS, ONE LINE. The paired section has a single reserved
+ * head and two envelopes behind it, so the note has to choose — and the choice
+ * is not arbitrary: the sheet opens with the repositories, so their staleness
+ * is what the head describes, and the contributions panel's own line is the
+ * fallback for exactly the case where the table has nothing to say. Without
+ * the fallback a wedged contributions panel would be silent while its column
+ * quietly stopped advancing; without the precedence, two caveats would compete
+ * for one row. */
+test('the sheet’s one head line is the table’s, and the log’s when the table has none', () => {
+  const now = new Date('2026-09-11T12:00:00Z');
+  const projects = {
+    schema: 'panel/v1',
+    id: 'coding-projects',
+    kind: 'coding-projects/v2',
+    title: 'Coding Projects',
+    generatedAt: '2026-09-11T11:59:00Z',
+    status: 'ok',
+    data: { repos: [{ name: 'kept', description: 'x', stars: 1, pushedAt: '2026-09-11T09:00:00Z' }] }
+  };
+  const stalledActivity = {
+    schema: 'panel/v1',
+    id: activityPanelId,
+    kind: 'vcs-activity/v1',
+    title: 'Fixture Activity',
+    status: 'stale',
+    generatedAt: '2026-08-28T00:12:00Z',
+    data: { ...goodActivity, endDate: '2026-08-28' }
+  };
+  // A fresh table and a stalled log: the head carries the log's line, because
+  // the table has none to carry.
+  const fromLog = projectsCommitsProps([projects, stalledActivity], now);
+  assert.equal(fromLog.staleNote, 'data through Aug 28, 2026 · last capture 14d ago');
+  // A stale TABLE outranks it: one row, one caveat, and it is the one about
+  // what the sheet opens with.
+  const fromTable = projectsCommitsProps(
+    [{ ...projects, status: 'stale', generatedAt: '2026-09-11T07:00:00Z' }, stalledActivity],
+    now
+  );
+  assert.equal(fromTable.staleNote, 'stale · data as of 5h ago');
+  // Both fresh: no line at all, which is what keeps this from being the
+  // retired freshness badge.
+  assert.equal(
+    projectsCommitsProps([projects, { ...stalledActivity, status: 'ok', generatedAt: '2026-09-11T11:00:00Z', data: { ...goodActivity, endDate: '2026-09-11' } }], now)
+      .staleNote,
+    undefined
+  );
+});
+
+/* THE SHORT IDENTITY IS NOT RENDERED ON A PHONE (owner directive, 2026-09-11:
+ * a commit row is two lines there, and a seven-character hash has no room on
+ * either). Absent from the DOM rather than hidden — a `display: none` cell is
+ * still an element a screen reader can be walked into — which is why the
+ * decision is made in the markup against a media seam rather than in CSS. The
+ * rendered proof at both widths is the browser lane; what is pinned here is
+ * that the decision is structural at all. */
+test('the commit row renders its short identity only where there is a cell for it', () => {
+  assert.match(
+    spread,
+    /\{#if wide\}<span class="commit-mark">\{row\.mark\}<\/span>\{\/if\}/,
+    'the short identity is unconditional again; a phone reader hears a hash their row does not show'
+  );
+  assert.doesNotMatch(
+    sheet,
+    /\.commit-mark \{\s*display: none/,
+    'the identity is hidden by CSS again, which leaves it in the accessibility tree'
+  );
+  // The decision reads the shared seam rather than a literal of its own.
+  assert.match(spread, /import \{ browserMedia, spreadMediaQuery, watchMedia \} from '\.\.\/columnWidth'/);
+  assert.match(spread, /let wide = \$state\(browserMedia\(spreadMediaQuery\)\.matches\)/);
+  assert.match(spread, /\$effect\(\(\) => watchMedia\(browserMedia, spreadMediaQuery, \(matches\) => \(wide = matches\)\)\)/);
+  // And the stylesheet asks the same number the script does.
+  assert.match(sheet, new RegExp(`@media \\(max-width: ${spreadFromRem - 0.0625}rem\\)`));
 });
 
 test('every entry-row href is built by the validated helpers, and the component builds none', () => {
@@ -820,7 +1068,8 @@ test('every entry-row href is built by the validated helpers, and the component 
   // is consulted only when no valid sha exists for the same row.
   const validSha = '0123456789abcdef0123456789abcdef01234567';
   const hostileSha = `${validSha.slice(0, 33)}"onmouseover="x`;
-  const hostile = commitLogProps([
+  const hostile = projectsCommitsProps([
+    null,
     {
       schema: 'panel/v1',
       id: activityPanelId,
@@ -837,10 +1086,9 @@ test('every entry-row href is built by the validated helpers, and the component 
           { repo: 'naranjo.online', sha: hostileSha, message: 'release (#152)', at: '2026-08-11T00:12:00Z' }
         ]
       }
-    },
-    null
+    }
   ]);
-  const [badRepo, noReference, referenced, shaOnly, badSha] = hostile.rows;
+  const [badRepo, noReference, referenced, shaOnly, badSha] = hostile.logRows;
   assert.equal(badRepo.source.href, null, 'a hostile repo must never become an href');
   assert.equal(badRepo.source.text, 'evil.com/x', 'the text still renders, as text');
   assert.equal(badRepo.title.href, null, 'a hostile repo poisons the entry link too');
@@ -869,40 +1117,49 @@ test('every entry-row href is built by the validated helpers, and the component 
   assert.equal(badSha.title.href, `${projectHost}/naranjo.online/issues/152`);
   assert.doesNotMatch(badSha.title.href, /onmouseover/);
 
-  // The structural half: the generic component renders the href it is handed
-  // or renders text — it never assembles one. Any interpolation beyond the
-  // two data fields would fail these pins.
-  const hrefs = [...component.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression);
+  /* The structural half: the generic component renders the href it is handed
+     or renders text — it never assembles one. Any interpolation beyond the
+     data fields would fail these pins. The component is LedgerSpread since the
+     sheet paired the columns (owner design decision, 2026-09-11, issue 318),
+     and it renders THREE validated hrefs rather than two: the commit row's
+     two, and the repository row's own — every one of them built and labelled
+     by an adapter, none of them assembled here. */
+  const hrefs = [...spread.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression);
   assert.deepEqual(
     hrefs.sort(),
-    ['row.source.href', 'row.title.href'],
-    'the component may render exactly the two validated hrefs and construct neither'
+    ['row.link.href', 'row.source.href', 'row.title.href'],
+    'the component may render exactly the validated hrefs and construct none'
   );
-  assert.match(component, /\{#if row\.source\.href\}/);
-  assert.match(component, /<span class="commit-source-text">\{row\.source\.text\}<\/span>/);
-  assert.match(component, /\{#if row\.title\.href\}/);
-  assert.match(component, /<span class="commit-title-text">\{row\.title\.text\}<\/span>/);
+  assert.match(spread, /\{#if row\.source\.href\}/);
+  assert.match(spread, /<span class="commit-source-text">\{row\.source\.text\}<\/span>/);
+  assert.match(spread, /\{#if row\.title\.href\}/);
+  assert.match(spread, /<span class="commit-title-text">\{row\.title\.text\}<\/span>/);
   /* The short identity is DISPLAY-ONLY and the adapter decides it: a row whose
      identity this module cannot vouch for prints the honest dash rather than a
      truncated guess, and the component prints whatever it is handed. */
   assert.equal(shaOnly.mark, validSha.slice(0, 7));
   assert.equal(badSha.mark, '—');
-  assert.match(component, /<span class="commit-mark">\{row\.mark\}<\/span>/);
-  // Text, never markup: this component must never reach for {@html} anywhere,
-  // now that two of its fields are payload-controlled link targets.
-  assert.doesNotMatch(component, /\{@html/, 'entry fields must never render as markup');
-  // Both outbound links close the same way: a new tab that says so, and the
+  assert.match(spread, /<span class="commit-mark">\{row\.mark\}<\/span>/);
+  // Text, never markup: neither component may reach for {@html} anywhere, now
+  // that several of their fields are payload-controlled link targets.
+  for (const [name, source] of Object.entries({ component, spread })) {
+    assert.doesNotMatch(source, /\{@html/, `${name} renders entry fields as markup`);
+  }
+  // Every outbound link closes the same way: a new tab that says so, and the
   // two attributes the threat model requires on anything leaving the page.
-  const targetBlank = component.match(/target="_blank"/g) ?? [];
-  const relSafe = component.match(/rel="noopener noreferrer"/g) ?? [];
-  assert.equal(targetBlank.length, 2, 'both the source and the title anchor must open a new tab');
-  assert.equal(relSafe.length, 2, 'both anchors must carry rel="noopener noreferrer"');
-  assert.match(component, /aria-label=\{row\.source\.label\}/);
-  assert.match(component, /aria-label=\{row\.title\.label\}/);
+  // THREE of them on this sheet — the repository, the commit's repository and
+  // the commit's subject.
+  const targetBlank = spread.match(/target="_blank"/g) ?? [];
+  const relSafe = spread.match(/rel="noopener noreferrer"/g) ?? [];
+  assert.equal(targetBlank.length, 3, 'every outbound anchor on the sheet must open a new tab');
+  assert.equal(relSafe.length, 3, 'every outbound anchor must carry rel="noopener noreferrer"');
+  assert.match(spread, /aria-label=\{row\.source\.label\}/);
+  assert.match(spread, /aria-label=\{row\.title\.label\}/);
+  assert.match(spread, /aria-label=\{row\.link\.label\}/);
 });
 
 test('activity sources stay local-origin and provider-neutral', () => {
-  for (const [name, source] of Object.entries({ component, helpers, grid })) {
+  for (const [name, source] of Object.entries({ component, spread, helpers, grid })) {
     // Protocol-relative origins still fail this; a line comment no longer
     // does. The lookahead and the reasoning behind it are documented once, on
     // the same sweep in tests/experience.test.mjs.
@@ -1001,26 +1258,32 @@ test('the gutter is published before the application mounts, so no grid is re-la
 test('the manifest mounts the calendar block exactly once, bound to both its panels', () => {
   /* The fences retired with the table-of-contents App (issue 165): the
      manifest IS the mount list, so the pin lives on it. What moved (owner
-     directive, 2026-09-03, issue 287) is WHICH section the calendar is in and
-     how many panels its block reads: the contribution calendar leads its own
-     COMMITS section now, and the block binds two panels, because the segmented
-     control cycles the same grid between the contributions and each token
-     source's daily series. Exactly one block module does that binding, and the
-     section lists it exactly once. */
-  const importLines = manifest.match(/^import \{ commitLog \} from '\.\/lib\/blocks\/commitLog\.ts';$/gm);
-  assert.equal(importLines?.length, 1, 'exactly one import line for the commits block');
+     design decision, 2026-09-11, issue 318) is WHICH section the calendar is
+     in: it led a COMMITS section of its own since issue 287 and is a TRACKER
+     now, between the token board and the game ticker. What did NOT move is how
+     many panels its block reads — two, because the segmented control cycles
+     the same grid between the contributions and each token source's daily
+     series. Exactly one block module does that binding, and the stack lists it
+     exactly once. */
+  const importLines = manifest.match(
+    /^import \{ contributionCalendar \} from '\.\/lib\/blocks\/contributionCalendar\.ts';$/gm
+  );
+  assert.equal(importLines?.length, 1, 'exactly one import line for the calendar block');
   const body = manifest.replace(/^import[^\n]*\n/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.equal(
-    (body.match(/\bcommitLog\b/g) ?? []).length,
+    (body.match(/\bcontributionCalendar\b/g) ?? []).length,
     1,
-    'the manifest lists the commits block exactly once'
+    'the manifest lists the calendar block exactly once'
   );
   assert.match(
     manifest,
-    /section\('commits', 'Commits', \[commitLog\], \{ mark: '[a-z-]+', layout: 'stack' \}\)/,
-    'the commits section lists the calendar block on its own'
+    /section\('trackers', 'Trackers', \[tokenBoard, contributionCalendar, bossTicker\], \{/,
+    'the calendar sits between the board and the ticker in the trackers stack'
   );
-  assert.match(binding, /panelsBlock\(\s*'commit-log',\s*CommitLog,\s*commitPanelIds,/);
+  assert.match(
+    binding,
+    /panelsBlock\(\s*'contribution-calendar',\s*ContributionCalendar,\s*calendarPanelIds,/
+  );
   // The ids the binding declares are the ids the adapter unpacks, in order,
   // named once so the two cannot disagree.
   assert.match(helpers, /export const activityPanelId = 'vcs-activity'/);

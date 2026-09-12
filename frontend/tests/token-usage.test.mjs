@@ -40,7 +40,7 @@ import {
   windowTerm
 } from '../src/lib/token-usage.ts';
 import { scrubReading } from '../src/lib/blocks.ts';
-import { commitLogProps, tokenSetLabel } from '../src/lib/commits.ts';
+import { contributionCalendarProps, tokenSetLabel } from '../src/lib/commits.ts';
 import {
   formatMagnitude,
   formatMagnitudeFixed,
@@ -66,7 +66,7 @@ import { sparkBox, sparkIndexAt, sparkInset, sparklinePath, sparkPointAt } from 
  * they must be pinned. */
 const [component, commits, helper, manifest, binding, sheet, chart] = await Promise.all([
   readFile(new URL('../src/lib/components/LedgerBoard.svelte', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/components/CommitLog.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/components/ContributionCalendar.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/token-usage.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/blocks/tokenBoard.ts', import.meta.url), 'utf8'),
@@ -934,13 +934,13 @@ describe('the board of cards: live surface', () => {
     // The adapter half, executed, and BOTH directions, because half of this
     // is not a guard: an adapter that offered no set to anybody would satisfy
     // the first half perfectly and draw nothing at all.
-    const seriesless = commitLogProps(tokenOnly({ sources: [{ label: 's', windows: [] }] }));
+    const seriesless = contributionCalendarProps(tokenOnly({ sources: [{ label: 's', windows: [] }] }));
     assert.equal(
       seriesless.sets.find((set) => set.key === 's'),
       undefined,
       'a source with no daily record was offered a segment over an empty grid'
     );
-    const empty = commitLogProps(
+    const empty = contributionCalendarProps(
       tokenOnly({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [] } }] })
     );
     assert.equal(
@@ -965,7 +965,7 @@ describe('the board of cards: live surface', () => {
       ).cards.some((card) => card.label.toLowerCase().includes('s')),
       'a source with no series lost its card as well as its calendar'
     );
-    const drawn = commitLogProps(
+    const drawn = contributionCalendarProps(
       tokenOnly({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [1, 2, 3] } }] })
     );
     const set = drawn.sets.find((set) => set.key === 's');
@@ -992,7 +992,7 @@ describe('the board of cards: live surface', () => {
        week that ends the contribution window ends every window. A source that
        stopped capturing early would otherwise draw a window silently offset
        from the one above it. */
-    const props = commitLogProps(
+    const props = contributionCalendarProps(
       tokenOnly({
         sources: [
           { label: 'a', windows: [], series: { startDate: '2026-08-01', totals: [1, 2, 3] } },

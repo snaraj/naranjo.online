@@ -337,15 +337,14 @@ export function commitShaLinkLabel(message: string, sha: string): string {
  * admission, the calendar's cells, every validated destination, and the words
  * for each honest empty state — stays here, beside the payload it describes,
  * and is imported from there.
+ *
+ * The reserve the log's box was computed from left this module entirely
+ * (owner design decision, 2026-09-11, issue 318). The log is the right-hand
+ * column of the sheet's paired section now and reserves exactly as many rows
+ * as the table beside it shows, so the number is `shownProjectRows` in
+ * lib/projects.ts — one constant for a height two columns share, rather than
+ * a second one here free to disagree with it.
  * ------------------------------------------------------------------------ */
-
-/* How many rows the log RESERVES, and the number the box's height is computed
- * from. Raised from five to ten by the owner's ruling (2026-09-11, issue
- * #315): the log lists every contribution now, and five rows of it was one
- * morning. Rows past this one still render — the box scrolls — so this is the
- * reserve rather than a cap, and the wire's own cap (maxServedCommits) is what
- * bounds how many there can be. */
-export const shownEntryRows = 10;
 
 /* contributionsLabel words the headline figure against the coverage the
  * payload declared, and it exists because the two producers count different

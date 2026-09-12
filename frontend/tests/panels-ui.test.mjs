@@ -18,7 +18,7 @@ import {
   tally,
   unrankedLabel,
 } from '../src/lib/bossLog.ts';
-import { commitLogProps } from '../src/lib/commits.ts';
+import { contributionCalendarProps } from '../src/lib/commits.ts';
 import { unavailablePanel } from '../src/lib/panels.ts';
 import { projects } from '../src/lib/projects.ts';
 
@@ -92,7 +92,7 @@ const [
   read('../vite.config.ts'),
   read('../src/lib/components/ContributionGrid.svelte'),
   read('../src/lib/grid.ts'),
-  read('../src/lib/components/CommitLog.svelte'),
+  read('../src/lib/components/ContributionCalendar.svelte'),
   read('../src/lib/components/LedgerBoard.svelte'),
   read('../src/styles.css'),
   read('../src/lib/ThemeMenu.svelte'),
@@ -103,12 +103,16 @@ const [
   read('../src/lib/blocks/bossTicker.ts'),
 ]);
 
+/* The sheet's paired section (owner design decision, 2026-09-11, issue 318):
+ * the component that draws the repositories table beside the commit log. */
+const ledgerSpread = await read('../src/lib/components/LedgerSpread.svelte');
+
 /* The two sibling binding modules, read beside the one above so the
  * stays-current pin can sweep all three panel bindings. */
 const bindingSourceCache = {
-  commits: await read('../src/lib/blocks/commitLog.ts'),
+  commits: await read('../src/lib/blocks/contributionCalendar.ts'),
   board: await read('../src/lib/blocks/tokenBoard.ts'),
-  projects: await read('../src/lib/blocks/codingProjects.ts'),
+  projects: await read('../src/lib/blocks/projectsCommits.ts'),
 };
 
 /* The adapter module beside the boss-log data, for the account-privacy pin. */
@@ -121,23 +125,34 @@ const commitsAdapter = await read('../src/lib/commits.ts');
 // Like the experience suite, these are structural regex pins over source:
 // they hold the shapes the owner specified — chrome values, grid density,
 // fail-soft rendering — while leaving copy and styling free to evolve.
-test('the manifest mounts exactly the two tracker blocks, in the stacked order', () => {
+test('the manifest mounts exactly the three tracker blocks, in the stacked order', () => {
   /* The fences retired with the table-of-contents App (issue 165): the
      manifest IS the mount list, one ordered entry per block, and the page
      renders it verbatim.
 
-     The section holds TWO blocks now (owner directive, 2026-09-03, issue 287):
-     the version-control calendar left to lead its own COMMITS section, where a
-     segmented control cycles it against each token source's daily series, and
-     what stays here is what is still a tracker once the calendar has moved —
-     the board of token cards and the boss ticker, in that order. */
+     The section holds THREE blocks again (owner design decision, 2026-09-11,
+     issue 318): the calendar left for its own COMMITS section at issue 287 and
+     has come back between the board and the ticker, because a year of daily
+     counts a reader cycles between three sources is exactly what the two
+     around it are — a tracker. The owner named the order: the token cards,
+     then the calendar, then the game ticker. */
   assert.match(
     manifest,
-    /section\('trackers', 'Trackers', \[tokenBoard, bossTicker\], \{ mark: '[a-z-]+', layout: 'stack' \}\)/,
+    /section\('trackers', 'Trackers', \[tokenBoard, contributionCalendar, bossTicker\], \{\s*mark: '[a-z-]+',\s*layout: 'stack'\s*\}\)/,
     'the trackers section must list exactly one entry per panel, in the order the page stacks them'
   );
-  // ...and the calendar is mounted exactly once, in its own section.
-  assert.match(manifest, /section\('commits', 'Commits', \[commitLog\], \{ mark: '[a-z-]+', layout: 'stack' \}\)/);
+  // ...and the calendar is mounted exactly once, here and nowhere else.
+  const mounts = manifest.slice(manifest.indexOf('export const page'));
+  assert.equal(
+    (mounts.match(/contributionCalendar/g) ?? []).length,
+    1,
+    'the calendar block is mounted more than once, or not at all'
+  );
+  assert.doesNotMatch(
+    manifest,
+    /section\('commits'/,
+    'the commits section came back; the sheet pairs it with Projects now (issue 318)'
+  );
   // The page renders the manifest rather than spelling its own copy of it. The
   // ordinal it passes is the manifest's own position, so a section moved there
   // renumbers itself (owner directive, 2026-09-03, issue 287) — through the
@@ -306,7 +321,12 @@ test('no card announces its own age, and none keeps a control', () => {
   assert.equal(failed.emptyNote, bossLogUnavailableNote);
   assert.equal(failed.status, 'unavailable');
   assert.match(ticker, /\{#if items\.length === 0\}\s*<p class="ticker-note">\{emptyNote\}<\/p>/);
-  assert.match(commitLog, /<p class="commit-note">\{rowsNote\}<\/p>/);
+  /* The log's own honest empty line moved with the log (owner design decision,
+     2026-09-11, issue 318): the rows are the sheet's right-hand column now, so
+     the note that stands in for them is rendered there, under the same class,
+     from the same adapter word. */
+  assert.match(ledgerSpread, /<p class="commit-note">\{logNote\}<\/p>/);
+  assert.match(ledgerSpread, /<p class="table-note">\{emptyNote\}<\/p>/);
   assert.match(ledgerBoard, /<p class="board-note">\{emptyNote\}<\/p>/);
   // No per-card control, and no panel hands one up any more.
   assert.doesNotMatch(shell, /panel-refresh|<button/, 'a card grew its own refresh control back');
@@ -849,7 +869,7 @@ test('the panel heading is data the origin serves, not a string in either tree',
   // reads it there — but the adapter hands the shell none, whatever arrives,
   // so no hardcoded heading can creep back in through the fallback path.
   assert.equal(
-    commitLogProps([
+    contributionCalendarProps([
       {
         schema: 'panel/v1',
         id: 'vcs-activity',
@@ -863,7 +883,7 @@ test('the panel heading is data the origin serves, not a string in either tree',
     undefined,
     'the commit block wears the envelope title again'
   );
-  assert.equal(commitLogProps([null, null]).title, undefined);
+  assert.equal(contributionCalendarProps([null, null]).title, undefined);
   /* The boss panel's heading is the same arrangement: the envelope's own
      title is the panel head over the strip, and the strip's lead prints no
      copy of it (owner directive, 2026-09-04, issue 292 — the lead's name and
@@ -926,25 +946,30 @@ test('every mounted panel stays current instead of painting once', () => {
     /\bloadPanel\b/,
     'the block host reads an envelope directly; the one-shot read is the bug'
   );
-  for (const [name, source] of Object.entries({ ticker, commitLog, ledgerBoard })) {
+  for (const [name, source] of Object.entries({ ticker, commitLog, ledgerBoard, ledgerSpread })) {
     assert.doesNotMatch(
       source,
       /\bloadPanel\b|\bwatchPanel\b|\bfetch\(/,
       `${name} reads the wire itself; the block host owns the subscription`
     );
   }
-  // And every tracker block is a panel binding, so all three ride that host.
+  // And every tracker block is a panel binding, so all of them ride that host.
   for (const [name, source] of Object.entries({
     bossBinding,
     boardBinding: bindingSourceCache.board,
-    projectsBinding: bindingSourceCache.projects,
   })) {
     assert.match(source, /panelBlock\(/, `${name} no longer binds through the panel host`);
   }
-  /* The commits block reads TWO panels (owner directive, 2026-09-03, issue
-     287) and rides the same host to do it: panelsBlock is one subscription per
-     id through the identical watchPanel, never a second retrieval path. */
-  assert.match(bindingSourceCache.commits, /panelsBlock\(/, 'the commits block no longer binds through the panel host');
+  /* TWO blocks read SEVERAL panels each and ride the same host to do it
+     (owner directive, 2026-09-03, issue 287; the sheet's paired section, owner
+     design decision 2026-09-11, issue 318): panelsBlock is one subscription
+     per id through the identical watchPanel, never a second retrieval path. */
+  for (const [name, source] of Object.entries({
+    calendarBinding: bindingSourceCache.commits,
+    projectsBinding: bindingSourceCache.projects,
+  })) {
+    assert.match(source, /panelsBlock\(/, `${name} no longer binds through the panel host`);
+  }
   assert.match(blockHost, /watchPanel\(id, \(loaded\) => \{/, 'the multi-panel branch no longer watches through the shared host');
 });
 
@@ -1224,7 +1249,7 @@ test('a source with no series is offered no segment, while the calendar keeps it
   // contributions calendar is one of them and its payload is genuinely in
   // flight — that reserve is measured in the rendering lanes.
   assert.match(commitLog, /\{#if sets\.length > 0 && active\}/);
-  const { sets } = commitLogProps([
+  const { sets } = contributionCalendarProps([
     null,
     {
       schema: 'panel/v1',
@@ -1242,7 +1267,7 @@ test('a source with no series is offered no segment, while the calendar keeps it
   );
   /* The other direction, so this is a guard rather than a way to draw
      nothing: a source that DOES publish days contributes its set. */
-  const { sets: drawn } = commitLogProps([
+  const { sets: drawn } = contributionCalendarProps([
     null,
     {
       schema: 'panel/v1',

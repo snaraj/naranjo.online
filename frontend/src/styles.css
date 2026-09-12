@@ -723,6 +723,17 @@
   --commit-row-height: 2.75rem;
   --ledger-row-pad: 0.875rem;
   --ledger-column-gap: 1.5rem;
+  /* THE PAIRED SECTION'S TWO GAPS (owner design decision, 2026-09-11, issue
+     318). The first is the air between the sheet's two columns — the one
+     length that says "these are two columns of one sheet" rather than two
+     sheets. The second is what a row spends between its own cells INSIDE such
+     a column, and it is smaller than --ledger-column-gap for an arithmetic
+     reason rather than a visual one: a full-width row can afford 1.5rem five
+     times, and a row in half a sheet cannot — four of them is 96px of the
+     ~324px a column has at the width the pair first appears, which is the
+     name track spent on white space. */
+  --ledger-spread-gap: 2.5rem;
+  --ledger-cell-gap: 0.75rem;
   /* The employer monogram's square (owner design decision, 2026-09-11, issue
      313): a hairline box the size of the ledger's other row furniture, not a
      logo. Its own token because the row grid declares it as a TRACK and the
@@ -2348,7 +2359,33 @@ h1 {
   color: var(--ledger-muted);
 }
 
-/* --- 02 / the ruled table ------------------------------------------------ */
+/* --- 02 / the paired columns: the ruled table and the ruled log ----------- */
+
+/* THE SHEET'S TWO COLUMNS (owner design decision, 2026-09-11, issue 318,
+   option B on the design canvas): the repositories on the left, every commit
+   on every repository on the right, one gap between them and nothing else
+   dividing them — they are two columns of one sheet, not two cards.
+
+   BOTH TRACKS ARE minmax(0, 1fr), which is the no-dead-space rule and the
+   no-sideways-scroll floor in one declaration: equal halves fill the sheet to
+   its right edge at every width, and a zero minimum lets each half be exactly
+   the track it was given rather than the width of its widest unbreakable row.
+   A bare `1fr` would take its minimum from its content and push the document
+   sideways the moment a reader drags the column in. */
+.ledger-spread {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 var(--ledger-spread-gap);
+}
+
+/* A column is its own stack of rows, and it declares the same zero minimum for
+   the same reason its parent track does. */
+.spread-column {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  min-inline-size: 0;
+}
 
 /* The four figure tracks are sized to the LONGEST value each column can
    print, not to a number somebody liked: a released version is the widest of
@@ -2357,21 +2394,40 @@ h1 {
    track narrower than its own content is a numeral that ellipsizes, which is a
    wrong figure rather than a tight one (issue 317).
 
-   THEIR SUM IS FIXED AT 20rem, and that is a page-level bound rather than an
-   aesthetic one. The row's fixed width — 15rem of name, five column gaps and
-   these four — is what the reading column can be narrowed to before the TABLE
-   pushes the document sideways: the column handle reaches 288px, the desktop
-   track list still applies at that column width (the restack is a viewport
-   decision, not a column one), and 680px of row is exactly what fits the
-   narrowest viewport the lanes drive. Widening one figure track means
-   narrowing another, or measuring the page's minimum again. */
+   EVERY TRACK IS A minmax NOW, and that is what lets the table live in half a
+   sheet (issue 318). A fixed track overflows its box when the box is smaller
+   than the track list; a `minmax(0, …)` track takes its stated width wherever
+   there is room for it — which is every viewport the lanes drive — and shrinks
+   below it rather than pushing the page sideways when a reader drags the
+   reading column in. The alignment claim survives the shrink because every row
+   is in the SAME container: all of them shrink by the same amount, so a figure
+   still sits where the table put it rather than where its own length pushed
+   it (issue 188's ruling).
+
+   The description column is gone with the same directive: a half-sheet column
+   holds a name and four figures, and a repository's own words are one click
+   away on the row's own link. */
 .table-head,
 .table-row {
   display: grid;
-  grid-template-columns: 15rem minmax(0, 1fr) 4.5rem 6rem 4rem 5.5rem;
+  grid-template-columns:
+    minmax(0, 1fr) minmax(0, 4.5rem) minmax(0, 6rem) minmax(0, 4rem) minmax(0, 5.5rem);
   align-items: center;
-  gap: var(--ledger-column-gap);
+  gap: var(--ledger-cell-gap);
   border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
+}
+
+/* The log column's head is ONE cell over the whole column rather than five
+   over the table's tracks: the table beside it names five columns because a
+   reader has to know which figure is which, and this one names the whole
+   stream, which is a different kind of statement (issue 315, written hashless
+   because three digits after a hash read as a hex color to this sheet's own
+   color sweep: it is every repository's record, not a selection). It reuses
+   `.table-head` for the rule
+   and the type and overrides only the track list, so the two heads are drawn
+   at one height by one rule rather than by two that must agree. */
+.spread-log-head {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .table-head {
@@ -2408,12 +2464,36 @@ h1 {
   text-align: end;
 }
 
+/* The name and its chip are ONE cell, so the chip sits against the name it
+   qualifies rather than in a track of its own that every other row would leave
+   empty. The cell is the row's flexible track, so a long repository name
+   ellipsizes inside it — and the chip does not, because it is the shorter of
+   the two and the one that says why the row is here at all.
+
+   The cell CLIPS rather than letting its contents decide its width, and the
+   link inside it keeps its own 44px floor: a repository whose name is shorter
+   than a finger is still a control a finger has to hit (the touch floor,
+   measured at 1280px where "theme" drew a 42px box), and a name longer than
+   the column still has to ellipsize inside it rather than push the sheet. The
+   floor is a MINIMUM, so the two are not in tension — the link shrinks to the
+   cell and stops at the floor. */
+.table-name-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--icon-gap);
+  min-inline-size: 0;
+  overflow: hidden;
+}
+
 .table-link,
 .table-name {
   display: inline-flex;
   align-items: center;
   min-inline-size: var(--control-target);
   min-block-size: var(--control-target);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-family: var(--font-mono);
   font-size: var(--ledger-body-size);
   font-weight: 500;
@@ -2428,13 +2508,20 @@ h1 {
   text-decoration: underline;
 }
 
-.table-summary {
-  min-inline-size: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-family: var(--font-sans);
-  font-size: var(--ledger-body-size);
+/* THE `latest` CHIP (owner design decision, 2026-09-11, issue 318): the sheet's
+   mono label in a hairline box, muted, and deliberately in NO colour of its
+   own — the page spends its one mark on text, and a chip that said "this row is
+   different" with a hue would be encoding a value by colour alone, which the
+   dataviz floor forbids. The word IS the channel. */
+.table-chip {
+  flex: none;
+  padding: 0.0625rem 0.3125rem;
+  border: var(--ledger-hairline) solid var(--ledger-rule);
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+  color: var(--ledger-muted);
 }
 
 /* THE MARK SLOT IS FIXED AND THE FIGURE FILLS THE REST (owner directive,
@@ -2577,6 +2664,14 @@ h1 {
    adapter's own constant — so the box and the number of rows it holds cannot
    drift apart.
 
+   SEVEN, because the table beside it shows seven (owner design decision,
+   2026-09-11, issue 318: "seven rows ... to match the seven repository rows").
+   The two columns of the paired section are one picture and the reserve is the
+   one place that pairing is expressible as a length — so the constant this
+   recomputes from is `shownProjectRows` in lib/projects.ts, the SAME number
+   the table selects its rows with, rather than a second one for this box to
+   disagree with.
+
    IT SCROLLS FOR THE REST (owner directive, 2026-09-11, issue 315 — written
    hashless because three digits after a hash read as a hex color to the
    stylesheet's own color sweep). The log lists every contribution now, which
@@ -2598,15 +2693,16 @@ h1 {
    no-reading-hints ruling): the scrollbar and the clipped row are the
    affordance. */
 .commit-rows {
-  block-size: calc(10 * var(--commit-row-height));
+  block-size: calc(7 * var(--commit-row-height));
   overflow-y: auto;
 }
 
 .commit-row {
   display: grid;
-  grid-template-columns: 5.625rem 14.375rem minmax(0, 1fr) 5rem;
+  grid-template-columns:
+    minmax(0, 4rem) minmax(0, 9rem) minmax(0, 1fr) minmax(0, 4rem);
   align-items: center;
-  gap: var(--ledger-column-gap);
+  gap: var(--ledger-cell-gap);
   block-size: var(--commit-row-height);
   min-block-size: var(--control-target);
   /* THE RULE UNDER A ROW IS AN INSET SHADOW, never a border (owner directive,
@@ -2683,7 +2779,9 @@ h1 {
    the touch-floor sweep reads a class's own size declarations and a
    `min-inline-size: 0` on a link class is a control declaring itself smaller
    than the floor — true of the layout box, false of the control, and
-   indistinguishable to a walk that can only read the declaration. */
+   indistinguishable to a walk that can only read the declaration. The name
+   cell's own link is deliberately NOT swept in here: it keeps the floor and
+   clips against its cell instead (see .table-name-cell). */
 .commit-row > *,
 .table-row > * {
   min-inline-size: 0;
@@ -3305,63 +3403,51 @@ h1 {
     margin-inline-start: 0;
   }
 
-  .table-head {
+  /* THE COLUMNS STACK, repositories first (owner design decision, 2026-09-11,
+     issue 318). One track, and the gap that separated them side by side now
+     separates them top to bottom — one length, both arrangements. */
+  .ledger-spread {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ledger-spread-gap) 0;
+  }
+
+  /* The TABLE's head row goes: every cell under it repeats its own word, so
+     five marks over a restacked row would be five heads over nothing. The
+     LOG's head stays — it is the only thing separating the stacked commit
+     column from the repositories above it, and it names the whole stream
+     rather than a column of figures. */
+  .table-head:not(.spread-log-head) {
     display: none;
   }
 
-  /* THE RESTACK, WITH EVERY CELL STILL IN A DECLARED TRACK. Three counters
-     placed in ONE grid area are three counters drawn on top of one another —
-     measured at 390px, where only the last of them was legible. So the phone
-     declares its OWN four columns and hands each counter one of them, which
-     keeps issue 188's claim true at this width as well: a figure sits where
-     the table put it, never where its own length pushed it. */
+  /* EXACTLY TWO LINES PER ROW (owner directive, 2026-09-11: "reduce the amount
+     of new lines as much as possible"). The name takes the first line whole,
+     and the row's four figures share the second — three lines became two when
+     the description column left the table with the same directive.
+
+     FOUR EQUAL TRACKS, not four content-sized ones (issue 317). `auto` sized
+     each counter track to the row's own figure, so a row reading 155 drew its
+     neighbours' marks further right than a row reading 15 — the ragged column
+     issue 188 threw out, reaching the marks. Fractions of the row make every
+     row's tracks identical, so a mark sits where the table put it at this
+     width too — the AGE included, which is why all four are fractions rather
+     than three plus a content-sized one: an age track that sized to "3h" on
+     one row and "12mo" on the next moved the three tracks beside it by the
+     difference.
+
+     The four counters are PLACED BY FLOW rather than by named areas: the name
+     cell spans the row, so the auto-placement algorithm puts the four cells
+     after it on the next line, in their own order. A name that spans is one
+     declaration; four areas would be five. */
   .table-row {
-    /* THREE EQUAL TRACKS, not three content-sized ones (issue 317). `auto`
-       sized each counter track to the row's own figure, so a row reading 155
-       drew its neighbours' marks further right than a row reading 15 — the
-       ragged column issue 188 threw out, reaching the marks. Fractions of the
-       row make every row's tracks identical, so a mark sits where the table
-       put it at this width too — the AGE included, which is why all four are
-       fractions rather than three plus a content-sized one: an age track that
-       sized to "3h" on one row and "12mo" on the next moved the three tracks
-       beside it by the difference. */
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    grid-template-areas:
-      'name name name age'
-      'summary summary summary summary'
-      'first second third .';
     align-items: center;
     padding-block: 0.5rem;
     row-gap: 0.125rem;
   }
 
-  .table-link,
-  .table-name {
-    grid-area: name;
-  }
-
-  .table-age {
-    grid-area: age;
-  }
-
-  .table-summary {
-    grid-area: summary;
-  }
-
-  /* The counters are the row's third, fourth and fifth children — the name,
-     the summary, then the cluster — so each is placed by that position. The
-     desktop track list already depends on there being exactly three of them;
-     the pin in tests/sections.test.mjs holds both ends to that number. */
-  .table-count:nth-child(3) {
-    grid-area: first;
-  }
-
-  .table-count:nth-child(4) {
-    grid-area: second;
-  }
-
-  .table-count:nth-child(5) {
-    grid-area: third;
+  .table-name-cell {
+    grid-column: 1 / -1;
   }
 
   /* At this width each counter has a whole track of its own, so the figure
@@ -3410,6 +3496,11 @@ h1 {
     min-block-size: 2.875rem;
   }
 
+  /* A COMMIT ROW IS TWO LINES HERE TOO, and the short identity is not one of
+     them: it is absent from the DOM at this width rather than hidden (see
+     LedgerSpread.svelte — a hidden cell is still something a screen reader can
+     be walked into), so the row declares two tracks and two areas and has
+     nothing left over to place. */
   .commit-row {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
@@ -3433,12 +3524,6 @@ h1 {
   .commit-title,
   .commit-title-text {
     grid-area: title;
-  }
-
-  /* The seven-character mark is the one thing a phone row has no room for; it
-     is display-only, and the row's link still carries the full identity. */
-  .commit-mark {
-    display: none;
   }
 
 }

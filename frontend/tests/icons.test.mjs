@@ -94,10 +94,14 @@ const literalNames = callSites
  * hole. The TypeScript union is what stops any of these compiling wrong; this
  * is the inventory. */
 const dataDrivenNames = {
-  /* The five section marks, beside the labels they stand for. */
-  '../src/page.ts': ['work', 'folder', 'commit', 'chip', 'photo'],
+  /* The four section marks, beside the labels they stand for. The `commit`
+     mark left this list with the section it named (owner design decision,
+     2026-09-11, issue 318) and did not leave the page: the commit column's own
+     ruled head draws it, spelled at its call site in LedgerSpread.svelte, so
+     it is covered by the literal walk above rather than declared here. */
+  '../src/page.ts': ['work', 'folder', 'chip', 'photo'],
   /* The projects table's head marks and its counters' glyphs (issue 317). */
-  '../src/lib/components/LedgerTable.svelte': ['pull', 'tag', 'star', 'clock'],
+  '../src/lib/components/LedgerSpread.svelte': ['pull', 'tag', 'star', 'clock'],
   '../src/lib/projects.ts': ['star', 'pull', 'tag', 'clock'],
   /* The board's title mark and the Sessions card's, decided by the adapter. */
   '../src/lib/token-usage.ts': ['chip', 'sessions'],
@@ -382,8 +386,8 @@ test('a link that is already words grows no trailing mark', () => {
   /* And the three row kinds the ruling names, by name, so the rule is legible
      where a reader would look for it. None of them draws a mark at all. */
   for (const file of [
-    'lib/components/LedgerTable.svelte',
-    'lib/components/CommitLog.svelte',
+    'lib/components/LedgerSpread.svelte',
+    'lib/components/ContributionCalendar.svelte',
   ]) {
     for (const control of controls(componentSources[file])) {
       if (control.tag !== 'a') continue;
