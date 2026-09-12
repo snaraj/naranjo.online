@@ -7,6 +7,20 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.84] - 2026-09-12
+
+### Fixed
+
+- The nightly ledger snapshot (issue #320) had never recorded a row: every
+  panel request carried urllib's default agent string, which the edge in
+  front of the origin refuses with 403, and the only line the job wrote was
+  "a panel request failed". Every panel request now names the job and the
+  checkout revision it runs from (`naranjo-online-ledger-snapshot/<revision>`,
+  the same short id stamped on the rows), a refused or unreachable panel is
+  reported by panel and standard status phrase while the other streams still
+  record, the summary counts `refused=` beside `unreported=`, and the run
+  still exits non-zero so the agent's last exit status stays the signal.
+
 ## [0.1.83] - 2026-09-12
 
 ### Added
