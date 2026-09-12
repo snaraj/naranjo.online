@@ -33,10 +33,12 @@ import os
 import pathlib
 import shutil
 import stat
+import subprocess
 import tempfile
 import time
 import unittest
 import urllib.error
+from unittest import mock
 
 
 def setUpModule():
@@ -495,7 +497,7 @@ class SnapshotArchiveTest(SnapshotCase):
         self.assertEqual(stored["data"]["streak"], 9)
 
     def test_a_second_identical_reading_appends_nothing(self):
-        appended, _, _ = self.take()
+        appended, _, _, _ = self.take()
         self.assertGreater(appended, 0)
         self.assertEqual(self.take()[0], 0)
 
@@ -505,6 +507,109 @@ class SnapshotArchiveTest(SnapshotCase):
         self.assertEqual(
             stat.S_IMODE((self.ledger / "github" / "2026.ndjson").stat().st_mode), 0o600
         )
+
+
+class PanelIdentityAndRefusalTest(SnapshotCase):
+    """How the job names itself on the wire, and how a refused panel is
+    reported (issue #320): the edge refused urllib's default agent string for
+    a day and the only line said `a panel request failed`."""
+
+    def test_every_panel_request_names_this_job_and_its_revision(self):
+        self.take()
+        agents = {request.get_header("User-agent") for request in self.opener.requests}
+        self.assertEqual(agents, {"naranjo-online-ledger-snapshot/snapshot"})
+        self.assertEqual(
+            {request.get_header("Accept") for request in self.opener.requests},
+            {"application/json"},
+        )
+        opener = FakeOpener(all_panels())
+        with contextlib.redirect_stderr(io.StringIO()):
+            snapshot.snapshot(self.ledger, SITE, NOW, TODAY, "abcdef123456", opener)
+        # The revision the rows are stamped with is the one the agent names.
+        self.assertEqual(
+            {request.get_header("User-agent") for request in opener.requests},
+            {"naranjo-online-ledger-snapshot/abcdef123456"},
+        )
+
+    def test_a_refused_panel_is_named_with_its_status_and_the_others_still_record(self):
+        url = snapshot.panel_url(SITE, "coding-projects")
+        answers = all_panels()
+        answers[url] = urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
+        appended, _, _, refused = self.take(answers)
+        self.assertEqual(refused, 1)
+        self.assertGreater(appended, 0)
+        self.assertIn("ledger snapshot refused coding-projects: HTTP 403 Forbidden", self.stderr)
+        self.assertIn("refused=1", self.stderr)
+        self.assertEqual(self.rows("projects"), [])
+        self.assertGreater(len(self.rows("github")), 0)
+        self.assertGreater(len(self.rows("osrs")), 0)
+
+    def test_a_refusal_names_the_standard_phrase_never_the_upstream_text(self):
+        url = snapshot.panel_url(SITE, "vcs-activity")
+        answers = all_panels()
+        answers[url] = urllib.error.HTTPError(url, 503, "the upstream's own prose", {}, None)
+        self.take(answers)
+        self.assertIn("refused vcs-activity: HTTP 503 Service Unavailable", self.stderr)
+        self.assertNotIn("own prose", self.stderr)
+
+    def test_an_unreachable_panel_is_named_by_its_failure_class(self):
+        url = snapshot.panel_url(SITE, "boss-log")
+        answers = all_panels()
+        answers[url] = urllib.error.URLError(TimeoutError("private-looking detail"))
+        self.take(answers)
+        self.assertIn("refused boss-log: unreachable (TimeoutError)", self.stderr)
+        self.assertNotIn("private-looking", self.stderr)
+
+    def test_a_redirect_is_still_a_hard_refusal_of_the_run(self):
+        url = snapshot.panel_url(SITE, "vcs-activity")
+        answers = all_panels()
+        answers[url] = urllib.error.HTTPError(url, 302, "Found", {}, None)
+        with self.assertRaises(ledger.LedgerError) as caught:
+            self.take(answers)
+        self.assertIn("redirected", str(caught.exception))
+
+    def test_the_run_exits_non_zero_when_any_panel_was_refused(self):
+        url = snapshot.panel_url(SITE, "coding-projects")
+        answers = all_panels()
+        answers[url] = urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as captured,
+            mock.patch.object(snapshot, "build_opener", lambda: FakeOpener(answers)),
+        ):
+            status = snapshot.main(
+                ["--ledger", str(self.ledger), "--site", SITE, "--exporter-version", "abc1234"]
+            )
+        self.assertEqual(status, 1)
+        self.assertIn("refused coding-projects: HTTP 403 Forbidden", captured.getvalue())
+        self.assertIn("refused=1 exporter=abc1234", captured.getvalue())
+
+    def test_the_exporter_defaults_to_the_checkout_revision(self):
+        # This test file lives in a checkout: the script's own revision is a
+        # short commit id. A directory that is no checkout yields the default.
+        revision = snapshot.checkout_revision()
+        self.assertRegex(revision, r"^[0-9a-f]{7,40}$")
+        self.assertEqual(snapshot.checkout_revision(str(self.scratch / "x.py")), "snapshot")
+        # A checkout with no commit answers `HEAD` on stdout and a non-zero
+        # status: text that is not a revision is the default, not a label.
+        empty = self.scratch / "empty"
+        empty.mkdir()
+        subprocess.run(["git", "init", "-q", str(empty)], check=True, capture_output=True)
+        self.assertEqual(snapshot.checkout_revision(str(empty / "x.py")), "snapshot")
+        # And whatever git answers that is not a revision — a failed status
+        # with text on stdout, or a success that is not hex — is the default:
+        # the label the rows are stamped with is a revision or the honest word.
+        for returncode, stdout in ((128, "HEAD\n"), (0, "not-a-revision\n")):
+            answer = subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
+            with mock.patch.object(snapshot.subprocess, "run", return_value=answer):
+                self.assertEqual(snapshot.checkout_revision(), "snapshot", (returncode, stdout))
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as captured,
+            mock.patch.object(snapshot, "build_opener", lambda: FakeOpener(all_panels())),
+        ):
+            status = snapshot.main(["--ledger", str(self.ledger), "--site", SITE])
+        self.assertEqual(status, 0)
+        self.assertIn("exporter=%s" % revision, captured.getvalue())
+        self.assertEqual({r["exporter"] for r in self.rows("github")}, {revision})
 
 
 class SnapshotCommandTest(SnapshotCase):

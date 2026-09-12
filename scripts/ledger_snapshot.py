@@ -31,8 +31,11 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import http
 import json
 import pathlib
+import re
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -65,9 +68,46 @@ SOURCE_OSRS = "osrs"
 KEY_ALL = "all"
 
 # The exporter field's value when this job took the reading and no revision
-# was supplied: the record says which program wrote a row, and "the snapshot"
-# is the honest answer when there is no checkout revision to name.
+# could be read: the record says which program wrote a row, and "the snapshot"
+# is the honest answer when there is no checkout revision to name. The
+# revision is read from the checkout this script runs from (the same short id
+# the usage exporter stamps), unless a caller names one.
 DEFAULT_EXPORTER = "snapshot"
+
+# The agent string every panel request carries: the product, then the
+# revision the rows are stamped with. A job that reads a public API names
+# itself; the edge in front of the origin refuses urllib's default agent
+# outright (issue #320), which is how this job ran refused for a day without a
+# line that said so.
+USER_AGENT_PRODUCT = "naranjo-online-ledger-snapshot"
+
+
+def user_agent(exporter):
+    return "%s/%s" % (USER_AGENT_PRODUCT, exporter)
+
+
+def checkout_revision(script=__file__):
+    """The short revision of the checkout this script runs from, or the default."""
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(pathlib.Path(script).resolve().parent), "rev-parse", "--short=12", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return DEFAULT_EXPORTER
+    revision = completed.stdout.strip()
+    if completed.returncode != 0 or not re.fullmatch(r"[0-9a-f]{7,40}", revision):
+        return DEFAULT_EXPORTER
+    return revision
+
+
+class PanelRefused(ledger.LedgerError):
+    """One panel could not be read this run. The run goes on to the others,
+    counts the refusal, names it, and exits non-zero at the end — a stream
+    the origin would not serve is one stream missing, not a night lost."""
 
 # Transport bounds. The body cap is read as cap+1 so an over-cap body is
 # REFUSED rather than truncated into something that parses.
@@ -109,16 +149,37 @@ def panel_url(site, panel):
     return "%s/api/panels/%s" % (site.rstrip("/"), panel)
 
 
-def fetch_panel(opener, url, host):
+def status_phrase(code):
+    """The standard phrase for a status code, never the upstream's own text."""
+    try:
+        return http.HTTPStatus(code).phrase
+    except ValueError:
+        return "unknown status"
+
+
+def failure_class(error):
+    """What kind of transport failure this was, as a class name and nothing
+    the upstream or the resolver wrote."""
+    reason = getattr(error, "reason", error)
+    if isinstance(reason, BaseException):
+        return type(reason).__name__
+    return type(error).__name__
+
+
+def fetch_panel(opener, url, host, agent=user_agent(DEFAULT_EXPORTER)):
     """One bounded read of one public envelope, or a refusal.
 
     The host is checked BEFORE the request is made and again on what the
     response says it came from: the first refuses a misconfigured site, the
-    second refuses a resolution that ended somewhere else.
+    second refuses a resolution that ended somewhere else. An answer that is
+    not an envelope at all — a status, an unreachable origin — is a
+    PanelRefused that names the panel's fate without a byte of upstream prose.
     """
     if urllib.parse.urlsplit(url).hostname != host:
         raise ledger.LedgerError("a panel request names a different host than the site")
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/json", "User-Agent": agent}
+    )
     try:
         with opener.open(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             if urllib.parse.urlsplit(response.geturl()).hostname != host:
@@ -127,9 +188,9 @@ def fetch_panel(opener, url, host):
     except urllib.error.HTTPError as error:
         if 300 <= error.code < 400:
             raise ledger.LedgerError("a panel request was redirected; the snapshot follows none")
-        raise ledger.LedgerError("a panel request failed")
-    except (urllib.error.URLError, OSError):
-        raise ledger.LedgerError("a panel request failed")
+        raise PanelRefused("HTTP %d %s" % (error.code, status_phrase(error.code)))
+    except (urllib.error.URLError, OSError) as error:
+        raise PanelRefused("unreachable (%s)" % failure_class(error))
     if len(body) > MAX_BODY_BYTES:
         raise ledger.LedgerError(
             "a panel response is larger than the %d byte bound" % MAX_BODY_BYTES
@@ -415,8 +476,15 @@ def snapshot(ledger_dir, site, now, today=None, exporter=DEFAULT_EXPORTER, opene
     if not ledger.valid_calendar_day(day):
         raise ledger.LedgerError("the snapshot was given a day that is not a calendar day")
     appended = kept = skipped_total = 0
+    refused = []
+    agent = user_agent(exporter)
     for panel, kind, stream in PANELS:
-        envelope = fetch_panel(opener, panel_url(site, panel), host)
+        try:
+            envelope = fetch_panel(opener, panel_url(site, panel), host, agent)
+        except PanelRefused as error:
+            print("ledger snapshot refused %s: %s" % (panel, error), file=sys.stderr)
+            refused.append(panel)
+            continue
         data = admit_payload(envelope, panel, kind)
         if data is None:
             print(
@@ -432,11 +500,11 @@ def snapshot(ledger_dir, site, now, today=None, exporter=DEFAULT_EXPORTER, opene
         kept += unchanged
         skipped_total += len(skipped)
     print(
-        "ledger snapshot appended=%d unchanged=%d unreported=%d"
-        % (appended, kept, skipped_total),
+        "ledger snapshot appended=%d unchanged=%d unreported=%d refused=%d exporter=%s"
+        % (appended, kept, skipped_total, len(refused), exporter),
         file=sys.stderr,
     )
-    return appended, kept, skipped_total
+    return appended, kept, skipped_total, len(refused)
 
 
 def parse_arguments(argv):
@@ -448,8 +516,9 @@ def parse_arguments(argv):
     parser.add_argument("--today", help="the calendar day the reading is filed under")
     parser.add_argument(
         "--exporter-version",
-        default=DEFAULT_EXPORTER,
-        help="the revision recorded beside every row this run writes",
+        default=None,
+        help="the revision recorded beside every row this run writes "
+        "(default: the checkout this script runs from)",
     )
     return parser.parse_args(argv)
 
@@ -465,12 +534,12 @@ def main(argv=None):
         return 2
     now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     try:
-        snapshot(
+        _, _, _, refused = snapshot(
             ledger_dir,
             arguments.site,
             now,
             arguments.today,
-            arguments.exporter_version,
+            arguments.exporter_version or checkout_revision(),
         )
     except ledger.LedgerError as error:
         print(str(error), file=sys.stderr)
@@ -478,7 +547,9 @@ def main(argv=None):
     except OSError:
         print("the snapshot could not be written", file=sys.stderr)
         return 1
-    return 0
+    # A refused panel is reported above, panel by panel; the run still fails,
+    # so the agent's last exit status is the visible signal it always was.
+    return 1 if refused else 0
 
 
 if __name__ == "__main__":
