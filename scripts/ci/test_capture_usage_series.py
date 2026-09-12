@@ -1714,6 +1714,19 @@ class HistoryStoreTest(unittest.TestCase):
         self.assertEqual(stored["2026-08-11"]["models"], {other: 15, named: 15})
         self.assertNotIn(retired, json.dumps(stored))
 
+    def test_a_retired_key_may_never_also_be_a_vocabulary_key(self):
+        # The fold runs before the membership check, so a key on both lists
+        # would quietly move real tokens to the residual; the capture refuses
+        # to start on such a vocabulary, and the shipped pair is disjoint.
+        capture_usage_series.require_disjoint_retirements(
+            capture_usage_series.MODEL_KEYS, capture_usage_series.RETIRED_MODEL_KEYS
+        )
+        retired = next(iter(capture_usage_series.RETIRED_MODEL_KEYS))
+        with self.assertRaisesRegex(capture_usage_series.CaptureError, "re-admits a retired key"):
+            capture_usage_series.require_disjoint_retirements(
+                (capture_usage_series.MODEL_OTHER, retired), capture_usage_series.RETIRED_MODEL_KEYS
+            )
+
     def test_an_unknown_model_key_in_the_store_still_refuses(self):
         # The fold is for keys the vocabulary retired, never for whatever a
         # corrupted store happens to carry.

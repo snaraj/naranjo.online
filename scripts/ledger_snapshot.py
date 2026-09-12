@@ -102,10 +102,9 @@ def git_directory(start):
         if candidate.is_file():
             pointer = candidate.read_text(encoding="utf-8").strip()
             if pointer.startswith("gitdir: "):
-                target = pathlib.Path(pointer[len("gitdir: "):].strip())
-                if not target.is_absolute():
-                    target = directory / target
-                return target if target.is_dir() else None
+                # Relative to the checkout, or absolute; a directory that is
+                # not there fails the HEAD read, which answers the default.
+                return directory / pointer[len("gitdir: "):].strip()
             return None
     return None
 
@@ -117,8 +116,9 @@ def resolve_ref(git, ref):
     homes = [git]
     common = git / "commondir"
     if common.is_file():
-        shared = pathlib.Path(common.read_text(encoding="utf-8").strip())
-        homes.append(shared if shared.is_absolute() else git / shared)
+        # Relative to the git directory, or absolute — pathlib keeps an
+        # absolute right operand, so one join covers both.
+        homes.append(git / common.read_text(encoding="utf-8").strip())
     for home in homes:
         loose = home / ref
         if loose.is_file():
@@ -579,6 +579,13 @@ def main(argv=None):
         return 2
     if arguments.today is not None and not ledger.valid_calendar_day(arguments.today):
         print("the day must be a calendar day", file=sys.stderr)
+        return 2
+    # The named revision travels in a request header and is stamped on every
+    # row: it is held to the ledger's own label shape here, before either.
+    if arguments.exporter_version is not None and not ledger.valid_name(
+        arguments.exporter_version, ledger.MAX_EXPORTER_LENGTH
+    ):
+        print("the exporter version must be bounded printable text", file=sys.stderr)
         return 2
     now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     try:

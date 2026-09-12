@@ -424,6 +424,18 @@ except CaptureError as error:  # pragma: no cover - proven by subprocess
     print(str(error), file=sys.stderr)
     raise SystemExit(1)
 
+def require_disjoint_retirements(keys, retired):
+    """A retired key must not be a vocabulary key: the fold runs before the
+    membership check, so a key on both lists would silently reattribute real,
+    named tokens to the residual. Re-admitting a retired id is a conscious
+    edit that removes it from the table first."""
+    readmitted = sorted(set(keys) & set(retired))
+    if readmitted:
+        raise CaptureError(
+            "the model vocabulary re-admits a retired key: %s" % ", ".join(readmitted)
+        )
+
+
 # Model keys the vocabulary once held and has since RETIRED. A history store
 # written under the older vocabulary still carries them, and the store is the
 # pipeline's own durable memory: refusing it would end every capture (issue
@@ -440,6 +452,12 @@ RETIRED_MODEL_KEYS = frozenset(
         "codex-auto-review",
     }
 )
+
+try:
+    require_disjoint_retirements(MODEL_KEYS, RETIRED_MODEL_KEYS)
+except CaptureError as error:  # pragma: no cover - proven by the contract test
+    print(str(error), file=sys.stderr)
+    raise SystemExit(1)
 
 # Every field name the emission may legitimately contain, CLOSED. The guard
 # refuses any dictionary key outside this set (plus the caller's explicitly
