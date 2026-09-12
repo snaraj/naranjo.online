@@ -29,7 +29,7 @@ tile, and centred on a flat `#faf9f5` square — the site's own paper. No border
 is baked in: the hairline a reader sees is the stylesheet's, the same rule the
 rest of the sheet is drawn with. Each tile is 96 × 96 px, 8-bit palette PNG,
 written at the smaller of an RGB and a 256-colour encoding. A 96 px file in a
-28 px box is the mark still resolving on a 3× display.
+44 px box is the mark still resolving on a 3× display.
 
 | File | Bytes | Mark inside the tile | Origin |
 | --- | --- | --- | --- |
