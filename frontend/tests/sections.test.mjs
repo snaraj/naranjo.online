@@ -18,6 +18,7 @@
  * cannot execute it — the constructors it is written in are executed instead.
  */
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
@@ -65,6 +66,15 @@ const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
    identity function: a props object that carried the file name through
    unresolved would still deep-equal the entries, and this way it cannot. */
 const markStub = (file) => `resolved:${file}`;
+/* The container build ships only frontend/ into the image (Dockerfile), so a
+   pin that reads a repository-root file is declared skipped there with its
+   reason, exactly as tests/panels-ui.test.mjs declares its attribution pin;
+   the full-checkout gate is where the pin is enforced. */
+const fullCheckout = existsSync(new URL('../../internal/panels/snapshots', import.meta.url));
+const reducedContextNote = fullCheckout
+  ? false
+  : 'reduced build context ships only frontend/; the full-checkout gate enforces this pin';
+
 const roleLedger = roleLedgerProps(markStub);
 
 /* HTML comments removed, to a fixed point. A pin that reads markup has to read
@@ -1066,24 +1076,32 @@ test('the role marks are exactly the four vendored tiles the entries name, each 
   }
   assert.match(sources, /licence|license/i, 'SOURCES.md states no terms for the vendored marks');
   assert.match(sources, /trademark/i, 'SOURCES.md drops the trademark statement');
-
-  /* And the repository's one attribution index points at that note, the way it
-     already points at the textures' (AGENTS.md, "Attribution for third-party
-     assets"). These four are somebody else's TRADEMARKS, which is the fact a
-     reviewer opens ATTRIBUTION.md to find — a provenance note only the
-     directory knows about is a note nobody reads. */
-  const attribution = await readFile(new URL('../../ATTRIBUTION.md', import.meta.url), 'utf8');
-  assert.match(
-    attribution,
-    /frontend\/src\/assets\/images\/marks\/SOURCES\.md/,
-    'ATTRIBUTION.md does not send a reviewer to the marks\u2019 own provenance note'
-  );
-  assert.match(
-    attribution,
-    /remains its owner['\u2019]s trademark/,
-    'ATTRIBUTION.md drops the trademark boundary for the organisation marks'
-  );
 });
+
+test(
+  'the attribution index sends a reviewer to the marks\u2019 own provenance note (issue 326)',
+  { skip: reducedContextNote },
+  async () => {
+    /* The repository's one attribution index points at the note beside the
+       tiles, the way it already points at the textures' (AGENTS.md,
+       "Attribution for third-party assets"). These four are somebody else's
+       TRADEMARKS, which is the fact a reviewer opens ATTRIBUTION.md to find — a
+       provenance note only the directory knows about is a note nobody reads.
+       The index lives at the repository root, outside the image build's
+       context, so this is the one pin here the reduced context skips by name. */
+    const attribution = await readFile(new URL('../../ATTRIBUTION.md', import.meta.url), 'utf8');
+    assert.match(
+      attribution,
+      /frontend\/src\/assets\/images\/marks\/SOURCES\.md/,
+      'ATTRIBUTION.md does not send a reviewer to the marks\u2019 own provenance note'
+    );
+    assert.match(
+      attribution,
+      /remains its owner['\u2019]s trademark/,
+      'ATTRIBUTION.md drops the trademark boundary for the organisation marks'
+    );
+  }
+);
 
 test('the mark is named as a file, resolved by the bundler, and drawn by a component that knows no file (issue 326)', () => {
   /* The same three-layer rule the gallery follows, for the same reason: a
