@@ -26,6 +26,7 @@
 
 import type { Component } from 'svelte';
 import type { GridCell } from './grid.ts';
+import type { IconName } from './icons.ts';
 import type { PanelEnvelope, PanelStatus } from './panels';
 import type { TipDetail } from './tooltip.ts';
 
@@ -116,6 +117,13 @@ export interface PageBlock extends BlockPresentation {
 export interface PageSection {
   readonly id: string;
   readonly label: string;
+  /* The section's own mark (owner design decision, 2026-09-11, issue 313).
+   * The nav prints it in place of the section's words and the section head
+   * prints it beside them, so it is stated ONCE here with the label it
+   * stands for rather than in two components that would drift. Required,
+   * not optional: five sections, five marks, and a sixth section cannot
+   * quietly ship without choosing one. */
+  readonly mark: IconName;
   readonly layout: 'flow' | 'stack';
   readonly blocks: readonly PageBlock[];
 }
@@ -128,9 +136,9 @@ export function section(
   id: string,
   label: string,
   blocks: readonly PageBlock[],
-  options: { layout?: 'stack' } = {}
+  options: { mark: IconName; layout?: 'stack' }
 ): PageSection {
-  return { id, label, layout: options.layout ?? 'flow', blocks };
+  return { id, label, mark: options.mark, layout: options.layout ?? 'flow', blocks };
 }
 
 export function staticBlock<P extends BlockProps>(
@@ -208,6 +216,16 @@ export function sectionHref(target: Pick<PageSection, 'id'>): string {
   return `#${target.id}`;
 }
 
+/* The number the ledger prints for a section: its position in the manifest,
+ * two digits wide so the five stack as a column of figures rather than a
+ * ragged edge. ONE function because two surfaces print it — the nav link and
+ * the section head — and a second copy of the rule is how one sheet ends up
+ * numbered two different ways. The position is the caller's, so a section
+ * moved in the manifest renumbers itself and no two can claim one number. */
+export function sectionOrdinal(position: number): string {
+  return String(position + 1).padStart(2, '0');
+}
+
 /* ===========================================================================
  * Component-layer props contracts, one block component each. Field names are
  * the reader's vocabulary — a figure, a caption, a detail — never a domain's.
@@ -243,8 +261,14 @@ export type LedgerRow = {
   readonly key: string;
   /* The years, already written the way the source writes them. */
   readonly span: string;
-  /* The short name the row leads with. */
+  /* The short name the row leads with, and the monogram tile that leads the
+   * name (owner design decision, 2026-09-11, issue 313). The monogram is
+   * DATA rather than initials this component derives: an employer's own short
+   * form is an editorial judgement, exactly as `name` already is, and a rule
+   * that guessed "UMBC LIDAR Research Group" would guess wrong. A trademark
+   * is never drawn — a monogram in the site's own ink is the mark. */
   readonly name: string;
+  readonly mark: string;
   /* The one-line description under (or beside) the name. */
   readonly role: string;
   /* Where it happened. */
@@ -270,7 +294,11 @@ export type LedgerLogProps = {
  * them), and the detail every figure on this page carries. */
 export type LedgerCount = {
   readonly key: string;
-  readonly glyph: 'star' | 'issue' | 'pull' | 'clock';
+  /* The mark drawn in place of the word, named from the Hairline family
+   * (lib/icons.ts). The union is narrow rather than the family's whole name
+   * list because these four are the columns the owner asked for (issue #317):
+   * a fifth mark in a table cell is a fifth column, not a spelling. */
+  readonly glyph: 'pull' | 'tag' | 'star' | 'clock';
   readonly value: string;
   readonly label: string;
   readonly detail: TipDetail;
@@ -280,8 +308,17 @@ export type LedgerTableRow = {
   readonly key: string;
   /* The row's leading cell, as navigation the information layer validated. */
   readonly link: ActivityLink;
-  /* The single-line description; an empty string renders the honest dash. */
-  readonly summary: string;
+  /* A small word set after the name for a row that is on this table for a
+   * reason the rows around it are not (owner design decision, 2026-09-11,
+   * issue 318). Absent on every row that needs none, which is why it is
+   * optional rather than an empty string: "no chip" and "a chip with no word"
+   * are different states and only one of them is ever meant.
+   *
+   * The description cell left with the same directive. The column was the
+   * widest thing in the row and the section holds HALF a sheet now, so the
+   * four figures and the name are what a repository gets; the description is
+   * one click away on the row's own link. */
+  readonly chip?: string;
   /* How long since the row's own last change — the same counter the other
    * three are, so its provenance and its exact instant reach a reader the same
    * way theirs do. It sits in its own column rather than in the cluster. */
@@ -289,23 +326,40 @@ export type LedgerTableRow = {
   readonly counts: readonly LedgerCount[];
 };
 
-export type LedgerTableProps = {
-  /* Absent for a table whose section head already names it (owner directive,
-   * 2026-09-04, issue 292): the shell renders no label and keeps the row. */
-  readonly title?: string;
+/* THE SHEET'S TWO COLUMNS (owner design decision, 2026-09-11, issue 318,
+ * option B on the design canvas): one block that draws a ruled table beside a
+ * ruled log, each with its own head row, and stacks them at a phone width.
+ *
+ * It is ONE props contract rather than two blocks side by side because the two
+ * columns are one picture the reader compares across — the repositories on the
+ * left and, beside them, what actually landed in them — and because the
+ * heights are paired: the log reserves exactly as many rows as the table
+ * shows, so the section's box is decided before either payload arrives.
+ *
+ * `logAnchor` is the id the log column answers to. The section carries one id
+ * for the nav; the log had a section of its own until this directive, and an
+ * address a reader already shared must keep landing them on it (issue 287's
+ * rule). It arrives as data so this contract, not a component, is where the
+ * page's addresses live. */
+export type LedgerSpreadProps = {
   readonly status: PanelStatus;
   readonly generatedAt?: string;
-  /* The column heads, in column order, exactly as they render. */
+  /* The table column's heads, in column order, exactly as they render. */
   readonly heads: readonly string[];
   readonly rows: readonly LedgerTableRow[];
   readonly emptyNote: string;
+  /* The log column's own head, its anchor, its rows and its empty line. */
+  readonly logHead: string;
+  readonly logAnchor: string;
+  readonly logRows: readonly CommitLogRow[];
+  readonly logNote: string;
   readonly staleNote?: string;
 };
 
-/* One selectable calendar in the commits block: a heatmap and the sentence
- * that reads it. Three of these render as one grid with a segmented control
- * over it, so a set carries everything the shared grid needs. */
-export type CommitLogSet = {
+/* One selectable calendar in the trackers' calendar block: a heatmap and the
+ * sentence that reads it. Three of these render as one grid with a segmented
+ * control over it, so a set carries everything the shared grid needs. */
+export type CalendarSet = {
   readonly key: string;
   readonly label: string;
   readonly columns: GridCell[][];
@@ -334,13 +388,17 @@ export type CommitLogRow = {
 /* No `title`: the block renders no panel label (owner directive, 2026-09-04,
  * issue 294). The envelope's title names one source — the version-control
  * host — and the calendar now opens on a token series, so a label over it
- * would be false; the segments underneath name every source themselves. */
-export type CommitLogProps = {
+ * would be false; the segments underneath name every source themselves.
+ *
+ * The LOG that used to ride under these sets left with the owner's 2026-09-11
+ * directive (issue 318): the rows are the right-hand column of the sheet's
+ * paired section now, and the calendar is a tracker among the trackers. What
+ * moved is which block renders them — the sets and the rows are built by the
+ * same two functions in lib/commits.ts they always were. */
+export type ContributionCalendarProps = {
   readonly status: PanelStatus;
   readonly generatedAt?: string;
-  readonly sets: readonly CommitLogSet[];
-  readonly rows: readonly CommitLogRow[];
-  readonly rowsNote: string;
+  readonly sets: readonly CalendarSet[];
   readonly staleNote?: string;
 };
 
@@ -392,14 +450,37 @@ export type LedgerMeter = {
   readonly label: string;
 };
 
-/* The daily line under a card: the series itself and the accessible name the
- * adapter wrote for it. The figures printed above it are the non-colour
- * channel the dataviz floor asks for, so the drawing carries no axis, no
- * caption and no legend. A null day is a day nobody measured; lib/spark.ts
- * decides what that draws. */
+/* The daily line under a card: the series itself, the accessible name the
+ * adapter wrote for it, and every day's date and figures already worded. The
+ * figures printed above it are the non-colour channel the dataviz floor asks
+ * for, so the drawing carries no axis, no caption and no legend. A null day is
+ * a day nobody measured; lib/spark.ts decides what that draws.
+ *
+ * THE THREE DAY ARRAYS ARE PARALLEL TO `totals`, one entry per day, and they
+ * exist because the scrubber prints a day rather than drawing one (owner
+ * directive, 2026-09-11, issue 316): the component is handed the words and
+ * formats nothing, exactly as it computes nothing. A day nobody measured
+ * carries the page's own unknown mark in both figure columns and its DATE in
+ * the label, because the absence is still a fact about a real day. */
 export type LedgerSpark = {
   readonly totals: readonly (number | null)[];
   readonly ariaLabel: string;
+  /* "on Sep 3" — the page's one voice for a day (lib/grid.ts's cellPeriod). */
+  readonly dayLabels: readonly string[];
+  /* The day's reading, compacted the way the card's own figure is, so the
+     headline reads in one column of units whichever day is under the cursor. */
+  readonly dayFigures: readonly string[];
+  /* The same day exactly, grouped, for the line that replaces the sub area. */
+  readonly dayExact: readonly string[];
+};
+
+/* What the daily line is handed: its series plus the one thing it reports
+ * back. `onScrub` is called with the day index under the pointer, the finger
+ * or the keyboard cursor, and with null the moment the reading ends — the
+ * component owns no readout of its own, so the card decides what a scrubbed
+ * day does to it. */
+export type SparklineProps = LedgerSpark & {
+  readonly onScrub?: (index: number | null) => void;
 };
 
 /* One card of the board. Every region is optional and every one is drawn only
@@ -407,13 +488,19 @@ export type LedgerSpark = {
  * fixed template with blanks in it — and a card whose source said nothing
  * renders its own note rather than a zero.
  *
- * There is ONE face. Pressing a card inverts its ink and its paper through a
- * single token remap; the content does not change, so there is no second face
- * to keep in the DOM, nothing turned away from the reader, and no hint to
- * print (owner directive, 2026-09-11). */
+ * There is ONE face and NOTHING TO PRESS (owner directive, 2026-09-11, issue
+ * 316: "these shouldn't change colour when I click on them"). A card whose
+ * `turned` is set is drawn inverted through a single token remap and stays
+ * that way; the inversion is the board's own rhythm, decided by the adapter,
+ * and no reader can change it. */
 export type LedgerCard = {
   readonly key: string;
   readonly label: string;
+  /* The mark that leads the label, when the canvas gave the card one (owner
+     design decision, 2026-09-11, issue 313: "Sessions — mark leads the
+     label"). Decided by the adapter as data, like everything else on the
+     card; the component draws what it is handed and names nothing. */
+  readonly mark?: IconName;
   /* The small label at the head's far edge: what the figure is OF. */
   readonly ctx?: string;
   /* The headline, when the card has one. */
@@ -438,22 +525,54 @@ export type LedgerCard = {
   readonly spark?: LedgerSpark;
   /* What the card says when it has nothing else to say. */
   readonly note?: string;
-  /* Whether the card opens inverted. The board's rhythm, decided by the
-     adapter over the sources it read, never by the component. */
+  /* Whether the card is drawn inverted. The board's rhythm, decided by the
+     adapter over the sources it read, never by the component and never by a
+     reader. */
   readonly turned?: boolean;
   readonly ariaLabel: string;
 };
 
+/* WHAT A SCRUBBED DAY SAYS ON ITS CARD, or null for "this card is at rest"
+ * (owner directive, 2026-09-11, issue 316). Pure, and here rather than in the
+ * component, for this repository's usual reason: a lookup a test can execute
+ * is a lookup whose hostile cases are decided once instead of being reasoned
+ * about in markup.
+ *
+ * TOTAL BY CONSTRUCTION. The three day arrays are parallel to the series the
+ * card is drawing RIGHT NOW, and the index came from a pointer over a chart
+ * that may since have been handed a different payload — a shorter series, or
+ * a card that lost its line entirely. Every one of those answers "no reading"
+ * rather than an undefined figure, which is the only honest answer available
+ * and the one that cannot reach the DOM as the word `undefined`. */
+export function scrubReading(
+  card: LedgerCard,
+  index: number
+): { readonly figure: string; readonly line: string } | null {
+  if (card.spark === undefined) {
+    return null;
+  }
+  const figure = card.spark.dayFigures[index];
+  const exact = card.spark.dayExact[index];
+  const label = card.spark.dayLabels[index];
+  if (figure === undefined || exact === undefined || label === undefined) {
+    return null;
+  }
+  /* The exact figure and the day, in that order: the figure is what the reader
+     came for and the date is what qualifies it — the same order the card's own
+     sub line already reads in. */
+  return { figure, line: `${exact} · ${label}` };
+}
+
 export type LedgerBoardProps = {
   readonly title: string;
+  /* The mark that leads the panel's title (the same decision, for the
+     board's own name: "Token usage — panel title mark"). */
+  readonly mark?: IconName;
   readonly status: PanelStatus;
   readonly generatedAt?: string;
   readonly cards: readonly LedgerCard[];
   readonly emptyNote: string;
   readonly staleNote?: string;
-  /* The words a card's own button carries in each state. */
-  readonly turnLabel: string;
-  readonly returnLabel: string;
 };
 
 /* One item of the scrolling strip: a small icon (or its initials fallback),
@@ -492,6 +611,12 @@ export type TickerMark = {
   readonly url: string;
   readonly width: number;
   readonly height: number;
+  /* A family mark set beside the picture (owner design decision, 2026-09-11,
+   * issue 313). It travels with the picture, in the binding layer, because a
+   * strip that hardcoded one would be a strip with an opinion about which
+   * collection it counts — the same rule that keeps every name out of this
+   * component. Decorative, like the picture: the strip's label is the name. */
+  readonly glyph?: IconName;
 };
 
 /* --- MediaGallery: one visible frame, prev/next, a click-to-enlarge lightbox
@@ -590,38 +715,3 @@ export type MediaGalleryProps = {
   readonly tiles?: number;
 };
 
-/* --- Counters --------------------------------------------------------------- */
-
-/* One counter beside a linked entry's title: a small drawn glyph, the bare
- * figure it counts, and the detail that spells the whole thing out.
- *
- * TERSE IS NOW THE ONLY SHAPE (issue 268, owner directive: "just remove it",
- * of the label text and the inline provenance mark alike). Issue 252 made two
- * of these counters terse; the owner extended that to every one of them, so
- * `value` is required rather than optional and the words no longer have a
- * visible branch to come back through. They have not left the DOM: `label` is
- * the counter's whole meaning in words, rendered into a clipped span every
- * screen reader still reads, and it is what `detail` shows a sighted reader on
- * hover, touch or focus. The dataviz floor is intact — a value here is carried
- * by glyph PLUS number, never by the glyph alone — and so is the accessible
- * name.
- *
- * `detail` is the same primitive and the same grammar the stat tiles use
- * (DetailTip, issue 136 rule 1): the detail's NAME is the full phrase, and its
- * rows carry whatever else the counter can vouch for — the absolute instant
- * behind a live age. The page prints no provenance sentence (owner directive,
- * 2026-09-06, issue 299); provenance stays in the payload's `recorded` flags. */
-export type EntryCount = {
-  readonly key: string;
-  readonly glyph: 'node' | 'star' | 'clock' | 'issue' | 'pull';
-  readonly label: string;
-  readonly value: string;
-  readonly detail: TipDetail;
-  /* An ISO instant this counter is a LIVE AGE of (issue 268). Its presence is
-   * the whole discriminator: a counter that declares one has its figure, its
-   * words and its detail re-derived against the reader's own clock on a
-   * minute-aligned tick, so "3h" becomes "4h" while the page is open instead
-   * of freezing at whatever the render happened to catch. A counter without
-   * one renders exactly the value, label and detail the adapter built. */
-  readonly since?: string;
-};

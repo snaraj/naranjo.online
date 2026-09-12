@@ -53,35 +53,39 @@
       "contentType": "application/json"
     },
     "commits": {
-      "headers": { "Accept": "application/json" },
+      "owner": "snaraj",
       "keyEnvName": "GITHUB_PANELS_TOKEN",
       "keyHeader": "Authorization",
       "keyPrefix": "Bearer ",
-      "maxBytes": 262144,
-      "contentType": "application/json",
       "minIntervalMinutes": 10,
       "authenticatedMinIntervalMinutes": 1,
-      "max": 9,
-      "sources": [
-        {
-          "repo": "naranjo.online",
-          "endpoint": "https://api.github.com/repos/snaraj/naranjo.online/commits?per_page=3"
-        },
-        {
-          "repo": "lidersea.com",
-          "endpoint": "https://api.github.com/repos/snaraj/lidersea.com/commits?per_page=3"
-        },
-        {
-          "repo": "platform",
-          "endpoint": "https://api.github.com/repos/snaraj/platform/commits?per_page=3"
-        }
-      ]
+      "max": 30,
+      "contributions": {
+        "endpoint": "https://api.github.com/graphql",
+        "query": "query($from: DateTime!, $to: DateTime!) { viewer { id contributionsCollection(from: $from, to: $to) { totalCommitContributions commitContributionsByRepository(maxRepositories: 50) { repository { id name isPrivate owner { login } } contributions(first: 100, orderBy: {field: OCCURRED_AT, direction: DESC}) { nodes { occurredAt commitCount } } } } } }",
+        "headers": { "Accept": "application/json", "Content-Type": "application/json" },
+        "maxBytes": 262144,
+        "contentType": "application/json"
+      },
+      "history": {
+        "endpoint": "https://api.github.com/graphql",
+        "query": "query($ids: [ID!]!, $author: ID!) { nodes(ids: $ids) { ... on Repository { name defaultBranchRef { target { ... on Commit { history(first: 10, author: {id: $author}) { nodes { oid messageHeadline committedDate } } } } } } } }",
+        "headers": { "Accept": "application/json", "Content-Type": "application/json" },
+        "maxBytes": 262144,
+        "contentType": "application/json"
+      }
     }
   },
   "codingProjects": {
     "account": "snaraj",
     "listingEndpoint": "https://api.github.com/users/snaraj/repos?per_page=30&sort=pushed",
-    "pullsEndpoint": "https://api.github.com/search/issues?q=user%3Asnaraj+is%3Apr+is%3Aopen&per_page=100",
+    "repositories": {
+      "endpoint": "https://api.github.com/graphql",
+      "query": "query { viewer { login pinnedItems(first: 6, types: REPOSITORY) { nodes { ... on Repository { name isPrivate } } } repositories(first: 50, ownerAffiliations: OWNER, privacy: PUBLIC, orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { name description isPrivate stargazerCount pushedAt latestRelease { tagName } pullRequests(states: [MERGED, CLOSED]) { totalCount } } } } }",
+      "headers": { "Accept": "application/json", "Content-Type": "application/json" },
+      "maxBytes": 262144,
+      "contentType": "application/json"
+    },
     "exclude": [],
     "headers": { "Accept": "application/json" },
     "keyEnvName": "GITHUB_PANELS_TOKEN",

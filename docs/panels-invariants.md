@@ -41,6 +41,42 @@ had left at the ten-week window, so the model window is now eight weeks. The
 ceiling is one number five stages agree on and never the lever; the window is,
 exactly as it was when issue #302 cut it from a quarter to ten weeks.
 
+### The version-control and repository payloads (issues #315, #317)
+
+Two payloads grew on 2026-09-11 and both were measured against the same
+131,072-byte ceiling rather than argued about.
+
+`vcs-activity/v1` raised its served row cap from 12 to 30 and gained
+`privateActivity`, one counted entry per day of the thirty-day log window. The
+MAXIMAL document — a full year of week columns at five-digit daily counts, 30
+commit rows each carrying a forty-hex identity, a hundred-character repository
+name and a subject at the truncation bound, plus 33 private days (every date
+the admission window, its slack and its skew can touch) at their widest
+figures — measures **14,667 bytes** served, 116,405 under the ceiling.
+Nothing a live round can produce is larger, because every term is at the bound
+its own admission enforces. `TestActivityPayloadFitsTheOwnerBudget` builds it
+and fails if it grows past 15,000 without somebody re-measuring.
+
+`coding-projects/v2` replaces `coding-projects/v1`: it carries `closedPulls`,
+`release` and `pinned`, and no longer carries `openIssues`/`openPulls` or the
+two columns that drew them — a breaking payload change, so a new kind version
+rather than a mutated one (the envelope doctrine). Its maximal
+document — twelve rows at the name, description and tag bounds, with both
+tallies at `maxCountValue` — measures **7,988 bytes**, 123,084 under the
+ceiling, pinned the same way by `TestProjectsPayloadFitsTheOwnerBudget`.
+
+Both were captured live on 2026-09-11 as well, which is the other half of the
+measurement: the real documents are 13,311 and 3,850 bytes on disk (pretty
+printed), so the structural maxima above are roughly an order of magnitude of
+headroom rather than a number that happens to fit today.
+
+The two query documents the commit log posts were measured on the same day
+against the owner's own account: the discovery answer 5,707 bytes for eight
+repositories, the history answer 12,833 bytes for seven repositories at ten
+commits each. Both endpoints cap at 262,144 — exactly half the shared bound,
+unchanged from the cap the retired REST commit documents carried — so the
+producer's worst-case transient read did not grow when its shape changed.
+
 ## Why two of the rendering-lane pins are structural
 
 A progressive value (a dynamic viewport unit, `env()`, `color-mix()`) must

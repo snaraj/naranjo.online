@@ -29,8 +29,9 @@
   actually makes a refresh load at the top instead of silently restoring
   whatever the reader happened to be scrolled to. -->
 <script lang="ts">
-  import { sectionHref } from '../blocks.ts';
+  import { sectionHref, sectionOrdinal } from '../blocks.ts';
   import { page } from '../../page.ts';
+  import Icon from './Icon.svelte';
 
   if (typeof history !== 'undefined' && 'scrollRestoration' in history) {
     history.scrollRestoration = 'manual';
@@ -54,12 +55,30 @@
   }
 </script>
 
+<!-- A LINK IS A MARK AND A NUMBER (owner design decision, 2026-09-11, issue
+  313): the sheet's sections are numbered, so the nav names them the way the
+  sheet does rather than repeating five headings the reader is about to read
+  again. Both halves come from the manifest — the mark from the entry, the
+  number from the entry's POSITION — so a section moved renumbers its link and
+  its head together, and no component spells either.
+
+  The WORD did not disappear, it moved channel: aria-label carries the
+  section's own label, which is also what the heading the link points at is
+  called, so a screen-reader user hears "Professional Experience" where a
+  sighted reader sees a briefcase and 01. An aria-label REPLACES an element's
+  contents in the accessibility tree, which is exactly what is wanted here —
+  "01 / Professional Experience" would announce a decoration the visual
+  channel already carries. -->
 <nav class="section-nav" aria-label="Page sections">
-  {#each page as section (section.id)}
+  {#each page as section, position (section.id)}
     <a
       class="section-link"
       href={sectionHref(section)}
-      onclick={(event) => onNavClick(event, section.id)}>{section.label}</a
+      aria-label={section.label}
+      onclick={(event) => onNavClick(event, section.id)}
+      ><Icon name={section.mark} slot="row" /><span class="section-link-number"
+        >{sectionOrdinal(position)}</span
+      ></a
     >
   {/each}
 </nav>

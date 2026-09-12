@@ -10,6 +10,7 @@
     triggerClick,
     triggerPointerDown
   } from './disclosure';
+  import Icon from './components/Icon.svelte';
   import { applyMode, documentMode, modes, type ModeId } from './themes';
 
   // The origin stamps the chosen mode on <html> before any script runs, so
@@ -148,9 +149,19 @@
     onclick={onTriggerClick}
     onkeydown={onTriggerKeydown}
   >
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" fill="currentColor" />
-    </svg>
+    <!-- THE TRIGGER JOINED THE FAMILY (owner design decision, 2026-09-11,
+      issue 313): the crescent it used to draw itself is the family's own
+      `mode-dark` glyph, at the chrome size, so the one mark the header shows
+      at rest is drawn to the same weight as every other mark on the page.
+      Its size is a token now rather than a width attribute, which is the
+      stricter direction — a chrome glyph can no longer be resized in markup
+      at all.
+
+      The five swatches below keep their own drawings (issue 180: five modes
+      have to be tellable apart by SILHOUETTE, and the family draws three of
+      the five as the same crescent), and they keep reading the chrome
+      grammar's tokens, so the two families still agree on size and weight. -->
+    <Icon name="mode-dark" slot="chrome" />
   </button>
 
   <div

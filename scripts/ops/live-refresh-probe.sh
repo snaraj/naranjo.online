@@ -4,22 +4,30 @@
 # momentary fake commit or something that gets reverted that VALIDATES the
 # live update").
 #
-# WHAT IT DOES, exactly the procedure validated by hand on 2026-09-01:
+# WHAT IT DOES, the procedure validated by hand on 2026-09-01 with the figure
+# re-vehicled for coding-projects/v2 (2026-09-12), whose rows carry stars,
+# closed pull requests, a release tag and a push instant — and no longer the
+# open-issue tally the first vehicle moved:
 #
 #   1. Read the live coding-projects envelope and record the target
-#      repository's openIssues figure as the baseline.
-#   2. Apply one REVERSIBLE mutation: open an ephemeral issue in the target
-#      repository. An issue, deliberately not a fake commit, so the probe
-#      creates and deletes no git refs and rewrites no history.
-#   3. Poll the live panel until the figure reflects the mutation
-#      (baseline + 1), recording the forward latency.
-#   4. Revert the mutation — close the issue — and poll until the figure
-#      returns to the baseline, recording the revert latency.
-#   5. Report both latencies. The issue is closed on EVERY exit path,
-#      including timeouts and interrupts, so the probe leaves nothing open.
+#      repository's `stars` figure as the baseline, and read whether the
+#      operator's own account already stars the repository.
+#   2. Apply one REVERSIBLE mutation: the operator's own star. An unstarred
+#      repository is starred (baseline + 1); one the operator already stars
+#      is unstarred (baseline - 1). A star, deliberately not a fake commit
+#      and not a pull request, so the probe creates and deletes no git refs,
+#      rewrites no history and leaves no closed item behind. It IS visible
+#      on the operator's profile for the minutes it lasts.
+#   3. Poll the live panel until the figure reflects the mutation, recording
+#      the forward latency.
+#   4. Revert the mutation and poll until the figure returns to the
+#      baseline, recording the revert latency.
+#   5. Report both latencies. The original star state is restored on EVERY
+#      exit path, including timeouts and interrupts, so the probe leaves the
+#      profile as it found it.
 #
 # MEASURED REFERENCE RUN (2026-09-01, issue #281 comment; mutation vehicle
-# was an ephemeral issue in a sibling repository):
+# was an ephemeral issue in a sibling repository, the v1 figure):
 #
 #   forward: issue opened 08:30:53Z -> reflected at the 08:43:51Z
 #            regeneration = 12m58s
@@ -67,9 +75,9 @@ fi
 repo="$1"
 name="${repo#*/}"
 
-# read_panel prints "<openIssues> <generatedAt>" for the target repository's
-# row, or "none" when the row or figure is absent (the panel may honestly
-# dash a tally; the probe refuses to start from a dash).
+# read_panel prints "<stars> <generatedAt>" for the target repository's row,
+# or "none" when the row or figure is absent (the probe refuses to start from
+# a row it cannot read).
 read_panel() {
   curl -fsS --max-time 20 "${site}/api/panels/coding-projects" |
     python3 -c '
@@ -79,7 +87,7 @@ envelope = json.load(sys.stdin)
 data = envelope.get("data") or {}
 for row in data.get("repos", []):
     if row.get("name") == target:
-        count = row.get("openIssues")
+        count = row.get("stars")
         if isinstance(count, int):
             print(count, envelope.get("generatedAt", ""))
             break
@@ -87,6 +95,25 @@ else:
     print("none")
 ' "$name"
 }
+
+# star_state prints "starred" or "unstarred" for the operator's own account,
+# from the status line the host answers with (204 or 404); anything else is
+# a transport or credential failure and the probe stops before mutating.
+star_state() {
+  local status
+  status="$(gh api -i "/user/starred/${repo}" 2>/dev/null | head -1 | awk '{print $2}')"
+  case "$status" in
+    204) printf 'starred\n' ;;
+    404) printf 'unstarred\n' ;;
+    *)
+      printf 'FAIL: could not read whether the operator stars %s (status %s)\n' "$repo" "${status:-none}" >&2
+      return 1
+      ;;
+  esac
+}
+
+star() { gh api -X PUT "/user/starred/${repo}" --silent; }
+unstar() { gh api -X DELETE "/user/starred/${repo}" --silent; }
 
 # wait_for polls until the row reports the wanted figure, printing each
 # observed regeneration, and fails past the two-tick deadline.
@@ -97,7 +124,7 @@ wait_for() {
     reading="$(read_panel)"
     if [ "${reading%% *}" = "$wanted" ]; then
       elapsed=$(($(date +%s) - started))
-      printf 'reached %s open issues after %dm%02ds (panel generatedAt %s)\n' \
+      printf 'reached %s stars after %dm%02ds (panel generatedAt %s)\n' \
         "$wanted" "$((elapsed / 60))" "$((elapsed % 60))" "${reading#* }"
       return 0
     fi
@@ -117,35 +144,39 @@ wait_for() {
 
 baseline_reading="$(read_panel)"
 if [ "$baseline_reading" = "none" ]; then
-  printf 'FAIL: the live panel reports no openIssues figure for %s; the probe needs a numeric baseline\n' "$name" >&2
+  printf 'FAIL: the live panel reports no stars figure for %s; the probe needs a numeric baseline\n' "$name" >&2
   exit 1
 fi
 baseline="${baseline_reading%% *}"
-printf 'baseline: %s open issues in %s (panel generatedAt %s)\n' \
-  "$baseline" "$name" "${baseline_reading#* }"
+original="$(star_state)"
+printf 'baseline: %s stars on %s, operator %s (panel generatedAt %s)\n' \
+  "$baseline" "$name" "$original" "${baseline_reading#* }"
 
-issue_url=""
+mutated=""
 cleanup() {
-  if [ -n "$issue_url" ]; then
-    gh issue close "$issue_url" >/dev/null 2>&1 || true
+  if [ -n "$mutated" ]; then
+    if [ "$original" = starred ]; then star || true; else unstar || true; fi
   fi
 }
 trap cleanup EXIT
 
 stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-issue_url="$(gh issue create -R "$repo" \
-  --title "live-refresh probe ${stamp}" \
-  --body "Ephemeral probe issue opened and closed by scripts/ops/live-refresh-probe.sh (naranjo.online issue #281) to validate panel live refresh. Safe to ignore.")"
-printf 'opened %s at %s\n' "$issue_url" "$stamp"
+if [ "$original" = starred ]; then
+  unstar; mutated=yes; expected="$((baseline - 1))"
+  printf 'unstarred %s at %s\n' "$repo" "$stamp"
+else
+  star; mutated=yes; expected="$((baseline + 1))"
+  printf 'starred %s at %s\n' "$repo" "$stamp"
+fi
 
-wait_for "$((baseline + 1))"
+wait_for "$expected"
 forward_done="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf 'forward transition validated at %s\n' "$forward_done"
 
-gh issue close "$issue_url" >/dev/null
-printf 'closed %s at %s\n' "$issue_url" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [ "$original" = starred ]; then star; else unstar; fi
+mutated=""
+printf 'restored the operator'"'"'s %s state at %s\n' "$original" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 wait_for "$baseline"
-issue_url=""
 printf 'revert transition validated at %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf 'PASS: both transitions observed inside two ticks; the mutation is fully reverted\n'

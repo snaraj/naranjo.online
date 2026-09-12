@@ -455,6 +455,61 @@ export function watchRails(
   };
 }
 
+/* THE SHEET'S OTHER VIEWPORT QUESTION (owner design decision, 2026-09-11,
+ * issue 318): the width from which the Projects · Commits section lays its two
+ * columns side by side instead of stacking them. It lives beside the rails'
+ * breakpoint because it is the same kind of fact and has the same trap — a
+ * media query cannot read a custom property, so the stylesheet spells the
+ * number in its own `@media` and a frontend test holds the two equal.
+ *
+ * A SCRIPT has to ask it as well, and that is not a duplicate of the
+ * stylesheet's job: the commit row's short identity is not merely hidden on a
+ * phone, it is not rendered at all (the owner's two-line ruling), so a reader
+ * using a screen reader on a phone does not hear a seven-character hash their
+ * row has no room for. `display: none` cannot say that — the element would
+ * still be in the document — so the DOM itself has to know the width. */
+export const spreadFromRem = 45.0625;
+export const spreadMediaQuery = `(min-width: ${spreadFromRem}rem)`;
+
+/* The live answer to one media query. Deliberately narrower than
+ * RailsWatchDeps above: a viewport-aware RENDER needs no frames and no token
+ * retry, only "does this match now" and "tell me when that changes". */
+export interface MediaWatch {
+  readonly matches: boolean;
+  addEventListener(type: 'change', listener: () => void): void;
+  removeEventListener(type: 'change', listener: () => void): void;
+}
+
+/* watchMedia reports a query's answer immediately and on every change, and
+ * returns the teardown. The seam is the FIRST argument so a node test drives
+ * it with a fake and the browser passes browserMedia below — the same shape
+ * watchRails already uses, for the same reason: a listener that could only be
+ * exercised in a browser is a listener nobody tests. */
+export function watchMedia(
+  open: (query: string) => MediaWatch,
+  query: string,
+  onMatch: (matches: boolean) => void
+): () => void {
+  const live = open(query);
+  const sync = (): void => onMatch(live.matches);
+  live.addEventListener('change', sync);
+  sync();
+  return () => live.removeEventListener('change', sync);
+}
+
+// browserMedia is the real browser behind that seam, beside frameDeps and
+// documentHost below for the same reason: the DOM names live in one place. A
+// host with no matchMedia — a server render, a node test — answers "matches,
+// and never changes", because the wide arrangement is the one a document with
+// no viewport at all should describe: a stacked phone rendering is a NARROWING
+// of the sheet, not its base state.
+export function browserMedia(query: string): MediaWatch {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return { matches: true, addEventListener: () => {}, removeEventListener: () => {} };
+  }
+  return window.matchMedia(query);
+}
+
 // frameDeps is the real browser behind the watch seam, beside documentHost
 // below for the same reason: the DOM names live in one place.
 export function frameDeps(): RailsWatchDeps {

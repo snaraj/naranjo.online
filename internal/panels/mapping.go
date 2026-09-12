@@ -209,34 +209,19 @@ func calendarPayload(daily []int, total int, first, last time.Time, coverage str
 // claims to publish.
 func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
 	// Two decodes, and which one is strict is the point (issue 246, finding
-	// 2). The ENVELOPE is read leniently, because it is the protocol's own
-	// wrapper and the protocol may add top-level siblings to it — `extensions`
-	// above all — that this package never reads a value out of. The PAYLOAD is
-	// read strictly, because it is the shape this package maps field by field
-	// and an unknown field there is drift it has half-understood. Refusing the
-	// whole document for a sibling of `data` would have taken out every
-	// credentialed calendar from the day the upstream added one.
-	var document calendarDocument
-	if err := json.Unmarshal(raw, &document); err != nil {
-		return nil, fmt.Errorf("contribution calendar: %w", err)
-	}
-	if len(document.Errors) > 0 {
-		// The upstream answers a refused credential, a missing scope, or a
-		// malformed query with a 200 carrying this array. The COUNT is the
-		// whole signal; the messages are upstream-authored prose and never
-		// enter this process's narrative.
-		return nil, fmt.Errorf("contribution calendar: the upstream refused the query with %d error(s)", len(document.Errors))
-	}
-	// An answer carrying neither errors nor data is not a calendar. Raw is nil
-	// there and decodeStrict refuses nil, which is the FIRST refusal that
-	// reaches it rather than the only one — the minimum-days floor below
-	// catches an empty calendar too, and a mutation that skipped this decode
-	// for a nil payload still failed there. Both are kept: this one names the
-	// real fault where it happened instead of reporting a calendar that is
-	// merely too short.
+	// 2) — both live in graphQLPayload now, which every credentialed producer
+	// enters through. The ENVELOPE is read leniently, because it is the
+	// protocol's own wrapper and the protocol may add top-level siblings to it
+	// — `extensions` above all — that this package never reads a value out of.
+	// The PAYLOAD is read strictly, because it is the shape this package maps
+	// field by field and an unknown field there is drift it has
+	// half-understood. An answer carrying neither errors nor data is not a
+	// calendar: Data is nil there and decodeStrict refuses nil, which is the
+	// FIRST refusal rather than the only one — the minimum-days floor below
+	// catches an empty calendar too.
 	var data calendarData
-	if err := decodeStrict(document.Data, &data); err != nil {
-		return nil, fmt.Errorf("contribution calendar: %w", err)
+	if err := graphQLPayload(raw, "contribution calendar", &data); err != nil {
+		return nil, err
 	}
 	calendar := data.Viewer.Contributions.Calendar
 	counts := make(map[string]int, maxCalendarDays)
@@ -393,6 +378,111 @@ func mapRepositoryListing(raw []byte, spec *codingProjectsFetchSpec, now time.Ti
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, nil, fmt.Errorf("repository listing: %w", err)
 	}
+	candidates := make([]listingCandidate, 0, len(entries))
+	for _, entry := range entries {
+		candidates = append(candidates, listingCandidate{
+			name:        entry.Name,
+			owner:       entry.Owner.Login,
+			private:     entry.Private,
+			description: entry.Description,
+			stars:       entry.Stars,
+			pushedAt:    entry.PushedAt,
+		})
+	}
+	return admitRepositories(candidates, spec, now)
+}
+
+// mapRepositoryQuery maps the CREDENTIALED repository answer (issue #317) onto
+// the same rows through the same gate. It exists because the public listing
+// document carries neither the released version nor the all-time closed
+// pull-request tally the owner's columns ask for, and the alternative — one
+// request per repository per refresh — is the fan-out this package refuses
+// everywhere else.
+//
+// It adds exactly two value checks to the shared admission: a release tag must
+// sit inside the host's own tag grammar, and a pull-request tally must be a
+// plausible non-negative figure. Both fail the ROW rather than the document,
+// for the same reason every other value check here does.
+func mapRepositoryQuery(raw []byte, spec *codingProjectsFetchSpec, now time.Time) ([]listedProject, []refusedRow, error) {
+	var data repositoriesData
+	if err := graphQLPayload(raw, "repository query", &data); err != nil {
+		return nil, nil, err
+	}
+	// The document asks the credential's OWN account for the repositories it
+	// owns, so every row is stamped with the configured account below — which
+	// is only honest if the credential belongs to that account. The answer
+	// says whose it is, and a credential minted for another account refuses
+	// the document rather than listing a stranger's repositories under the
+	// owner's link host. The login is not repeated in the refusal.
+	if data.Viewer.Login != spec.Account {
+		return nil, nil, errors.New("repository query: the credential does not belong to the configured account")
+	}
+	// The pinned set is matched by NAME against the listing below, and a
+	// pinned name the listing does not carry is simply not matched: a pin is a
+	// mark on a row that exists, never a row of its own. A PRIVATE pin is
+	// dropped before the match for the same reason every private repository is
+	// dropped — its name is not this panel's to hold (requirement 12) — and a
+	// name outside the host's grammar is dropped rather than refusing the
+	// document, because the pinned set is decoration on a roster the identity
+	// tier already gates.
+	pinned := make(map[string]bool, len(data.Viewer.PinnedItems.Nodes))
+	for _, node := range data.Viewer.PinnedItems.Nodes {
+		if node.Name == "" || node.Private || !isRepositoryName(node.Name) {
+			continue
+		}
+		pinned[node.Name] = true
+	}
+	nodes := data.Viewer.Repositories.Nodes
+	candidates := make([]listingCandidate, 0, len(nodes))
+	for _, node := range nodes {
+		candidate := listingCandidate{
+			name:        node.Name,
+			owner:       spec.Account,
+			private:     node.Private,
+			description: node.Description,
+			stars:       node.Stars,
+			pushedAt:    node.PushedAt,
+			pulls:       &node.PullRequests.TotalCount,
+			pinned:      pinned[node.Name],
+		}
+		if node.LatestRelease != nil {
+			candidate.release = node.LatestRelease.TagName
+		}
+		candidates = append(candidates, candidate)
+	}
+	return admitRepositories(candidates, spec, now)
+}
+
+// listingCandidate is one repository as either producer read it, before
+// admission. It exists so the two documents converge on ONE gate: the owner's
+// ruling about which repositories may appear, and every value check behind it,
+// is decided in one place rather than once per upstream grammar.
+//
+// The OWNER is the reading producer's claim about who the row belongs to. The
+// public listing reports it per row and it is checked; the credentialed query
+// asks the credential's own account for repositories it OWNS, verifies that
+// the account answering is the configured one, and the field then carries the
+// configured account.
+type listingCandidate struct {
+	name        string
+	owner       string
+	private     bool
+	description *string
+	stars       int64
+	pushedAt    string
+	// pulls is the all-time merged-or-closed tally, or nil from a producer
+	// that reports none — which the row serves as absent and the page as a
+	// dash, never as a zero.
+	pulls *int64
+	// release is the latest release tag, empty for a repository that has
+	// never released or a producer that cannot read one.
+	release string
+	// pinned marks a row the owner pinned on the host; false from a producer
+	// that cannot read the pinned set, which is the public listing.
+	pinned bool
+}
+
+func admitRepositories(entries []listingCandidate, spec *codingProjectsFetchSpec, now time.Time) ([]listedProject, []refusedRow, error) {
 	if len(entries) == 0 {
 		return nil, nil, errors.New("repository listing: the document lists no repository at all")
 	}
@@ -404,53 +494,87 @@ func mapRepositoryListing(raw []byte, spec *codingProjectsFetchSpec, now time.Ti
 		excluded[name] = true
 	}
 	seen := make(map[string]bool, len(entries))
-	ordered := make([]listedProject, 0, maxCodingProjectSources)
+	ordered := make([]listedProject, 0, len(entries))
 	refused := make([]refusedRow, 0, 2)
 	for _, entry := range entries {
-		if !isRepositoryName(entry.Name) {
+		if !isRepositoryName(entry.name) {
 			return nil, nil, fmt.Errorf("repository listing: a name is outside the host's grammar")
 		}
-		if entry.Owner.Login != spec.Account {
+		if entry.owner != spec.Account {
 			return nil, nil, fmt.Errorf("repository listing: a row does not belong to the configured account")
 		}
-		if entry.Private {
-			return nil, nil, fmt.Errorf("repository listing: %s claims to be private; the public listing may not carry it", entry.Name)
+		if entry.private {
+			// Unnamed on purpose: the refusal is logged, and a name the
+			// document calls private is not this panel's to hold anywhere.
+			return nil, nil, errors.New("repository listing: a row claims to be private; the public listing may not carry it")
 		}
-		if seen[entry.Name] {
-			return nil, nil, fmt.Errorf("repository listing: %s is listed twice", entry.Name)
+		if seen[entry.name] {
+			return nil, nil, fmt.Errorf("repository listing: %s is listed twice", entry.name)
 		}
-		seen[entry.Name] = true
-		if excluded[entry.Name] {
+		seen[entry.name] = true
+		if excluded[entry.name] {
 			continue
 		}
-		if entry.PushedAt == "" {
+		if entry.pushedAt == "" {
 			continue
 		}
 		project, err := admitListedRepository(entry, now)
 		if err != nil {
-			refused = append(refused, refusedRow{name: entry.Name, err: err})
+			refused = append(refused, refusedRow{name: entry.name, err: err})
 			continue
 		}
-		// Bounded insertion by recency, newest first with the name as the
-		// deterministic tie-break — the same clamp-by-recency shape
-		// mergeCommits applies to its own row cap.
+		// Insertion by recency, newest first with the name as the
+		// deterministic tie-break. The CAP is applied afterwards, because
+		// which rows it may drop depends on the whole roster.
 		at := len(ordered)
 		for at > 0 && earlierListing(ordered[at-1], project) {
 			at--
 		}
-		if at >= maxCodingProjectSources {
-			continue
-		}
-		if len(ordered) < maxCodingProjectSources {
-			ordered = append(ordered, listedProject{})
-		}
+		ordered = append(ordered, listedProject{})
 		copy(ordered[at+1:], ordered[at:])
 		ordered[at] = project
 	}
 	if len(ordered) == 0 {
 		return nil, nil, errors.New("repository listing: no row survived admission")
 	}
-	return ordered, refused, nil
+	return servedRepositories(ordered), refused, nil
+}
+
+// servedRepositories applies the row cap to a recency-ordered roster: every
+// PINNED row survives it, the newest unpinned rows fill whatever is left, and
+// the result keeps the recency order it arrived in.
+//
+// Keeping the pins is what makes the owner's curation reachable rather than
+// nearly reachable (owner directive, 2026-09-11). The page lists the pinned
+// repositories; a pin that fell off a recency cap because a handful of other
+// repositories happened to be pushed today would be a card that vanished for a
+// reason nobody could see. The cap itself is unchanged, and it is still a
+// clamp rather than a refusal: a thirteenth repository must not take the panel
+// down, and the payload budget still has to fit.
+func servedRepositories(ordered []listedProject) []listedProject {
+	if len(ordered) <= maxCodingProjectSources {
+		return ordered
+	}
+	served := make([]listedProject, 0, maxCodingProjectSources)
+	room := maxCodingProjectSources
+	for _, project := range ordered {
+		if project.row.Pinned {
+			room--
+		}
+	}
+	for _, project := range ordered {
+		if !project.row.Pinned {
+			if room <= 0 {
+				continue
+			}
+			room--
+		}
+		served = append(served, project)
+		if len(served) == maxCodingProjectSources {
+			break
+		}
+	}
+	return served
 }
 
 // earlierListing reports whether have should sit AFTER candidate: it was
@@ -462,123 +586,71 @@ func earlierListing(have, candidate listedProject) bool {
 	return have.at.Before(candidate.at)
 }
 
-// admitListedRepository runs one row's value checks and builds the served
-// row, tallies excluded — those arrive from the separately read search
-// document, or not at all.
-func admitListedRepository(entry repositoryListingEntry, now time.Time) (listedProject, error) {
-	at, err := time.Parse(time.RFC3339, entry.PushedAt)
+// admitListedRepository runs one row's value checks and builds the served row.
+// The two figures issue #317 added are admitted here beside the ones that were
+// already: a tally outside the plausible range and a tag outside the host's
+// own tag grammar each fail the ROW, which the page then draws as a dash —
+// "not known", which is true, rather than a zero or a version nobody released.
+func admitListedRepository(entry listingCandidate, now time.Time) (listedProject, error) {
+	at, err := time.Parse(time.RFC3339, entry.pushedAt)
 	if err != nil {
-		return listedProject{}, fmt.Errorf("push instant %q: %w", entry.PushedAt, err)
+		return listedProject{}, fmt.Errorf("push instant %q: %w", entry.pushedAt, err)
 	}
 	if at.After(now.Add(maxCommitFutureSkew)) || at.Before(now.Add(-maxProjectAge)) {
 		return listedProject{}, fmt.Errorf("push instant %s is outside the plausible window", at.UTC().Format(time.RFC3339))
 	}
-	if entry.Stars < 0 || entry.Stars > maxCountValue {
-		return listedProject{}, fmt.Errorf("a star tally of %d is outside the admissible range", entry.Stars)
+	if entry.stars < 0 || entry.stars > maxCountValue {
+		return listedProject{}, fmt.Errorf("a star tally of %d is outside the admissible range", entry.stars)
 	}
 	description := ""
-	if entry.Description != nil {
-		description, err = projectDescription(*entry.Description)
+	if entry.description != nil {
+		description, err = projectDescription(*entry.description)
 		if err != nil {
 			return listedProject{}, err
 		}
 	}
-	stars := entry.Stars
-	return listedProject{
-		row: CodingProject{
-			Name:        entry.Name,
-			Description: description,
-			Stars:       &stars,
-			PushedAt:    at.UTC().Format(time.RFC3339),
-		},
-		combinedOpen: entry.OpenIssues,
-		at:           at,
-	}, nil
-}
-
-// splitOpenWork turns the upstream's ONE combined open tally into the two the
-// card draws. The repository document counts open pull requests as open
-// issues, so the issue figure is the combined tally minus the separately read
-// pull-request tally, and it exists only when that second read succeeded.
-//
-// Both figures are dropped together on anything that does not add up: no
-// pull-request tally, a negative or absurd figure on either side, or a
-// pull-request count exceeding the combined one — which is a real outcome, not
-// a hypothetical, because the two documents are read a moment apart and a
-// pull request opened between them lands in the later count only. Every one of
-// those refusals reaches the reader as a dash. That is the whole point: a dash
-// says "not known", a zero says "none open", and the second is a claim this
-// producer is in no position to make.
-//
-// Refusing the PAIR rather than the ROW is deliberate and it is the additive
-// rule doing its job. These fields arrived after the kind shipped; a payload
-// without them is valid, so a bad tally costs exactly the tallies and leaves a
-// perfectly good description, star count and push instant serving.
-func splitOpenWork(combined int64, openPulls *int64) (*int64, *int64) {
-	if openPulls == nil {
-		return nil, nil
+	row := CodingProject{
+		Name:        entry.name,
+		Description: description,
+		Stars:       &entry.stars,
+		PushedAt:    at.UTC().Format(time.RFC3339),
+		Pinned:      entry.pinned,
 	}
-	pulls := *openPulls
-	if pulls < 0 || pulls > maxCountValue || combined < pulls || combined > maxCountValue {
-		return nil, nil
-	}
-	issues := combined - pulls
-	return &issues, &pulls
-}
-
-// mapOpenPullsByRepo reads the account-wide open pull-request search answer
-// and attributes each match to its repository, through the openPullSearchEntry
-// projection and its bounds. A document that reports no count at all is
-// refused rather than read as zero, and a document whose matches cannot ALL
-// be attributed — a truncated page, an admitted-incomplete search, an item
-// pointing outside the account — is refused whole, because a partial map is
-// an undercount wearing a confident number.
-func mapOpenPullsByRepo(raw []byte, account string) (map[string]int64, error) {
-	var entry openPullSearchEntry
-	if err := json.Unmarshal(raw, &entry); err != nil {
-		return nil, fmt.Errorf("pull-request tally: %w", err)
-	}
-	if entry.Total == nil {
-		return nil, errors.New("pull-request tally: the document reports no total")
-	}
-	if *entry.Total < 0 || *entry.Total > maxCountValue {
-		return nil, fmt.Errorf("pull-request tally: %d is outside the admissible range", *entry.Total)
-	}
-	if entry.Incomplete {
-		return nil, errors.New("pull-request tally: the upstream reports its own search incomplete")
-	}
-	if len(entry.Items) > maxOpenPullItems {
-		return nil, fmt.Errorf("pull-request tally: %d items is over the %d bound", len(entry.Items), maxOpenPullItems)
-	}
-	if int64(len(entry.Items)) != *entry.Total {
-		return nil, fmt.Errorf("pull-request tally: the document reports %d matches but carries %d; a truncated answer would undercount", *entry.Total, len(entry.Items))
-	}
-	counted := make(map[string]int64, len(entry.Items))
-	for _, item := range entry.Items {
-		name, err := pullRepositoryName(item.RepositoryURL, account)
-		if err != nil {
-			return nil, fmt.Errorf("pull-request tally: %w", err)
+	if entry.pulls != nil {
+		if *entry.pulls < 0 || *entry.pulls > maxCountValue {
+			return listedProject{}, fmt.Errorf("a closed pull-request tally of %d is outside the admissible range", *entry.pulls)
 		}
-		counted[name] += 1
+		row.ClosedPulls = entry.pulls
 	}
-	return counted, nil
+	if entry.release != "" {
+		if !isReleaseTag(entry.release) {
+			return listedProject{}, fmt.Errorf("a release tag is outside the host's tag grammar")
+		}
+		row.Release = entry.release
+	}
+	return listedProject{row: row, at: at}, nil
 }
 
-// pullRepositoryName reads the repository name out of one search item's
-// repository address, admitting only the exact ".../repos/<account>/<name>"
-// tail with a grammatical name. The address is never requested — this is
-// attribution over a string, and the account pin is what stops a hostile
-// document from crediting a stranger's pull requests to the owner's rows.
-func pullRepositoryName(address, account string) (string, error) {
-	segments := strings.Split(address, "/")
-	if len(segments) < 3 {
-		return "", errors.New("a match names no repository address")
+// isReleaseTag admits a release tag through the shape a version word actually
+// has: letters, digits, dots, underscores and dashes, bounded, never a
+// filesystem dot name. The cell prints it verbatim, so this is what stops an
+// upstream from printing a sentence, a control character, or a path where a
+// version belongs.
+func isReleaseTag(tag string) bool {
+	if tag == "." || tag == ".." || len(tag) > maxReleaseTagRunes {
+		return false
 	}
-	name := segments[len(segments)-1]
-	if segments[len(segments)-3] != "repos" || segments[len(segments)-2] != account || !isRepositoryName(name) {
-		return "", errors.New("a match sits outside the configured account")
+	for _, symbol := range tag {
+		switch {
+		case symbol >= '0' && symbol <= '9',
+			symbol >= 'a' && symbol <= 'z',
+			symbol >= 'A' && symbol <= 'Z',
+			symbol == '.', symbol == '_', symbol == '-':
+		default:
+			return false
+		}
 	}
-	return name, nil
+	return true
 }
 
 // projectDescription reduces a repository's description to the single line a
@@ -720,50 +792,265 @@ func countFromLabel(label, id string) (int, error) {
 	return count, nil
 }
 
-// mapCommits maps ONE repository's public commit document onto dated panel
-// rows. The document is read through the commitListEntry projection rather
-// than decodeStrict — see that type for why the exception is narrow and why it
-// is the stronger privacy posture — so the whole gate lives in the value
-// checks below. Every one of them refuses the WHOLE document rather than
-// dropping a row, because a document that half-parses is drift, and a
-// half-parsed commit list looks exactly like a quiet week.
+// graphQLPayload unwraps ONE credentialed query answer: the protocol envelope
+// read leniently, the payload read strictly, and the upstream's own refusal
+// reported as one. Every credentialed producer in this package enters through
+// it, so "the envelope may grow siblings, the data may not" is decided once
+// rather than re-argued per document (see graphQLDocument for the full reason).
+func graphQLPayload(raw []byte, what string, into any) error {
+	var document graphQLDocument
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	if len(document.Errors) > 0 {
+		// The upstream answers a refused credential, a missing scope, or a
+		// malformed query with a 200 carrying this array. The COUNT is the
+		// whole signal; the messages are upstream-authored prose and never
+		// enter this process's narrative.
+		return fmt.Errorf("%s: the upstream refused the query with %d error(s)", what, len(document.Errors))
+	}
+	if err := decodeStrict(document.Data, into); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return nil
+}
+
+// mapCommitContributions maps the DISCOVERY answer onto three things the
+// second half of the round needs: the account's own node identity, the PUBLIC
+// repositories it committed to over the window (newest activity first, capped
+// by recency), and the per-day PRIVATE aggregate that is all a private
+// repository will ever contribute to this panel.
 //
-// The repo label is the caller's, never the document's: an upstream that could
-// name the repository could attribute a stranger's commit to the owner.
-func mapCommits(raw []byte, repo string, now time.Time) ([]datedCommit, error) {
-	var entries []commitListEntry
-	if err := json.Unmarshal(raw, &entries); err != nil {
-		return nil, fmt.Errorf("commit document for %s: %w", repo, err)
+// Everything here refuses the WHOLE document rather than dropping an entry,
+// because this document decides both what is asked next and what is counted:
+// a half-understood discovery answer produces a log that looks like a quiet
+// month rather than a broken read.
+//
+// Three gates carry the weight:
+//
+//   - PRIVACY. A repository flagged private is counted into its days and is
+//     never named, never identified, and never asked about in the second
+//     document. A name that appears both private and public under ONE owner
+//     is not a bad row in a good document — it is a document that cannot be
+//     trusted about which is which — so it refuses everything. The same name
+//     under two owners is a fork beside its upstream, which the host reports
+//     routinely, and is two repositories. Every refusal below names the entry
+//     by its POSITION in the document and never by its name: a refusal is
+//     logged, the entry it refuses may be the private one, and requirement 12
+//     holds for log lines exactly as it holds for the wire.
+//   - IDENTITY. A name outside the host's own grammar, or an owner login that
+//     is not the configured account, never becomes a named row. Foreign
+//     repositories are legitimate — the account contributes to other people's
+//     work — so they are COUNTED toward the document's own total and simply
+//     not listed, which is the difference between curation and a lie.
+//   - ARITHMETIC. The document reports its own commit total beside the days,
+//     and the days must sum to exactly it. That is the same cross-field
+//     integrity rule mapCalendarDocument rests on, and it is what catches a
+//     truncated repository list or a silently dropped bucket: serving either
+//     of two disagreeing figures would be picking which claim to publish.
+func mapCommitContributions(raw []byte, owner string, now time.Time) (string, []contributionRepo, []VCSPrivateDay, error) {
+	var data contributionsData
+	if err := graphQLPayload(raw, "commit contributions", &data); err != nil {
+		return "", nil, nil, err
 	}
-	if len(entries) == 0 {
-		return nil, fmt.Errorf("commit document for %s reports no commits at all", repo)
+	viewer := data.Viewer
+	if !isNodeIdentifier(viewer.ID) {
+		return "", nil, nil, errors.New("commit contributions: the document carries no account identity")
 	}
-	if len(entries) > maxCommitDocumentItems {
-		return nil, fmt.Errorf("commit document for %s carries %d rows, over the %d bound", repo, len(entries), maxCommitDocumentItems)
+	collection := viewer.Contributions
+	if len(collection.Repositories) > maxContributionRepositories {
+		return "", nil, nil, fmt.Errorf("commit contributions: %d repositories reported, over the %d bound", len(collection.Repositories), maxContributionRepositories)
 	}
-	rows := make([]datedCommit, 0, len(entries))
-	for _, entry := range entries {
-		// The identity check is what makes the projection fail closed. An
-		// unrelated JSON array decodes into zero-valued entries without error;
-		// a 40-hex identity is the cheapest thing no unrelated document has.
-		if !isCommitIdentity(entry.SHA) {
-			return nil, fmt.Errorf("commit document for %s: a row carries no commit identity", repo)
+	oldest := now.Add(-commitLogWindowDays * 24 * time.Hour).Add(-contributionWindowSlack)
+	newest := now.Add(maxCommitFutureSkew)
+	privateDays := make(map[string]*VCSPrivateDay, commitLogWindowDays)
+	type repositoryKey struct{ owner, name string }
+	seen := make(map[repositoryKey]bool, len(collection.Repositories))
+	candidates := make([]contributionRepo, 0, len(collection.Repositories))
+	total := 0
+	for index, entry := range collection.Repositories {
+		reference := entry.Repository
+		position := index + 1
+		if !isRepositoryName(reference.Name) {
+			return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries a name outside the host's grammar", position)
 		}
-		subject, err := commitSubject(entry.Commit.Message)
-		if err != nil {
-			return nil, fmt.Errorf("commit document for %s: %w", repo, err)
+		key := repositoryKey{owner: reference.Owner.Login, name: reference.Name}
+		if seen[key] {
+			return "", nil, nil, fmt.Errorf("commit contributions: entry %d appears twice", position)
 		}
-		at, err := time.Parse(time.RFC3339, entry.Commit.Author.Date)
-		if err != nil {
-			return nil, fmt.Errorf("commit document for %s: commit instant %q: %w", repo, entry.Commit.Author.Date, err)
+		seen[key] = true
+		if !isNodeIdentifier(reference.ID) {
+			return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries no node identity", position)
 		}
-		if at.After(now.Add(maxCommitFutureSkew)) || at.Before(now.Add(-maxCommitAge)) {
-			return nil, fmt.Errorf("commit document for %s: commit instant %s is outside the plausible window", repo, at.UTC().Format(time.RFC3339))
+		days := entry.Contributions.Nodes
+		if len(days) > maxContributionDays {
+			return "", nil, nil, fmt.Errorf("commit contributions: entry %d reports %d dated buckets, over the %d bound", position, len(days), maxContributionDays)
 		}
-		rows = append(rows, datedCommit{
-			at:  at,
-			row: VCSCommit{Repo: repo, SHA: entry.SHA, Message: subject, At: at.UTC().Format(time.RFC3339)},
-		})
+		var latest time.Time
+		counted := 0
+		for _, day := range days {
+			at, err := time.Parse(time.RFC3339, day.OccurredAt)
+			if err != nil {
+				// Not wrapped: the parse error quotes the upstream's own bytes,
+				// and this entry may be the private one (requirement 12).
+				return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries a bucket instant that does not parse", position)
+			}
+			if at.Before(oldest) || at.After(newest) {
+				return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries a bucket at %s, outside the requested window", position, at.UTC().Format(time.RFC3339))
+			}
+			if day.CommitCount < 0 {
+				return "", nil, nil, fmt.Errorf("commit contributions: entry %d reports a negative count", position)
+			}
+			total += day.CommitCount
+			counted += day.CommitCount
+			if at.After(latest) {
+				latest = at
+			}
+			if !reference.Private || day.CommitCount == 0 {
+				continue
+			}
+			key := at.UTC().Format(dayLayout)
+			aggregate, known := privateDays[key]
+			if !known {
+				aggregate = &VCSPrivateDay{Date: key}
+				privateDays[key] = aggregate
+			}
+			aggregate.Contributions += day.CommitCount
+			aggregate.Repositories++
+		}
+		if reference.Private || reference.Owner.Login != owner || counted == 0 {
+			continue
+		}
+		candidates = append(candidates, contributionRepo{id: reference.ID, name: reference.Name, at: latest})
+	}
+	if total != collection.Total {
+		return "", nil, nil, fmt.Errorf("commit contributions: the document reports %d commits but its days sum to %d", collection.Total, total)
+	}
+	return viewer.ID, recentRepositories(candidates), orderedPrivateDays(privateDays), nil
+}
+
+// contributionRepo is one PUBLIC repository the discovery answer admitted: the
+// opaque identity the next document asks by, the name the row will wear, and
+// the newest instant it contributed, which is what the recency cap sorts on.
+type contributionRepo struct {
+	id   string
+	name string
+	at   time.Time
+}
+
+// recentRepositories keeps the most recently active repositories, newest
+// first, and drops the rest past maxHistoryRepositories. Dropping by recency
+// rather than refusing is the same clamp mergeCommits applies to its row cap:
+// a thirteenth repository must not take the panel down, and a third request
+// per round is exactly the per-repository fan-out this producer exists to
+// avoid.
+func recentRepositories(candidates []contributionRepo) []contributionRepo {
+	ordered := make([]contributionRepo, 0, len(candidates))
+	for _, candidate := range candidates {
+		at := len(ordered)
+		for at > 0 && ordered[at-1].at.Before(candidate.at) {
+			at--
+		}
+		ordered = append(ordered, contributionRepo{})
+		copy(ordered[at+1:], ordered[at:])
+		ordered[at] = candidate
+	}
+	if len(ordered) > maxHistoryRepositories {
+		ordered = ordered[:maxHistoryRepositories]
+	}
+	return ordered
+}
+
+// orderedPrivateDays turns the per-day aggregate into the served list, newest
+// day first so it merges into the log's own order without re-sorting. A day
+// with no private contribution has no entry at all: no zero facts.
+func orderedPrivateDays(days map[string]*VCSPrivateDay) []VCSPrivateDay {
+	ordered := make([]VCSPrivateDay, 0, len(days))
+	for _, day := range days {
+		at := len(ordered)
+		for at > 0 && ordered[at-1].Date < day.Date {
+			at--
+		}
+		ordered = append(ordered, VCSPrivateDay{})
+		copy(ordered[at+1:], ordered[at:])
+		ordered[at] = *day
+	}
+	return ordered
+}
+
+// isNodeIdentifier admits an opaque upstream node identity: printable ASCII
+// without whitespace, bounded. It is not a grammar this package invented a
+// meaning for — the value is the upstream's own handle and is only ever
+// handed straight back as a typed variable — so the check is exactly what
+// keeps an unrelated or hostile document from putting arbitrary bytes into
+// the next request body.
+func isNodeIdentifier(s string) bool {
+	if s == "" || len(s) > maxNodeIdentifierRunes {
+		return false
+	}
+	for _, symbol := range s {
+		if symbol <= 0x20 || symbol >= 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// mapCommitHistories maps the SECOND answer onto dated panel rows. The request
+// asked about one node identifier per admitted repository, in order, so the
+// answer's entries are matched to those repositories POSITIONALLY and the row
+// label is the name discovery admitted — never a label this document chose.
+//
+// Two upstream states are data rather than errors, and both are narrow: an
+// entry with no default branch is an empty repository and contributes no rows,
+// and a commit tip that is not a commit yields no history. Everything else —
+// a null entry, a count over the bound, a name that disagrees with the one
+// asked about, a malformed identity, subject, or instant — refuses the WHOLE
+// document, because a half-parsed history looks exactly like a quiet week.
+func mapCommitHistories(raw []byte, repos []contributionRepo, now time.Time) ([]datedCommit, error) {
+	var data historyData
+	if err := graphQLPayload(raw, "commit history", &data); err != nil {
+		return nil, err
+	}
+	if len(data.Nodes) != len(repos) {
+		return nil, fmt.Errorf("commit history: %d entries answered %d repositories", len(data.Nodes), len(repos))
+	}
+	rows := make([]datedCommit, 0, len(repos)*maxCommitDocumentItems)
+	for index, node := range data.Nodes {
+		repo := repos[index]
+		if node == nil {
+			return nil, fmt.Errorf("commit history: the entry for %s is empty", repo.name)
+		}
+		if node.Name != repo.name {
+			return nil, fmt.Errorf("commit history: the entry asked about %s answered under another name", repo.name)
+		}
+		if node.DefaultBranchRef == nil {
+			continue
+		}
+		commits := node.DefaultBranchRef.Target.History.Nodes
+		if len(commits) > maxCommitDocumentItems {
+			return nil, fmt.Errorf("commit history for %s carries %d rows, over the %d bound", repo.name, len(commits), maxCommitDocumentItems)
+		}
+		for _, commit := range commits {
+			if !isCommitIdentity(commit.OID) {
+				return nil, fmt.Errorf("commit history for %s: a row carries no commit identity", repo.name)
+			}
+			subject, err := commitSubject(commit.MessageHeadline)
+			if err != nil {
+				return nil, fmt.Errorf("commit history for %s: %w", repo.name, err)
+			}
+			at, err := time.Parse(time.RFC3339, commit.CommittedDate)
+			if err != nil {
+				return nil, fmt.Errorf("commit history for %s: commit instant %q: %w", repo.name, commit.CommittedDate, err)
+			}
+			if at.After(now.Add(maxCommitFutureSkew)) || at.Before(now.Add(-maxCommitAge)) {
+				return nil, fmt.Errorf("commit history for %s: commit instant %s is outside the plausible window", repo.name, at.UTC().Format(time.RFC3339))
+			}
+			rows = append(rows, datedCommit{
+				at:  at,
+				row: VCSCommit{Repo: repo.name, SHA: commit.OID, Message: subject, At: at.UTC().Format(time.RFC3339)},
+			})
+		}
 	}
 	return rows, nil
 }

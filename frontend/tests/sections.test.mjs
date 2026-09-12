@@ -22,7 +22,9 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
 import { relativeAge } from '../src/lib/age.ts';
-import { section, sectionHref, staticBlock } from '../src/lib/blocks.ts';
+import { section, sectionHref, sectionOrdinal, staticBlock } from '../src/lib/blocks.ts';
+import { spreadFromRem, spreadMediaQuery } from '../src/lib/columnWidth.ts';
+import { commitColumnHead, commitColumnId, projectsCommitsProps } from '../src/lib/commits.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
 import {
   roleLedgerProps,
@@ -32,7 +34,8 @@ import {
 } from '../src/lib/work.ts';
 import {
   codingProjectsPanelId,
-  projectCounts,
+  latestRowChip,
+  projectColumns,
   projectHost,
   projectLinkLabel,
   projects,
@@ -70,7 +73,7 @@ const [
   pageHeader,
   blockHost,
   ledgerLog,
-  ledgerTable,
+  ledgerSpread,
   mediaGallery,
 ] = await Promise.all([
   read('../src/App.svelte'),
@@ -82,7 +85,7 @@ const [
   read('../src/lib/components/PageHeader.svelte'),
   read('../src/lib/components/Block.svelte'),
   read('../src/lib/components/LedgerLog.svelte'),
-  read('../src/lib/components/LedgerTable.svelte'),
+  read('../src/lib/components/LedgerSpread.svelte'),
   read('../src/lib/components/MediaGallery.svelte'),
 ]);
 
@@ -93,10 +96,12 @@ const workSource = await read('../src/lib/work.ts');
 const [workBinding, mediaBinding, projectsBinding, galleryModule] = await Promise.all([
   read('../src/lib/blocks/workHistory.ts'),
   /* Renamed with its section (owner directive of 2026-09-03, issue 287): the
-     gallery is the sheet's own fifth section rather than half of Projects, so
+     gallery is the sheet's own last section rather than half of Projects, so
      the block that mounts it is named for the media it carries. */
   read('../src/lib/blocks/mediaGallery.ts'),
-  read('../src/lib/blocks/codingProjects.ts'),
+  /* Renamed with ITS section too (owner design decision, 2026-09-11, issue
+     318): the repositories and the commit log are one two-column block now. */
+  read('../src/lib/blocks/projectsCommits.ts'),
   /* The data module is executed above; its SOURCE is read too, because the
      optionality of a TypeScript field is erased before Node ever sees it —
      "this entry has no title" and "this field may be absent" are different
@@ -109,16 +114,16 @@ const [workBinding, mediaBinding, projectsBinding, galleryModule] = await Promis
    287) where it used to be the entry log and the gallery; every sweep below
    that walked the old pair walks all of them, so the redesign added surfaces
    to these guards rather than removing any. */
-const [commitLog, ledgerBoard, ticker] = await Promise.all([
-  read('../src/lib/components/CommitLog.svelte'),
+const [contributionCalendar, ledgerBoard, ticker] = await Promise.all([
+  read('../src/lib/components/ContributionCalendar.svelte'),
   read('../src/lib/components/LedgerBoard.svelte'),
   read('../src/lib/components/Ticker.svelte'),
 ]);
 
 const contentComponents = {
   LedgerLog: ledgerLog,
-  LedgerTable: ledgerTable,
-  CommitLog: commitLog,
+  LedgerSpread: ledgerSpread,
+  ContributionCalendar: contributionCalendar,
   LedgerBoard: ledgerBoard,
   Ticker: ticker,
   MediaGallery: mediaGallery,
@@ -147,14 +152,20 @@ const componentSources = Object.fromEntries(
 const styleBlock = (source) => /<style[^>]*>([\s\S]*?)<\/style>/.exec(source)?.[1] ?? '';
 
 /* The manifest's section calls, read from the one module the page is. Each
- * captured id and label is then driven through the EXECUTED constructor the
- * manifest is written in, so the assertions bind to the real page rather
- * than to a copy of it. */
+ * captured id, label and mark is then driven through the EXECUTED constructor
+ * the manifest is written in, so the assertions bind to the real page rather
+ * than to a copy of it.
+ *
+ * The mark is REQUIRED in the pattern, not optional (owner design decision,
+ * 2026-09-11, issue 313): a section that shipped without one would fall out of
+ * this list entirely and take its own pins with it, which is the quiet failure
+ * an optional capture invites. */
 const manifestSections = [...manifest.matchAll(
-  /section\('([a-z-]+)', '([^']+)', \[([^\]]*)\](?:, (\{ layout: 'stack' \}))?\)/g
-)].map(([, id, label, blocks, stack]) => ({
+  /section\('([a-z-]+)', '([^']+)', \[([^\]]*)\], \{\s*mark: '([a-z-]+)'(,\s*layout: 'stack')?\s*\}\)/g
+)].map(([, id, label, blocks, mark, stack]) => ({
   id,
   label,
+  mark,
   blocks: blocks.split(',').map((name) => name.trim()).filter(Boolean),
   layout: stack ? 'stack' : 'flow',
 }));
@@ -163,47 +174,65 @@ const manifestSections = [...manifest.matchAll(
 // The manifest, the nav, and the sections it points at
 // ---------------------------------------------------------------------------
 
-/* FIVE SECTIONS, updated deliberately for the owner directive of 2026-09-03
- * (issue 287): the ledger gives each of the owner's five headings a numbered
- * section of its own. Commits leaves the trackers stack to lead a section that
- * cycles one calendar between three daily series, and the gallery leaves
- * Projects, where it had been a subheading, for the sheet's last section. The
- * IDS of the three surviving sections do not move — an id is the fragment a
- * nav link jumps to and an address a reader may already have shared. */
-test('the manifest names the owner’s five sections, in the order the page stacks them', () => {
+/* FOUR SECTIONS, updated deliberately for the owner's design decision of
+ * 2026-09-11 (issue 318, option B on the design canvas): Projects and Commits
+ * become ONE section of two columns, and the contribution calendar goes back
+ * into the trackers stack between the board and the ticker. The ledger had
+ * five since issue 287.
+ *
+ * The IDS of the surviving sections do not move — an id is the fragment a nav
+ * link jumps to and an address a reader may already have shared — and `commits`
+ * does not stop resolving just because it stopped being a section: the commit
+ * COLUMN carries it, which is pinned below. */
+test('the manifest names the owner’s four sections, in the order the page stacks them', () => {
   assert.deepEqual(
     manifestSections.map((entry) => entry.label),
-    ['Professional Experience', 'Projects', 'Commits', 'Trackers', 'Gallery'],
+    ['Professional Experience', 'Projects · Commits', 'Trackers', 'Gallery'],
     'the section labels are the owner’s words and their order is the page’s order'
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.id),
-    ['work', 'projects', 'commits', 'trackers', 'gallery']
+    ['work', 'projects', 'trackers', 'gallery']
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.blocks),
     [
       ['workHistory'],
-      ['codingProjects'],
-      ['commitLog'],
-      ['tokenBoard', 'bossTicker'],
+      ['projectsCommits'],
+      ['tokenBoard', 'contributionCalendar', 'bossTicker'],
       ['mediaGallery'],
     ],
     'each section holds exactly its blocks; reordering the page is moving one name here'
   );
   assert.deepEqual(
     manifestSections.map((entry) => entry.layout),
-    ['flow', 'flow', 'stack', 'stack', 'flow'],
-    'the two panel stacks are the sections whose blocks share one column'
+    ['flow', 'flow', 'stack', 'flow'],
+    'the one panel stack is the section whose blocks share one column'
+  );
+  /* EVERY SECTION CARRIES ITS MARK (owner design decision, 2026-09-11, issue
+     313), here in the manifest beside the label it stands for — so the nav
+     link and the section head read one entry and cannot draw two different
+     marks for one section. The combined section keeps `folder`: it is the
+     owner's projects, with what landed in them beside it. */
+  assert.deepEqual(
+    manifestSections.map((entry) => entry.mark),
+    ['work', 'folder', 'chip', 'photo'],
+    'each section names the mark the nav and the section head both draw'
   );
   // The constructors the manifest is written in, executed with its own ids:
   // the id in, the id out, the layout defaulted to flow, and the href built
   // by a function rather than concatenated in markup — a lost '#' is one red
   // test instead of four links to the page root.
   for (const entry of manifestSections) {
-    const built = section(entry.id, entry.label, [], entry.layout === 'stack' ? { layout: 'stack' } : {});
+    const built = section(
+      entry.id,
+      entry.label,
+      [],
+      entry.layout === 'stack' ? { mark: entry.mark, layout: 'stack' } : { mark: entry.mark }
+    );
     assert.equal(built.id, entry.id);
     assert.equal(built.label, entry.label);
+    assert.equal(built.mark, entry.mark, 'the constructor drops the section mark');
     assert.equal(built.layout, entry.layout);
     assert.equal(sectionHref(built), `#${entry.id}`);
   }
@@ -245,13 +274,61 @@ test('the empty About Me section is gone, and nothing renders in its place', asy
   }
 });
 
+/* THE OLD ADDRESS KEEPS RESOLVING (issue 287's rule: never break a URL).
+ * `#commits` named a section of its own until the owner's design decision of
+ * 2026-09-11 (issue 318) paired it with Projects, and a reader who bookmarked
+ * or shared that fragment must still land on the commits. So the COLUMN wears
+ * the id: the adapter names it once, hands it through as data, and the
+ * component renders it on the log's own wrapper.
+ *
+ * The nav never links it, and that is the other half of the claim — a nav link
+ * to a non-section would be a second address for one place, and the nav is
+ * derived from the manifest precisely so it cannot invent one. */
+test('the retired commits address still lands on the commits, and the nav never links it', () => {
+  assert.equal(commitColumnId, 'commits');
+  // The adapter hands it through; no component spells it.
+  assert.equal(projectsCommitsProps([null, null]).logAnchor, commitColumnId);
+  assert.match(ledgerSpread, /<div class="spread-column" id=\{logAnchor\}>/);
+  for (const [name, source] of Object.entries(componentSources)) {
+    assert.doesNotMatch(source, /id="commits"/, `${name} spells a page address of its own`);
+  }
+  // And it is not a section any more: the manifest names four, none of them
+  // this one, so the nav has nothing to point at it with.
+  assert.ok(
+    !manifestSections.some((entry) => entry.id === commitColumnId),
+    'the commits section came back; the sheet pairs it with Projects now'
+  );
+});
+
 test('every nav link lands on the section the manifest renders', () => {
   // Structural now, not counted: the nav and the sections read the SAME
   // manifest entry, so a link cannot point at a section nobody rendered.
   assert.match(sectionNav, /import \{ page \} from '\.\.\/\.\.\/page\.ts'/);
-  assert.match(sectionNav, /\{#each page as section \(section\.id\)\}/);
+  assert.match(sectionNav, /\{#each page as section, position \(section\.id\)\}/);
   assert.match(sectionNav, /href=\{sectionHref\(section\)\}/);
   assert.match(sectionNav, /class="section-link"/);
+  /* A LINK IS A MARK AND A NUMBER, AND THE WORD IS ITS ACCESSIBLE NAME (owner
+     design decision, 2026-09-11, issue 313). Both halves of what a link shows
+     come from the manifest — the mark from the entry, the number from the
+     entry's POSITION through the shared ordinal rule — so a section moved in
+     src/page.ts renumbers its link and its head together and neither is a
+     literal in a component. The label is what a screen reader hears, and it is
+     the same word the heading the link points at is called. */
+  assert.match(sectionNav, /<Icon name=\{section\.mark\} slot="row" \/>/);
+  assert.match(sectionNav, /\{sectionOrdinal\(position\)\}/);
+  assert.match(sectionNav, /aria-label=\{section\.label\}/, 'a mark-only link with no accessible name');
+  assert.doesNotMatch(
+    sectionNav,
+    />\{section\.label\}</,
+    'the link prints the section word again; the word is the accessible name now'
+  );
+  /* ONE ordinal rule for two surfaces, EXECUTED rather than matched: the nav
+     and the page both call it, so the sheet cannot end up numbered two ways.
+     Two digits, and the position is the caller's. */
+  assert.equal(sectionOrdinal(0), '01');
+  assert.equal(sectionOrdinal(4), '05');
+  assert.equal(sectionOrdinal(9), '10');
+  assert.equal(sectionOrdinal(99), '100', 'the rule pads to two digits, it does not truncate to two');
   assert.match(pageSectionSource, /<section class="page-section" id=\{section\.id\}/);
   /* The ordinal the ledger's section head prints is derived from the
      manifest's own position (owner directive of 2026-09-03, issue 287), so a
@@ -259,7 +336,7 @@ test('every nav link lands on the section the manifest renders', () => {
      claim the same number. */
   assert.match(
     app,
-    /\{#each page as section, position \(section\.id\)\}\s*<PageSection \{section\} ordinal=\{String\(position \+ 1\)\.padStart\(2, '0'\)\} \/>/
+    /\{#each page as section, position \(section\.id\)\}\s*<PageSection \{section\} ordinal=\{sectionOrdinal\(position\)\} \/>/
   );
   // No component may spell a section of its own beside the manifest: one
   // renderer, zero hardcoded ids, or the counting guarantee above is gone.
@@ -341,7 +418,8 @@ test('the page stacks the chrome row, the name and the sections in one column', 
      aria-labelledby points at — are unchanged. */
   assert.match(
     pageSectionSource,
-    /<div class="section-head">\s*<span class="section-number" aria-hidden="true">\{ordinal\}<\/span>/
+    /<div class="section-head">(?:\s*<!--[\s\S]*?-->)?\s*<span class="section-number" aria-hidden="true"\s*><Icon name=\{section\.mark\} slot="row" \/>\{ordinal\}<\/span\s*>/,
+    'the section head must lead with the manifest mark and the ordinal, both hidden from assistive technology (issue 313)'
   );
   /* A section link has to be a real touch target: 44px on both axes, as a
      minimum rather than a fixed box so an enlarged base font grows it. It
@@ -814,11 +892,15 @@ test('the experience section carries four complete real entries, newest first', 
 /* THE SAME DOCTRINE, ONE SHAPE FEWER (owner directive of 2026-09-03, issue
  * 287). The card carried two body regions — a paragraph and a points list —
  * and drew each only when it held something, because a card that reserved an
- * empty <p> for content it did not have was the defect. The ledger splits
- * those two across two surfaces: the log's drawer holds the points, the
- * table's row holds the one-line summary. So the claim below is the same claim
- * against each of them — nothing this site ships is a row with nothing to say
- * — checked over every adapter that feeds either. */
+ * empty <p> for content it did not have was the defect.
+ *
+ * The table's half of that claim moved rather than lapsed (owner design
+ * decision, 2026-09-11, issue 318). The description cell it used to be about
+ * is gone — the section holds half a sheet now — and what replaced it is a
+ * cell drawn only for the row that has something in it: the `latest` chip. So
+ * the claim is the same claim, against the one optional cell the table still
+ * has: it is present exactly on the row that earned it and absent everywhere
+ * else, never an empty box held open. */
 test('a row draws only the body it has, and every shipped row has one', () => {
   // The drawer is a region drawn from data, and the row's own points are what
   // fill it; an entry with none would open onto an empty box.
@@ -826,214 +908,53 @@ test('a row draws only the body it has, and every shipped row has one', () => {
   for (const row of roleLedgerProps.rows) {
     assert.ok(row.points.length > 0, `the ledger ships "${row.key}" with an empty drawer`);
   }
-  // The table's summary is the other half, and a repository the host carries
-  // no description for renders the honest dash rather than an empty cell.
+  // The chip is conditional in BOTH directions: the markup draws it only when
+  // the row carries one...
+  assert.match(ledgerSpread, /\{#if row\.chip\}<span class="table-chip">\{row\.chip\}<\/span>\{\/if\}/);
+  // ...and no row ever carries an empty one, which would be a box with nothing
+  // in it drawn by a truthy test that happens to be false.
+  const chips = projectTableProps(
+    projectsEnvelope([
+      { name: 'kept', description: 'x', stars: 1, pushedAt: '2026-09-01T09:00:00Z', pinned: true },
+      { name: 'newest', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' }
+    ])
+  )
+    .rows.map((row) => row.chip)
+    .filter((chip) => chip !== undefined);
+  assert.deepEqual(chips, [latestRowChip]);
   for (const row of projectTableProps(null).rows) {
-    assert.ok(
-      row.summary.trim().length > 0,
-      `the projects table ships "${row.key}" with neither a description nor a dash`
-    );
+    assert.equal(row.chip, undefined, `the captured face marked "${row.key}" latest`);
   }
-  assert.match(ledgerTable, /<span class="table-summary">\{row\.summary\}<\/span>/);
 });
 
 // ---------------------------------------------------------------------------
 // Projects: the coding half
 // ---------------------------------------------------------------------------
 
-test('the seven repositories are the owner’s, at the addresses the owner gave', () => {
-  // SEVEN, exactly, and the equality is the pin (owner ruling, corrected in
-  // issue 256: the foobar2000-* trio stays): this section is a curated set
-  // rather than a sweep of an account, so a repository appearing here that
-  // the owner did not put here is the failure this test exists to catch.
-  // Relaxing it to a floor would let exactly that through.
-  assert.equal(projects.length, 7);
-  // The exact URLs, verbatim from the owner's list. The host is written once
-  // and the row supplies its name, so this pin proves the derivation as well
-  // as the addresses.
-  assert.deepEqual(projects.map(projectUrl), [
-    'https://github.com/snaraj/naranjo.online',
-    'https://github.com/snaraj/platform',
-    'https://github.com/snaraj/lidersea.com',
-    'https://github.com/snaraj/dotfiles',
-    'https://github.com/snaraj/foobar2000-lyricsbuddy',
-    'https://github.com/snaraj/foobar2000-library-visualizer',
-    'https://github.com/snaraj/foobar2000-album-visualizer',
-  ]);
+test('the captured fallback is the snapshot\'s roster, at the addresses the owner gave', () => {
+  /* SEVEN, exactly, was the pin while this list was a curated set. It is not
+     one any more (issue 281, and the owner\'s dynamic-roster ruling behind it):
+     these rows are the cold-start FALLBACK face, a mirror of the embedded
+     snapshot, and the snapshot is whatever the account published when it was
+     last captured. The equality that replaced the count is the one that still
+     catches the failure the old pin was about — a repository appearing here
+     that the account does not publish — and it lives in
+     tests/panels-ui.test.mjs, where both files can be read at once.
+
+     What stays HERE is the derivation: every address is the one host constant
+     plus a name, so a row can never point at another host or an unparseable
+     path. */
+  assert.ok(projects.length > 0, 'the captured fallback set is empty');
   for (const project of projects) {
+    assert.equal(projectUrl(project), `${projectHost}/${project.name}`);
+    assert.match(project.name, /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/);
     assert.ok(project.description.trim().length > 0, `${project.name} has no description`);
-    for (const count of [project.commits, project.stars]) {
-      assert.ok(
-        Number.isInteger(count) && count >= 0,
-        `${project.name} carries a count that is not a whole number of things`
-      );
-    }
-  }
-  // The adapter hands the log exactly those addresses and labels, and an
-  // outbound link says where it goes and that it leaves the page.
-  assert.equal(
-    projectLinkLabel(projects[0]),
-    'naranjo.online on GitHub, opens in a new tab'
-  );
-  const captured = projectTableProps(null);
-  /* Compared against the feed's OWN order (issue 252) rather than the module
-     list's, because they are no longer the same thing: the module list is a
-     maintenance order and the table is sorted by last push. Sorting the
-     expectation the same way keeps this test about identity — every row's
-     name, address and accessible name derived from the captured row — and
-     leaves the ordering claim to the test that exists for it.
-
-     The table shows the four most recently pushed (owner directive of
-     2026-09-03, issue 287). The roster count it used to print above them is
-     gone (owner directive, 2026-09-04, issue 292). */
-  const byPush = projects.toSorted(
-    (left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt)
-  );
-  assert.equal(shownProjectRows, 4);
-  assert.deepEqual(
-    captured.rows.map((row) => [row.link.text, row.link.href, row.link.label, row.summary]),
-    byPush
-      .slice(0, shownProjectRows)
-      .map((project) => [
-        project.name,
-        projectUrl(project),
-        projectLinkLabel(project),
-        project.description,
-      ])
-  );
-  assert.equal(captured.caption, undefined, 'the roster caption came back (owner cut it, issue 292)');
-  assert.deepEqual([...projectTableHeads], ['Repository', 'Description', 'Stars', 'Open', 'PRs', 'Pushed']);
-  assert.match(ledgerTable, /target="_blank"/);
-  assert.match(ledgerTable, /rel="noopener noreferrer"/);
-  assert.match(ledgerTable, /aria-label=\{row\.link\.label\}/);
-  // The table renders the href it is handed and never assembles one.
-  assert.deepEqual(
-    [...ledgerTable.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression),
-    ['row.link.href'],
-    'the table may render exactly the one validated href and construct none'
-  );
-});
-
-test('a count of one is a count of one thing', () => {
-  // "1 commits" is the small lie a page tells when nobody executes its
-  // labels. Three of the seven tracked repositories genuinely carry a single
-  // star and two a single commit, yet every case below is driven from a
-  // SYNTHETIC row — the derivation has to be proven against the figures it
-  // must handle, not against whichever figures the tracked repositories
-  // happen to hold this week. The clock is FIXED so the third count — how
-  // long since the last push (0.1.52) — is executed as arithmetic rather
-  // than asserted around a moving now.
-  const noon = Date.parse('2026-08-27T12:00:00Z');
-  const row = { name: 'x', description: 'x', pushedAt: '2026-08-24T12:00:00Z' };
-  // The open-work pair reports nothing without a panel row, so the trailing
-  // two labels here are the honest not-reported sentence throughout; the
-  // singular/plural of THOSE is executed by the icon test below.
-  const unreported = ['open issues not reported', 'open pull requests not reported'];
-  // Cluster order per the owner's sketch (issue 275): stars, freshness,
-  // commits, then the open-work pair.
-  assert.deepEqual(
-    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon).map((count) => count.label),
-    ['1 star', 'updated 3 days ago', '1 commit', ...unreported]
-  );
-  assert.deepEqual(
-    projectCounts({ ...row, commits: 0, stars: 20 }, undefined, noon).map((count) => count.label),
-    ['20 stars', 'updated 3 days ago', '0 commits', ...unreported]
-  );
-  // Grouped through the same whole-number renderer every other figure on the
-  // page uses, so a four-figure count does not suddenly read differently.
-  assert.deepEqual(
-    projectCounts({ ...row, commits: 1234, stars: 5678 }, undefined, noon).map((count) => count.label),
-    ['5,678 stars', 'updated 3 days ago', '1,234 commits', ...unreported]
-  );
-  /* The freshness counter's own bands moved to lib/age.ts with the live clock
-     (issue 268) and tests/age.test.mjs executes every one of them from both
-     sides. What stays HERE is the seam: this adapter's second counter is that
-     module's sentence about this row's push instant, and nothing in between.
-     Pinned by reproduction rather than by restating a string, so the two
-     cannot drift into two answers about one instant. */
-  assert.equal(
-    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[1].label,
-    relativeAge(row.pushedAt, noon).phrase
-  );
-  assert.equal(
-    projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[1].value,
-    relativeAge(row.pushedAt, noon).compact
-  );
-  /* And `since` is what keeps it alive: the component re-derives the figure
-     from THIS instant on every minute-aligned tick, so an adapter that stopped
-     carrying it would ship a counter frozen at whichever render caught it. */
-  assert.equal(projectCounts({ ...row, commits: 1, stars: 1 }, undefined, noon)[1].since, row.pushedAt);
-  // The adapter carries the same labels into the log, with the glyph beside
-  // the words rather than instead of them. Against the feed's LEADING entry,
-  // which is the most recently pushed repository rather than the module list's
-  // first row (issue 252).
-  const leading = projects.toSorted(
-    (left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt)
-  )[0];
-  /* THE TABLE DRAWS FOUR OF THE FIVE COUNTERS (owner directive of 2026-09-03,
-     issue 287: the columns are the owner's own list — Stars, Open, PRs,
-     Pushed). The age has a column of its own rather than a place in the
-     cluster, and the captured commit total left with the card that had room
-     for it. What did NOT change is where each figure comes from: every one of
-     them is still projectCounts' own counter, carried across whole — the same
-     figure, the same sentence, the same detail, the same provenance mark. */
-  const leadingRow = projectTableProps(null, noon).rows[0];
-  const tableCounters = [leadingRow.counts[0], leadingRow.updated, ...leadingRow.counts.slice(1)];
-  const cardCounters = projectCounts(leading, undefined, noon).filter(
-    (count) => count.glyph !== 'node'
-  );
-  assert.deepEqual(
-    tableCounters.map((count) => count.label),
-    cardCounters.map((count) => count.label)
-  );
-  assert.deepEqual(
-    tableCounters.map((count) => count.glyph),
-    ['star', 'clock', 'issue', 'pull'],
-    'each count names its generic glyph; the drawing is the component’s'
-  );
-  /* EVERY counter is terse now (issue 268): the glyph and a bare figure on the
-     visible line, the whole sentence in the clipped span and in the detail.
-     Both channels are checked, because dropping either one is the failure —
-     the figure alone leaves the glyph carrying the meaning for a screen
-     reader, and the words alone are the noise the owner removed. */
-  for (const count of tableCounters) {
     assert.ok(
-      typeof count.value === 'string' && count.value.length > 0,
-      `${count.key} renders no visible figure`
+      Number.isInteger(project.stars) && project.stars >= 0,
+      `${project.name} carries a star count that is not a whole number of things`
     );
-    assert.ok(count.label.length > 0, `${count.key} carries no sentence`);
-    assert.equal(count.detail.name, count.label, `${count.key}'s detail does not name its phrase`);
+    assert.match(project.pushedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
   }
-  // The figure is TEXT beside the glyph, never carried by the glyph alone.
-  assert.match(ledgerTable, /\{count\.value\}/);
-  assert.match(ledgerTable, /\{count\.label\}/);
-  assert.match(ledgerTable, /aria-hidden="true"/);
-});
-
-test('a figure the origin recorded says nothing about it, on the line or in its detail (issue 299)', () => {
-  /* The owner, of the inline italic mark repeated on every row (issue 268):
-     "stale, static and ugly ... just remove it". The sentence then lived one
-     interaction away, in the detail; the owner's directive of 2026-09-06
-     (issue 299) removed every instance of it. What remains pinned is the
-     absence on both halves. */
-  const noon = Date.parse('2026-08-27T12:00:00Z');
-  const captured = projectTableProps(null, noon).rows[0].counts;
-  const stars = captured.find((count) => count.key === 'stars');
-  assert.ok(!('marked' in stars), 'the captured face carries a provenance mark');
-  assert.deepEqual(stars.detail.rows, [], 'a recorded figure carries a provenance row in its detail');
-  // And nothing on the visible line says it: the mark, its class and its
-  // browser tooltip are gone from the component rather than merely unused.
-  assert.doesNotMatch(ledgerTable, /entry-recorded|table-recorded/);
-  assert.doesNotMatch(ledgerTable, /·\s*recorded/);
-  // The reader still reaches it, through the page's one hover-detail
-  // primitive rather than through a browser tooltip no phone can open.
-  assert.match(ledgerTable, /<DetailTip detail=\{count\.detail\} \/>/);
-  /* A DASH gets no provenance row. "not reported" and "recorded out of band"
-     are different claims, and only one of them can be true of a figure that
-     does not exist. */
-  const unreported = captured.find((count) => count.key === 'issues');
-  assert.equal(unreported.value, '—');
-  assert.deepEqual(unreported.detail.rows, []);
 });
 
 test('the feed leads with the repository pushed most recently (issue 252)', () => {
@@ -1064,7 +985,7 @@ test('the feed leads with the repository pushed most recently (issue 252)', () =
   const envelope = {
     schema: 'panel/v1',
     id: codingProjectsPanelId,
-    kind: 'coding-projects/v1',
+    kind: 'coding-projects/v2',
     title: 'Coding Projects',
     generatedAt: '2026-08-29T12:00:00Z',
     status: 'ok',
@@ -1105,7 +1026,7 @@ function projectsEnvelope(repos, overrides = {}) {
   return {
     schema: 'panel/v1',
     id: codingProjectsPanelId,
-    kind: 'coding-projects/v1',
+    kind: 'coding-projects/v2',
     title: 'Coding Projects',
     generatedAt: '2026-09-01T12:00:00Z',
     status: 'ok',
@@ -1126,8 +1047,8 @@ test('the roster is the payload’s: a repository the module list has never hear
     description: 'a repository created after the last release',
     stars: 1,
     pushedAt: '2026-09-01T11:00:00Z',
-    openIssues: 2,
-    openPulls: 1,
+    closedPulls: 2,
+    release: 'v0.1.0',
   };
   const rendered = projectTableProps(projectsEnvelope([fresh]), now);
   assert.equal(rendered.rows.length, 1, 'the payload decides the roster, not the module list');
@@ -1135,22 +1056,20 @@ test('the roster is the payload’s: a repository the module list has never hear
   assert.equal(entry.link.text, 'born-this-morning');
   assert.equal(entry.link.href, `${projectHost}/born-this-morning`);
   assert.equal(entry.link.label, 'born-this-morning on GitHub, opens in a new tab');
-  assert.equal(entry.summary, fresh.description);
   const byKey = new Map(entry.counts.map((count) => [count.key, count]));
   assert.equal(byKey.get('stars').value, '1');
-  assert.equal(byKey.get('issues').value, '2');
-  assert.equal(byKey.get('pulls').value, '1');
-  /* A repository the capture never saw still renders its live figures. The
-     card carried a captured commit total the table has no column for, so what
-     the honest-dash rule is read on here is the figure that CAN be absent from
-     a live row: an open-work tally the payload does not carry. */
+  assert.equal(byKey.get('pulls').value, '2');
+  assert.equal(byKey.get('release').value, 'v0.1.0');
+  /* A repository the capture never saw still renders its live figures, and the
+     honest-dash rule is read on the two figures that CAN be absent from a live
+     row: a tally and a version the payload does not carry. */
   const noTallies = projectTableProps(
-    projectsEnvelope([{ ...fresh, openIssues: undefined, openPulls: undefined }]),
+    projectsEnvelope([{ ...fresh, closedPulls: undefined, release: undefined }]),
     now
   );
-  const absent = noTallies.rows[0].counts.find((count) => count.key === 'issues');
+  const absent = noTallies.rows[0].counts.find((count) => count.key === 'pulls');
   assert.equal(absent.value, '—');
-  assert.equal(absent.label, 'open issues not reported');
+  assert.equal(absent.label, 'closed pull requests not reported');
   assert.deepEqual(absent.detail.rows, [], 'a dash carries no provenance row');
 });
 
@@ -1236,7 +1155,10 @@ test('a card looks stale when its envelope says so (issue 281, defect 2)', () =>
  * surface passes none. */
 test('the table renders its stale line in the reserved head, and only when it has one', async () => {
   const shell = await read('../src/lib/components/PanelShell.svelte');
-  assert.match(ledgerTable, /<PanelShell \{title\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
+  /* NO TITLE PROP AT ALL (owner directive, 2026-09-04, issue 292; the section
+     head names the sheet): the shell is handed status, provenance and the note
+     and nothing else, so the reserved head row is what keeps the geometry. */
+  assert.match(ledgerSpread, /<PanelShell \{status\} \{generatedAt\} note=\{staleNote\}>/);
   assert.match(shell, /\{#if note\}<span class="panel-note" data-panel-note>\{note\}<\/span>\{\/if\}/);
   assert.ok(
     shell.indexOf('data-panel-note') < shell.indexOf('<div class="panel-body">'),
@@ -1267,7 +1189,7 @@ test('the table renders its stale line in the reserved head, and only when it ha
   );
   assert.match(
     shell,
-    /\{#if title\}<h2 class="panel-title">\{title\}<\/h2>\{\/if\}/,
+    /\{#if title\}<h2 class="panel-title"[^>]*>(?:\{#if mark\}<span class="panel-mark">.*?<\/span>\{\/if\})?\{title\}<\/h2>\{\/if\}/,
     'the title is optional; a bare head is the Projects table'
   );
   assert.match(
@@ -1276,64 +1198,103 @@ test('the table renders its stale line in the reserved head, and only when it ha
     'the note must keep the end column when there is no title beside it'
   );
   assert.equal(projectTableProps(null).title, undefined, 'the Projects table grew a panel label back');
+  assert.doesNotMatch(ledgerSpread, /\{title\}/, 'the sheet passes a panel label again');
 });
 
-test('open issues and open pull requests are told with icons and a number (issue 252)', () => {
+test('the closed-pull tally and the released version are told with a mark and a figure (issue #317)', () => {
   const noon = Date.parse('2026-08-29T12:00:00Z');
-  const project = { name: 'x', description: 'x', commits: 1, stars: 1, pushedAt: '2026-08-29T09:00:00Z' };
+  const project = { name: 'x', description: 'x', stars: 1, pushedAt: '2026-08-29T09:00:00Z' };
   const live = {
     name: 'x',
     description: 'x',
     stars: 1,
     pushedAt: '2026-08-29T09:00:00Z',
-    openIssues: 1,
-    openPulls: 4
+    closedPulls: 4,
+    release: 'v0.1.82'
   };
-  const [, , , issues, pulls] = projectCounts(project, live, noon);
-  // The owner's instruction: the CARD does not read "open prs". The visible
-  // channel is the glyph and the figure...
-  assert.equal(issues.value, '1');
+  const [pulls, release] = projectColumns(project, live, noon).counts;
+  // The owner's instruction: the cell does not read "prs closed". The visible
+  // channel is the mark and the figure...
   assert.equal(pulls.value, '4');
+  assert.equal(release.value, 'v0.1.82');
   // ...and the words are in the accessible name, complete and plural-correct,
-  // so the icon is never the only thing carrying the meaning.
-  assert.equal(issues.label, '1 open issue');
-  assert.equal(pulls.label, '4 open pull requests');
+  // so the mark is never the only thing carrying the meaning.
+  assert.equal(pulls.label, '4 closed pull requests');
+  assert.equal(release.label, 'version v0.1.82');
   assert.equal(
-    projectCounts(project, { ...live, openIssues: 2, openPulls: 1 }, noon)[4].label,
-    '1 open pull request'
+    projectColumns(project, { ...live, closedPulls: 1 }, noon).counts[0].label,
+    '1 closed pull request'
   );
 
-  // A tally the payload does not carry is a DASH, never a zero: those are
+  // A figure the payload does not carry is a DASH, never a zero: those are
   // different claims and only one of them is supported.
-  const [, , , unknownIssues, unknownPulls] = projectCounts(project, { ...live, openIssues: undefined, openPulls: undefined }, noon);
-  assert.equal(unknownIssues.value, '—');
-  assert.equal(unknownIssues.label, 'open issues not reported');
+  const [unknownPulls, unknownRelease] = projectColumns(
+    project,
+    { ...live, closedPulls: undefined, release: undefined },
+    noon
+  ).counts;
   assert.equal(unknownPulls.value, '—');
+  assert.equal(unknownPulls.label, 'closed pull requests not reported');
+  assert.equal(unknownRelease.value, '—');
+  assert.equal(unknownRelease.label, 'no released version');
   // A REPORTED zero is a measurement and renders as one.
-  assert.equal(projectCounts(project, { ...live, openIssues: 0 }, noon)[3].value, '0');
-  assert.equal(projectCounts(project, { ...live, openIssues: 0 }, noon)[3].label, '0 open issues');
-
-  // The component draws both glyphs in the page's own language — one ink,
-  // bound to currentColor — so a forced-colours or monochrome render keeps
-  // them, and marks them decorative because the accessible name is the text.
-  for (const glyph of ["count.glyph === 'star'", "count.glyph === 'issue'"]) {
-    assert.ok(ledgerTable.includes(glyph), `the table draws no ${glyph} branch`);
-  }
+  assert.equal(projectColumns(project, { ...live, closedPulls: 0 }, noon).counts[0].value, '0');
   assert.equal(
-    [...ledgerTable.matchAll(/(?:fill|stroke)="(?!none)([^"]*)"/g)].every(
-      ([, paint]) => paint === 'currentColor'
-    ),
-    true,
-    'a glyph paints an ink that is not currentColor'
+    projectColumns(project, { ...live, closedPulls: 0 }, noon).counts[0].label,
+    '0 closed pull requests'
   );
+
+  /* THE MARKS COME FROM THE ONE FAMILY (issue 313), so the component draws no
+     <svg> of its own any more: there is exactly one place on the site that
+     writes the viewBox, the stroke attributes and the assistive posture, and a
+     second drawing of a star here would be a second weight to keep in step. */
+  assert.match(ledgerSpread, /import Icon from '\.\/Icon\.svelte';/);
+  assert.match(ledgerSpread, /<Icon name=\{count\.glyph\} slot="cell" \/>/);
+  assert.doesNotMatch(ledgerSpread, /<svg/, 'the table draws a glyph of its own again');
+  assert.doesNotMatch(ledgerSpread, /stroke-width=/, 'the family’s weight is restated in the table');
   /* The words are hidden by CLIPPING, never by display:none or hidden, both of
-     which would take them out of the accessibility tree and leave the glyph
-     carrying the figure alone. The class moved with the surface (owner
-     directive of 2026-09-03, issue 287) and its rule moved to styles.css with
-     every other page-level row decision; the technique is byte-identical. */
-  assert.match(ledgerTable, /<span class="table-clipped">\{count\.label\}<\/span>/);
+     which would take them out of the accessibility tree and leave the mark
+     carrying the figure alone. */
+  assert.match(ledgerSpread, /<span class="table-clipped">\{count\.label\}<\/span>/);
   assert.match(styles, /\.table-clipped \{[^}]*clip-path: inset\(50%\)/s);
   assert.doesNotMatch(styles, /\.table-clipped \{[^}]*display: none/s);
+  /* THE HEAD ROW IS WORDS TOO (owner directive, 2026-09-11, issue #317): the
+     visible head is a mark, so the word it replaced has to reach a screen
+     reader from the head itself — which is why the row is no longer hidden
+     wholesale. */
+  assert.doesNotMatch(ledgerSpread, /<div class="table-head" aria-hidden="true">/);
+  assert.match(ledgerSpread, /<span class="table-clipped">\{head\}<\/span>/);
+  /* EACH COLUMN HAS ITS OWN RULED HEAD (owner design decision, 2026-09-11,
+     issue 318). The table's names its five columns; the log's names the whole
+     stream, in the adapter's words, under the same class so the two heads are
+     drawn at one height by one rule rather than by two that must agree. */
+  assert.equal(commitColumnHead, 'Commits · every repository');
+  assert.equal(projectsCommitsProps([null, null]).logHead, commitColumnHead);
+  assert.match(
+    ledgerSpread,
+    /<div class="table-head spread-log-head">\s*<span class="table-label"><Icon name="commit" slot="cell" \/>\{logHead\}<\/span>/
+  );
+  assert.match(styles, /\.spread-log-head \{[^}]*grid-template-columns: minmax\(0, 1fr\);/s);
+  /* A VERSION LONGER THAN ITS CELL ELLIPSIZES rather than wrapping the row: a
+     wrapped figure is a row taller than the reserve the column beside it was
+     built from, which is the zero-CLS pairing breaking on a tag nobody chose
+     the length of. The cell is one unbreakable line that clips. */
+  const figure = /\.table-figure \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(figure, /overflow: hidden/);
+  assert.match(figure, /white-space: nowrap/);
+  assert.match(figure, /text-overflow: ellipsis/);
+  /* And the tag reaches the cell VERBATIM however long it is — the adapter
+     prints what the host released and the cell decides how much of it is
+     drawn, so nothing truncates a version into a different version. */
+  // Long, and inside the release-tag grammar issue 317 admits: a `+` would be
+  // refused by the payload gate, which would prove the gate rather than this.
+  const longTag = 'v0.0.0-release-candidate.1.build.2026091100000000';
+  const tagged = projectTableProps(
+    projectsEnvelope([
+      { name: 'x', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z', release: longTag }
+    ])
+  );
+  assert.equal(tagged.rows[0].counts.find((count) => count.key === 'release').value, longTag);
 });
 
 /* THE CLUSTER BECAME COLUMNS (owner directive of 2026-09-03, issue 287), and
@@ -1365,11 +1326,32 @@ test('the table places every counter in a declared track, and no figure moves an
   );
   assert.equal(rowRules.length, 1, 'the row has grown a second base shape again');
   assert.match(rowRules[0], /display:\s*grid/);
+  /* EVERY TRACK IS A minmax (owner design decision, 2026-09-11, issue 318):
+     the name track flexes, and each figure track takes its stated width
+     wherever there is room and shrinks below it rather than pushing the page
+     sideways when the table lives in half a sheet or a reader drags the
+     reading column in. A bare fixed track is what used to overflow. */
   assert.match(
     rowRules[0],
-    /grid-template-columns:\s*[0-9.]+rem minmax\(0, 1fr\)/,
-    'the description column must shrink under a long line instead of pushing the counters'
+    /grid-template-columns:\s*\n?\s*minmax\(0, 1fr\)(?:\s+minmax\(0, [0-9.]+rem\)){4};/,
+    'the name column must flex and every figure track must be able to shrink'
   );
+  /* And the LOG column beside it is declared the same way, for the same
+     reason: a subject that flexes between an age, a repository and an
+     identity, each of which can shrink. */
+  const logRule = /\.commit-row \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(
+    logRule,
+    /grid-template-columns:\s*\n?\s*minmax\(0, [0-9.]+rem\) minmax\(0, [0-9.]+rem\) minmax\(0, 1fr\) minmax\(0, [0-9.]+rem\);/,
+    'the commit row must flex on its subject and shrink on the rest'
+  );
+  /* THE TWO COLUMNS ARE EQUAL HALVES that fill the sheet (the no-dead-space
+     ruling) and can be narrowed (the no-sideways-scroll floor). Both claims
+     are one declaration. */
+  const spreadRule = /\.ledger-spread \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(spreadRule, /display:\s*grid/);
+  assert.match(spreadRule, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\);/);
+  assert.match(spreadRule, /gap:\s*0 var\(--ledger-spread-gap\);/);
   /* The head and the rows are laid on the SAME track list — one declaration
      for both — so a column head can never sit over a different column than the
      figures it names. */
@@ -1386,29 +1368,57 @@ test('the table places every counter in a declared track, and no figure moves an
   /* The BOUNDARY MOVED from 40rem to 45rem (owner directive of 2026-09-03,
      issue 287), and it moved because it was measured rather than chosen: the
      wide row's own tracks — 15rem for the name, four counter columns, five
-     1.5rem gaps — come to 680px, so a page column narrower than that overflows
+     1.5rem gaps — came to 680px, so a page column narrower than that overflowed
      the document sideways, which happened between 641px and 711px. The
-     restack now happens at 720px, where the wide layout genuinely stops
-     fitting. */
+     restack happens at 720px, where the wide layout genuinely stopped fitting,
+     and it is the SAME boundary the two columns stack at (owner design
+     decision, 2026-09-11, issue 318). */
   const phoneWidths = new Set(
     [...styles.matchAll(/@media \(max-width: ([^)]+)\)/g)].map(([, width]) => width.trim())
   );
   assert.equal(phoneWidths.size, 1, `the sheet disagrees about where a phone ends: ${[...phoneWidths].join(', ')}`);
-  assert.match(styles, /@media \(max-width: 45rem\)[\s\S]*?\.table-head \{\s*display: none;/);
-  assert.match(styles, /@media \(max-width: 45rem\)[\s\S]*?\.table-row \{[^}]*grid-template-areas:/);
-  /* And the phone's restack places each counter in a track of its own. Three
+  /* THE TABLE's head goes and the LOG's stays (owner design decision,
+     2026-09-11, issue 318): every cell under the table's head repeats its own
+     word, so five marks over a restacked row are five heads over nothing —
+     while the log's head is the only thing telling a reader where the
+     repositories stop and the commits start once the columns stack. */
+  assert.match(
+    styles,
+    /@media \(max-width: 45rem\)[\s\S]*?\.table-head:not\(\.spread-log-head\) \{\s*display: none;/
+  );
+  assert.match(styles, /@media \(max-width: 45rem\)[\s\S]*?\.ledger-spread \{[^}]*grid-template-columns: minmax\(0, 1fr\);/);
+  /* THE SCRIPT ASKS THE SAME QUESTION THE STYLESHEET DOES, and a media query
+     cannot read a token — so the number is stated in lib/columnWidth.ts and
+     this holds the two equal. The commit row's short identity is rendered
+     against it, so a drift here is a phone row that grows a third line. */
+  assert.equal(spreadFromRem, 45.0625);
+  assert.equal(spreadMediaQuery, '(min-width: 45.0625rem)');
+  assert.match(ledgerSpread, /\{#if wide\}<span class="commit-mark">\{row\.mark\}<\/span>\{\/if\}/);
+  assert.match(ledgerSpread, /browserMedia\(spreadMediaQuery\)\.matches/);
+  /* And the phone's restack keeps every counter in a track of its own. Three
      counters sharing ONE grid area are three counters drawn on top of each
      other — measured at 390px before this pin existed — so the count of them
-     is held at both ends: the desktop track list reserves exactly three, and
-     the phone names exactly three placements. */
+     is held at both ends: the desktop track list reserves exactly three
+     counters plus the age, and the phone declares exactly four equal tracks
+     with the name spanning the line above them. */
   assert.equal(projectTableProps(null, noonPlacement).rows[0].counts.length, 3);
-  for (const nth of [3, 4, 5]) {
-    assert.match(
-      styles,
-      new RegExp(`@media \\(max-width: 45rem\\)[\\s\\S]*?\\.table-count:nth-child\\(${nth}\\) \\{\\s*grid-area:`),
-      `the phone gives the row's child ${nth} no track of its own`
-    );
-  }
+  assert.match(
+    styles,
+    /@media \(max-width: 45rem\)[\s\S]*?\.table-row \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 45rem\)[\s\S]*?\.table-name-cell \{\s*grid-column: 1 \/ -1;/,
+    'the name no longer spans the row, so the four counters share its line'
+  );
+  /* THE MARK SLOT IS A DECLARED TRACK TOO (issue #317). A counter that packed
+     its mark and its figure inline put the mark wherever the figure's own
+     length left it, so a column of four-digit tallies drew its marks at a
+     different x than a column of one-digit ones — issue 188's own defect, one
+     level down. Two tracks fix both edges at once. */
+  const countRule = /\.table-count \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(countRule, /display:\s*grid/);
+  assert.match(countRule, /grid-template-columns:\s*var\(--icon-cell\) minmax\(0, 1fr\)/);
 
   /* A digit may not jitter the column it sits in: the counters read tabular
      figures. That is a LIVE requirement rather than a precaution — the
@@ -1426,17 +1436,23 @@ test('the table places every counter in a declared track, and no figure moves an
   for (const count of [...row.counts, row.updated]) {
     assert.ok(count.label.trim().length > 0, `${count.key} carries no sentence for the tree`);
   }
-  assert.match(ledgerTable, /<span class="table-clipped">\{count\.label\}<\/span>/);
+  assert.match(ledgerSpread, /<span class="table-clipped">\{count\.label\}<\/span>/);
   /* Both are focus stops (owner directive, 2026-09-03, issue 287): each
      carries a detail, and a detail only a pointer can open is half the
      feature — the same reason the retired stat tiles carried a tabindex. */
-  assert.match(ledgerTable, /<span class="table-age" tabindex="0" aria-label=\{row\.updated\.label\}>/);
-  assert.match(ledgerTable, /<span class="table-count" tabindex="0" aria-label=\{count\.label\}>/);
+  assert.match(ledgerSpread, /<span class="table-count table-age" tabindex="0" aria-label=\{row\.updated\.label\}>/);
+  assert.match(ledgerSpread, /<span class="table-count" tabindex="0" aria-label=\{count\.label\}>/);
   assert.match(styles, /\.table-count:focus-visible,\s*\.table-age:focus-visible \{[^}]*outline: 2px solid var\(--color-accent\)/);
   const clipped = /\.table-clipped \{([^}]*)\}/.exec(styles)?.[1] ?? '';
   assert.match(clipped, /clip-path:\s*inset\(50%\)/);
   assert.doesNotMatch(clipped, /display:\s*none/);
 });
+
+/* The four columns as one flat list, in render order: the cluster then the
+ * age, which is the order the table draws them in. */
+function columnLabels(columns) {
+  return [...columns.counts, columns.updated].map((count) => count.label);
+}
 
 test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every stated date honestly', () => {
   // A pure test of the constant and the function (issue 167): the owner
@@ -1585,6 +1601,31 @@ test('exactly the reviewed sixteen WebP files (plus the sources manifest) are ve
     assert.ok(size <= 2 * 1024 * 1024, `${file} is ${size} bytes, over the 2MB per-image ceiling`);
   }
   assert.ok(total <= 16 * 1024 * 1024, `the vendored set is ${total} bytes, over the 16MB total ceiling`);
+});
+
+test('Rime’s flight sheet is exactly one vendored file under its own ceiling (owner 2026-09-11, issue 314)', async () => {
+  /* The second dated requirement-11 exception, and a narrower one than the
+     gallery's: ONE file, the owner's own render of his own dragon, carried as
+     a hashed bundle asset because the alternative — a 3D runtime, a model and
+     an iframe from the media origin — is a new publish path and a new
+     content type for a mark in the corner of a row.
+     The ceiling is 1,000,000 bytes rather than the gallery's 2MB because this
+     one is fetched on EVERY first paint, not when a reader opens a picture,
+     and it is what the sheet is encoded against: 80px cells at quality 80.
+     The allowlist half is what makes a missing sheet a red build rather than
+     an empty box — a build that dropped the file fails here, before a reader
+     ever meets a mark with nothing in it. */
+  const dir = new URL('../src/assets/images/rime/', import.meta.url);
+  const entries = (await readdir(dir)).filter((entry) => !entry.startsWith('.'));
+  assert.deepEqual(entries.sort(), ['rime-flight.webp'], 'the vendored flight directory is not exactly the one sheet');
+  const styles = await read('../src/styles.css');
+  assert.match(
+    styles,
+    /url\('\.\/assets\/images\/rime\/rime-flight\.webp'\)/,
+    'the stylesheet no longer names the sheet, so the bundler emits a file nothing draws'
+  );
+  const { size } = await stat(new URL('rime-flight.webp', dir));
+  assert.ok(size <= 1_000_000, `the flight sheet is ${size} bytes, over its 1,000,000-byte ceiling`);
 });
 
 /* The enlarged branch, extracted whole. Issue 202 nested a further {#if}
@@ -1929,7 +1970,18 @@ test('the media sets are data: kind-derived by default, named by the manifest, c
   assert.match(mediaGallery, /const sets = \$derived\(\[\.\.\.new Set\(items\.map\(setOf\)\)\]\);/, 'a set exists exactly when something is in it');
   assert.match(mediaGallery, /\{#if sets\.length > 1\}\s*<div class="gallery-sets" role="group" aria-label="Media set">/, 'one set draws no switch');
   assert.match(mediaGallery, /aria-pressed=\{name === activeSet\}/);
-  assert.match(mediaGallery, /\{name\} · \{countOf\(name\)\}/, 'each set states its own count');
+  /* THE SET'S WORD MOVED TO THE ACCESSIBLE NAME (owner design decision,
+     2026-09-11, issue 313) and the figure stayed visible, because a count is a
+     fact and "Photographs" was a label. The mark is decided by what the set
+     HOLDS, the same rule the default name already follows, so a manifest that
+     names its own set still gets the right drawing. */
+  assert.match(mediaGallery, /<Icon name=\{setGlyph\(name\)\} slot="row" \/> · \{countOf\(name\)\}/, 'each set states its own count');
+  assert.match(mediaGallery, /aria-label=\{`\$\{name\} · \$\{countOf\(name\)\}`\}/, 'a mark-only segment with no accessible name');
+  assert.match(
+    mediaGallery,
+    /return members\.every\(\(candidate\) => candidate\.video !== undefined\) \? 'film' : 'photo';/,
+    'a set reads as film only when every member is one; a mixed set is pictures'
+  );
   assert.match(mediaGallery, /chosenSet = name;\s*playingKey = undefined;\s*index = 0;/, 'a set change hands every film back and returns the stage to the start');
   assert.match(galleryStyle, /\.gallery-set \{[^}]*min-inline-size: var\(--control-target\);\s*min-block-size: var\(--control-target\);/);
 });

@@ -11,7 +11,7 @@ import type {
   LedgerMeter,
   LedgerSpark
 } from './blocks.ts';
-import { addDays, formatMagnitudeFixed, formatWhole } from './grid.ts';
+import { addDays, cellPeriod, formatMagnitudeFixed, formatWhole } from './grid.ts';
 import { dayNumber, formatDateRange } from './periods.ts';
 import { panelStaleAfterMs, panelStaleNote } from './panels.ts';
 /* The model vocabulary is DATA and it lives in one file, outside this
@@ -1065,12 +1065,9 @@ export function windowTerm(period: string): string {
   return windowTerms.get(period) ?? period;
 }
 
-/* The board's own words. The turn labels prefix each card's accessible name,
- * so a reader is told what pressing does and what state the card is in;
- * nothing is printed on the card itself (owner directive, 2026-09-11: no
- * turn hint). */
-export const boardTurnLabel = 'Turn';
-export const boardReturnLabel = 'Turn back';
+/* The board's own words. There is no turn vocabulary any more: the cards are
+ * not controls (owner directive, 2026-09-11, issue 316), so the only copy the
+ * board itself owns is what it says when it has nothing to say. */
 export const boardEmptyNote = tokenUsageEmptyNote;
 
 /* The total card's own copy: what the headline is a total OF, and the subject
@@ -1184,13 +1181,47 @@ function dailyLineLabel(subject: string, days: number): string {
   return `${subject} daily tokens, ${days} ${days === 1 ? 'day' : 'days'}`;
 }
 
+/* EVERY DAY OF A LINE, ALREADY WORDED (owner directive, 2026-09-11, issue
+ * 316). The scrubber prints a day; it does not draw one, and the component
+ * that draws the line formats nothing — so the three readings a scrubbed day
+ * needs are composed here, in the one file that knows how this page words a
+ * date and a token count, and handed over parallel to the series itself.
+ *
+ * The DATE comes from the wire's start date plus the index, through the
+ * page's one voice for a day (cellPeriod), so a scrubbed day and a calendar
+ * cell can never read differently. The two FIGURES are the same pair a card
+ * already prints: the compacted one the headline reads in, and the exact
+ * grouped one the line under it carries.
+ *
+ * A day nobody measured carries the unknown mark in both figures and its date
+ * in the label: the absence is a fact about a real day, and printing a zero
+ * there would be the invention the honest-states floor forbids. */
+export function sparkDays(
+  startDate: string,
+  totals: readonly (number | null)[]
+): Pick<LedgerSpark, 'dayLabels' | 'dayFigures' | 'dayExact'> {
+  const dayLabels: string[] = [];
+  const dayFigures: string[] = [];
+  const dayExact: string[] = [];
+  for (const [index, value] of totals.entries()) {
+    dayLabels.push(cellPeriod({ value: 0, date: addDays(startDate, index) }));
+    dayFigures.push(value === null ? unknownFigure : formatTokenCount(value));
+    dayExact.push(value === null ? unknownFigure : formatWhole(value));
+  }
+  return { dayLabels, dayFigures, dayExact };
+}
+
 /* One source's own daily line, or nothing when it reported no series. */
 function sourceSpark(source: TokenUsageSource, subject: string): LedgerSpark | undefined {
   const series = source.series;
   if (series === undefined || series.totals.length === 0) {
     return undefined;
   }
-  return { totals: series.totals, ariaLabel: dailyLineLabel(subject, series.totals.length) };
+  return {
+    totals: series.totals,
+    ariaLabel: dailyLineLabel(subject, series.totals.length),
+    ...sparkDays(series.startDate, series.totals)
+  };
 }
 
 /* The lifetime total across every source that reported one. Undefined when no
@@ -1226,8 +1257,10 @@ function lifetimeTotal(sources: readonly TokenUsageSource[]): number | undefined
  * same rule read from the other side — a source that says nothing about any
  * day cannot make a day unmeasurable — and it is what keeps the card drawing
  * a line at all when one source reports figures but no history. */
-function combinedSeries(sources: readonly TokenUsageSource[]): number[] | undefined {
-  const drawn: { start: number; totals: readonly number[] }[] = [];
+function combinedSeries(
+  sources: readonly TokenUsageSource[]
+): { startDate: string; totals: number[] } | undefined {
+  const drawn: { start: number; startDate: string; totals: readonly number[] }[] = [];
   for (const source of sources) {
     const series = source.series;
     if (series === undefined || series.totals.length === 0) {
@@ -1237,7 +1270,7 @@ function combinedSeries(sources: readonly TokenUsageSource[]): number[] | undefi
     if (start === null) {
       return undefined;
     }
-    drawn.push({ start, totals: series.totals });
+    drawn.push({ start, startDate: series.startDate, totals: series.totals });
   }
   if (drawn.length === 0) {
     return undefined;
@@ -1255,7 +1288,16 @@ function combinedSeries(sources: readonly TokenUsageSource[]): number[] | undefi
     }
     totals.push(sum);
   }
-  return totals;
+  /* THE LINE'S FIRST DAY IS THE INTERSECTION'S, not the oldest capture's, and
+     the date has to travel with the totals now that a scrubbed day is printed
+     (issue 316). `from` is the LATEST of the starts, so it is the start of at
+     least one of the series drawn — which is where its calendar spelling comes
+     from, rather than from arithmetic this file would have to invert. */
+  const opening = drawn.find((series) => series.start === from);
+  if (opening === undefined) {
+    return undefined;
+  }
+  return { startDate: opening.startDate, totals };
 }
 
 /* The lifetime split, as ONE ruled line: the sources that reported a lifetime,
@@ -1291,7 +1333,7 @@ function totalCard(sources: readonly TokenUsageSource[]): LedgerCard {
   const total = lifetimeTotal(sources);
   const figure = total === undefined ? unknownFigure : formatTokenCount(total);
   const split = splitFact(sources, total);
-  const totals = combinedSeries(sources);
+  const combined = combinedSeries(sources);
   return {
     key: 'tracked',
     label: totalCardLabel,
@@ -1301,11 +1343,15 @@ function totalCard(sources: readonly TokenUsageSource[]): LedgerCard {
     facts: split === undefined ? undefined : [split],
     factColumns: 1,
     spark:
-      totals === undefined
+      combined === undefined
         ? undefined
-        : { totals, ariaLabel: dailyLineLabel(combinedLineSubject, totals.length) },
+        : {
+            totals: combined.totals,
+            ariaLabel: dailyLineLabel(combinedLineSubject, combined.totals.length),
+            ...sparkDays(combined.startDate, combined.totals)
+          },
     note:
-      total === undefined && split === undefined && totals === undefined
+      total === undefined && split === undefined && combined === undefined
         ? boardEmptyNote
         : undefined,
     ariaLabel: `${totalCardLabel}, ${lifetimeContext}: ${figure}`
@@ -1375,6 +1421,7 @@ function sessionsCard(sources: readonly TokenUsageSource[]): LedgerCard {
   return {
     key: 'sessions',
     label: sessionsCardLabel,
+    mark: 'sessions',
     figure,
     facts: facts.length === 0 ? undefined : facts,
     factColumns: 1,
@@ -1526,12 +1573,11 @@ export function tokenBoardProps(
   const sources = tokenUsageSources(envelope.data);
   return {
     title: envelope.title || tokenUsageFallbackTitle,
+    mark: 'chip',
     status: envelope.status,
     generatedAt: envelope.generatedAt,
     cards: tokenCards(sources),
     emptyNote: boardEmptyNote,
-    staleNote: usageStaleNote(envelope.status, envelope.generatedAt, sources, now),
-    turnLabel: boardTurnLabel,
-    returnLabel: boardReturnLabel
+    staleNote: usageStaleNote(envelope.status, envelope.generatedAt, sources, now)
   };
 }

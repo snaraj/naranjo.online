@@ -261,6 +261,163 @@ export function frameCoalescer<Value>(
   };
 }
 
+/* ---------------------------------------------------------------------------
+ * READING ALONG A SURFACE (owner directive, 2026-09-11, issue 316)
+ *
+ * "As I run the mouse through this hovering or clicking, I expected to see
+ * more information, like you can in Robinhood when looking at a stock price."
+ * A scrub is not a drag — nothing moves, nothing is committed, and there is no
+ * turn to earn — so it is its own binding rather than a mode of the one above.
+ * What it DOES share is this module's whole reason for existing: the pointer
+ * plumbing lives here, executable by the unit suite with no DOM, so a second
+ * component never grows a second copy of it.
+ *
+ * THE THREE READERS ARE DIFFERENT AND ARE TREATED DIFFERENTLY:
+ *
+ *   - a HOVERING pointer (a mouse, a pen) has no ambiguity to resolve. It is
+ *     over the surface or it is not, so it reads on entry and on every move
+ *     and stops reading when it leaves;
+ *   - a FINGER may be starting a page scroll, and the page's scroll is never
+ *     ours to take. Nothing is read until the gesture proves itself
+ *     horizontal by this module's own rule, and a gesture the browser claims
+ *     (pointercancel) is surrendered rather than contested;
+ *   - a TAP is a question about one point, and its answer STAYS. A touch
+ *     pointer is destroyed the instant it lifts — every engine fires
+ *     pointerleave straight after pointerup for a finger — so clearing on
+ *     leave would show a tapping reader their answer for exactly as long as
+ *     their finger covered it.
+ * ------------------------------------------------------------------------ */
+export interface ScrubBinding {
+  /* The reader is pointing at this viewport x. The caller owns the geometry —
+     which subject that x names is a question about the caller's own contents,
+     and this module knows nothing about them. */
+  read: (clientX: number) => void;
+  /* Nothing is being pointed at any more. */
+  clear: () => void;
+}
+
+export function scrubAlong(node: HTMLElement, binding: ScrubBinding) {
+  /* The finger's own bookkeeping: which pointer is ours, where it started,
+     and whether it has earned the gesture yet. -1 is "no finger", which no
+     real pointerId is. */
+  let pointer = -1;
+  let startX = 0;
+  let startY = 0;
+  let claimed = false;
+
+  function onHover(event: PointerEvent): void {
+    if (event.pointerType === 'touch') {
+      return;
+    }
+    binding.read(event.clientX);
+  }
+
+  function onDown(event: PointerEvent): void {
+    if (event.pointerType !== 'touch') {
+      return;
+    }
+    pointer = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    claimed = false;
+  }
+
+  function onMove(event: PointerEvent): void {
+    if (event.pointerType !== 'touch') {
+      onHover(event);
+      return;
+    }
+    if (event.pointerId !== pointer) {
+      return;
+    }
+    if (!claimed) {
+      const dx = event.clientX - startX;
+      const dy = event.clientY - startY;
+      if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > gestureSlop) {
+        /* A vertical gesture is the page's. Standing down explicitly — rather
+           than simply not acting — is what keeps a later horizontal wobble in
+           the same gesture from grabbing a scroll already in progress. */
+        pointer = -1;
+        return;
+      }
+      if (!claimsHorizontal(dx, dy)) {
+        return;
+      }
+      claimed = true;
+      /* Capture only AFTER the gesture is proven horizontal, and guarded: the
+         spec makes this a NotFoundError for a pointer that is no longer
+         active, which a finger lifted between this move and its dispatch
+         genuinely is. Losing capture costs the scrub its out-of-bounds
+         tracking; letting the throw escape would abandon the reading. */
+      try {
+        node.setPointerCapture(event.pointerId);
+      } catch {
+        /* Tracked without capture; pointerup still ends it. */
+      }
+    }
+    binding.read(event.clientX);
+  }
+
+  function onUp(event: PointerEvent): void {
+    if (event.pointerType !== 'touch' || event.pointerId !== pointer) {
+      return;
+    }
+    const wasClaimed = claimed;
+    pointer = -1;
+    claimed = false;
+    if (wasClaimed) {
+      /* The finger has left, so the reading goes with it — the same answer a
+         mouse gets when it leaves the surface. */
+      binding.clear();
+      return;
+    }
+    /* A tap: answered where it landed, and left on screen (see the header). */
+    binding.read(event.clientX);
+  }
+
+  /* The browser has taken the gesture — a scroll it decided was vertical, a
+     second finger, a system edge swipe. Not ours to argue with. */
+  function onCancel(event: PointerEvent): void {
+    if (event.pointerId !== pointer) {
+      return;
+    }
+    pointer = -1;
+    claimed = false;
+    binding.clear();
+  }
+
+  function onLeave(event: PointerEvent): void {
+    if (event.pointerType === 'touch') {
+      return;
+    }
+    binding.clear();
+  }
+
+  /* PASSIVE, all six, and it is a promise rather than a hint: none of these
+     handlers calls preventDefault, and saying so up front lets the engine
+     dispatch them without first waiting to find out. The declaration that
+     keeps the page's vertical scroll is `touch-action: pan-y` on the surface
+     itself, never a preventDefault here. */
+  const passive = { passive: true } as const;
+  node.addEventListener('pointerenter', onHover, passive);
+  node.addEventListener('pointermove', onMove, passive);
+  node.addEventListener('pointerdown', onDown, passive);
+  node.addEventListener('pointerup', onUp, passive);
+  node.addEventListener('pointercancel', onCancel, passive);
+  node.addEventListener('pointerleave', onLeave, passive);
+
+  return {
+    destroy() {
+      node.removeEventListener('pointerenter', onHover);
+      node.removeEventListener('pointermove', onMove);
+      node.removeEventListener('pointerdown', onDown);
+      node.removeEventListener('pointerup', onUp);
+      node.removeEventListener('pointercancel', onCancel);
+      node.removeEventListener('pointerleave', onLeave);
+    }
+  };
+}
+
 export interface SwipeBinding {
   /* The distance the gesture is measured against — the surface's own width.
      Read at gesture START rather than stored, so a resize between gestures

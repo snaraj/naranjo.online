@@ -29,6 +29,7 @@
 <script lang="ts">
   import type { LedgerLogProps } from '../blocks.ts';
   import FeedCard from './FeedCard.svelte';
+  import Icon from './Icon.svelte';
 
   let { rows, emptyNote, expandLabel, collapseLabel }: LedgerLogProps = $props();
 
@@ -62,19 +63,28 @@
           data-open={open ? 'true' : 'false'}
           onclick={() => toggle(row.key)}>
           <span class="ledger-span">{row.span}</span>
+          <!-- THE MONOGRAM IS NOT A LOGO (owner design decision, 2026-09-11,
+            issue 313). An employer's logo is its trademark and this page draws
+            none; two letters in the site's own ink, inside the same hairline
+            square the rest of the sheet is ruled with, identify the row at a
+            glance without borrowing anyone's art. The letters are DATA, from
+            the entry — deriving them would have to guess at "University of
+            Maryland, Baltimore County — LIDAR Research Group" — and the tile
+            is aria-hidden because the row's accessible name already carries
+            the employer in full. -->
+          <span class="ledger-monogram" aria-hidden="true">{row.mark}</span>
           <span class="ledger-name">{row.name}</span>
           <span class="ledger-role">{row.role}</span>
           <span class="ledger-place">{row.place}</span>
+          <!-- The chevron POINTS at what it does: down to open, up to close.
+            It is a glyph swap rather than a rotation (owner design decision,
+            2026-09-11, issue 313) because the disc it sits in already answers
+            the open state by inverting, and inverting AND spinning is two
+            announcements of one fact — and a swap adds no transform, so a
+            reader who asked for less motion sees the same thing everyone
+            else does. -->
           <span class="ledger-chevron" aria-hidden="true">
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linecap="round"
-              stroke-linejoin="round"><path d="M3.5 6 8 10.5 12.5 6" /></svg>
+            <Icon name={open ? 'chevron-up' : 'chevron-down'} slot="row" />
           </span>
         </button>
         <div class="ledger-drawer" data-open={open ? 'true' : 'false'}>

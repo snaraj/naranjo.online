@@ -19,7 +19,7 @@ export const panelKinds = {
   tokenUsage: 'token-usage/v2',
   vcsActivity: 'vcs-activity/v1',
   bossLog: 'boss-log/v1',
-  codingProjects: 'coding-projects/v1'
+  codingProjects: 'coding-projects/v2'
 } as const;
 
 export interface PanelEnvelope<Data = unknown> {
@@ -165,10 +165,26 @@ export interface VCSCommit {
  * say by omission. */
 export type VCSCoverage = 'public' | 'complete';
 
+/* One day of PRIVATE contribution, counted and never named (issue #315). It
+ * is how the owner's ruling — private work is marked the way its host marks
+ * it — is served without serving a private repository: an aggregate is the
+ * whole row, and no name, URL, identity or subject of a private repository
+ * ever reaches it. */
+export interface VCSPrivateDay {
+  date: string;
+  contributions: number;
+  repositories: number;
+}
+
 export interface VCSActivityData {
   totalContributions: number;
   weeks: number[][];
   streak: number;
+  /* The private days, newest first. Optional: additive inside the kind, so a
+   * payload from a replica that predates it still renders — this chart runs a
+   * RollingUpdate, and a browser holding the new frontend can reach an old
+   * replica mid-rollout. */
+  privateActivity?: VCSPrivateDay[];
   /* See VCSCoverage. Optional: additive inside the same kind version, so a
    * payload from a replica that predates it still renders — this chart runs a
    * RollingUpdate, and a browser holding the new frontend can reach an old
@@ -209,7 +225,7 @@ export interface BossLogData {
   bosses: BossLogEntry[];
 }
 
-/* coding-projects/v1 — the owner's repositories as their host describes them
+/* coding-projects/v2 — the owner's repositories as their host describes them
  * RIGHT NOW. Every figure is nullable and every row carries its own
  * provenance, so a row whose live read failed serves the shipped values and
  * says so rather than borrowing the freshness of the rows beside it. */
@@ -224,14 +240,24 @@ export interface CodingProjectRow {
    * it into a sentence against the reader's own clock, and ORDERS the feed by
    * it (issue 252). */
   pushedAt?: string;
-  /* Open issues and open pull requests. ABSENT rather than null when unknown,
-   * because the producer omits the keys — which is exactly what makes them
-   * additive: a payload written before they existed decodes here unchanged and
-   * renders unchanged. Absent draws a dash; a reported zero is a figure and
-   * draws as one. They arrive and leave together, because the issue tally
-   * exists only as a subtraction against the pull-request one. */
-  openIssues?: number;
-  openPulls?: number;
+  /* How many pull requests the repository has merged or closed, all time
+   * (issue #317). ABSENT rather than null when unknown, because the producer
+   * omits the key — which is exactly what makes it additive: a payload written
+   * before it existed decodes here unchanged and renders unchanged. Absent
+   * draws a dash, which says "not known"; a reported zero is a figure and
+   * draws as one. */
+  closedPulls?: number;
+  /* The latest release tag exactly as the host names it, absent for a
+   * repository that has never released. Both render as the dash: "no release"
+   * and "not read" are both "no version to show", and neither is a number this
+   * page may invent. */
+  release?: string;
+  /* True when the owner has PINNED this repository on the host (owner
+   * directive, 2026-09-11). It is curation expressed where the owner already
+   * expresses it, carried as a flag rather than acted on by the origin:
+   * which rows the page LISTS is the page's decision. Absent means not
+   * pinned. */
+  pinned?: boolean;
   /* True when this row came from the shipped snapshot rather than a live
    * read, exactly as `recorded` marks a token-usage tile. */
   recorded?: boolean;

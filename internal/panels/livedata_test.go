@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -90,6 +91,14 @@ func (d *capturingDoer) Do(r *http.Request) (*http.Response, error) {
 		status = http.StatusOK
 	}
 	return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(answer.body))}, nil
+}
+
+// total is every request this doer saw, which is how "an unset credential
+// asks nothing at all" is asserted as a count rather than as a path miss.
+func (d *capturingDoer) total() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.requests)
 }
 
 func (d *capturingDoer) at(path string) []recordedRequest {
@@ -271,11 +280,14 @@ func TestTheCalendarRequestAsksForASundayAlignedWindow(t *testing.T) {
 	// Every weekday, so the alignment cannot pass by happening to land right.
 	for offset := range 7 {
 		now := time.Date(2026, 8, 24, 9, 30, 0, 0, time.UTC).AddDate(0, 0, offset)
-		body, err := calendarRequestBody("query($from: DateTime!, $to: DateTime!) { calendar }", now)
+		body, err := queryRequestBody("query($from: DateTime!, $to: DateTime!) { calendar }", queryVariables{
+			From: calendarWindowStart(now),
+			To:   now.UTC().Format(time.RFC3339),
+		})
 		if err != nil {
 			t.Fatalf("build request body: %v", err)
 		}
-		var request calendarQueryRequest
+		var request queryRequest
 		if err := json.Unmarshal(body, &request); err != nil {
 			t.Fatalf("decode request body: %v", err)
 		}
@@ -434,37 +446,45 @@ func TestAuthenticatedGitHubCadenceFallsBackBeforeReservation(t *testing.T) {
 		configure := func(t *testing.T) *FetchSource {
 			t.Helper()
 			_, state := activityFetchRegistry(t, 10)
-			spec := state.fetch.specs.vcs.Commits
-			spec.KeyEnvName = "FIXTURE_COMMITS_TOKEN"
-			spec.KeyHeader = "Authorization"
-			spec.KeyPrefix = "Bearer "
-			spec.AuthenticatedMinIntervalMinutes = 1
+			state.fetch.specs.vcs.Commits.AuthenticatedMinIntervalMinutes = 1
 			return state.fetch
 		}
 
 		authDoer := newCapturingDoer(activityAnswers(t))
 		authSource := configure(t)
 		for _, at := range []time.Time{now, now.Add(time.Minute)} {
-			if _, _, attempted, fresh := authSource.commitSection(t.Context(), authDoer, credential, authSource.specs.vcs.Commits, at); !attempted || !fresh {
+			if _, _, _, attempted, fresh := authSource.commitSection(t.Context(), authDoer, credential, authSource.specs.vcs.Commits, at); !attempted || !fresh {
 				t.Fatalf("credentialed commit refresh at %v = attempted %t fresh %t", at, attempted, fresh)
 			}
 		}
-		if requests := authDoer.at("/repos/first/commits"); len(requests) != 2 {
-			t.Fatalf("credentialed one-minute wakes made %d requests, want 2", len(requests))
+		if requests := authDoer.at("/graphql/contributions"); len(requests) != 2 {
+			t.Fatalf("credentialed one-minute wakes made %d discovery requests, want 2", len(requests))
 		} else if got := requests[1].header.Get("Authorization"); got != "Bearer fixture-token-value" {
 			t.Errorf("credentialed request header = %q", got)
 		}
+		// TWO documents per round and never more (issue #315): the history
+		// answer covers every repository the discovery answer named, so the
+		// request count is flat in the size of the roster.
+		if got := len(authDoer.at("/graphql/history")); got != 2 {
+			t.Errorf("credentialed one-minute wakes made %d history requests, want 2", got)
+		}
 
+		// An unset credential asks NOTHING. Both documents are about the
+		// credential's own account, so there is no anonymous half to read.
 		publicDoer := newCapturingDoer(activityAnswers(t))
 		publicSource := configure(t)
-		if _, _, attempted, _ := publicSource.commitSection(t.Context(), publicDoer, anonymous, publicSource.specs.vcs.Commits, now); !attempted {
-			t.Fatal("public first refresh attempted nothing")
+		rows, days, _, attempted, fresh := publicSource.commitSection(t.Context(), publicDoer, anonymous, publicSource.specs.vcs.Commits, now)
+		if attempted {
+			t.Fatal("an unset credential still attempted a commit round")
 		}
-		if _, _, attempted, _ := publicSource.commitSection(t.Context(), publicDoer, anonymous, publicSource.specs.vcs.Commits, now.Add(time.Minute)); attempted {
-			t.Fatal("public one-minute wake spent an anonymous request")
+		if !fresh {
+			t.Error("an unconfigured producer made the panel stale; no producer, no claim")
 		}
-		if got := len(publicDoer.at("/repos/first/commits")); got != 1 {
-			t.Errorf("public one-minute wakes made %d requests, want 1", got)
+		if len(rows) != 0 || len(days) != 0 {
+			t.Errorf("an unset credential served %d rows and %d private days; it must invent none", len(rows), len(days))
+		}
+		if got := publicDoer.total(); got != 0 {
+			t.Errorf("an unset credential made %d requests, want none", got)
 		}
 	})
 }
@@ -749,7 +769,7 @@ func TestAGetProducerNeverBecomesAPost(t *testing.T) {
 }
 
 /* ---------------------------------------------------------------------------
- * coding-projects/v1
+ * coding-projects/v2
  * ------------------------------------------------------------------------ */
 
 // projectsSpec is the repository-metadata fixture spec: the account's listing
@@ -806,35 +826,56 @@ func listingAnswer(rows ...listedRepo) string {
 	return "[" + strings.Join(entries, ",") + "]"
 }
 
-// searchAnswer is a realistic account-wide open-pull search answer: one item
-// per name given (repeat a name for several matches), each carrying the
-// account profiles the projection must never hold beside the one address it
-// reads. The total is the honest item count unless overridden by a test that
-// drives the truncation refusal.
-func searchAnswer(account string, names ...string) string {
-	items := make([]string, 0, len(names))
-	for _, name := range names {
-		items = append(items, fmt.Sprintf(`{"id":9,"number":1,"title":"a pull request",`+
-			`"user":{"login":"somebody","id":3,"type":"User"},"state":"open",`+
-			`"repository_url":"https://api.example.test/repos/%s/%s"}`, account, name))
-	}
-	return fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,"items":[%s]}`,
-		len(names), strings.Join(items, ","))
+// queriedRepo is one row of a CREDENTIALED repository answer: the same facts
+// the listing carries plus the two the owner's columns added (issue #317).
+type queriedRepo struct {
+	name        string
+	private     bool
+	description string // a raw JSON value: `"text"` or `null`
+	stars       int
+	pushedAt    string // "" serves JSON null: a repository never pushed
+	release     string // "" serves a null latestRelease: never released
+	closedPulls int
 }
 
-// projectsSpecWithTallies is projectsSpec with the optional search document
-// named, which is the shipped configuration's shape.
-func projectsSpecWithTallies() *codingProjectsFetchSpec {
+// repositoriesAnswer is a realistic credentialed repository answer.
+func repositoriesAnswer(rows ...queriedRepo) string {
+	entries := make([]string, 0, len(rows))
+	for _, row := range rows {
+		pushed := "null"
+		if row.pushedAt != "" {
+			pushed = fmt.Sprintf("%q", row.pushedAt)
+		}
+		release := "null"
+		if row.release != "" {
+			release = fmt.Sprintf(`{"tagName":%q}`, row.release)
+		}
+		entries = append(entries, fmt.Sprintf(`{"name":%q,"description":%s,"isPrivate":%t,`+
+			`"stargazerCount":%d,"pushedAt":%s,"latestRelease":%s,"pullRequests":{"totalCount":%d}}`,
+			row.name, row.description, row.private, row.stars, pushed, release, row.closedPulls))
+	}
+	return fmt.Sprintf(`{"data":{"viewer":{"login":"owner","repositories":{"nodes":[%s]}}}}`, strings.Join(entries, ","))
+}
+
+// projectsSpecWithQuery is projectsSpec with the credentialed document named,
+// which is the shipped configuration's shape.
+func projectsSpecWithQuery() *codingProjectsFetchSpec {
 	spec := projectsSpec()
-	spec.PullsEndpoint = "https://api.example.test/search/issues?q=owner-pulls"
+	spec.Repositories = &graphQLDocumentSpec{
+		Endpoint:    "https://api.example.test/graphql/repositories",
+		Query:       "query { viewer { login repositories } }",
+		Headers:     map[string]string{"Accept": "application/json", "Content-Type": "application/json"},
+		MaxBytes:    1 << 17,
+		ContentType: "application/json",
+	}
 	return spec
 }
 
-// tallyingProjectsSource is projectsSource over that spec.
-func tallyingProjectsSource(t *testing.T) *FetchSource {
+// queryingProjectsSource is projectsSource over that spec.
+func queryingProjectsSource(t *testing.T) *FetchSource {
 	t.Helper()
 	source, err := NewFetchSource(SnapshotSource{Name: "snapshots/coding-projects.json"}, liveTestConfig(),
-		panelFetchSpecs{projects: projectsSpecWithTallies()})
+		panelFetchSpecs{projects: projectsSpecWithQuery()})
 	if err != nil {
 		t.Fatalf("build source: %v", err)
 	}
@@ -1107,14 +1148,47 @@ func TestTheRepositoryRowValueGateFailsClosed(t *testing.T) {
 			if err := json.Unmarshal([]byte(testCase.body), &entry); err != nil {
 				t.Fatalf("decode listing row: %v", err)
 			}
-			if _, err := admitListedRepository(entry, now); err == nil {
+			candidate := listingCandidate{
+				name: entry.Name, owner: entry.Owner.Login, private: entry.Private,
+				description: entry.Description, stars: entry.Stars, pushedAt: entry.PushedAt,
+			}
+			if _, err := admitListedRepository(candidate, now); err == nil {
 				t.Fatal("a hostile or drifted row produced a served row")
 			} else if !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("refusal = %v, want it to name %q", err, testCase.want)
 			}
 		})
 	}
+	// The two figures issue #317 added get the same gate. Both fail the ROW,
+	// which the page draws as a dash — never a zero and never half a version.
+	for _, testCase := range []struct {
+		name      string
+		candidate listingCandidate
+		want      string
+	}{
+		{"a negative closed-pull tally", listingCandidate{pulls: figureOf(-1)}, "closed pull-request tally"},
+		{"a closed-pull tally past the bound", listingCandidate{pulls: figureOf(maxCountValue + 1)}, "closed pull-request tally"},
+		{"a release tag carrying a path", listingCandidate{release: "v1/../../etc"}, "tag grammar"},
+		{"a release tag carrying whitespace", listingCandidate{release: "v1 0"}, "tag grammar"},
+		{"a release tag carrying control characters", listingCandidate{release: "v1\u0007"}, "tag grammar"},
+		{"a release tag that is a dot name", listingCandidate{release: ".."}, "tag grammar"},
+		{"a release tag past the bound", listingCandidate{release: strings.Repeat("v", maxReleaseTagRunes+1)}, "tag grammar"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			candidate := testCase.candidate
+			candidate.name, candidate.stars, candidate.pushedAt = "alpha", 1, "2026-08-27T10:00:00Z"
+			if _, err := admitListedRepository(candidate, now); err == nil {
+				t.Fatal("a hostile or drifted figure produced a served row")
+			} else if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("refusal = %v, want it to name %q", err, testCase.want)
+			}
+		})
+	}
 }
+
+// figureOf is a pointer to one tally, for the table above.
+func figureOf(value int64) *int64 { return &value }
 
 // TestTheRepositoryListingFailsClosed drives the identity tier of the listing
 // gate: every case is a well-formed JSON array that would put a wrong or
@@ -1219,125 +1293,21 @@ func TestALongDescriptionIsTruncatedRatherThanLost(t *testing.T) {
 	}
 }
 
-// TestOpenWorkIsSplitOutOfTheCombinedTally is the arithmetic the two figures
-// rest on (issue 252): the listing's open tally counts pull requests as
-// issues, so the issue figure is that tally MINUS the separately read
-// pull-request one. Getting this backwards, or skipping the subtraction,
-// publishes a wrong number that looks entirely plausible.
-func TestOpenWorkIsSplitOutOfTheCombinedTally(t *testing.T) {
-	t.Parallel()
-	pulls := int64(2)
-	issues, split := splitOpenWork(5, &pulls)
-	if issues == nil || *issues != 3 {
-		t.Errorf("open issues = %v, want 3: five open things of which two are pull requests", issues)
-	}
-	if split == nil || *split != 2 {
-		t.Errorf("open pull requests = %v, want the tally as read", split)
-	}
-	// A genuine zero is a figure, not an absence: a repository with nothing
-	// open reports nothing open, and the card is entitled to say so.
-	none := int64(0)
-	quietIssues, quietPulls := splitOpenWork(0, &none)
-	if quietIssues == nil || *quietIssues != 0 || quietPulls == nil || *quietPulls != 0 {
-		t.Errorf("a quiet repository served %v/%v, want a reported zero on both", quietIssues, quietPulls)
-	}
-}
-
-// TestAnUnsplittableTallyServesNeitherFigure pins the refusal. Every case here
-// would produce a confident, wrong, entirely renderable number if the guard
-// were dropped — most dangerously the racing one, where a pull request opened
-// between the two reads makes the subtraction go negative.
-func TestAnUnsplittableTallyServesNeitherFigure(t *testing.T) {
-	t.Parallel()
-	overBound := int64(maxCountValue + 1)
-	negative := int64(-1)
-	two := int64(2)
-	for _, testCase := range []struct {
-		name     string
-		combined int64
-		pulls    *int64
-	}{
-		{"no tally was read at all", 4, nil},
-		{"more pull requests than open things, the read-skew race", 1, &two},
-		{"a negative tally", 4, &negative},
-		{"a tally past the bound", 4, &overBound},
-		{"a combined figure past the bound", maxCountValue + 1, &two},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			issues, pulls := splitOpenWork(testCase.combined, testCase.pulls)
-			if issues != nil || pulls != nil {
-				t.Fatalf("served %v/%v, want a dash on both: half a derived pair is a wrong number, not a smaller truth", issues, pulls)
-			}
-		})
-	}
-}
-
-// TestThePullRequestTallyDocumentFailsClosed drives the search projection's
-// value gate. The missing-total case is the one that matters most: an
-// unrelated JSON object projects to no count at all, and reading that as zero
-// would put "nothing open" on a card that knows nothing. The truncation and
-// attribution refusals are new with the account-wide document (issue 281):
-// a partial map is an undercount wearing a confident number, and an item
-// pointing outside the account is a stranger's pull request on the owner's
-// card.
-func TestThePullRequestTallyDocumentFailsClosed(t *testing.T) {
-	t.Parallel()
-	for _, testCase := range []struct {
-		name string
-		body string
-		want string
-	}{
-		{"an unrelated JSON object", `{"unrelated":true}`, "no total"},
-		{"a document that is not JSON at all", `<html>`, "pull-request tally"},
-		{"a negative count", `{"total_count":-1}`, "admissible range"},
-		{"a count past the bound", fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,"items":[]}`, int64(maxCountValue)+1), "admissible range"},
-		{"an admitted-incomplete search", `{"total_count":0,"incomplete_results":true,"items":[]}`, "incomplete"},
-		{"a truncated page", `{"total_count":5,"incomplete_results":false,"items":[{"repository_url":"https://api.example.test/repos/owner/alpha"}]}`, "undercount"},
-		{"an item outside the account", `{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.example.test/repos/somebody-else/theirs"}]}`, "outside the configured account"},
-		{"an item with no repository address", `{"total_count":1,"incomplete_results":false,"items":[{"repository_url":""}]}`, "no repository address"},
-		{"an item with an ungrammatical name", `{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.example.test/repos/owner/bad name"}]}`, "outside the configured account"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			if _, err := mapOpenPullsByRepo([]byte(testCase.body), "owner"); err == nil {
-				t.Fatal("a hostile or drifted tally document produced a count")
-			} else if !strings.Contains(err.Error(), testCase.want) {
-				t.Fatalf("refusal = %v, want it to name %q", err, testCase.want)
-			}
-		})
-	}
-	// The gate must admit real data too: an account with nothing open is a
-	// zero on every row, and two matches on one repository count as two.
-	counted, err := mapOpenPullsByRepo([]byte(searchAnswer("owner")), "owner")
-	if err != nil || len(counted) != 0 {
-		t.Fatalf("a reported zero was refused: %v, %v", counted, err)
-	}
-	counted, err = mapOpenPullsByRepo([]byte(searchAnswer("owner", "alpha", "alpha", "beta")), "owner")
-	if err != nil {
-		t.Fatalf("an honest answer was refused: %v", err)
-	}
-	if counted["alpha"] != 2 || counted["beta"] != 1 {
-		t.Fatalf("attribution = %v, want alpha:2 beta:1", counted)
-	}
-}
-
-// TestTheServedRowsCarryBothOpenTallies is the end-to-end claim: the listing
-// and ONE account-wide search document go in, every row comes out carrying
-// both figures — including the true zero on a repository the search names no
-// match for — and the credential rides the tally request exactly as it rides
-// the listing one.
-func TestTheServedRowsCarryBothOpenTallies(t *testing.T) {
+// TestTheServedRowsCarryTheReleaseAndClosedPullTally is issue #317's
+// end-to-end claim: ONE credentialed document goes in, every row comes out
+// carrying the version its host names and the all-time merged-or-closed
+// tally, a repository that has never released carries no version at all
+// rather than an invented one, and the credential rides the request.
+func TestTheServedRowsCarryTheReleaseAndClosedPullTally(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	doer := newCapturingDoer(map[string]cannedAnswer{
-		"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
-			listedRepo{name: "alpha", description: `"alpha"`, stars: 1, pushedAt: "2026-08-29T10:00:00Z", open: 9},
-			listedRepo{name: "beta", description: `"beta"`, stars: 1, pushedAt: "2026-08-28T10:00:00Z", open: 0},
+		"/graphql/repositories": {contentType: "application/json", body: repositoriesAnswer(
+			queriedRepo{name: "alpha", description: `"alpha"`, stars: 1, pushedAt: "2026-08-29T10:00:00Z", release: "v1.2.3", closedPulls: 41},
+			queriedRepo{name: "beta", description: `"beta"`, stars: 1, pushedAt: "2026-08-28T10:00:00Z", closedPulls: 0},
 		)},
-		"/search/issues": {contentType: "application/json", body: searchAnswer("owner", "alpha", "alpha", "alpha", "alpha")},
 	})
-	loaded, err := tallyingProjectsSource(t).refreshProjects(t.Context(), doer, func(name string) string {
+	loaded, err := queryingProjectsSource(t).refreshProjects(t.Context(), doer, func(name string) string {
 		if name == "FIXTURE_PROJECTS_TOKEN" {
 			return "fixture-token-value"
 		}
@@ -1347,92 +1317,119 @@ func TestTheServedRowsCarryBothOpenTallies(t *testing.T) {
 		t.Fatalf("refresh: %v", err)
 	}
 	payload := decodeProjects(t, loaded)
-	if payload.Repos[0].OpenIssues == nil || *payload.Repos[0].OpenIssues != 5 {
-		t.Errorf("open issues = %v, want 5: nine open things of which four are pull requests", payload.Repos[0].OpenIssues)
+	if payload.Repos[0].Release != "v1.2.3" {
+		t.Errorf("release = %q, want the tag its host names", payload.Repos[0].Release)
 	}
-	if payload.Repos[0].OpenPulls == nil || *payload.Repos[0].OpenPulls != 4 {
-		t.Errorf("open pull requests = %v, want 4", payload.Repos[0].OpenPulls)
+	if payload.Repos[0].ClosedPulls == nil || *payload.Repos[0].ClosedPulls != 41 {
+		t.Errorf("closed pulls = %v, want 41", payload.Repos[0].ClosedPulls)
 	}
-	// The search vouches for the whole account, so a repository it names no
-	// match for carries a REPORTED zero, not a dash.
-	if payload.Repos[1].OpenIssues == nil || *payload.Repos[1].OpenIssues != 0 || payload.Repos[1].OpenPulls == nil || *payload.Repos[1].OpenPulls != 0 {
-		t.Errorf("the quiet repository served %v/%v, want a reported zero on both", payload.Repos[1].OpenIssues, payload.Repos[1].OpenPulls)
+	// Never released is an absent version, and a reported zero is a figure:
+	// the two say different things and the panel makes only the claim it can.
+	if payload.Repos[1].Release != "" {
+		t.Errorf("a repository with no release served %q", payload.Repos[1].Release)
 	}
-	tallies := doer.at("/search/issues")
-	if len(tallies) != 1 {
-		t.Fatalf("%d tally requests, want exactly one for the whole account", len(tallies))
+	if payload.Repos[1].ClosedPulls == nil || *payload.Repos[1].ClosedPulls != 0 {
+		t.Errorf("a reported zero served %v, want 0", payload.Repos[1].ClosedPulls)
 	}
-	for _, request := range tallies {
-		if got := request.header.Get("Authorization"); got != "Bearer fixture-token-value" {
-			t.Errorf("tally Authorization header = %q, want the same prefixed credential the listing read carries", got)
-		}
-		if request.method != http.MethodGet {
-			t.Errorf("tally method = %s, want GET: counting is a read", request.method)
-		}
+	requests := doer.at("/graphql/repositories")
+	if len(requests) != 1 {
+		t.Fatalf("%d repository requests, want exactly one for the whole account", len(requests))
 	}
-	// The whole round is TWO requests — the arithmetic behind the rate-budget
-	// pin in fetch_test, executed on the wire.
-	if total := len(doer.at("/users/owner/repos")) + len(tallies); total != 2 {
-		t.Errorf("the round made %d requests, want 2", total)
+	if got := requests[0].header.Get("Authorization"); got != "Bearer fixture-token-value" {
+		t.Errorf("Authorization header = %q, want the prefixed credential", got)
+	}
+	if requests[0].method != http.MethodPost {
+		t.Errorf("method = %s, want POST: the query travels in the request body", requests[0].method)
+	}
+	// The whole round is ONE request, and the listing is never consulted —
+	// the arithmetic behind the rate-budget pin in fetch_test, executed on
+	// the wire.
+	if total := doer.total(); total != 1 {
+		t.Errorf("the round made %d requests, want 1", total)
 	}
 }
 
-// TestAFailedTallyCostsTheTalliesAndNothingElse pins the failure granularity
-// the second request was designed around. Falling the rows back — or marking
-// the envelope stale — because a count went missing would tell the reader a
-// perfectly current description is not, a worse lie than the dash it
-// replaces. Both failure shapes are driven: the transport failing, and a
-// document arriving intact that does not survive admission.
-func TestAFailedTallyCostsTheTalliesAndNothingElse(t *testing.T) {
+// TestAnAnonymousProjectsRoundKeepsThePublicAnswer pins the honest narrowing:
+// with no credential the panel reads the public listing it always did and
+// serves rows WITHOUT the two new fields, which the page draws as dashes. A
+// zero there would claim a repository has never released and never closed a
+// pull request; absence claims nothing.
+func TestAnAnonymousProjectsRoundKeepsThePublicAnswer(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	for name, answer := range map[string]cannedAnswer{
-		"a tally outage":              {status: http.StatusInternalServerError, contentType: "application/json", body: "{}"},
-		"a tally that fails the gate": {contentType: "application/json", body: `{"total_count":5,"incomplete_results":false,"items":[]}`},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			doer := newCapturingDoer(map[string]cannedAnswer{
-				"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
-					listedRepo{name: "alpha", description: `"alpha lives"`, stars: 1, pushedAt: "2026-08-29T10:00:00Z", open: 9},
-				)},
-				"/search/issues": answer,
-			})
-			loaded, err := tallyingProjectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now)
-			if err != nil {
-				t.Fatalf("refresh: %v", err)
-			}
-			if loaded.status != StatusOK {
-				t.Errorf("status = %q, want ok: every repository answered; only an optional count did not", loaded.status)
-			}
-			payload := decodeProjects(t, loaded)
-			if payload.Repos[0].Recorded {
-				t.Error("a lost count fell the whole row back")
-			}
-			if payload.Repos[0].Description != "alpha lives" {
-				t.Errorf("description = %q, want the live text", payload.Repos[0].Description)
-			}
-			if payload.Repos[0].OpenIssues != nil || payload.Repos[0].OpenPulls != nil {
-				t.Errorf("served %v/%v, want a dash on both", payload.Repos[0].OpenIssues, payload.Repos[0].OpenPulls)
-			}
-			// The additive rule, proven on the wire rather than asserted: a
-			// payload with no tallies must carry no tally KEYS, so a consumer
-			// written before they existed sees the document it always saw.
-			if bytes.Contains(loaded.data, []byte("openIssues")) || bytes.Contains(loaded.data, []byte("openPulls")) {
-				t.Errorf("an absent tally was serialized as a key: %s", loaded.data)
-			}
-		})
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+			listedRepo{name: "alpha", description: `"alpha lives"`, stars: 1, pushedAt: "2026-08-29T10:00:00Z"},
+		)},
+	})
+	loaded, err := queryingProjectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "" }, now)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if loaded.status != StatusOK {
+		t.Errorf("status = %q, want ok: the public answer is live, it just says less", loaded.status)
+	}
+	payload := decodeProjects(t, loaded)
+	if payload.Repos[0].Description != "alpha lives" {
+		t.Errorf("description = %q, want the live text", payload.Repos[0].Description)
+	}
+	if payload.Repos[0].ClosedPulls != nil || payload.Repos[0].Release != "" {
+		t.Errorf("the public answer served %v/%q, want both absent", payload.Repos[0].ClosedPulls, payload.Repos[0].Release)
+	}
+	// The additive rule, proven on the wire rather than asserted: a payload
+	// without the two fields must carry no KEYS for them, so a consumer
+	// written before they existed sees the document it always saw.
+	if bytes.Contains(loaded.data, []byte("closedPulls")) || bytes.Contains(loaded.data, []byte("release")) {
+		t.Errorf("an absent field was serialized as a key: %s", loaded.data)
+	}
+	if got := len(doer.at("/graphql/repositories")); got != 0 {
+		t.Errorf("an unset credential still posted %d queries", got)
 	}
 }
 
-// TestTheTallyEndpointIsHostCheckedToo pins that "optional" describes whether
-// the document is CONFIGURED, never whether its URL is admitted. A second
-// reachable URL that skipped the allowlist would be a hole in the one rule
-// every outbound request passes — and the listing endpoint passes it too.
-func TestTheTallyEndpointIsHostCheckedToo(t *testing.T) {
+// TestACredentialedProjectsFailureNeverFallsBackToThePublicAnswer is the same
+// deliberate NON-fallback the calendar producer carries: answering a transient
+// fault by quietly serving an answer two columns narrower, under the same
+// heading, is how a panel lies without anyone editing it.
+func TestACredentialedProjectsFailureNeverFallsBackToThePublicAnswer(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/graphql/repositories": {status: http.StatusInternalServerError, contentType: "application/json", body: "{}"},
+		"/users/owner/repos": {contentType: "application/json", body: listingAnswer(
+			listedRepo{name: "alpha", description: `"alpha"`, stars: 1, pushedAt: "2026-08-29T10:00:00Z"},
+		)},
+	})
+	if _, err := queryingProjectsSource(t).refreshProjects(t.Context(), doer, func(string) string { return "present" }, now); err == nil {
+		t.Fatal("a failed credentialed read was reported as a successful refresh")
+	}
+	if len(doer.at("/users/owner/repos")) != 0 {
+		t.Error("a credentialed failure fell through to the public listing, narrowing the answer without saying so")
+	}
+}
+
+// TestTheRepositoryQueryEndpointIsHostCheckedToo pins that "optional"
+// describes whether the document is CONFIGURED, never whether its URL is
+// admitted. A second reachable URL that skipped the allowlist would be a hole
+// in the one rule every outbound request passes.
+func TestTheRepositoryQueryEndpointIsHostCheckedToo(t *testing.T) {
 	t.Parallel()
 	for name, edit := range map[string]func(*codingProjectsFetchSpec){
-		"the tally document": func(s *codingProjectsFetchSpec) { s.PullsEndpoint = "https://elsewhere.example.net/search/issues" },
+		"the repository query": func(s *codingProjectsFetchSpec) {
+			s.Repositories.Endpoint = "https://elsewhere.example.net/graphql"
+		},
+		"a plain-http query": func(s *codingProjectsFetchSpec) {
+			s.Repositories.Endpoint = "http://api.example.test/graphql"
+		},
+		"a body cap wider than shared": func(s *codingProjectsFetchSpec) {
+			s.Repositories.MaxBytes = liveTestConfig().MaxBytes + 1
+		},
+		"a query with no credential to ride": func(s *codingProjectsFetchSpec) {
+			s.KeyEnvName, s.KeyHeader, s.AuthenticatedMinIntervalMinutes = "", "", 0
+		},
+		"a query that never asks whose repositories it lists": func(s *codingProjectsFetchSpec) {
+			s.Repositories.Query = "query { viewer { repositories } }"
+		},
 		"the listing itself": func(s *codingProjectsFetchSpec) {
 			s.ListingEndpoint = "https://elsewhere.example.net/users/owner/repos"
 		},
@@ -1442,12 +1439,12 @@ func TestTheTallyEndpointIsHostCheckedToo(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			spec := projectsSpecWithTallies()
+			spec := projectsSpecWithQuery()
 			edit(spec)
 			_, err := NewFetchSource(SnapshotSource{Name: "snapshots/coding-projects.json"}, liveTestConfig(),
 				panelFetchSpecs{projects: spec})
 			if err == nil {
-				t.Fatal("an off-allowlist endpoint built a source")
+				t.Fatal("an off-allowlist or incomplete document built a source")
 			}
 		})
 	}
@@ -1731,7 +1728,9 @@ func TestARepositoryDescriptionThatIsNotTextIsRefused(t *testing.T) {
 	var entry repositoryListingEntry
 	err := json.Unmarshal(document, &entry)
 	if err == nil {
-		_, err = admitListedRepository(entry, now)
+		_, err = admitListedRepository(listingCandidate{
+			name: entry.Name, description: entry.Description, stars: entry.Stars, pushedAt: entry.PushedAt,
+		}, now)
 	}
 	if err == nil {
 		t.Fatal("a description that is not valid UTF-8 produced a row")
@@ -2112,27 +2111,12 @@ func TestCredentialChangesReselectTheReservation(t *testing.T) {
 				return true
 			},
 		},
-		{
-			name:   "commits",
-			public: 10 * time.Minute,
-			paths:  []string{"/repos/first/commits"},
-			build: func(t *testing.T) (*FetchSource, *capturingDoer) {
-				t.Helper()
-				_, state := activityFetchRegistry(t, 10)
-				spec := state.fetch.specs.vcs.Commits
-				spec.KeyEnvName = "FIXTURE_COMMITS_TOKEN"
-				spec.KeyHeader = "Authorization"
-				spec.KeyPrefix = "Bearer "
-				spec.AuthenticatedMinIntervalMinutes = 1
-				return state.fetch, newCapturingDoer(activityAnswers(t))
-			},
-			wake: func(t *testing.T, source *FetchSource, doer *capturingDoer, env func(string) string, at time.Time) bool {
-				t.Helper()
-				_, _, attempted, _ := source.commitSection(t.Context(), doer, env, source.specs.vcs.Commits, at)
-				return attempted
-			},
-		},
 	}
+	// The commit producer is NOT a role here, and its absence is the point:
+	// both of its documents ask about the credential's own account, so losing
+	// the credential does not move it to a slower budget — it stops the round
+	// entirely (issue #315). That transition is proven where it happens, in
+	// the "commits" subtest of TestCredentialledProducersUseTheirFastCadence.
 	// The calendar's anonymous and credentialed requests go to different
 	// paths, so the request one wake made is found by the path that grew.
 	count := func(doer *capturingDoer, paths []string) int {
@@ -2207,5 +2191,667 @@ func TestCredentialChangesReselectTheReservation(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+/* ---------------------------------------------------------------------------
+ * The commit log's two query documents (issue #315)
+ * ------------------------------------------------------------------------ */
+
+// commitRoundNow is the fixed instant every commit-round scenario measures
+// against, so the window checks are exercised deterministically rather than
+// against a clock that moves under the suite.
+var commitRoundNow = time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+
+// windowDay is a bucket instant `days` days before that instant, written the
+// way the upstream writes one: the account's own local midnight in UTC, which
+// is why these fixtures never sit exactly on the window's edge.
+func windowDay(days int) string {
+	return commitRoundNow.AddDate(0, 0, -days).Format("2006-01-02") + "T07:00:00Z"
+}
+
+// TestTheDiscoveryAnswerDecidesWhatIsAskedAndWhatIsCounted is the commit
+// producer's whole gate over its FIRST document: which repositories become
+// named rows, which become an aggregate, and which are counted and never
+// listed at all.
+func TestTheDiscoveryAnswerDecidesWhatIsAskedAndWhatIsCounted(t *testing.T) {
+	t.Parallel()
+	answer := contributionsAnswer([]fixtureContributionRepo{
+		{id: "R_public", name: "public-repo", days: []fixtureContributionDay{
+			{at: windowDay(1), count: 3}, {at: windowDay(4), count: 1},
+		}},
+		{id: "R_older", name: "older-repo", days: []fixtureContributionDay{{at: windowDay(9), count: 2}}},
+		// Someone else's repository. The account really did commit there, so
+		// the commits COUNT — dropping them would break the document's own
+		// arithmetic — and the repository is not the owner's to list.
+		{id: "R_foreign", name: "somebody-elses", owner: "another-account", days: []fixtureContributionDay{{at: windowDay(2), count: 5}}},
+		// Two private repositories on the SAME day, which is the only way the
+		// per-day repository count is ever more than one.
+		{id: "R_secret", name: "a-private-name", private: true, days: []fixtureContributionDay{
+			{at: windowDay(1), count: 4}, {at: windowDay(3), count: 1},
+		}},
+		{id: "R_secret2", name: "another-private-name", private: true, days: []fixtureContributionDay{{at: windowDay(1), count: 2}}},
+	}, nil)
+	author, repos, days, err := mapCommitContributions([]byte(answer), "fixture-owner", commitRoundNow)
+	if err != nil {
+		t.Fatalf("a realistic discovery answer was refused: %v", err)
+	}
+	if author != "U_fixture-viewer" {
+		t.Errorf("author identity = %q", author)
+	}
+	// The account's OWN public repositories, newest activity first. The
+	// foreign one and both private ones are absent.
+	names := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		names = append(names, repo.name)
+	}
+	if len(names) != 2 || names[0] != "public-repo" || names[1] != "older-repo" {
+		t.Fatalf("asked about %v, want the account's own public repositories newest first", names)
+	}
+	// THE PRIVATE AGGREGATE IS THE WHOLE ROW, newest day first.
+	if len(days) != 2 {
+		t.Fatalf("private days = %+v, want two", days)
+	}
+	if days[0].Date != commitRoundNow.AddDate(0, 0, -1).Format(dayLayout) {
+		t.Errorf("private days are not newest first: %+v", days)
+	}
+	if days[0].Contributions != 6 || days[0].Repositories != 2 {
+		t.Errorf("the busy private day = %+v, want 6 contributions across 2 repositories", days[0])
+	}
+	if days[1].Contributions != 1 || days[1].Repositories != 1 {
+		t.Errorf("the quiet private day = %+v", days[1])
+	}
+	// NOTHING ABOUT A PRIVATE REPOSITORY SURVIVES (requirement 12). The
+	// serialized aggregate is searched for every fact the document carried
+	// about one — its name and its opaque identity — because "we never copy
+	// it" is a claim a test can actually check.
+	encoded, err := json.Marshal(days)
+	if err != nil {
+		t.Fatalf("marshal the aggregate: %v", err)
+	}
+	for _, leak := range []string{"a-private-name", "another-private-name", "R_secret"} {
+		if bytes.Contains(encoded, []byte(leak)) {
+			t.Errorf("the private aggregate carries %q: %s", leak, encoded)
+		}
+	}
+	// And the identities that DO travel are only the ones asked about.
+	for _, repo := range repos {
+		if repo.id == "R_secret" || repo.id == "R_secret2" || repo.id == "R_foreign" {
+			t.Errorf("the second document would ask about %q", repo.id)
+		}
+	}
+	// A day with no private contribution has no row: no zero facts.
+	quiet := contributionsAnswer([]fixtureContributionRepo{
+		{id: "R_public", name: "public-repo", days: []fixtureContributionDay{{at: windowDay(1), count: 3}}},
+		{id: "R_secret", name: "a-private-name", private: true, days: []fixtureContributionDay{{at: windowDay(2), count: 0}}},
+	}, nil)
+	if _, _, days, err := mapCommitContributions([]byte(quiet), "fixture-owner", commitRoundNow); err != nil || len(days) != 0 {
+		t.Errorf("a private day of zero produced %+v (%v); a zero is the absence of a fact, not one", days, err)
+	}
+}
+
+// TestTheDiscoveryAnswerFailsClosedOnEveryDrift drives every refusal. Each case
+// would produce a plausible, renderable log if its check were removed — which
+// is the whole danger: a half-understood discovery answer looks exactly like a
+// quiet month.
+func TestTheDiscoveryAnswerFailsClosedOnEveryDrift(t *testing.T) {
+	t.Parallel()
+	good := fixtureContributionRepo{id: "R_public", name: "public-repo", days: []fixtureContributionDay{{at: windowDay(1), count: 3}}}
+	oversized := make([]fixtureContributionRepo, 0, maxContributionRepositories+1)
+	for index := range maxContributionRepositories + 1 {
+		oversized = append(oversized, fixtureContributionRepo{
+			id:   fmt.Sprintf("R_%d", index),
+			name: fmt.Sprintf("repo-%d", index),
+			days: []fixtureContributionDay{{at: windowDay(1), count: 1}},
+		})
+	}
+	manyDays := make([]fixtureContributionDay, 0, maxContributionDays+1)
+	for index := range maxContributionDays + 1 {
+		manyDays = append(manyDays, fixtureContributionDay{at: windowDay(index), count: 1})
+	}
+	wrongTotal := 99
+	for name, body := range map[string]string{
+		"not an object at all":    `[]`,
+		"malformed json":          `{"data":`,
+		"an unrelated payload":    `{"data":{"unrelated":"shape"}}`,
+		"an upstream error array": `{"errors":[{"message":"bad credentials"}]}`,
+		"no data at all":          `{}`,
+		"no account identity": contributionsAnswer([]fixtureContributionRepo{good}, nil)[:len(`{"data":{"viewer":{"id":"`)] +
+			`","contributionsCollection":{"totalCommitContributions":0,"commitContributionsByRepository":[]}}}}`,
+		"a name outside the host's grammar": contributionsAnswer([]fixtureContributionRepo{
+			good, {id: "R_bad", name: "evil name/../x", days: []fixtureContributionDay{{at: windowDay(1), count: 1}}},
+		}, nil),
+		"a name that is a filesystem dot name": contributionsAnswer([]fixtureContributionRepo{
+			good, {id: "R_dot", name: "..", days: []fixtureContributionDay{{at: windowDay(1), count: 1}}},
+		}, nil),
+		// The hostile case the brief names by hand: a repository that is
+		// private AND appears again in a public-looking entry. A document that
+		// cannot keep one name on one side of that line is a document nothing
+		// here can trust about which is which.
+		"one name listed both private and public": contributionsAnswer([]fixtureContributionRepo{
+			{id: "R_secret", name: "two-faced", private: true, days: []fixtureContributionDay{{at: windowDay(1), count: 1}}},
+			{id: "R_public2", name: "two-faced", days: []fixtureContributionDay{{at: windowDay(1), count: 1}}},
+		}, nil),
+		"a repository with no node identity": contributionsAnswer([]fixtureContributionRepo{
+			{id: "", name: "public-repo", days: []fixtureContributionDay{{at: windowDay(1), count: 1}}},
+		}, nil),
+		"a node identity carrying whitespace": contributionsAnswer([]fixtureContributionRepo{
+			{id: "R_ bad", name: "public-repo", days: []fixtureContributionDay{{at: windowDay(1), count: 1}}},
+		}, nil),
+		"a node identity past the bound": contributionsAnswer([]fixtureContributionRepo{
+			{id: strings.Repeat("R", maxNodeIdentifierRunes+1), name: "public-repo", days: []fixtureContributionDay{{at: windowDay(1), count: 1}}},
+		}, nil),
+		"more repositories than the bound": contributionsAnswer(oversized, nil),
+		"more dated buckets than the window has days": contributionsAnswer([]fixtureContributionRepo{
+			{id: "R_public", name: "public-repo", days: manyDays},
+		}, nil),
+		"a negative count": contributionsAnswer([]fixtureContributionRepo{
+			{id: "R_public", name: "public-repo", days: []fixtureContributionDay{{at: windowDay(1), count: -1}}},
+		}, nil),
+		"an unparseable bucket instant": contributionsAnswer([]fixtureContributionRepo{
+			{id: "R_public", name: "public-repo", days: []fixtureContributionDay{{at: "yesterday", count: 1}}},
+		}, nil),
+		"a bucket older than the window": contributionsAnswer([]fixtureContributionRepo{
+			{id: "R_public", name: "public-repo", days: []fixtureContributionDay{{at: windowDay(commitLogWindowDays + 3), count: 1}}},
+		}, nil),
+		"a bucket from the future": contributionsAnswer([]fixtureContributionRepo{
+			{id: "R_public", name: "public-repo", days: []fixtureContributionDay{{at: commitRoundNow.AddDate(0, 0, 2).Format(time.RFC3339), count: 1}}},
+		}, nil),
+		// The cross-field integrity rule: the document reports its own total
+		// beside the days, and the two must agree or this package has
+		// half-understood it.
+		"days that do not sum to the document's own total": contributionsAnswer([]fixtureContributionRepo{good}, &wrongTotal),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, repos, days, err := mapCommitContributions([]byte(body), "fixture-owner", commitRoundNow); err == nil {
+				t.Fatalf("a drifted discovery answer produced %+v / %+v", repos, days)
+			}
+		})
+	}
+	// The positive controls: the bound's own worth of repositories and days is
+	// fine, so every refusal above is about the drift and not the builder.
+	atBound := contributionsAnswer(oversized[:maxContributionRepositories], nil)
+	if _, _, _, err := mapCommitContributions([]byte(atBound), "fixture-owner", commitRoundNow); err != nil {
+		t.Errorf("a document exactly at the repository bound was refused: %v", err)
+	}
+	edge := contributionsAnswer([]fixtureContributionRepo{
+		{id: "R_public", name: "public-repo", days: []fixtureContributionDay{{at: windowDay(commitLogWindowDays), count: 1}}},
+	}, nil)
+	if _, _, _, err := mapCommitContributions([]byte(edge), "fixture-owner", commitRoundNow); err != nil {
+		t.Errorf("a bucket on the window's own oldest day was refused: %v; the upstream buckets by the account's local day and a day of slack is what admits it", err)
+	}
+}
+
+// TestTheHistoryRequestIsBoundedByRecency pins the drop rule the second
+// document depends on: a busy month is more repositories than one answer
+// should carry, and the round drops the quietest rather than opening a third
+// document — which is the per-repository fan-out this producer exists to
+// avoid.
+func TestTheHistoryRequestIsBoundedByRecency(t *testing.T) {
+	t.Parallel()
+	repos := make([]fixtureContributionRepo, 0, maxHistoryRepositories+3)
+	for index := range maxHistoryRepositories + 3 {
+		repos = append(repos, fixtureContributionRepo{
+			id:   fmt.Sprintf("R_%d", index),
+			name: fmt.Sprintf("repo-%02d", index),
+			// Newest first: repo-00 is the most recently active.
+			days: []fixtureContributionDay{{at: windowDay(index + 1), count: 1}},
+		})
+	}
+	_, admitted, _, err := mapCommitContributions([]byte(contributionsAnswer(repos, nil)), "fixture-owner", commitRoundNow)
+	if err != nil {
+		t.Fatalf("map: %v", err)
+	}
+	if len(admitted) != maxHistoryRepositories {
+		t.Fatalf("asked about %d repositories, want the %d bound", len(admitted), maxHistoryRepositories)
+	}
+	if admitted[0].name != "repo-00" || admitted[len(admitted)-1].name != fmt.Sprintf("repo-%02d", maxHistoryRepositories-1) {
+		t.Errorf("the roster is not the most recently active ones: %s … %s", admitted[0].name, admitted[len(admitted)-1].name)
+	}
+}
+
+// TestTheCommitRoundIsTwoDocumentsAndNeverMore drives the whole round over the
+// wire: discovery, then history, then the merged list — with the request count
+// pinned, because "never one call per repository per refresh" is the rate
+// property the owner's ruling rests on.
+func TestTheCommitRoundIsTwoDocumentsAndNeverMore(t *testing.T) {
+	t.Parallel()
+	repos := make([]fixtureContributionRepo, 0, maxHistoryRepositories)
+	histories := make([]fixtureHistoryRepo, 0, maxHistoryRepositories)
+	for index := range maxHistoryRepositories {
+		name := fmt.Sprintf("repo-%02d", index)
+		repos = append(repos, fixtureContributionRepo{
+			id:   fmt.Sprintf("R_%d", index),
+			name: name,
+			days: []fixtureContributionDay{{at: windowDay(index + 1), count: 1}},
+		})
+		histories = append(histories, fixtureHistoryRepo{
+			name: name, shaOffset: index * 10,
+			commits: [][2]string{{fmt.Sprintf("feat: %s", name), commitRoundNow.Add(-time.Duration(index+1) * time.Hour).Format(time.RFC3339)}},
+		})
+	}
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/graphql/contributions": {contentType: "application/json", body: contributionsAnswer(repos, nil)},
+		"/graphql/history":       {contentType: "application/json", body: historyAnswer(histories...)},
+	})
+	source, err := NewFetchSource(SnapshotSource{Name: "snapshots/vcs-activity.json"}, liveTestConfig(),
+		panelFetchSpecs{vcs: &vcsActivityFetchSpec{
+			Endpoint:           "https://public.example.test/contributions",
+			Headers:            map[string]string{"Accept": "text/html"},
+			MaxBytes:           1 << 17,
+			ContentType:        "text/html",
+			MinIntervalMinutes: 15,
+			Commits:            commitQuerySpec(10),
+		}},
+	)
+	if err != nil {
+		t.Fatalf("build source: %v", err)
+	}
+	rows, days, at, attempted, fresh := source.commitSection(t.Context(), doer,
+		func(string) string { return "fixture-token-value" }, source.specs.vcs.Commits, commitRoundNow)
+	if !attempted || !fresh {
+		t.Fatalf("commitSection = attempted %t fresh %t", attempted, fresh)
+	}
+	if at.IsZero() {
+		t.Error("a freshly read list carries no instant")
+	}
+	if len(days) != 0 {
+		t.Errorf("a window with no private contribution produced %+v", days)
+	}
+	// TWO requests for twelve repositories. A producer that fanned out would
+	// make this thirteen.
+	if got := doer.total(); got != 2 {
+		t.Errorf("the round made %d requests for %d repositories, want 2", got, maxHistoryRepositories)
+	}
+	// Newest first across every repository, capped by the configured limit.
+	if len(rows) != source.specs.vcs.Commits.Max {
+		t.Fatalf("served %d rows, want the configured %d", len(rows), source.specs.vcs.Commits.Max)
+	}
+	for index := 1; index < len(rows); index++ {
+		if rows[index-1].At < rows[index].At {
+			t.Errorf("row %d is older than the row above it: %+v", index, rows)
+		}
+	}
+	// The SECOND request asked by identity, and by the identities the first
+	// answer carried — never by name, and never in the request line.
+	history := doer.at("/graphql/history")
+	if len(history) != 1 {
+		t.Fatalf("%d history requests, want one", len(history))
+	}
+	var posted queryRequest
+	if err := json.Unmarshal([]byte(history[0].body), &posted); err != nil {
+		t.Fatalf("decode the posted body: %v", err)
+	}
+	if len(posted.Variables.IDs) != maxHistoryRepositories {
+		t.Errorf("asked about %d identities, want %d", len(posted.Variables.IDs), maxHistoryRepositories)
+	}
+	if posted.Variables.Author != "U_fixture-viewer" {
+		t.Errorf("the history document did not filter to the account: %q", posted.Variables.Author)
+	}
+	for _, repo := range repos {
+		if strings.Contains(posted.Query, repo.name) {
+			t.Errorf("a repository name was interpolated into the query document: %q", repo.name)
+		}
+	}
+}
+
+// TestAPrivateRepositoryNeverReachesTheWire is the requirement-12 pin driven
+// end to end, over the whole round: a private repository's name is in the
+// discovery answer, and no byte of it may reach the served payload — not as a
+// row, not as a label, not in a log line.
+func TestAPrivateRepositoryNeverReachesTheWire(t *testing.T) {
+	t.Parallel()
+	const secret = "a-name-that-must-not-travel"
+	var out bytes.Buffer
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/graphql": {contentType: "application/json", body: calendarAnswer(
+			firstSunday(commitRoundNow.AddDate(0, 0, -calendarWindowDays)),
+			int(commitRoundNow.Sub(firstSunday(commitRoundNow.AddDate(0, 0, -calendarWindowDays)))/(24*time.Hour))+1, 1, nil)},
+		"/graphql/contributions": {contentType: "application/json", body: contributionsAnswer([]fixtureContributionRepo{
+			{id: "R_public", name: "public-repo", days: []fixtureContributionDay{{at: windowDay(1), count: 1}}},
+			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: windowDay(1), count: 7}}},
+		}, nil)},
+		"/graphql/history": {contentType: "application/json", body: historyAnswer(
+			fixtureHistoryRepo{name: "public-repo", commits: [][2]string{
+				{"feat: a public subject", commitRoundNow.Add(-time.Hour).Format(time.RFC3339)},
+			}},
+		)},
+	})
+	source, err := NewFetchSource(SnapshotSource{Name: "snapshots/vcs-activity.json"}, liveTestConfig(),
+		panelFetchSpecs{vcs: activitySpecWithCommits()})
+	if err != nil {
+		t.Fatalf("build source: %v", err)
+	}
+	source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	loaded, err := source.refreshActivity(t.Context(), doer, func(string) string { return "fixture-token-value" }, commitRoundNow)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if bytes.Contains(loaded.data, []byte(secret)) {
+		t.Fatalf("the served payload names a private repository: %s", loaded.data)
+	}
+	if strings.Contains(out.String(), secret) {
+		t.Errorf("a log line names a private repository: %s", out.String())
+	}
+	payload := decodeActivityPayload(t, loaded)
+	if len(payload.PrivateActivity) != 1 || payload.PrivateActivity[0].Contributions != 7 {
+		t.Fatalf("the private day was lost: %+v", payload.PrivateActivity)
+	}
+	if payload.PrivateActivity[0].Repositories != 1 {
+		t.Errorf("private repositories that day = %d, want 1", payload.PrivateActivity[0].Repositories)
+	}
+	// And the public half is untouched beside it.
+	if len(payload.RecentCommits) != 1 || payload.RecentCommits[0].Repo != "public-repo" {
+		t.Errorf("the public rows are wrong: %+v", payload.RecentCommits)
+	}
+}
+
+// activitySpecWithCommits is the whole version-control spec used by the
+// end-to-end scenarios above: the public document, the credentialed calendar,
+// and the commit producer's two query documents.
+func activitySpecWithCommits() *vcsActivityFetchSpec {
+	spec := activitySpec(calendarSpec())
+	spec.Commits = commitQuerySpec(10)
+	return spec
+}
+
+// TestTheCredentialNeverReachesAServedByteOrALogLine is the other half of the
+// credential contract: it rides one request header and nothing else. The
+// sentinel is searched for in the payload, in every log line, and in every
+// request body the round posted.
+func TestTheCredentialNeverReachesAServedByteOrALogLine(t *testing.T) {
+	t.Parallel()
+	const credential = "commit-credential-sentinel-eeee"
+	var out bytes.Buffer
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/graphql/contributions": {contentType: "application/json", body: contributionsAnswer([]fixtureContributionRepo{
+			{id: "R_public", name: "public-repo", days: []fixtureContributionDay{{at: windowDay(1), count: 1}}},
+		}, nil)},
+		"/graphql/history": {contentType: "application/json", body: historyAnswer(
+			fixtureHistoryRepo{name: "public-repo", commits: [][2]string{
+				{"feat: a public subject", commitRoundNow.Add(-time.Hour).Format(time.RFC3339)},
+			}},
+		)},
+	})
+	source, err := NewFetchSource(SnapshotSource{Name: "snapshots/vcs-activity.json"}, liveTestConfig(),
+		panelFetchSpecs{vcs: activitySpecWithCommits()})
+	if err != nil {
+		t.Fatalf("build source: %v", err)
+	}
+	source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	rows, _, _, _, _ := source.commitSection(t.Context(), doer, func(string) string { return credential },
+		source.specs.vcs.Commits, commitRoundNow)
+	if len(rows) == 0 {
+		t.Fatal("the round served nothing; the scenario would then prove nothing")
+	}
+	encoded, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatalf("marshal rows: %v", err)
+	}
+	if bytes.Contains(encoded, []byte(credential)) {
+		t.Error("the served rows carry the credential")
+	}
+	if strings.Contains(out.String(), credential) {
+		t.Errorf("a log line carries the credential: %s", out.String())
+	}
+	carried := 0
+	for _, request := range doer.requests {
+		if strings.Contains(request.body, credential) {
+			t.Error("a request BODY carries the credential; it rides one header and nothing else")
+		}
+		if request.header.Get("Authorization") == "Bearer "+credential {
+			carried++
+		}
+	}
+	if carried != 2 {
+		t.Errorf("%d of the round's requests carried the credential header, want both", carried)
+	}
+}
+
+// TestThePinnedSetMarksRowsAndNeverInventsOne pins the owner's curation
+// (2026-09-11): pinning a repository on the host marks its row, with no edit
+// here and no release. The mark is a FLAG rather than a selection — which rows
+// the page lists is the page's decision — and the three hostile shapes are the
+// ones a pinned set can really take.
+func TestThePinnedSetMarksRowsAndNeverInventsOne(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	answer := fmt.Sprintf(`{"data":{"viewer":{"login":"fixture-owner","pinnedItems":{"nodes":[%s]},"repositories":{"nodes":[%s]}}}}`,
+		strings.Join([]string{
+			`{"name":"alpha","isPrivate":false}`,
+			// A pinned PRIVATE repository whose name is ALSO the name of a
+			// listed public row — a document contradicting itself, which is
+			// the only shape in which a private pin could ever reach a row.
+			// The mark is refused: a repository this document calls private is
+			// one it cannot be trusted about, and the row stays unmarked.
+			`{"name":"beta","isPrivate":true}`,
+			// A pinned name the listing does not carry: a pin marks a row that
+			// exists, it is never a row of its own.
+			`{"name":"not-in-the-listing","isPrivate":false}`,
+			// The pinned set may hold gists too, and the query's inline
+			// fragment selects only the repository case — so a non-repository
+			// entry decodes to an empty name and is skipped, not refused.
+			`{}`,
+		}, ","),
+		strings.Join([]string{
+			`{"name":"alpha","description":"a","isPrivate":false,"stargazerCount":1,"pushedAt":"2026-09-11T10:00:00Z","latestRelease":null,"pullRequests":{"totalCount":2}}`,
+			`{"name":"beta","description":"b","isPrivate":false,"stargazerCount":0,"pushedAt":"2026-09-10T10:00:00Z","latestRelease":null,"pullRequests":{"totalCount":0}}`,
+		}, ","))
+	listed, refused, err := mapRepositoryQuery([]byte(answer), pinnedFixtureSpec(), now)
+	if err != nil || len(refused) != 0 {
+		t.Fatalf("a realistic answer was refused: %v / %+v", err, refused)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("served %d rows, want 2", len(listed))
+	}
+	if !listed[0].row.Pinned || listed[0].row.Name != "alpha" {
+		t.Errorf("the pinned row is unmarked: %+v", listed[0].row)
+	}
+	if listed[1].row.Pinned {
+		t.Errorf("an unpinned row is marked: %+v", listed[1].row)
+	}
+	// Nothing about the private pin, and no phantom row for the pinned name
+	// the listing never carried.
+	encoded, err := json.Marshal(listed[0].row)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, leak := range []string{"not-in-the-listing"} {
+		if bytes.Contains(encoded, []byte(leak)) {
+			t.Errorf("a served row carries %q", leak)
+		}
+	}
+	for _, project := range listed {
+		if project.row.Name == "not-in-the-listing" {
+			t.Errorf("a pinned name became a row of its own: %+v", project.row)
+		}
+	}
+	// A FALSE flag is omitted from the wire, which is what keeps the field
+	// additive: a reader written before it existed sees the document it
+	// always saw.
+	unpinned, err := json.Marshal(listed[1].row)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(unpinned, []byte("pinned")) {
+		t.Errorf("an unpinned row serialized the flag: %s", unpinned)
+	}
+}
+
+// TestAPinnedRowSurvivesTheRecencyCap is the reason the cap is pin-aware at
+// all. The page lists the owner's pinned repositories; a pin that fell off a
+// recency cap because a handful of other repositories happened to be pushed
+// today would be a card that vanished for a reason nobody could see.
+func TestAPinnedRowSurvivesTheRecencyCap(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	rows := make([]string, 0, maxCodingProjectSources+3)
+	for index := range maxCodingProjectSources + 3 {
+		rows = append(rows, fmt.Sprintf(
+			`{"name":"repo-%02d","description":"d","isPrivate":false,"stargazerCount":0,"pushedAt":%q,"latestRelease":null,"pullRequests":{"totalCount":0}}`,
+			index, now.AddDate(0, 0, -index).Format(time.RFC3339)))
+	}
+	// The OLDEST repository is the pinned one, so a cap that only kept the
+	// newest would drop it.
+	oldest := fmt.Sprintf("repo-%02d", maxCodingProjectSources+2)
+	answer := fmt.Sprintf(`{"data":{"viewer":{"login":"fixture-owner","pinnedItems":{"nodes":[{"name":%q,"isPrivate":false}]},"repositories":{"nodes":[%s]}}}}`,
+		oldest, strings.Join(rows, ","))
+	listed, _, err := mapRepositoryQuery([]byte(answer), pinnedFixtureSpec(), now)
+	if err != nil {
+		t.Fatalf("map: %v", err)
+	}
+	// The cap still bounds the payload.
+	if len(listed) != maxCodingProjectSources {
+		t.Fatalf("served %d rows, want the %d cap", len(listed), maxCodingProjectSources)
+	}
+	names := make([]string, 0, len(listed))
+	for _, project := range listed {
+		names = append(names, project.row.Name)
+	}
+	if names[len(names)-1] != oldest {
+		t.Errorf("the pinned row was dropped by the recency cap: %v", names)
+	}
+	// And it displaced the oldest UNPINNED row rather than a newer one: the
+	// order is still recency, with the pin only deciding membership.
+	for index := 1; index < len(listed)-1; index++ {
+		if listed[index-1].at.Before(listed[index].at) {
+			t.Errorf("the served rows are not newest first: %v", names)
+		}
+	}
+}
+
+// pinnedFixtureSpec is the repository-metadata spec these scenarios map
+// against: the account pin and nothing the mapping does not read.
+func pinnedFixtureSpec() *codingProjectsFetchSpec {
+	return &codingProjectsFetchSpec{Account: "fixture-owner"}
+}
+
+// TestARefusedPrivateEntryIsNeverNamedInALogLine is the other half of
+// requirement 12 for the discovery document: the happy path above proves a
+// private repository never reaches the wire, and this proves a private entry
+// that makes the document REFUSE never reaches a log line either. Every
+// drift a single entry can carry is applied to the private one, the round is
+// run through the real producer with its logger captured, and the refusal is
+// asserted to have been logged — so the search for the name is a search of a
+// line that exists.
+func TestARefusedPrivateEntryIsNeverNamedInALogLine(t *testing.T) {
+	t.Parallel()
+	const secret = "a-private-name-that-must-not-travel"
+	one := []fixtureContributionDay{{at: windowDay(1), count: 1}}
+	for name, entries := range map[string][]fixtureContributionRepo{
+		"a negative count": {
+			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: windowDay(1), count: -1}}},
+		},
+		// The instant IS the name: a parse error quotes its input, so a
+		// wrapped one would carry the upstream's bytes into the log line.
+		"an unparseable bucket instant": {
+			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: secret, count: 1}}},
+		},
+		"a bucket outside the window": {
+			{id: "R_secret", name: secret, private: true, days: []fixtureContributionDay{{at: windowDay(commitLogWindowDays + 3), count: 1}}},
+		},
+		"no node identity": {
+			{id: "", name: secret, private: true, days: one},
+		},
+		"more dated buckets than the bound": {
+			{id: "R_secret", name: secret, private: true, days: func() []fixtureContributionDay {
+				days := make([]fixtureContributionDay, 0, maxContributionDays+1)
+				for index := range maxContributionDays + 1 {
+					days = append(days, fixtureContributionDay{at: windowDay(index % commitLogWindowDays), count: 1})
+				}
+				return days
+			}()},
+		},
+		"the same name again under the same owner": {
+			{id: "R_secret", name: secret, private: true, days: one},
+			{id: "R_secret2", name: secret, private: true, days: one},
+		},
+		"a name outside the host's grammar": {
+			{id: "R_secret", name: secret + " with a space", private: true, days: one},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			doer := newCapturingDoer(map[string]cannedAnswer{
+				"/graphql/contributions": {contentType: "application/json", body: contributionsAnswer(entries, nil)},
+			})
+			source, err := NewFetchSource(SnapshotSource{Name: "snapshots/vcs-activity.json"}, liveTestConfig(),
+				panelFetchSpecs{vcs: activitySpecWithCommits()})
+			if err != nil {
+				t.Fatalf("build source: %v", err)
+			}
+			source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			rows, _, _, _, ok := source.commitSection(t.Context(), doer, func(string) string { return "fixture-token-value" },
+				source.specs.vcs.Commits, commitRoundNow)
+			if ok || len(rows) != 0 {
+				t.Fatalf("a drifted discovery answer served %d rows, ok=%t; the refusal is the case", len(rows), ok)
+			}
+			if !strings.Contains(out.String(), "commit round failed") {
+				t.Fatalf("the refusal was not logged, so nothing here was searched: %s", out.String())
+			}
+			if strings.Contains(out.String(), secret) {
+				t.Errorf("a log line names the private repository: %s", out.String())
+			}
+		})
+	}
+}
+
+// TestAForkBesideItsUpstreamIsTwoRepositories pins the repeat rule's key: a
+// name is repeated only when it is repeated under ONE owner. The ordinary
+// fork-and-pull workflow puts the same name under two owners in one window,
+// and the host reports both; refusing that would serve the last good list for
+// a month for no reason a reader could see. The owner's copy becomes a named
+// row and the foreign one is counted and not listed, exactly as any foreign
+// repository is.
+func TestAForkBesideItsUpstreamIsTwoRepositories(t *testing.T) {
+	t.Parallel()
+	answer := contributionsAnswer([]fixtureContributionRepo{
+		{id: "R_upstream", name: "shared-name", owner: "somebody-else", days: []fixtureContributionDay{{at: windowDay(1), count: 3}}},
+		{id: "R_fork", name: "shared-name", owner: "fixture-owner", days: []fixtureContributionDay{{at: windowDay(2), count: 1}}},
+	}, nil)
+	_, repos, days, err := mapCommitContributions([]byte(answer), "fixture-owner", commitRoundNow)
+	if err != nil {
+		t.Fatalf("a fork beside its upstream was refused: %v", err)
+	}
+	if len(repos) != 1 || repos[0].id != "R_fork" || repos[0].name != "shared-name" {
+		t.Fatalf("named rows = %+v, want the owner's copy alone", repos)
+	}
+	if len(days) != 0 {
+		t.Errorf("public repositories produced private days: %+v", days)
+	}
+}
+
+// TestTheRepositoryQueryRefusesAnotherAccountsAnswer covers the two refusals
+// the credentialed repository document can raise about identity, and pins
+// that neither names what it refuses: the credential's account is checked
+// against the configured one before any row is stamped with it, and a row
+// the answer calls private refuses the document without carrying the name
+// into the error the refresh loop will log.
+func TestTheRepositoryQueryRefusesAnotherAccountsAnswer(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	const stranger = "somebody-else"
+	foreign := strings.Replace(repositoriesAnswer(queriedRepo{name: "alpha", description: `"x"`, stars: 1, pushedAt: "2026-09-10T10:00:00Z"}),
+		`"login":"owner"`, `"login":"`+stranger+`"`, 1)
+	if _, _, err := mapRepositoryQuery([]byte(foreign), projectsSpec(), now); err == nil {
+		t.Fatal("another account's repositories were admitted under the configured account")
+	} else if !strings.Contains(err.Error(), "configured account") {
+		t.Fatalf("refusal = %v, want the account check named", err)
+	} else if strings.Contains(err.Error(), stranger) {
+		t.Errorf("the refusal repeats the stranger's login: %v", err)
+	}
+	const secret = "a-private-name-that-must-not-travel"
+	hidden := repositoriesAnswer(
+		queriedRepo{name: "alpha", description: `"x"`, stars: 1, pushedAt: "2026-09-10T10:00:00Z"},
+		queriedRepo{name: secret, private: true, description: `"x"`, stars: 1, pushedAt: "2026-09-10T10:00:00Z"},
+	)
+	if _, _, err := mapRepositoryQuery([]byte(hidden), projectsSpec(), now); err == nil {
+		t.Fatal("a private row in the credentialed answer was admitted")
+	} else if !strings.Contains(err.Error(), "private") {
+		t.Fatalf("refusal = %v, want the privacy claim named", err)
+	} else if strings.Contains(err.Error(), secret) {
+		t.Errorf("the refusal names the private repository: %v", err)
 	}
 }

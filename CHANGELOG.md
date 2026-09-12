@@ -7,6 +7,51 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.83] - 2026-09-12
+
+### Added
+
+- The Hairline icon family (issue #313): one module of structured glyphs and
+  one `Icon` component draw every mark on the site — the chrome place, the
+  nav and section heads, the role rows, the ledger chevron, the gallery
+  segments and stage controls, the reading-mode trigger, the footer, the
+  strip lead, the board's title and the Sessions card. Every mark is
+  `aria-hidden`; the word it replaced lives on the control's accessible name.
+- Rime (issue #314): the v6 flight, rendered flight-only and tiled as a
+  20 × 24 sheet of 80 px cells under a pinned ceiling, steps at 60 Hz at the
+  end of the chrome row through CSS `steps()` animations declared only under
+  `prefers-reduced-motion: no-preference`; the loop closes without a cut. The
+  tab icon is Rime's head with an ink edge, with a home-screen icon and a
+  re-composed link image.
+- The daily line on the token board scrubs (issue #316): a pointer, a touch
+  drag or the arrow keys mark a day with a cursor and a hairline, and the
+  card's figure and exact line read that day; the reading clears on leave.
+- The Commits log lists every contribution on every repository (issue #315):
+  the repositories come from GitHub's own contributions record over the one
+  fixed GraphQL endpoint, public commits in full and private contributions as
+  one aggregate line per day, never a private name.
+- The projects table shows PRs closed, the released version, stars and last
+  updated (issue #317), with a `pinned` flag on the wire from GitHub's pinned
+  set; open issues and open pull requests leave the payload, so the kind is
+  `coding-projects/v2`.
+- Projects and Commits are one two-column section (issue #318): the pinned
+  repositories plus the latest-activity repository at the left, seven commit
+  rows at the right; the contribution calendar moves under the six token
+  cards, before the Old School RuneScape ticker.
+
+### Changed
+
+- The token cards no longer invert on a click (issue #316); the adapter's
+  alternating inversion is static paint.
+- `codex-auto-review`, the Codex journals' id for the auto-review feature, is
+  no longer a model in the vocabulary; its tokens fold into the residual no
+  card renders.
+
+### Removed
+
+- Three bespoke inline SVG blocks, the card turn machinery and its rendering
+  lanes, the three-repository commit list in the panel fetch configuration.
+
 ## [0.1.82] - 2026-09-11
 
 ### Added

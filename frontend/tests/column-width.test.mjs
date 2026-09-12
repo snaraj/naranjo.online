@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 
 import {
   applyStoredColumnWidth,
+  browserMedia,
   clampColumnRem,
   columnBounds,
   columnKeyIntent,
@@ -21,7 +22,10 @@ import {
   readColumnTokens,
   railsWatchFrames,
   readStoredColumn,
+  spreadFromRem,
+  spreadMediaQuery,
   storedColumnValue,
+  watchMedia,
   watchRails,
   writeStoredColumn
 } from '../src/lib/columnWidth.ts';
@@ -352,6 +356,92 @@ describe('the mount survives a token layer that is not readable yet', () => {
     }
     assert.equal(frames.pending(), 0, 'the retry outlived its own budget');
     assert.equal(media.listeners.length, 0);
+  });
+});
+
+/* THE SHEET'S OTHER VIEWPORT QUESTION (owner design decision, 2026-09-11,
+ * issue 318): whether the paired section is wide enough for two columns —
+ * which is also whether a commit row has a cell for its short identity.
+ *
+ * It is EXECUTED rather than pinned as source for the same reason watchRails
+ * is: the commit row's identity is absent from the DOM below the breakpoint,
+ * not merely hidden, so a listener that never fired would leave a phone reader
+ * hearing a hash their row does not show — and a listener that never detached
+ * would keep writing into a component that is gone. */
+describe('the sheet asks the width the stylesheet asks', () => {
+  const fakeQuery = (matches) => {
+    const listeners = [];
+    return {
+      listeners,
+      live: {
+        get matches() {
+          return this.answer;
+        },
+        answer: matches,
+        addEventListener: (type, listener) => listeners.push([type, listener]),
+        removeEventListener: (type, listener) => {
+          const at = listeners.findIndex(([, held]) => held === listener);
+          if (at >= 0) listeners.splice(at, 1);
+        }
+      }
+    };
+  };
+
+  it('reports the answer immediately, on every change, and stops on teardown', () => {
+    const query = fakeQuery(true);
+    const asked = [];
+    const seen = [];
+    const stop = watchMedia(
+      (text) => {
+        asked.push(text);
+        return query.live;
+      },
+      spreadMediaQuery,
+      (matches) => seen.push(matches)
+    );
+    // The FIRST answer arrives without waiting for a change, which is what
+    // makes the first paint right rather than corrected a frame later.
+    assert.deepEqual(seen, [true], 'the watch reported nothing until something changed');
+    assert.deepEqual(asked, [spreadMediaQuery], 'the watch asked a query of its own devising');
+    assert.equal(query.listeners.length, 1);
+    // A reader rotates the phone.
+    query.live.answer = false;
+    query.listeners[0][1]();
+    assert.deepEqual(seen, [true, false]);
+    stop();
+    assert.equal(query.listeners.length, 0, 'the teardown left the listener attached');
+    // ...and a change after teardown reaches nobody.
+    query.live.answer = true;
+    assert.deepEqual(seen, [true, false], 'a torn-down watch still writes into its caller');
+  });
+
+  it('answers "wide, and never changing" where there is no matchMedia to ask', () => {
+    /* This test runs in exactly the host the branch exists for: node, with no
+       `window` at all. The answer has to be the WIDE one, and that is a
+       decision rather than a convenience — a document with no viewport should
+       describe the sheet's base arrangement, and the stacked phone rendering
+       is a NARROWING of it. Answering "narrow" would make the commit row's
+       short identity absent from any render that happens before a viewport
+       exists, which is the one direction that loses information.
+       And the stub's listeners are inert rather than missing: watchMedia
+       attaches and detaches unconditionally, so a stub that omitted either
+       method would throw in the host it exists to serve. */
+    const live = browserMedia(spreadMediaQuery);
+    assert.equal(live.matches, true, 'a host with no matchMedia answers narrow');
+    const seen = [];
+    const stop = watchMedia(() => live, spreadMediaQuery, (matches) => seen.push(matches));
+    assert.deepEqual(seen, [true]);
+    stop();
+  });
+
+  it('states the breakpoint once, in the rem the stylesheet spells', () => {
+    /* A media query cannot read a custom property, so this number and the
+       stylesheet's own @media are two statements of one fact; the pin that
+       holds them equal lives in tests/sections.test.mjs, where the sheet is
+       already read. What is executed HERE is that the query is built from the
+       constant rather than typed out beside it. */
+    assert.equal(spreadMediaQuery, `(min-width: ${spreadFromRem}rem)`);
+    assert.ok(spreadFromRem > 45, 'the two-column width must sit above the phone block’s own ceiling');
   });
 });
 

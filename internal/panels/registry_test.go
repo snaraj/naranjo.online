@@ -364,13 +364,35 @@ func TestShippedUsageTilesSurviveALiveMergeWithoutDoubling(t *testing.T) {
 	}
 }
 
-// calendarWeeks is the number of columns the contribution calendar ships, and
-// the frontend's `pendingWeeks` is the same number written on the other side
-// of the wire (frontend/src/lib/grid.ts). It is duplicated by hand rather than
-// derived, exactly like reservedMediaSegments, because the two live in
-// different languages; each side pins it and each failure names the other
-// file.
+// calendarWeeks is the number of columns the frontend RESERVES for the
+// contribution calendar — `pendingWeeks` in frontend/src/lib/grid.ts, the same
+// number written on the other side of the wire. It is duplicated by hand
+// rather than derived, exactly like reservedMediaSegments, because the two
+// live in different languages; each side pins it and each failure names the
+// other file.
+//
+// The payload may ship ONE COLUMN FEWER, and the difference is structural
+// rather than sloppy. The two producers cover different windows: the public
+// document is scraped from an already-drawn 53-column grid, while the
+// credentialed producer asks for a window it computes — and the widest window
+// it may ask for is calendarWindowDays, because the upstream refuses a span
+// over one year and Sunday alignment adds up to six days on top of it. That
+// window is 358 to 364 days, which chunks to exactly 52 whole columns, every
+// day of the year.
+//
+// Neither count moves the page, and that is what the parity is actually
+// about: calendarColumns builds exactly pendingWeeks columns from whatever
+// dated cells it is given, filling the rest with the dated absent cells the
+// grid already draws for "the window starts here, the data doesn't". A
+// payload with MORE columns than the reserve would be the shift — the extra
+// would be dropped after the box was sized — so the bound below is one-sided
+// on purpose.
 const calendarWeeks = 53
+
+// calendarWeeksFloor is the fewest columns a real calendar may ship: the
+// credentialed producer's own 52. Below it the panel is back to a hand-made
+// sample, which is the regression this pin has always been about.
+const calendarWeeksFloor = 52
 
 // TestVCSActivityPanelShipsARenderableGraph pins the vcs-activity shape the
 // contribution graph needs: seven-day weeks, a plausible total, a streak,
@@ -392,8 +414,9 @@ func TestVCSActivityPanelShipsARenderableGraph(t *testing.T) {
 	// calendar changes width the moment its data lands and the reserve stops
 	// being a reserve. frontend/src/lib/grid.ts pins pendingWeeks to the same
 	// 53 from its side and names this test when it fails.
-	if len(payload.Weeks) != calendarWeeks {
-		t.Errorf("graph ships %d weeks, want exactly %d; pendingWeeks in frontend/src/lib/grid.ts reserves that many columns for it and the two must move together", len(payload.Weeks), calendarWeeks)
+	if len(payload.Weeks) < calendarWeeksFloor || len(payload.Weeks) > calendarWeeks {
+		t.Errorf("graph ships %d weeks, want %d or %d; pendingWeeks in frontend/src/lib/grid.ts reserves %d columns and a payload past that reserve is the one direction that moves the page",
+			len(payload.Weeks), calendarWeeksFloor, calendarWeeks, calendarWeeks)
 	}
 	if _, err := time.Parse("2006-01-02", payload.EndDate); err != nil {
 		t.Errorf("endDate = %q: %v; without it the padded trailing week is indistinguishable from real quiet days", payload.EndDate, err)

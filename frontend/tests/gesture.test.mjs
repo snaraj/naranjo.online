@@ -43,6 +43,7 @@ import {
   frameCoalescer,
   gestureSlop,
   rubberBand,
+  scrubAlong,
   swipeDecision,
   swipeHorizontal,
   swipeMetrics
@@ -604,6 +605,131 @@ test('every swipe listener is passive except the one that must not be', () => {
   assert.equal(swipe.node.listeners.get('click:capture').options, true);
 });
 
+/* One scrub harness: the real binding over the same fake node, with every
+ * reading it produced recorded in order. `clear` is recorded as null, so the
+ * order of readings and endings is one readable list. */
+function scrubHarness() {
+  const node = fakeNode();
+  const readings = [];
+  const bound = scrubAlong(node, {
+    read: (clientX) => readings.push(clientX),
+    clear: () => readings.push(null)
+  });
+  const pointer = (type, x, y, extra = {}) =>
+    node.send(type, { pointerId: 7, pointerType: 'touch', clientX: x, clientY: y, ...extra });
+  const hover = (type, x, y) =>
+    node.send(type, { pointerId: 1, pointerType: 'mouse', clientX: x, clientY: y });
+  return { node, readings, bound, pointer, hover };
+}
+
+test('a hovering pointer reads on arrival, on every move, and stops when it leaves', () => {
+  /* A mouse has no ambiguity to resolve — it is over the surface or it is not
+     — so it reads immediately, which is the behaviour the owner asked for
+     ("as I run the mouse through this... I expected to see more
+     information"). */
+  const scrub = scrubHarness();
+  scrub.hover('pointerenter', 120, 10);
+  scrub.hover('pointermove', 140, 10);
+  scrub.hover('pointermove', 160, 10);
+  scrub.hover('pointerleave', 160, 10);
+  assert.deepEqual(scrub.readings, [120, 140, 160, null]);
+  assert.deepEqual(scrub.node.captured, [], 'a hover captured the pointer');
+});
+
+test('a finger reads nothing until the gesture has proven itself horizontal', () => {
+  const scrub = scrubHarness();
+  scrub.pointer('pointerdown', 100, 100);
+  assert.deepEqual(scrub.readings, [], 'a finger read the surface before it had moved at all');
+  // Inside the slop: tremor, not a direction.
+  scrub.pointer('pointermove', 104, 100);
+  assert.deepEqual(scrub.readings, [], 'a fidget was read as a scrub');
+  assert.deepEqual(scrub.node.captured, [], 'the pointer was captured before the gesture proved itself');
+  // Past the slop and genuinely across: claimed, captured, reading.
+  scrub.pointer('pointermove', 130, 104);
+  scrub.pointer('pointermove', 150, 104);
+  assert.deepEqual(scrub.readings, [130, 150]);
+  assert.deepEqual(scrub.node.captured, [7], 'a claimed scrub did not capture its pointer');
+  // And the reading leaves with the finger.
+  scrub.pointer('pointerup', 150, 104);
+  assert.deepEqual(scrub.readings, [130, 150, null]);
+});
+
+test('a mostly-vertical finger is handed to the page and never taken back', () => {
+  /* The page's scroll is never ours: a chart that swallowed a downward drag
+     would be a chart a phone cannot scroll past. */
+  const scrub = scrubHarness();
+  scrub.pointer('pointerdown', 100, 100);
+  scrub.pointer('pointermove', 104, 140);
+  assert.deepEqual(scrub.readings, [], 'a vertical drag scrubbed the chart');
+  scrub.pointer('pointermove', 200, 140);
+  assert.deepEqual(
+    scrub.readings,
+    [],
+    'a stood-down gesture grabbed the scroll it had already conceded'
+  );
+  scrub.pointer('pointerup', 200, 140);
+  assert.deepEqual(scrub.readings, [], 'a stood-down gesture reported a reading on release');
+});
+
+test('a tap reads where it landed and LEAVES the answer on screen', () => {
+  /* A touch pointer is destroyed the instant it lifts — every engine fires
+     pointerleave straight after pointerup for a finger — so an answer cleared
+     on leave would be visible for exactly as long as the finger covered it.
+     The leave is ignored for touch, and the tap's reading stands. */
+  const scrub = scrubHarness();
+  scrub.pointer('pointerdown', 210, 40);
+  scrub.pointer('pointerup', 210, 40);
+  assert.deepEqual(scrub.readings, [210]);
+  scrub.pointer('pointerleave', 210, 40);
+  assert.deepEqual(scrub.readings, [210], 'a finger lifting wiped the answer it had just asked for');
+});
+
+test('a gesture the browser claims is surrendered rather than contested', () => {
+  const scrub = scrubHarness();
+  scrub.pointer('pointerdown', 100, 100);
+  scrub.pointer('pointermove', 140, 102);
+  assert.deepEqual(scrub.readings, [140]);
+  scrub.pointer('pointercancel', 140, 102);
+  assert.deepEqual(scrub.readings, [140, null], 'a cancelled gesture kept its reading');
+  // And the gesture is over: a later move belongs to nobody here.
+  scrub.pointer('pointermove', 200, 102);
+  assert.deepEqual(scrub.readings, [140, null], 'a cancelled gesture carried on reading');
+});
+
+test('a second finger is not the first one, and never moves the reading', () => {
+  const scrub = scrubHarness();
+  scrub.pointer('pointerdown', 100, 100);
+  scrub.pointer('pointermove', 140, 102);
+  // A pinch's second contact reports its own moves; they are not this scrub's.
+  scrub.pointer('pointermove', 300, 102, { pointerId: 9 });
+  scrub.pointer('pointerup', 300, 102, { pointerId: 9 });
+  assert.deepEqual(scrub.readings, [140], 'a second finger drove the first one\u2019s reading');
+});
+
+test('the scrub binding listens passively and cleans every listener up', () => {
+  /* Passive is a PROMISE: nothing in this binding calls preventDefault, and
+     declaring it lets the engine dispatch without first waiting to find out.
+     The declaration that keeps the page's vertical scroll is touch-action on
+     the surface, never a preventDefault here. */
+  const scrub = scrubHarness();
+  for (const type of [
+    'pointerenter',
+    'pointermove',
+    'pointerdown',
+    'pointerup',
+    'pointercancel',
+    'pointerleave'
+  ]) {
+    assert.deepEqual(
+      scrub.node.listeners.get(type).options,
+      { passive: true },
+      `the ${type} listener is not passive, so the engine must wait to find out whether it fights the scroll`
+    );
+  }
+  scrub.bound.destroy();
+  assert.equal(scrub.node.listeners.size, 0, 'the scrub binding left listeners behind');
+});
+
 /* ===========================================================================
  * One gesture layer, not several. These make a second hand-rolled drag a red
  * build rather than a code review somebody has to catch.
@@ -644,7 +770,9 @@ test('no component wires its own pointer drag; the gesture layer is one module',
     // The tooltip's own binding is the ONE other pointer consumer on this
     // page and it lives in lib/tooltip.ts for the identical reason. A
     // component reaching for setPointerCapture or a raw pointer listener is a
-    // second gesture implementation being born.
+    // second gesture implementation being born — which is exactly why the
+    // daily line's scrubber (issue 316) went into lib/gesture.ts as
+    // scrubAlong instead of into Sparkline.svelte.
     assert.doesNotMatch(
       source,
       /setPointerCapture|addEventListener\(\s*'pointer/,
@@ -678,19 +806,29 @@ test('no third-party gesture dependency entered the frontend (requirement 1)', a
   );
 });
 
-test('every horizontal gesture surface declares a touch-action that spares the page its scroll', () => {
+test('every horizontal gesture surface declares a touch-action that spares the page its scroll', async () => {
   // The rule the whole gesture layer rests on. A surface that claims a
-  // horizontal drag must hand the vertical axis back to the compositor, or a
-  // reader cannot scroll the page through it.
-  const swiping = Object.entries(componentSources).filter(([, source]) =>
-    /use:swipeHorizontal/.test(source)
+  // horizontal axis must hand the vertical one back to the compositor, or a
+  // reader cannot scroll the page through it. BOTH bindings are swept: a
+  // scrub takes the same axis a swipe does and owes the same declaration
+  // (issue 316).
+  //
+  // The sheet joins the component sources because a declaration is pinned
+  // WHERE IT IS DECIDED: the gallery states its own inside its component, and
+  // the daily line's paint lives in the page's token sheet with the rest of
+  // that chart. Reading both is what keeps this sweep true for either home
+  // instead of forcing a rule to move for a test's convenience.
+  const sheet = await read('../src/styles.css');
+  const bound = Object.entries(componentSources).filter(([, source]) =>
+    /use:(swipeHorizontal|scrubAlong)/.test(source)
   );
-  assert.ok(swiping.length > 0, 'nothing swipes any more; this pin guards nothing');
-  for (const [name, source] of swiping) {
+  assert.ok(bound.length > 1, 'fewer than two gesture surfaces remain; this pin guards almost nothing');
+  for (const [name, source] of bound) {
+    const declarations = `${source}\n${sheet}`;
     assert.match(
-      source,
+      declarations,
       /touch-action:\s*pan-y/,
-      `${name} binds a horizontal swipe without handing the vertical axis to the page`
+      `${name} binds a horizontal gesture without handing the vertical axis to the page`
     );
     assert.doesNotMatch(
       source,

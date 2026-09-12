@@ -5,8 +5,6 @@ import { describe, it } from 'node:test';
 
 import {
   boardEmptyNote,
-  boardReturnLabel,
-  boardTurnLabel,
   categoryLabel,
   categoryShares,
   categorySlot,
@@ -26,6 +24,7 @@ import {
   resetsIn,
   sessionsCardLabel,
   sourceName,
+  sparkDays,
   tokenBoardProps,
   tokenCards,
   tokenUsageEmptyNote,
@@ -40,19 +39,21 @@ import {
   usageStaleNote,
   windowTerm
 } from '../src/lib/token-usage.ts';
-import { commitLogProps, tokenSetLabel } from '../src/lib/commits.ts';
+import { scrubReading } from '../src/lib/blocks.ts';
+import { contributionCalendarProps, tokenSetLabel } from '../src/lib/commits.ts';
 import {
   formatMagnitude,
   formatMagnitudeFixed,
   formatWhole as formatWholeFigure,
   pendingWeeks
 } from '../src/lib/grid.ts';
-import { sparkBox, sparkInset, sparklinePath } from '../src/lib/spark.ts';
+import { sparkBox, sparkIndexAt, sparkInset, sparklinePath, sparkPointAt } from '../src/lib/spark.ts';
 
-/* THE PANEL BECAME A BOARD (owner directive of 2026-09-03, issue 287) AND
- * THEN SIX CARDS (2026-09-11, issues 267 and 311): LedgerBoard.svelte draws a
- * three-by-two grid whose cards invert when pressed, Sparkline.svelte draws
- * the daily line back under the ones that have a series, and the contribution
+/* THE PANEL BECAME A BOARD (owner directive of 2026-09-03, issue 287), THEN
+ * SIX CARDS (2026-09-11, issues 267 and 311), AND THEN A BOARD NOBODY PRESSES
+ * (2026-09-11, issue 316): LedgerBoard.svelte draws a three-by-two grid whose
+ * cards carry a static inversion, Sparkline.svelte draws the daily line back
+ * under the ones that have a series AND scrubs it, and the contribution
  * calendar the tracker used to own stayed in the commits section's cycler
  * (CommitLog.svelte). All three are read here, because the pins this file
  * carries live across them — and the ABSENCE list that keeps the retired
@@ -65,7 +66,7 @@ import { sparkBox, sparkInset, sparklinePath } from '../src/lib/spark.ts';
  * they must be pinned. */
 const [component, commits, helper, manifest, binding, sheet, chart] = await Promise.all([
   readFile(new URL('../src/lib/components/LedgerBoard.svelte', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/components/CommitLog.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/components/ContributionCalendar.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/token-usage.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/blocks/tokenBoard.ts', import.meta.url), 'utf8'),
@@ -295,7 +296,7 @@ describe('the board of cards: source contract', () => {
     /* The shell receives the data-through line as well (owner directive of
        2026-09-03, issue 287): the head is the one row a late line can appear
        in without moving anything — the same arrangement the calendar uses. */
-    assert.match(component, /<PanelShell \{title\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
+    assert.match(component, /<PanelShell \{title\} \{mark\} \{status\} \{generatedAt\} note=\{staleNote\}>/);
     assert.match(component, /<\/PanelShell>/);
     // No panel offers a manual refresh any more (owner directive, issue 179):
     // this panel hands its shell no refresher and holds no watcher handle of
@@ -456,15 +457,19 @@ describe('the board of cards: source contract', () => {
 
   it('sets every dynamic value through a custom property, never an inline style string', () => {
     /* The CSP floor (default-src 'self' admits no style attribute): a bar's
-       fill and the daily line's end mark are the genuinely dynamic lengths on
-       this surface, and each reaches the DOM as a custom property Svelte
-       writes with setProperty rather than as a style string. Everything else —
-       which card is turned, which severity paints, how many fact columns —
-       is a closed-set data attribute. */
+       fill, the daily line's end mark, the scrubber's cursor and the height
+       the sub area reserves are the genuinely dynamic lengths on this
+       surface, and each reaches the DOM as a custom property Svelte writes
+       with setProperty rather than as a style string. Everything else —
+       which card is inverted, which severity paints, how many fact columns,
+       whether a cursor is lit — is a closed-set data attribute. */
     assert.match(component, /style:--board-fill=\{`\$\{row\.fillPct\}%`\}/);
     assert.match(component, /style:--board-fill=\{`\$\{card\.meter\.fillPct\}%`\}/);
+    assert.match(component, /style:--board-sub-lines=\{card\.sub\?\.length \?\? 1\}/);
     assert.match(chart, /style:--spark-mark-x=\{`\$\{path\.last\.x\}%`\}/);
     assert.match(chart, /style:--spark-mark-y=\{`\$\{path\.last\.y\}%`\}/);
+    assert.match(chart, /style:--spark-cursor-x=\{`\$\{point\?\.x \?\? 0\}%`\}/);
+    assert.match(chart, /style:--spark-cursor-y=\{`\$\{point\?\.y \?\? 0\}%`\}/);
     for (const [name, source] of Object.entries({ component, chart })) {
       assert.doesNotMatch(source, /\sstyle="/, `${name}: a static style attribute is exactly what the CSP forbids`);
       assert.doesNotMatch(source, /style=\{/, `${name}: a whole-attribute style expression is blocked by the CSP`);
@@ -472,14 +477,14 @@ describe('the board of cards: source contract', () => {
     }
   });
 
-  it('turns by inverting one token set, with no second face left in the DOM', () => {
-    /* THE TURN IS AN INVERSION (owner directive, 2026-09-11). The two-face
-       machinery is gone with the reasons it existed: a rotated pivot, the
-       backface cull, the WebKit visibility swap, the aria-hidden on whichever
-       face was turned away, and the fixed box that clipped whatever the far
-       face could not fit. What replaces all of it is one [data-turned] rule
-       remapping the card's own paper and ink roles, so nothing is hidden and
-       nothing can be hidden by accident. */
+  it('inverts by remapping one token set, with no second face left in the DOM', () => {
+    /* THE INVERSION IS ONE TOKEN REMAP (owner directive, 2026-09-11). The
+       two-face machinery is gone with the reasons it existed: a rotated
+       pivot, the backface cull, the WebKit visibility swap, the aria-hidden
+       on whichever face was turned away, and the fixed box that clipped
+       whatever the far face could not fit. What replaces all of it is one
+       [data-turned] rule remapping the card's own paper and ink roles, so
+       nothing is hidden and nothing can be hidden by accident. */
     for (const gone of ['board-pivot', 'board-face', 'data-face', 'rotateY', 'backface-visibility', 'perspective']) {
       assert.ok(!component.includes(gone), `the component still carries ${gone}`);
       assert.ok(!sheet.includes(gone), `the sheet still carries ${gone}`);
@@ -488,25 +493,36 @@ describe('the board of cards: source contract', () => {
     assert.match(
       sheet,
       /\.board-card \{[^}]*--board-paper: var\(--ledger-bg\);[\s\S]*?--board-ink: var\(--ledger-ink\)/,
-      'a resting card must declare the roles the turn swaps'
+      'a card in the paper state must declare the roles the inversion swaps'
     );
     assert.match(
       sheet,
       /\.board-card\[data-turned='true'\] \{[^}]*--board-paper: var\(--ledger-ink\);[\s\S]*?--board-ink: var\(--ledger-bg\)/,
-      'the turn must be one token remap, not a rule per painted thing'
-    );
-    /* And the inversion is a paint change under motion, never a transform: a
-       reader who asked for less motion gets the same two states instantly,
-       because the transition is declared inside the no-preference guard. */
-    assert.match(
-      sheet,
-      /@media \(prefers-reduced-motion: no-preference\)[\s\S]*?\.board-card \{\s*transition:\s*\n?\s*background/,
-      'the turn animates outside the motion guard'
+      'the inversion must be one token remap, not a rule per painted thing'
     );
   });
 
-  it('opens with the board the adapter composed, and remembers what the reader turned', () => {
-    /* EVERY SECOND SOURCE CARD OPENS INVERTED. It is the board's rhythm rather
+  it('offers nothing to press, and paints the inversion the adapter composed', () => {
+    /* "THESE SHOULDN'T CHANGE COLOUR WHEN I CLICK ON THEM" (owner directive,
+       2026-09-11, issue 316). The press revealed nothing — one face, one
+       token remap — so the whole control is gone: no button, no pressed
+       state, no click, and no state for a click to change. What stays is the
+       RHYTHM, which was always the adapter's: every second source card is
+       drawn inverted, and no reader can move it. */
+    const markup = rendered(component);
+    assert.ok(!markup.includes('<button'), 'the board grew a control again');
+    assert.ok(!markup.includes('aria-pressed'), 'a card still announces a pressed state');
+    assert.ok(!markup.includes('onclick'), 'a card still takes a click');
+    assert.match(component, /<div\s+class="board-card"/);
+    assert.match(component, /data-turned=\{card\.turned \? 'true' : 'false'\}/);
+    /* The inversion is READ from the card the adapter composed rather than
+       held in the component: a Set keyed by card is exactly the machinery the
+       owner asked to be removed, and the turn vocabulary went with it. */
+    assert.doesNotMatch(component, /new Set\(/, 'the component kept a per-card state set');
+    assert.doesNotMatch(component, /turnLabel|returnLabel/, 'the turn vocabulary outlived the turn');
+    assert.doesNotMatch(helper, /boardTurnLabel|boardReturnLabel/, 'the adapter still writes turn copy');
+
+    /* EVERY SECOND SOURCE CARD IS INVERTED. It is the board's rhythm rather
        than a fact about any source, which is what makes a third source join
        that rhythm instead of needing a rule of its own. */
     const cards = tokenBoardProps(envelopeFor(shippedPayload)).cards;
@@ -527,35 +543,40 @@ describe('the board of cards: source contract', () => {
       cards.filter((card) => !card.key.startsWith('source-')).every((card) => card.turned === undefined),
       'only the source cards carry the board\u2019s alternating rhythm'
     );
-    // The component seeds ONCE from the adapter and never reseeds: a refresh
-    // thirty seconds later must not fold a card the reader has just opened.
-    assert.match(
-      component,
-      /let turned = \$state\(new Set\(cards\.filter\(\(card\) => card\.turned\)\.map\(\(card\) => card\.key\)\)\);/
-    );
-    assert.doesNotMatch(component, /\$effect/, 'the opening state is re-applied after the reader has touched it');
-  });
-
-  it('is a control a finger and a keyboard can both reach', () => {
-    /* The 44px touch floor and the announced state, on the one control this
-       surface has. A real <button> is what brings keyboard operation and the
-       pressed state with it; the floor is declared on the class even though a
-       card is far larger, because a control sized only by its content is a
-       control whose size depends on its content. */
-    assert.match(component, /<button\s+class="board-card"/);
-    assert.match(component, /aria-pressed=\{open\}/);
-    assert.match(sheet, /\.board-card \{[^}]*min-inline-size: var\(--control-target\)/);
-    assert.match(sheet, /\.board-card \{[^}]*min-block-size: var\(--control-target\)/);
-    assert.match(sheet, /--control-target: 2\.75rem;/);
-    // The turn is announced in words the ADAPTER supplies, so the component
-    // composes no sentence of its own.
-    assert.match(component, /aria-label=\{`\$\{open \? returnLabel : turnLabel\} \$\{card\.ariaLabel\}`\}/);
-    assert.equal(boardTurnLabel, 'Turn');
-    assert.equal(boardReturnLabel, 'Turn back');
-    // Every card names itself, so the board never offers a nameless control.
-    for (const card of tokenBoardProps(envelopeFor(shippedPayload)).cards) {
+    // Every card still names itself, so the box a reader lands in is named.
+    for (const card of cards) {
       assert.ok(card.ariaLabel.trim().length > 0, card.key);
     }
+    assert.match(component, /aria-label=\{card\.ariaLabel\}/);
+  });
+
+  it('puts the board\u2019s one target on the daily line, for a finger and a keyboard alike', () => {
+    /* THE CARD IS NOT A CONTROL AND THE CHART IS (issue 316). The touch floor
+       moves with the interaction: the line is declared taller than the floor
+       before the card's padding is pulled back around it, it takes a focus
+       stop, and it hands the page its vertical scroll rather than swallowing
+       it. */
+    assert.match(chart, /role="slider"/);
+    assert.match(chart, /tabindex="0"/);
+    assert.match(chart, /onkeydown=\{onKeydown\}/);
+    /* The pointer half is the gesture layer's, which is what keeps this
+       component from being a second implementation of whose gesture a finger
+       belongs to (tests/gesture.test.mjs owns that sweep). */
+    assert.match(chart, /use:scrubAlong=\{scrubBinding\}/);
+    assert.match(sheet, /\.spark \{[^}]*touch-action: pan-y/);
+    assert.match(sheet, /\.spark:focus-visible \{[^}]*outline: 2px solid var\(--color-accent\)/);
+    const plot = /--spark-height: ([\d.]+)rem;/.exec(sheet);
+    const target = /--control-target: ([\d.]+)rem;/.exec(sheet);
+    assert.ok(plot && target, 'the chart height and the touch floor must both be declared lengths');
+    assert.ok(
+      Number(plot[1]) >= Number(target[1]),
+      `the daily line is ${plot[1]}rem against a ${target[1]}rem touch floor`
+    );
+    /* The card keeps a stated minimum for the GRID's sake — an automatic
+       minimum of min-content drags the board past its own column — which is a
+       different claim from the one above and is asserted as its own. */
+    assert.match(sheet, /\.board-card \{[^}]*min-inline-size: var\(--control-target\)/);
+    assert.match(sheet, /\.board-card \{[^}]*min-block-size: var\(--control-target\)/);
   });
 
   it('prints no hint, no chip and no caption on the board or its shell', () => {
@@ -780,7 +801,13 @@ describe('the board of cards: live surface', () => {
       /@media \(min-width: 67\.5rem\) \{\s*\.board-grid \{\s*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/
     );
     assert.match(sheet, /\.board-grid \{[^}]*grid-auto-rows: minmax\(var\(--board-card-min\), auto\)/);
-    assert.match(component, /class="board-figure">\{card\.figure\}/);
+    /* The headline is the card's own figure, or the scrubbed day's while a
+       reader is on the line — one element either way, so the swap costs the
+       card no box (issue 316). */
+    assert.match(
+      component,
+      /class="board-figure">\{scrubbed \? scrubbed\.figure : card\.figure\}/
+    );
     // The figure the card shows is the tested renderer's, via the adapter.
     const payload = {
       sources: [
@@ -907,13 +934,13 @@ describe('the board of cards: live surface', () => {
     // The adapter half, executed, and BOTH directions, because half of this
     // is not a guard: an adapter that offered no set to anybody would satisfy
     // the first half perfectly and draw nothing at all.
-    const seriesless = commitLogProps(tokenOnly({ sources: [{ label: 's', windows: [] }] }));
+    const seriesless = contributionCalendarProps(tokenOnly({ sources: [{ label: 's', windows: [] }] }));
     assert.equal(
       seriesless.sets.find((set) => set.key === 's'),
       undefined,
       'a source with no daily record was offered a segment over an empty grid'
     );
-    const empty = commitLogProps(
+    const empty = contributionCalendarProps(
       tokenOnly({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [] } }] })
     );
     assert.equal(
@@ -938,7 +965,7 @@ describe('the board of cards: live surface', () => {
       ).cards.some((card) => card.label.toLowerCase().includes('s')),
       'a source with no series lost its card as well as its calendar'
     );
-    const drawn = commitLogProps(
+    const drawn = contributionCalendarProps(
       tokenOnly({ sources: [{ label: 's', windows: [], series: { startDate: '2026-08-01', totals: [1, 2, 3] } }] })
     );
     const set = drawn.sets.find((set) => set.key === 's');
@@ -965,7 +992,7 @@ describe('the board of cards: live surface', () => {
        week that ends the contribution window ends every window. A source that
        stopped capturing early would otherwise draw a window silently offset
        from the one above it. */
-    const props = commitLogProps(
+    const props = contributionCalendarProps(
       tokenOnly({
         sources: [
           { label: 'a', windows: [], series: { startDate: '2026-08-01', totals: [1, 2, 3] } },
@@ -1808,6 +1835,46 @@ describe('the models card is one card per source', () => {
     );
   });
 
+  it('folds an unnamed identifier into the residual, which never renders and never leaves the total', () => {
+    /* "I AM NOT SURE THIS IS A REAL MODEL?" (owner directive, 2026-09-11,
+       issue 316). A feature identifier the Codex journals record where a
+       model id normally sits was rendering as a model row, so it left the
+       vocabulary; the producer folds every identifier the file does not name
+       into the residual, and THIS is what the page then does with it.
+
+       The claim has two halves and both are checked, because passing one
+       alone would be a different bug: the residual draws no row beside real
+       members, and the SOURCE TOTAL is untouched — the daily series is the
+       source's own measurement and a member leaving the vocabulary must never
+       reduce it. */
+    const [group] = vocabulary.groups;
+    const named = keysOf(group).slice(0, 2);
+    const payload = carrying([
+      { label: 'a-capture-tool', keys: [vocabulary.residual.key, ...named] }
+    ]);
+    const cards = cardsOf(payload);
+    const [card] = cards.filter((entry) => entry.key.startsWith('models-'));
+    assert.deepEqual(
+      card.models.map((row) => row.key),
+      named,
+      'the residual drew a row beside real models'
+    );
+    assert.ok(
+      !card.models.some((row) => row.label === vocabulary.residual.label),
+      'the residual reached a models card by its written name'
+    );
+    /* The source's own line still carries every token the payload reported,
+       residual included: `carrying` sums one row per key into each day, so a
+       fold that was DROPPED rather than folded would show here as a shorter
+       total. */
+    const source = cards.find((entry) => entry.key === 'source-a-capture-tool');
+    assert.deepEqual(source.spark.totals, [3, 6, 9]);
+    assert.deepEqual(
+      source.spark.dayFigures,
+      [3, 6, 9].map((value) => formatTokenCount(value))
+    );
+  });
+
   it('renders no card at all when a source has nothing to split', () => {
     /* A card saying "all of it was something we cannot name" is the aggregate
        above it with extra steps, and the producer already omits the section
@@ -2522,6 +2589,45 @@ describe('the six-card board', () => {
     assert.equal(tokenCards([{ label: 'a', windows: [] }])[0].spark, undefined);
   });
 
+  it('words every day of every line: its date, its compacted figure and its exact one', () => {
+    /* THE COMPONENT FORMATS NOTHING (owner directive, 2026-09-11, issue 316),
+       so the three readings a scrubbed day needs arrive written and parallel
+       to the series itself. The source's line is dated from its OWN start
+       date; the combined line is dated from the INTERSECTION's, which is the
+       first day every source carries and not the oldest capture — the fixture
+       starts one source on the 10th and the other on the 11th. */
+    const source = cardsOf().find((card) => card.key === `source-${firstSource.key}`);
+    assert.deepEqual(source.spark.dayLabels, ['on Aug 10', 'on Aug 11', 'on Aug 12', 'on Aug 13']);
+    assert.deepEqual(
+      source.spark.dayFigures,
+      [1, 2, 3, 4].map((value) => formatTokenCount(value))
+    );
+    assert.deepEqual(
+      source.spark.dayExact,
+      [1, 2, 3, 4].map((value) => formatWholeFigure(value))
+    );
+    const [total] = cardsOf();
+    assert.deepEqual(total.spark.dayLabels, ['on Aug 11', 'on Aug 12', 'on Aug 13']);
+    assert.deepEqual(
+      total.spark.dayFigures,
+      [12, 23, 34].map((value) => formatTokenCount(value))
+    );
+    assert.deepEqual(
+      total.spark.dayExact,
+      [12, 23, 34].map((value) => formatWholeFigure(value))
+    );
+    /* PARALLEL IS THE WHOLE CONTRACT: an array one entry short is a scrubbed
+       day with an undefined figure, which is the defect the card's own lookup
+       refuses and this is the half that keeps it from arising. */
+    for (const card of cardsOf()) {
+      if (card.spark === undefined) continue;
+      const days = card.spark.totals.length;
+      assert.equal(card.spark.dayLabels.length, days, card.key);
+      assert.equal(card.spark.dayFigures.length, days, card.key);
+      assert.equal(card.spark.dayExact.length, days, card.key);
+    }
+  });
+
   it('gives each source card its figure, its classes, its windows and its own line', () => {
     const card = cardsOf().find((candidate) => candidate.key === `source-${firstSource.key}`);
     assert.equal(card.label, firstSource.name);
@@ -2722,9 +2828,12 @@ describe('sparklinePath', () => {
   });
 
   it('is the only place the chart computes anything', () => {
-    assert.match(chart, /import \{ sparkBox, sparklinePath \} from '\.\.\/spark\.ts'/);
+    assert.match(
+      chart,
+      /import \{ sparkBox, sparkIndexAt, sparklinePath, sparkPointAt \} from '\.\.\/spark\.ts'/
+    );
     assert.match(chart, /preserveAspectRatio="none"/);
-    assert.match(chart, /role="img" aria-label=\{ariaLabel\}/);
+    assert.match(chart, /aria-label=\{ariaLabel\}/);
     /* The stroke keeps its own thickness through vector-effect, and the mark
        on the newest reading is positioned OUTSIDE the squashed space — a
        circle inside it would be an ellipse whose eccentricity is the card's
@@ -2733,11 +2842,186 @@ describe('sparklinePath', () => {
     assert.match(sheet, /\.spark-line \{[^}]*stroke: var\(--grid-cell-peak\)/);
     assert.match(sheet, /\.spark-area \{[^}]*fill: var\(--grid-cell-1\)/);
     assert.match(sheet, /\.spark-mark \{[^}]*border-radius: 50%/);
+    /* The scrubber's own two marks wear the CHART's family rather than the
+       sheet's one mark: the line and its end dot are already the peak, and a
+       cursor in a different ink would read as a second quantity rather than
+       as a position on the first. */
+    assert.match(sheet, /\.spark-cursor \{[^}]*background: var\(--grid-cell-peak\)/);
+    assert.match(sheet, /\.spark-guide \{[^}]*background: var\(--grid-cell-peak\)/);
     // No axis, no caption, no legend: the figures above the line are the
     // reading, and the drawing is the shape.
     for (const chrome of ['<text', 'caption', 'legend', 'axis']) {
       assert.ok(!rendered(chart).toLowerCase().includes(chrome), `the chart draws ${chrome}`);
     }
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * THE SCRUBBER'S ARITHMETIC (owner directive, 2026-09-11, issue 316)
+ *
+ * "As I run the mouse through this hovering or clicking, I expected to see
+ * more information, like you can in Robinhood when looking at a stock price."
+ * Which day a pointer names and where that day sits on the drawn line are two
+ * pure functions, decided here rather than in an engine, so every edge a
+ * finger can produce — past either end, on a day nobody measured, on a series
+ * of one — is answered by a test rather than by a browser.
+ * ------------------------------------------------------------------------ */
+describe('scrubReading', () => {
+  /* One card of the shape the adapter composes, with its three day arrays
+     parallel to a three-day series. */
+  const card = (spark) => ({ key: 'a-card', label: 'A card', ariaLabel: 'A card', spark });
+  const days = { totals: [1, 2, 3], ariaLabel: 'line', ...sparkDays('2026-09-01', [1, 2, 3]) };
+
+  it('reads the day the cursor names, exactly and dated', () => {
+    assert.deepEqual(scrubReading(card(days), 1), {
+      figure: formatTokenCount(2),
+      line: `${formatWholeFigure(2)} · on Sep 2`
+    });
+  });
+
+  it('refuses a day the current payload cannot answer', () => {
+    /* THE INDEX CAME FROM A POINTER OVER A CHART THAT MAY SINCE HAVE BEEN
+       HANDED A DIFFERENT PAYLOAD. Every one of these is a card that must go
+       back to its own figure rather than print the word `undefined`. */
+    assert.equal(scrubReading(card(days), 3), null, 'a day past the end of the series');
+    assert.equal(scrubReading(card(days), -1), null, 'a day before the start of the series');
+    assert.equal(scrubReading(card(undefined), 0), null, 'a card that lost its line');
+    // An array shorter than the series — a half-built payload, or a card whose
+    // line grew without its words.
+    assert.equal(
+      scrubReading(card({ ...days, dayExact: [formatWholeFigure(1)] }), 1),
+      null,
+      'a card whose exact figures are short of its series'
+    );
+    assert.equal(
+      scrubReading(card({ ...days, dayLabels: [] }), 0),
+      null,
+      'a card whose days carry no dates'
+    );
+  });
+
+  it('reads a day nobody measured as unknown, twice, and still dates it', () => {
+    const absent = { totals: [null], ariaLabel: 'line', ...sparkDays('2026-09-04', [null]) };
+    assert.deepEqual(scrubReading(card(absent), 0), {
+      figure: unknownFigure,
+      line: `${unknownFigure} · on Sep 4`
+    });
+  });
+});
+
+describe('sparkDays', () => {
+  it('dates every day from the wire\u2019s start date, in the page\u2019s one voice', () => {
+    const days = sparkDays('2026-08-30', [1, 2, 3]);
+    assert.deepEqual(days.dayLabels, ['on Aug 30', 'on Aug 31', 'on Sep 1']);
+    assert.deepEqual(days.dayFigures, [1, 2, 3].map((value) => formatTokenCount(value)));
+    assert.deepEqual(days.dayExact, [1, 2, 3].map((value) => formatWholeFigure(value)));
+  });
+
+  it('marks a day nobody measured as unknown in both figures, and still dates it', () => {
+    /* An absence is a fact about a REAL day: printing a zero there would be
+       the invention the honest-states floor forbids, and dropping the date
+       would leave a reader scrubbing over a day the page refuses to name. */
+    const days = sparkDays('2026-09-01', [5, null]);
+    assert.deepEqual(days.dayLabels, ['on Sep 1', 'on Sep 2']);
+    assert.deepEqual(days.dayFigures, [formatTokenCount(5), unknownFigure]);
+    assert.deepEqual(days.dayExact, [formatWholeFigure(5), unknownFigure]);
+  });
+
+  it('says nothing at all for a series of no days', () => {
+    assert.deepEqual(sparkDays('2026-09-01', []), {
+      dayLabels: [],
+      dayFigures: [],
+      dayExact: []
+    });
+  });
+});
+
+describe('sparkIndexAt', () => {
+  it('names the NEAREST day, so a pointer lands on the day it is pointing at', () => {
+    // Four days across the box: the boundaries between them are at 1/6, 1/2
+    // and 5/6, and a fraction either side of one picks the nearer day.
+    assert.equal(sparkIndexAt(0, 4), 0);
+    assert.equal(sparkIndexAt(0.16, 4), 0);
+    assert.equal(sparkIndexAt(0.18, 4), 1);
+    assert.equal(sparkIndexAt(0.5, 4), 2);
+    assert.equal(sparkIndexAt(1, 4), 3);
+  });
+
+  it('clamps a pointer that arrived outside its own box', () => {
+    /* A finger that began on the chart and slid past its edge keeps
+       reporting, and a box measured one frame before a resize answers a
+       fraction outside [0, 1]. The end day is the honest answer there; an
+       index the series cannot answer is a figure of undefined. */
+    assert.equal(sparkIndexAt(-4, 5), 0);
+    assert.equal(sparkIndexAt(9, 5), 4);
+    assert.equal(sparkIndexAt(-0.0001, 5), 0);
+    assert.equal(sparkIndexAt(1.0001, 5), 4);
+  });
+
+  it('answers a one-day series with its one day, and a series of none with none', () => {
+    // A single day has no interval to divide by: every point of the box is it.
+    assert.equal(sparkIndexAt(0, 1), 0);
+    assert.equal(sparkIndexAt(1, 1), 0);
+    assert.equal(sparkIndexAt(0.5, 1), 0);
+    assert.equal(sparkIndexAt(0.5, 0), null);
+    assert.equal(sparkIndexAt(0.5, -3), null);
+    /* A box of zero width divides to NaN or to an infinity on the caller's
+       side. Neither is a fraction, so neither names a day — clamping an
+       infinity would answer a question nobody could have asked. */
+    assert.equal(sparkIndexAt(Number.NaN, 5), null);
+    assert.equal(sparkIndexAt(Number.POSITIVE_INFINITY, 5), null);
+    assert.equal(sparkIndexAt(Number.NEGATIVE_INFINITY, 5), null);
+  });
+});
+
+describe('sparkPointAt', () => {
+  const box = { width: 100, height: 100 };
+
+  it('puts the cursor exactly where the line already drew that day', () => {
+    /* ONE mapping from a day to a point, or the cursor and the line are two
+       drawings of the same series: every plotted day is checked against the
+       path's own coordinates rather than against numbers typed here. */
+    const totals = [0, 5, 10];
+    const path = sparklinePath(totals, box);
+    const points = totals.map((_, index) => sparkPointAt(totals, box, index));
+    assert.equal(
+      points.map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x} ${point.y}`).join(' '),
+      path.line,
+      'the cursor and the line disagree about where a day is'
+    );
+    assert.deepEqual(points[2], path.last);
+  });
+
+  it('refuses a day the series cannot answer', () => {
+    const totals = [1, 2, 3];
+    assert.equal(sparkPointAt(totals, box, -1), null);
+    assert.equal(sparkPointAt(totals, box, 3), null);
+    assert.equal(sparkPointAt(totals, box, 1.5), null);
+    assert.equal(sparkPointAt([], box, 0), null);
+    assert.equal(sparkPointAt([null, null], box, 0), null);
+  });
+
+  it('puts no cursor on a day nobody measured', () => {
+    /* The absence draws no point, so there is nothing to mark — and the days
+       either side of it are unmoved, because a gap spends its x position. */
+    const totals = [10, null, 20];
+    assert.equal(sparkPointAt(totals, box, 1), null);
+    assert.deepEqual(sparkPointAt(totals, box, 0), { x: 0, y: 50 });
+    assert.deepEqual(sparkPointAt(totals, box, 2), { x: 100, y: 8 });
+  });
+
+  it('marks a one-day series where its own mark is', () => {
+    /* sparklinePath draws a single day as a line across the whole box and
+       puts its mark at the far edge; a cursor at the origin would sit on the
+       same line at a place the reader cannot read a value at. */
+    const totals = [7];
+    assert.deepEqual(sparkPointAt(totals, box, 0), sparklinePath(totals, box).last);
+    assert.deepEqual(sparkPointAt(totals, box, 0), { x: 100, y: 8 });
+  });
+
+  it('scales with the box it is given, exactly as the path does', () => {
+    const wide = { width: 200, height: 50 };
+    assert.deepEqual(sparkPointAt([0, 10], wide, 1), sparklinePath([0, 10], wide).last);
   });
 });
 

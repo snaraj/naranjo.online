@@ -37,6 +37,16 @@ export interface WorkEntry {
    * drawer's link carry. */
   readonly short: string;
   readonly years: string;
+  /* The employer's MONOGRAM: two letters, the row's mark (owner design
+   * decision, 2026-09-11, issue 313). A logo is a trademark and this page
+   * draws none, so the mark is the employer's own initials set in the site's
+   * ink. It is data for the same reason `short` is — an institution's
+   * initials are an editorial judgement, and a rule deriving them from
+   * "University of Maryland, Baltimore County — LIDAR Research Group" would
+   * produce something nobody calls it. Two letters exactly, pinned by
+   * tests/sections.test.mjs: one reads as a typo and three do not fit the
+   * square. */
+  readonly mark: string;
   /* The role held there. */
   readonly role: string;
   /* The span, as the owner writes it — a portfolio date range, never an
@@ -63,6 +73,7 @@ export const workEntries: readonly WorkEntry[] = [
     company: 'Panasonic Avionics Corporation',
     short: 'Panasonic Avionics',
     years: '2023 —',
+    mark: 'PA',
     role: 'Software Engineer, Automation, DevOps and Tools',
     dates: 'July 2023 – Present',
     location: 'Irvine, CA',
@@ -80,6 +91,7 @@ export const workEntries: readonly WorkEntry[] = [
     company: 'Fathom5',
     short: 'Fathom5',
     years: '2022 – 23',
+    mark: 'F5',
     role: 'Software Engineer, Condition Based Maintenance',
     dates: 'Mar 2022 – July 2023',
     location: 'Austin, TX',
@@ -96,6 +108,7 @@ export const workEntries: readonly WorkEntry[] = [
     company: 'OnTrajectory',
     short: 'OnTrajectory',
     years: '2019',
+    mark: 'OT',
     role: 'Software Engineering Intern',
     dates: 'May 2019 – Aug 2019',
     location: 'Towson, MD',
@@ -109,6 +122,7 @@ export const workEntries: readonly WorkEntry[] = [
     company: 'University of Maryland, Baltimore County — LIDAR Research Group',
     short: 'UMBC LIDAR Research Group',
     years: '2017',
+    mark: 'UM',
     role: 'Software Engineering Intern',
     dates: 'May 2017 – Aug 2017',
     location: 'Baltimore, MD',
@@ -149,6 +163,7 @@ export const roleLedgerProps: LedgerLogProps = {
     key: entry.company,
     span: entry.years,
     name: entry.short,
+    mark: entry.mark,
     role: entry.role,
     place: entry.location,
     points: entry.points,

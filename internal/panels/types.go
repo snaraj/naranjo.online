@@ -122,7 +122,7 @@ const (
 	// The kind is named for what it REPORTS, never for where it comes from,
 	// exactly as the version-control kind beside it is — the host is a config
 	// endpoint, and swapping it stays a data edit.
-	KindCodingProjects = "coding-projects/v1"
+	KindCodingProjects = "coding-projects/v2"
 )
 
 // Status is the envelope serving state. It reflects data provenance, never
@@ -445,6 +445,33 @@ type VCSActivityData struct {
 	// Empty means the producer declared none, which is what the embedded
 	// snapshot says.
 	Coverage string `json:"coverage,omitempty"`
+	// PrivateActivity carries the account's PRIVATE contribution days, one
+	// entry per day that had any, newest first (issue #315). It is how the
+	// owner's ruling — private work is marked the way its host marks it — is
+	// served without serving a private repository: an aggregate is the whole
+	// row, and no name, URL, identity, subject or description of a private
+	// repository ever reaches it.
+	//
+	// Additive inside the kind, which is why vcs-activity stays v1: a payload
+	// written before this field decodes and renders unchanged, and a reader
+	// that has never heard of it draws the public rows exactly as it did.
+	PrivateActivity []VCSPrivateDay `json:"privateActivity,omitempty"`
+}
+
+// VCSPrivateDay is one day of private contribution, counted and never named.
+// Zero days do not appear: a day with no private contribution is not a fact
+// about a private repository, it is the absence of one, and the honest-states
+// floor has no row for it.
+type VCSPrivateDay struct {
+	// Date is the calendar date (YYYY-MM-DD) the contributions fall on.
+	Date string `json:"date"`
+	// Contributions is how many commits the account made in private
+	// repositories that day.
+	Contributions int `json:"contributions"`
+	// Repositories is how many DISTINCT private repositories those
+	// contributions were spread across. A count is the most this row may ever
+	// say about them (requirement 12).
+	Repositories int `json:"repositories"`
 }
 
 // The coverage vocabulary, closed and admitted by MEMBERSHIP. Only this
@@ -459,7 +486,9 @@ const (
 	CoverageComplete = "complete"
 )
 
-// CodingProjectsData is the coding-projects/v1 payload: one row per
+// CodingProjectsData is the coding-projects/v2 payload (v1 carried open
+// issues and open pull requests; removing them is a breaking payload change,
+// and a breaking change mints a new kind version): one row per
 // repository the owner publishes, carrying what its host currently says about
 // it. Rows arrive most recently pushed first, DERIVED from the account's own
 // public listing at fetch time (issue 281): the owner's ruling is that a new
@@ -498,20 +527,33 @@ type CodingProject struct {
 	// PushedAt is the RFC 3339 instant of the repository's last push,
 	// normalized to UTC. Empty when unreported.
 	PushedAt string `json:"pushedAt,omitempty"`
-	// OpenIssues and OpenPulls are the repository's open issue and open
-	// pull-request tallies (issue 252). Both are ADDITIVE options inside the
-	// existing kind, which is why coding-projects stays v1: a payload written
-	// before they existed decodes and renders unchanged, and the frontend
-	// draws a dash for a tally it was not given rather than a confident zero.
+	// ClosedPulls is how many pull requests the repository has merged or
+	// closed, all time (issue #317). Absent — not zero — when the producer
+	// could not read it, which is every anonymous round: the public listing
+	// document carries no such figure, and a dash says "not known" where a
+	// zero would claim "none ever".
+	ClosedPulls *int64 `json:"closedPulls,omitempty"`
+	// Pinned marks a row the owner has PINNED on the host (owner directive,
+	// 2026-09-11). It is curation expressed where the owner already expresses
+	// it — pinning a repository puts it on the page with no edit here — and it
+	// is served as a flag rather than acted on here, because which rows the
+	// PAGE lists is the page's decision and this producer's job is to say
+	// which rows the owner marked. False is the ordinary state and is omitted.
+	Pinned bool `json:"pinned,omitempty"`
+	// Release is the repository's latest release tag exactly as its host
+	// names it, or empty for a repository that has never released. Both
+	// render as the owner's dash, and that is deliberate: "no release" and
+	// "not read" are both "no version to show", and neither is a number this
+	// panel may invent.
 	//
-	// They arrive and leave TOGETHER, and that is the honest coupling rather
-	// than a convenience. The repository document reports one combined figure
-	// that counts pull requests as issues, so the issue tally only exists as
-	// the combined figure minus a separately read pull-request tally. Missing
-	// either one, or a pair whose subtraction is nonsense, leaves both nil:
-	// half of a derived pair is not a smaller truth, it is a wrong number.
-	OpenIssues *int64 `json:"openIssues,omitempty"`
-	OpenPulls  *int64 `json:"openPulls,omitempty"`
+	// ClosedPulls and Release arrived with coding-projects/v2 (issue #317).
+	// The pair they replaced — openIssues and openPulls — left with the
+	// columns that drew them and the second search document that produced
+	// them, and a field that leaves the wire is a breaking payload change, so
+	// the kind moved from v1 to v2 rather than growing in place (the envelope
+	// doctrine). Both new fields are optional inside v2 for the reason above:
+	// "no release" and "not read" are both the owner's dash.
+	Release string `json:"release,omitempty"`
 	// Recorded marks a row served from the shipped snapshot rather than read
 	// live — the same provenance meaning it carries on a token-usage stat
 	// tile. Since issue 281 only the cold-start snapshot produces such rows:
@@ -733,6 +775,11 @@ type FetchSource struct {
 	calendarAt time.Time
 	// commits is the last successfully fetched commit list.
 	commits []VCSCommit
+	// commitDays is the private-day aggregate read in the same round, retained
+	// beside the rows because the two halves are one answer: serving retained
+	// rows next to a fresh-looking absence of private days would report a
+	// quiet week the producer never measured.
+	commitDays []VCSPrivateDay
 	// commitsAt is when that list was fetched; the zero instant means no list
 	// has ever been fetched, which the payload reports as an absent commitsAt
 	// rather than as a fresh empty list.
@@ -794,7 +841,7 @@ type panelFetchSpecs struct {
 	usage *tokenUsageFetchSpec
 	// vcs is set when this source feeds a vcs-activity/v1 panel.
 	vcs *vcsActivityFetchSpec
-	// projects is set when this source feeds a coding-projects/v1 panel.
+	// projects is set when this source feeds a coding-projects/v2 panel.
 	projects *codingProjectsFetchSpec
 }
 
@@ -905,16 +952,49 @@ type vcsActivityFetchSpec struct {
 	Calendar *vcsCalendarFetchSpec `json:"calendar"`
 }
 
-// vcsCalendarHeaderAllowlist is the COMPLETE set of STATIC request headers the
-// credentialed calendar producer may send, and it is a second list rather than
-// a widening of the public one on purpose. The public producers must stay
-// unable to carry any header but Accept; this producer additionally needs to
+// graphQLHeaderAllowlist is the COMPLETE set of STATIC request headers a
+// credentialed QUERY producer may send, and it is a second list rather than a
+// widening of the public one on purpose. The public producers must stay unable
+// to carry any header but Accept; a query producer additionally needs to
 // declare the media type of the request BODY it posts. Neither list may name a
 // credential header — the credential never travels through a static header map
 // at all, it is read from the environment at fetch time and set through the
-// spec's own dedicated key fields — so config data still cannot attach a
+// owning spec's dedicated key fields — so config data still cannot attach a
 // secret to a request by editing a map.
-var vcsCalendarHeaderAllowlist = []string{"Accept", "Content-Type"}
+var graphQLHeaderAllowlist = []string{"Accept", "Content-Type"}
+
+// graphQLDocumentSpec is ONE credentialed query document, described entirely
+// as data: where it is posted, the LITERAL text posted there, the static
+// headers it may carry, and the bounds its answer is held to.
+//
+// The credential is deliberately NOT a field here. A document belongs to a
+// producer, the producer owns the key fields, and one key therefore covers
+// every document of that producer — which is what keeps "this panel reads one
+// credential" a fact a reader can check in one place rather than a promise
+// repeated per document.
+//
+// Query is LITERAL, and that is the load-bearing property (issue #315). The
+// obvious alternative — composing document text from names an upstream
+// returned — would let an upstream answer decide what is asked of the next
+// one. Every document this package posts is instead a config constant, and
+// everything that varies per round travels as a typed VARIABLE beside it, so
+// the set of questions this process can ask is fixed before the first request.
+type graphQLDocumentSpec struct {
+	// Endpoint is the full request URL, checked against the host allowlist at
+	// construction like every other endpoint.
+	Endpoint string `json:"endpoint"`
+	// Query is the literal query document posted to it. The variables it must
+	// declare are checked at construction rather than sent, so a document
+	// edited to drop one is refused instead of being answered over whatever
+	// the upstream's own default happens to be.
+	Query string `json:"query"`
+	// Headers holds the static request headers, held to graphQLHeaderAllowlist.
+	Headers map[string]string `json:"headers"`
+	// MaxBytes optionally tightens the shared body cap for this endpoint.
+	MaxBytes int64 `json:"maxBytes"`
+	// ContentType is the exact media type the answer must declare.
+	ContentType string `json:"contentType"`
+}
 
 // vcsCalendarFetchSpec configures the CREDENTIALED contribution-calendar
 // producer: a query API that reports the calendar of the account the
@@ -956,7 +1036,7 @@ type vcsCalendarFetchSpec struct {
 	// request instead of spending an authenticated budget without a key.
 	AuthenticatedMinIntervalMinutes int `json:"authenticatedMinIntervalMinutes"`
 	// Headers holds the static request headers, held to
-	// vcsCalendarHeaderAllowlist.
+	// graphQLHeaderAllowlist.
 	Headers map[string]string `json:"headers"`
 	// MaxBytes optionally tightens the shared body cap for this endpoint.
 	MaxBytes int64 `json:"maxBytes"`
@@ -974,6 +1054,15 @@ const (
 	calendarFromVariable = "$from"
 	// calendarToVariable names its last.
 	calendarToVariable = "$to"
+	// historyAuthorVariable names the account whose commits the history
+	// document may return. A document that drops it would answer with every
+	// author's commits on those branches, which is a different panel.
+	historyAuthorVariable = "$author"
+	// historyIDsVariable names the repositories it asks about. A document
+	// that drops it would answer about nothing, or about whatever the query
+	// text happened to name — which is exactly the interpolation this
+	// producer refuses.
+	historyIDsVariable = "$ids"
 )
 
 // calendarWindowDays is how far back the credentialed calendar window reaches
@@ -1033,17 +1122,17 @@ type codingProjectsFetchSpec struct {
 	// appears unless a name is written here, so curation can never silently
 	// hide a new repository the way a stale whitelist did.
 	Exclude []string `json:"exclude"`
-	// PullsEndpoint optionally names ONE literal search URL answering with
-	// every open pull request across the account (issue 252, reshaped by
-	// issue 281). It is a separate document because the listing has no such
-	// field: its open-issue figure counts pull requests, so the two tallies
-	// are only separable by reading the open pull requests and subtracting.
+	// Repositories optionally names the CREDENTIALED query document, preferred
+	// over the public listing whenever the credential is present (issue #317).
+	// It exists because the listing document carries neither of the two
+	// figures the owner's columns ask for — the released version and the
+	// all-time closed pull-request count — and reading them per repository
+	// would be one request per row per refresh.
 	//
-	// Optional in the same sense the credential is: a spec that names none
-	// serves rows with no tallies, which the frontend dashes. The failure
-	// mode stays per FIELD — this document going bad costs the two counts on
-	// every row and nothing else.
-	PullsEndpoint string `json:"pullsEndpoint"`
+	// Optional exactly like the calendar's: a deployment with no credential
+	// reads the public listing and serves rows without those two fields,
+	// which the frontend draws as dashes rather than as zeros.
+	Repositories *graphQLDocumentSpec `json:"repositories"`
 	// Headers holds static request headers, held to the same public-producer
 	// allowlist the commit sources' are.
 	Headers map[string]string `json:"headers"`
@@ -1082,10 +1171,10 @@ const (
 	// a document past it is drift or an upstream inflating a body, refused
 	// whole before it can cost memory or mapping work.
 	maxListedRepositories = 100
-	// maxOpenPullItems bounds the search document's item list the same way.
-	// The tally mapping also requires the item count to EQUAL the document's
-	// own total, so a truncated answer is refused rather than undercounted.
-	maxOpenPullItems = 100
+	// maxReleaseTagRunes bounds one served release tag. A tag is a short
+	// version word; anything longer is not a version and is refused rather
+	// than truncated, because half a version number is a wrong one.
+	maxReleaseTagRunes = 64
 	// maxRepositoryNameRunes bounds one repository name. The code host caps
 	// names at 100 characters; anything longer never came from it.
 	maxRepositoryNameRunes = 100
@@ -1101,39 +1190,50 @@ const (
 	maxProjectAge = 40 * 365 * 24 * time.Hour
 )
 
-// vcsCommitsFetchSpec configures the recent-commit producer: one public
-// commit-list document per repository, each named by a complete literal URL
-// in configuration. Its optional credential changes only rate headroom; an
-// absent credential reads the identical public documents on the conservative
-// public budget.
+// vcsCommitsFetchSpec configures the recent-commit producer: TWO credentialed
+// query documents against one fixed endpoint, replacing the hand-spelled list
+// of three repository URLs the panel shipped with (issue #315). The owner's
+// ruling is that the log shows every contribution on every project, and a list
+// somebody maintains can only ever show what its last edit knew.
 //
-// Complete literal URLs are the load-bearing detail. The obvious alternative —
-// discovering repositories from an upstream activity document and building
-// request URLs out of the names it returns — would let an upstream choose
-// where this process connects next. Every endpoint here is instead a config
-// constant validated against the host allowlist at construction, so the set of
-// reachable URLs is fixed before the first request and no upstream answer can
-// extend it.
+// The list is gone; the property it protected is not. The old comment here
+// argued that complete literal URLs were load-bearing because the alternative —
+// "discovering repositories from an upstream activity document and building
+// request URLs out of the names it returns" — would let an upstream choose
+// where this process connects next. That is still true, and it is exactly what
+// this producer does NOT do. Both documents are posted to ONE config endpoint
+// that is host-allowlisted at construction, and the discovery answer never
+// touches a URL: the repositories it names travel into the SECOND document as
+// opaque node identifiers in a typed variable list, so the set of reachable
+// addresses is still fixed before the first request and an upstream can choose
+// only which rows come back, never where the next request goes.
+//
+// The credential is REQUIRED here, unlike the calendar's. The documents ask
+// about the credential's own account, so without one there is nothing to ask
+// and the producer serves an empty list rather than an invented one.
 type vcsCommitsFetchSpec struct {
-	// Sources lists one labeled commit document per repository.
-	Sources []vcsCommitSourceSpec `json:"sources"`
-	// Headers holds static request headers, held to the same public-producer
-	// allowlist the calendar's are.
-	Headers map[string]string `json:"headers"`
-	// KeyEnvName optionally names the environment variable holding a
-	// credential used only for rate headroom. The value is read at attempt
-	// time and never stored on the source.
+	// Contributions is the discovery document: which repositories the account
+	// committed to over the log window, with per-day counts and the privacy
+	// flag that decides whether a repository may ever be named.
+	Contributions *graphQLDocumentSpec `json:"contributions"`
+	// History is the second document: the newest default-branch commits the
+	// account authored in the repositories discovery admitted, asked for by
+	// the node identifiers that answer carried.
+	History *graphQLDocumentSpec `json:"history"`
+	// Owner is the account login every NAMED row must belong to. The account
+	// legitimately contributes to other people's repositories, and those
+	// contributions are theirs to list — this panel is the owner's own log, so
+	// a repository under any other login is counted and never named.
+	Owner string `json:"owner"`
+	// KeyEnvName names the environment variable holding the credential. The
+	// value is read at attempt time and never stored on the source.
 	KeyEnvName string `json:"keyEnvName"`
 	// KeyHeader is the request header that carries the credential.
 	KeyHeader string `json:"keyHeader"`
 	// KeyPrefix is prepended to it in the header.
 	KeyPrefix string `json:"keyPrefix"`
-	// MaxBytes optionally tightens the shared body cap for these endpoints.
-	MaxBytes int64 `json:"maxBytes"`
-	// ContentType is the exact media type each answer must declare.
-	ContentType string `json:"contentType"`
-	// MinIntervalMinutes is the rate budget applied to the whole group: the
-	// shortest gap between two rounds of attempts across every source.
+	// MinIntervalMinutes is the rate budget applied to the whole round: the
+	// shortest gap between two rounds of both documents.
 	MinIntervalMinutes int `json:"minIntervalMinutes"`
 	// AuthenticatedMinIntervalMinutes is the shorter group budget used only
 	// while KeyEnvName resolves to a credential. Zero retains the public
@@ -1142,16 +1242,6 @@ type vcsCommitsFetchSpec struct {
 	// Max caps how many commit rows the merged list serves. It can only ever
 	// tighten maxServedCommits.
 	Max int `json:"max"`
-}
-
-// vcsCommitSourceSpec is one repository's commit document: the public name the
-// panel SERVES and the literal URL it is read from. The name is configuration
-// precisely so a hostile or drifting upstream cannot relabel a row.
-type vcsCommitSourceSpec struct {
-	// Repo is the public repository name served on every row from this source.
-	Repo string `json:"repo"`
-	// Endpoint is the full request URL.
-	Endpoint string `json:"endpoint"`
 }
 
 // tokenUsageFetchSpec configures the token-usage live fetch: one entry per
@@ -1249,14 +1339,45 @@ const minCalendarDays = 28
 // clamp: a commit document that breaks any of them is discarded whole and the
 // panel keeps serving its last good list.
 const (
-	// maxCommitDocumentItems bounds how many rows one commit document may
-	// carry. The configured endpoints ask for a handful; a document with more
-	// is either drift or an upstream trying to make this process hold memory.
+	// maxCommitDocumentItems bounds how many rows ONE repository's history may
+	// carry. The document asks for ten; a repository answering with more is
+	// either drift or an upstream trying to make this process hold memory.
 	maxCommitDocumentItems = 30
 	// maxServedCommits is the absolute ceiling on the merged list, which the
 	// per-panel budget then has to fit as well. Configuration may tighten it
-	// and can never widen it.
-	maxServedCommits = 12
+	// and can never widen it. Raised from 12 to 30 with issue #315: the log
+	// reserves ten rows on the page and scrolls for the rest, and 30 is what
+	// the measured payload fits under MaxPanelResponseBytes (the measurement
+	// is in docs/panels-invariants.md and pinned by
+	// TestActivityPayloadFitsTheOwnerBudget).
+	maxServedCommits = 30
+	// commitLogWindowDays is how far back the log's discovery document asks.
+	// A "recent commits" list is a window, not a history, and a window this
+	// size is what makes the per-day private aggregate a readable row rather
+	// than a year of them.
+	commitLogWindowDays = 30
+	// maxContributionRepositories bounds how many repositories the discovery
+	// document may report. It is the figure the document itself asks for, so a
+	// longer list is drift rather than a busy month.
+	maxContributionRepositories = 50
+	// maxHistoryRepositories bounds how many repositories the SECOND document
+	// asks about: the most recently active ones, dropped by recency past this
+	// many rather than fanned out into a third document.
+	maxHistoryRepositories = 12
+	// maxContributionDays bounds one repository's per-day contribution list.
+	// The window is commitLogWindowDays long, so a repository reporting more
+	// dated buckets than the window has days is drift.
+	maxContributionDays = commitLogWindowDays + 2
+	// maxNodeIdentifierRunes bounds one opaque upstream node identifier. The
+	// identifiers observed are around twenty characters; this is generous
+	// headroom that still refuses a value inflating the next request body.
+	maxNodeIdentifierRunes = 128
+	// contributionWindowSlack is how far BEFORE the requested window start a
+	// contribution instant may sit. The upstream buckets contributions by the
+	// account's own local day and reports the bucket as that day's local
+	// midnight in UTC, so a legitimate bucket can precede the requested start
+	// by a whole timezone offset. One day covers every offset that exists.
+	contributionWindowSlack = 24 * time.Hour
 	// maxCommitMessageRunes bounds one served subject line. Longer subjects
 	// are truncated with a visible marker rather than refused: a long subject
 	// is legal, and refusing the document over it would lose real commits.
@@ -1297,45 +1418,213 @@ var errNothingDue = errors.New("fetch: every endpoint is still inside its rate b
 // cadence keep knocking.
 var errUpstreamRateLimited = errors.New("fetch: the upstream refused for rate reasons")
 
-// commitListEntry is the PROJECTION this package reads a public commit
-// document through, and the one place its admission gate is a projection
-// rather than decodeStrict. That is a narrow, deliberate exception, and both
-// halves of the reason matter:
-//
-//   - Closing the document is not possible without holding the author's name
-//     and EMAIL ADDRESS in this process. The upstream carries them on every
-//     row; DisallowUnknownFields would force this package to declare fields
-//     for personal contact details it must never hold, log, or serve
-//     (requirement 12). Reading only the three values the panel renders is
-//     the stronger privacy posture, not the looser one.
-//   - A projection decodes silently: feed it an unrelated JSON object and it
-//     yields zero values rather than an error. That is exactly why every
-//     field below is then value-checked — a 40-hex identity, a non-empty
-//     printable subject, a parseable instant inside a plausible window — and
-//     any row failing any check discards the WHOLE document. The gate moved
-//     from the decoder to the values; it did not go away.
-type commitListEntry struct {
-	// SHA is the commit identity.
-	SHA string `json:"sha"`
-	// Commit holds the authored content.
-	Commit commitDetail `json:"commit"`
+// contributionsData is the DISCOVERY answer's result root: which repositories
+// the credential's account committed to over the log window, and how many
+// commits on which days. It is read through decodeStrict — unlike the public
+// commit list it replaces, this document is one this package asked for field
+// by field, so it declares nothing it does not map and an unknown field is
+// drift rather than an author's email address it would have to hold.
+type contributionsData struct {
+	Viewer contributionsViewer `json:"viewer"`
 }
 
-// commitDetail is the authored half of one commit row.
-type commitDetail struct {
-	// Message is the full commit message; only its subject line is served.
-	Message string `json:"message"`
-	// Author carries the authoring instant, and deliberately nothing else.
-	Author commitAuthorship `json:"author"`
+// contributionsViewer is the account the credential belongs to. The query asks
+// about the CREDENTIAL'S OWN account rather than a named one, which is what
+// makes private repositories appear at all — and also means no account name
+// travels in the request.
+type contributionsViewer struct {
+	// ID is the account's own node identity, which the SECOND document uses
+	// to ask for "commits this account authored" without naming anyone.
+	ID string `json:"id"`
+	// Contributions is the collection over the requested window.
+	Contributions contributionsCollection `json:"contributionsCollection"`
 }
 
-// commitAuthorship models the authoring INSTANT and no other authorship
-// field. The upstream also reports a name and an email address on this
-// object; neither is declared here, so neither is ever decoded into this
-// process's memory.
-type commitAuthorship struct {
-	// Date is the RFC 3339 authoring instant.
-	Date string `json:"date"`
+// contributionsCollection is the window's own record.
+type contributionsCollection struct {
+	// Total is the account's own commit-contribution total for the window.
+	// The per-repository days must sum to exactly this, which is the
+	// cross-field integrity rule this producer rests on for the same reason
+	// the calendar's does.
+	Total int `json:"totalCommitContributions"`
+	// Repositories groups those contributions by the repository they landed
+	// in.
+	Repositories []contributionsRepository `json:"commitContributionsByRepository"`
+}
+
+// contributionsRepository is one repository's share of the window.
+type contributionsRepository struct {
+	// Repository identifies it.
+	Repository contributionsRepositoryRef `json:"repository"`
+	// Contributions holds its dated per-day counts.
+	Contributions contributionsDays `json:"contributions"`
+}
+
+// contributionsRepositoryRef carries the four facts admission needs and
+// nothing else. There is no description, no URL, and no owner profile here:
+// what is not decoded cannot be served, logged, or leaked.
+type contributionsRepositoryRef struct {
+	// ID is the opaque node identity the history document asks by.
+	ID string `json:"id"`
+	// Name is the repository's own name, admitted through the host's grammar
+	// before it is served and never used to build a URL.
+	Name string `json:"name"`
+	// Private decides whether this repository may EVER be named: a private
+	// one is counted into the day aggregate and nothing about it — name,
+	// identity, subject, instant — is served (requirement 12).
+	Private bool `json:"isPrivate"`
+	// Owner carries the one profile fact admission needs: the login.
+	Owner contributionsOwner `json:"owner"`
+}
+
+// contributionsOwner is the owner sub-object, reduced to its login.
+type contributionsOwner struct {
+	Login string `json:"login"`
+}
+
+// contributionsDays wraps the per-day node list.
+type contributionsDays struct {
+	Nodes []contributionsDay `json:"nodes"`
+}
+
+// contributionsDay is one dated bucket: how many commits, on which day.
+type contributionsDay struct {
+	// OccurredAt is the bucket's instant, the account's own local midnight
+	// expressed in UTC — which is why the window check carries a day of
+	// slack rather than comparing instants exactly.
+	OccurredAt string `json:"occurredAt"`
+	// CommitCount is how many commits that bucket holds.
+	CommitCount int `json:"commitCount"`
+}
+
+// historyData is the SECOND answer's result root: one entry per node
+// identifier the request asked about, in the order it asked.
+type historyData struct {
+	Nodes []*historyNode `json:"nodes"`
+}
+
+// historyNode is one repository's answer. It is a POINTER in the list above
+// because the upstream writes null for an identifier it cannot resolve, and
+// that is a real state — refused rather than read as an empty history, since
+// an unresolvable identity means this package half-understood the document.
+type historyNode struct {
+	// Name is the repository's name as the upstream reports it here. It is
+	// checked against the name the DISCOVERY document gave for the same
+	// identifier: two answers naming the same object differently is drift,
+	// and the check is what keeps the row's label bound to the object the
+	// request actually asked about.
+	Name string `json:"name"`
+	// DefaultBranchRef is null for a repository with no default branch — an
+	// empty repository — which contributes no rows and is not an error.
+	DefaultBranchRef *historyBranchRef `json:"defaultBranchRef"`
+}
+
+// historyBranchRef is the default branch's tip.
+type historyBranchRef struct {
+	Target historyTarget `json:"target"`
+}
+
+// historyTarget is the tip object. The query's inline fragment selects the
+// commit case only, so a non-commit tip yields an empty history rather than a
+// decode failure.
+type historyTarget struct {
+	History historyConnection `json:"history"`
+}
+
+// historyConnection wraps the commit node list.
+type historyConnection struct {
+	Nodes []historyCommit `json:"nodes"`
+}
+
+// historyCommit is one commit, reduced to the three values a row renders. The
+// upstream also reports the author's name and EMAIL ADDRESS on this object;
+// neither is declared here, so neither is ever decoded into this process's
+// memory (requirement 12) — the same privacy posture the retired projection
+// achieved by not closing its document, reached here by asking for less.
+type historyCommit struct {
+	// OID is the commit identity.
+	OID string `json:"oid"`
+	// MessageHeadline is the subject line, which is all a row renders.
+	MessageHeadline string `json:"messageHeadline"`
+	// CommittedDate is the RFC 3339 commit instant.
+	CommittedDate string `json:"committedDate"`
+}
+
+// repositoriesData is the credentialed repository-metadata answer's root.
+type repositoriesData struct {
+	Viewer repositoriesViewer `json:"viewer"`
+}
+
+// repositoriesViewer is the account the credential belongs to.
+type repositoriesViewer struct {
+	// Login is that account's own login, which mapRepositoryQuery checks
+	// against the configured account before any row is stamped with it.
+	Login string `json:"login"`
+	// PinnedItems is the account's own PINNED set, which is the owner's
+	// curation expressed where the owner already expresses it (owner
+	// directive, 2026-09-11): pinning a repository on the host is what puts
+	// it on the page, with no edit here and no release.
+	PinnedItems  pinnedConnection       `json:"pinnedItems"`
+	Repositories repositoriesConnection `json:"repositories"`
+}
+
+// pinnedConnection wraps the pinned node list.
+type pinnedConnection struct {
+	Nodes []pinnedNode `json:"nodes"`
+}
+
+// pinnedNode is one pinned item, reduced to the one fact the mark needs. The
+// pinned set may legitimately contain gists as well as repositories, and the
+// query's inline fragment selects only the repository case — so a non-repository
+// entry decodes to an empty name and is skipped rather than refused.
+type pinnedNode struct {
+	// Name is the repository's own name, matched against the listing's names.
+	Name string `json:"name"`
+	// Private is the reason the match is by name rather than by trust: a
+	// PRIVATE repository can be pinned, and marking one would put its name on
+	// the wire. A private pin is dropped here and the listing — which carries
+	// public repositories only — could not have matched it anyway.
+	Private bool `json:"isPrivate"`
+}
+
+// repositoriesConnection wraps the repository node list.
+type repositoriesConnection struct {
+	Nodes []repositoryNode `json:"nodes"`
+}
+
+// repositoryNode is one repository row of the credentialed listing. Its
+// admission is the identical two-tier gate mapRepositoryListing applies to the
+// public document, over the identical facts plus the two the owner's columns
+// added (issue #317).
+type repositoryNode struct {
+	// Name is the repository's public name.
+	Name string `json:"name"`
+	// Description is its own description, or null when it has none.
+	Description *string `json:"description"`
+	// Private must be false: the query asks for public repositories, so a
+	// private row is drift, and a private name is not this panel's to serve.
+	Private bool `json:"isPrivate"`
+	// Stars is the star tally.
+	Stars int64 `json:"stargazerCount"`
+	// PushedAt is the RFC 3339 instant of the last push, or empty for a
+	// repository that has never been pushed.
+	PushedAt string `json:"pushedAt"`
+	// LatestRelease is null for a repository that has never released, which
+	// is a real state the row serves as an empty version.
+	LatestRelease *repositoryRelease `json:"latestRelease"`
+	// PullRequests carries the all-time merged-or-closed tally.
+	PullRequests repositoryPullTally `json:"pullRequests"`
+}
+
+// repositoryRelease is the latest release, reduced to the one word a cell
+// prints: the tag exactly as the host names it.
+type repositoryRelease struct {
+	TagName string `json:"tagName"`
+}
+
+// repositoryPullTally is the counted pull-request connection.
+type repositoryPullTally struct {
+	TotalCount int64 `json:"totalCount"`
 }
 
 // datedCommit pairs a served row with its parsed instant so the merge across
@@ -1347,9 +1636,9 @@ type datedCommit struct {
 	row VCSCommit
 }
 
-// calendarDocument is the TRANSPORT envelope of the credentialed calendar
-// answer, and it is deliberately the one shape in this file that is NOT read
-// strictly (issue 246, finding 2).
+// graphQLDocument is the TRANSPORT envelope EVERY credentialed query answer
+// arrives in, and it is deliberately the one shape in this file that is NOT
+// read strictly (issue 246, finding 2).
 //
 // The distinction is between the envelope and the payload, and it is the
 // whole point. The payload — everything under `data` — is a shape this
@@ -1365,7 +1654,7 @@ type datedCommit struct {
 // this was a follow-up rather than a blocker; it is still the same
 // unverifiable-upstream-shape class the commit above was written to close.
 //
-// So Data is raw here and decodeStrict is applied to it in mapCalendarDocument
+// So Data is raw here and decodeStrict is applied to it by each mapper
 // instead. Nothing is weakened: every byte this package reads a value out of
 // is still read through the strict gate, and the only thing newly tolerated is
 // a sibling of `data` that this package never looks at.
@@ -1377,7 +1666,7 @@ type datedCommit struct {
 // it makes the refusal explicit; keeping its contents raw means this package
 // never decodes upstream-authored prose into typed fields it would then have
 // to reason about.
-type calendarDocument struct {
+type graphQLDocument struct {
 	Data   json.RawMessage   `json:"data"`
 	Errors []json.RawMessage `json:"errors"`
 }
@@ -1467,11 +1756,6 @@ type repositoryListingEntry struct {
 	// repository that has never been pushed — which is skipped, not refused:
 	// a repository with no pushes has no activity to report.
 	PushedAt string `json:"pushed_at"`
-	// OpenIssues is the upstream's COMBINED open tally: it counts open pull
-	// requests as open issues, which is why nothing renders it directly. It is
-	// one half of the subtraction that produces the two figures the card
-	// draws, and it costs no request — the document already carries it.
-	OpenIssues int64 `json:"open_issues_count"`
 }
 
 // repositoryListingOwner is the owner sub-object, reduced to its login.
@@ -1479,14 +1763,10 @@ type repositoryListingOwner struct {
 	Login string `json:"login"`
 }
 
-// listedProject is one admitted listing row on its way to being served: the
-// row itself plus the upstream's combined open tally, which only becomes the
-// two rendered figures once the separately read pull-request count arrives.
+// listedProject is one admitted listing row on its way to being served.
 type listedProject struct {
-	// row carries everything but the open-work pair.
+	// row is the served row.
 	row CodingProject
-	// combinedOpen is the upstream's one open tally, pull requests included.
-	combinedOpen int64
 	// at is the parsed push instant, kept so the recency ordering never
 	// re-parses or trusts string order.
 	at time.Time
@@ -1501,36 +1781,6 @@ type refusedRow struct {
 	name string
 	// err is the value refusal.
 	err error
-}
-
-// openPullSearchEntry is the projection over the account-wide open
-// pull-request search answer. The document carries a full result item per
-// match, complete with account profiles this package must never hold, log, or
-// serve (requirement 12); each item is reduced to the ONE fact attribution
-// needs — which repository the match belongs to.
-//
-// The count is a POINTER so an unrelated JSON object is distinguishable from a
-// genuine zero. An account with no open pull requests reports 0 and that is
-// data; a document that never mentioned the field reports nothing, and the
-// panel must not read that as "none open".
-type openPullSearchEntry struct {
-	// Total is the number of matches the upstream counted. The mapping
-	// requires it to EQUAL the item count, so a paginated or truncated answer
-	// is refused rather than silently undercounted per repository.
-	Total *int64 `json:"total_count"`
-	// Incomplete is the upstream's own admission that the search timed out
-	// before covering everything; a tally built from it would undercount.
-	Incomplete bool `json:"incomplete_results"`
-	// Items carries one entry per open pull request.
-	Items []openPullSearchItem `json:"items"`
-}
-
-// openPullSearchItem is one search match, reduced to its repository address.
-type openPullSearchItem struct {
-	// RepositoryURL is the API address of the repository the match belongs
-	// to. It is PARSED for its trailing account and name segments and never
-	// requested: attribution is a read of the string, not a reachable URL.
-	RepositoryURL string `json:"repository_url"`
 }
 
 // maxSeriesDays bounds a mapped activity series. The configured endpoints

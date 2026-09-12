@@ -25,11 +25,14 @@
   the page can be audited for, and it is what a lane or a future presentation
   reads instead of re-deriving freshness from scratch. -->
 <script lang="ts">
+  import Icon from './Icon.svelte';
+  import type { IconName } from '../icons.ts';
   import type { Snippet } from 'svelte';
   import type { PanelStatus } from '../panels';
 
   let {
     title,
+    mark,
     status = 'unavailable',
     generatedAt,
     note,
@@ -41,6 +44,9 @@
        row stays at the title's own height either way — see .panel-head — so
        the note keeps its reserved lane. */
     title?: string;
+    /* A mark that leads the title, handed down as data by the block that
+       knows its own name (issue 313); a shell with no mark draws none. */
+    mark?: IconName;
     status?: PanelStatus;
     generatedAt?: string;
     /* The honest data-through line (issue 285), for a panel whose body is a
@@ -57,7 +63,7 @@
 
 <section class="panel-shell" data-panel-status={status} data-panel-generated-at={generatedAt}>
   <header class="panel-head">
-    {#if title}<h2 class="panel-title">{title}</h2>{/if}
+    {#if title}<h2 class="panel-title" class:panel-title-marked={mark !== undefined}>{#if mark}<span class="panel-mark"><Icon name={mark} slot="cell" /></span>{/if}{title}</h2>{/if}
     {#if note}<span class="panel-note" data-panel-note>{note}</span>{/if}
   </header>
   <div class="panel-body">
@@ -127,6 +133,24 @@
      and mounting pulled 28px out from under everything below it. Measured on
      a Pixel 5: `.panel-head` 42px before the envelope, 14px after. The words
      are still in the accessible name; what truncates is the drawing. */
+  /* The mark is OUT of the line box on purpose: the head is a reserved row
+     exactly one line of the title's type tall (issue 292), and an inline mark
+     taller than that line would grow the row — measured, 12.1 px became 16.4
+     — so the title makes room for it with padding and the mark is positioned
+     into that room, centred on the line, costing the row nothing. */
+  .panel-title-marked {
+    position: relative;
+    padding-inline-start: calc(var(--icon-cell) + var(--icon-gap));
+  }
+
+  .panel-mark {
+    position: absolute;
+    inset-inline-start: 0;
+    inset-block-start: 50%;
+    display: inline-flex;
+    translate: 0 -50%;
+  }
+
   .panel-title {
     margin: 0;
     min-inline-size: 0;

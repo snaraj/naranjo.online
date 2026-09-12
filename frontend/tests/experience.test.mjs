@@ -1552,6 +1552,145 @@ test('the chrome row is in the document, so no control owns a corner of the page
   );
 });
 
+/* RIME FLIES AT THE END OF THE ROW (owner decision, 2026-09-11, issue 314),
+ * and everything that makes that safe is a source fact this pin holds. The
+ * rendering lane of the same name measures the box and the moving frames in a
+ * real engine; neither half replaces the other. */
+/* Comments come out to a FIXPOINT, not in one pass: a single replace leaves
+   a `<!--` behind when one comment's removal joins two halves of another,
+   which is the incompleteness CodeQL's multi-character-sanitization rule
+   names; the loop runs until a pass changes nothing. */
+const stripComments = (source) => {
+  let out = source;
+  while (out !== (out = out.replace(/<!--[\s\S]*?-->/g, ''))) {
+    /* until a pass removes nothing */
+  }
+  return out;
+};
+
+test('Rime is a picture in the chrome row, reserved, silent, and stepped only where motion is welcome (owner 2026-09-11, issue 314)', () => {
+  const mark = componentSources['lib/components/RimeMark.svelte'];
+  assert.ok(mark, 'the mark component is not where this pin expects it');
+  const markup = stripComments(mark).trim();
+
+  /* SILENT AND UNREACHABLE. SN. at the start of the row is the page's
+     accessible mark; a decorative dragon that announced itself would be a
+     name every screen reader reads past on every visit, and a focusable one
+     would be a fourth stop on a keyboard order the rendering lanes pin. */
+  assert.match(markup, /aria-hidden="true"/, 'the mark is announced to a screen reader');
+  assert.doesNotMatch(markup, />[^<\s][\s\S]*</, 'the mark carries text');
+  assert.doesNotMatch(
+    markup,
+    /\b(?:href|tabindex|role|onclick|onkeydown|aria-label|title)\b/,
+    'the mark has grown a name, a role, or a way to reach it'
+  );
+  /* And the component knows no file name of its own: the stylesheet names the
+     sheet so the bundler resolves it to a content-hashed URL, which is the
+     same rule requirement 11 puts on every other picture this page draws. */
+  assert.doesNotMatch(markup, /\.webp|import\.meta|src=/, 'the component resolves its own asset');
+
+  /* LAST IN THE ROW. After the reading mode, so the keyboard order through
+     the chrome — the wordmark, the nav, the mode — gains nothing between any
+     two of its stops. */
+  const header = stripComments(componentSources['lib/components/PageHeader.svelte']);
+  const chrome = /<div class="page-chrome">([\s\S]*?)<\/div>/.exec(header);
+  assert.ok(chrome, 'the row’s end cluster is not where this pin expects it');
+  assert.ok(
+    chrome[1].indexOf('<RimeMark') > chrome[1].indexOf('<ThemeMenu'),
+    'Rime is drawn before the reading mode, so he now sits between two keyboard stops'
+  );
+
+  const rest = sweptRules.find(
+    (rule) => rule.selector === '.rime-mark' && !rule.enclosing.some((at) => at.startsWith('@media'))
+  );
+  assert.ok(rest, 'the mark has no rule outside a media block, so it renders nothing at all for a reader who asked for less motion');
+  const resting = Object.fromEntries(
+    declarationsOf(rest.body).map(({ property, value }) => [property, value])
+  );
+  /* THE BOX IS RESERVED, not measured from the picture: the row is the same
+     height before the sheet arrives as after it, which is the page's zero-CLS
+     floor, and the mark is the size of every control beside it. */
+  assert.equal(resting['inline-size'], 'var(--control-target)');
+  assert.equal(resting['block-size'], 'var(--control-target)');
+  assert.equal(resting.flex, 'none', 'the row’s end cluster may squeeze him');
+  /* At rest he holds frame 0 — a still, rather than a cancelled animation. */
+  assert.equal(resting['background-position'], '0 0');
+  assert.match(
+    resting['background-image'],
+    /^url\('\.\/assets\/[^']+\.webp'\)$/,
+    'the sheet is not a relative bundled asset, so nothing content-hashes it'
+  );
+  /* The drawn sheet is DERIVED from the box rather than restated in pixels:
+     the box is a rem length, so literals stop dividing it the moment a reader
+     runs a browser font size other than 16px and the next cell starts showing
+     inside the mark. */
+  assert.equal(resting['background-size'], 'var(--rime-sheet-inline) var(--rime-sheet-block)');
+  for (const [token, axis] of [
+    ['--rime-sheet-inline', 20],
+    ['--rime-sheet-block', 24],
+  ]) {
+    assert.match(
+      stylesCode,
+      new RegExp(`${token}: calc\\(var\\(--control-target\\) \\* ${axis}\\);`),
+      `${token} no longer derives the sheet’s ${axis}-cell axis from the mark’s own box`
+    );
+  }
+
+  /* THE FLIGHT, and only inside no-preference. The sweep above proves no rule
+     animates outside that block; this proves the two steps() that make the
+     sprite advance are DECLARED, that they are steps rather than a tween (a
+     tween paints two half-frames at once), and that each walks its own axis's
+     whole sheet. */
+  const moving = sweptRules.find(
+    (rule) =>
+      rule.selector === '.rime-mark' &&
+      rule.enclosing.some((at) => /prefers-reduced-motion\s*:\s*no-preference/.test(at))
+  );
+  assert.ok(moving, 'Rime never flies; the mark declares no animation where motion is welcome');
+  const flight = declarationsOf(moving.body).find(({ property }) => property === 'animation');
+  assert.ok(flight, 'the mark’s motion rule declares no animation');
+  assert.match(flight.value, /rime-flight-strip var\(--rime-flight-strip\) steps\(20\) infinite/);
+  assert.match(flight.value, /rime-flight var\(--rime-flight\) steps\(24\) infinite/);
+  /* The strip is the loop DIVIDED, never a written decimal: 0.33333s × 24 is
+     0.08ms short of 8s, and that remainder walks the strip one column across
+     the sheet every 28 minutes until every row boundary shows a wrong frame
+     (found by the review of 588e64b). The quotient's divisor is the sheet's
+     row count, the same 24 the block axis steps. */
+  assert.match(
+    stylesCode,
+    /--rime-flight-strip: calc\(var\(--rime-flight\) \/ 24\);/,
+    'the strip duration is no longer the loop divided by its 24 rows, so the two animations drift apart'
+  );
+  for (const [name, token] of [
+    ['rime-flight-strip', '--rime-sheet-inline'],
+    ['rime-flight', '--rime-sheet-block'],
+  ]) {
+    const frames = sweptRules.find((rule) =>
+      rule.enclosing.some((at) => at === `@keyframes ${name}`)
+    );
+    assert.ok(frames, `@keyframes ${name} is missing, so the animation names nothing`);
+    assert.match(
+      frames.body,
+      new RegExp(`background-position-[xy]: calc\\(-1 \\* var\\(${token}\\)\\)`),
+      `@keyframes ${name} travels a distance the sheet’s own size does not decide`
+    );
+  }
+});
+
+test('the document declares both marks a browser looks for, and nothing inlines them (owner 2026-09-11, issue 314)', () => {
+  /* The tab mark keeps its name and its type (issue 239): the runtime image
+     carries no MIME registry beyond Go's built-in table, so the extension is
+     what decides whether a browser is handed an icon or a download. */
+  assert.match(fallback, /<link rel="icon"[^>]*href="\/favicon\.svg"/);
+  assert.match(fallback, /<link rel="icon"[^>]*type="image\/svg\+xml"/);
+  /* And the home-screen mark, which iOS looks for INSTEAD of the icon above
+     when a visitor adds the site to a home screen; without it the tile is a
+     screenshot of the page. It rides the static head for the reason every
+     other head tag here does: nothing that reads it runs script. */
+  assert.match(fallback, /<link rel="apple-touch-icon"[^>]*href="\/apple-touch-icon\.png"/);
+  assert.doesNotMatch(component, /rel="(?:icon|apple-touch-icon)"/, 'the mounted page adds a second copy of a mark the static head already carries');
+});
+
 test('an open modal stops the document scrolling behind it, without moving it (issue 241)', () => {
   /* MEASURED with the lightbox open on 0.1.54: +485px at an iPhone 13
      viewport and +1400px at 1280x720. showModal() makes the page inert to
@@ -1736,23 +1875,18 @@ test('every reading mode declares the identical token set', () => {
  * visitor to press something), so only the reading-mode trigger remains, and
  * the stroke pin rests on the token alone.
  *
- * The drift this still guards is real rather than theoretical: the trigger
- * carries its size as an SVG ATTRIBUTE, which no custom property can reach,
- * while the swatches read a token. So the attribute is read back out of the
- * chrome component here and compared with the token the swatches consume —
- * and the browser lanes measure the same pair in a real engine.
+ * THE DRIFT THIS GUARDS CHANGED SHAPE (owner design decision, 2026-09-11,
+ * issue 313). The trigger used to draw its own crescent and state its painted
+ * size as a `width="18"` ATTRIBUTE — markup, which no custom property can
+ * reach — so this pin read that attribute back out and compared it with the
+ * token the swatches consume. The trigger is a member of the Hairline family
+ * now and carries no size attribute at all: it is sized by `--icon-chrome`.
+ * So the comparison moved to where the size is DECIDED, which is the stricter
+ * direction — a chrome glyph can no longer be resized in markup at all, and
+ * this pin measures two declarations against each other rather than a
+ * declaration against a hopeful copy. The browser lanes still measure the two
+ * families' painted boxes against each other in a real engine.
  * ======================================================================== */
-
-// The chrome's own glyph, as the markup states it: the size attribute both
-// header icons carry, and the line weight the stroked one is drawn at.
-const chromeGlyphAttributes = (source) => {
-  const svg = /<svg[^>]*>/.exec(source);
-  assert.ok(svg, 'a chrome control renders no inline SVG at all');
-  return {
-    width: Number(/\bwidth="([\d.]+)"/.exec(svg[0])?.[1]),
-    height: Number(/\bheight="([\d.]+)"/.exec(svg[0])?.[1]),
-  };
-};
 
 // One rule from one file, by exact selector. Fails loudly rather than
 // returning undefined: a rule this pin cannot find is a rule it cannot
@@ -1786,20 +1920,29 @@ test('the reading-mode swatches are drawn in the header chrome grammar', () => {
     'the swatch line weight no longer derives from the chrome stroke token'
   );
 
-  /* ...and the tokens are the truth about the chrome, not a hopeful copy of
-     it. Both header icons state their painted size as an attribute, so the
-     attribute is what this compares against: a chrome glyph resized in the
-     markup and nowhere else is exactly the drift the owner's complaint was
-     made of, in the opposite direction. */
+  /* ...and the one chrome glyph left is the icon family's, at the family's
+     chrome size, which is a THIRD token that has to agree with the other two
+     or the trigger and the swatches under it are drawn at different scales
+     again — the owner's original complaint, exactly. The component states no
+     size of its own: it names a slot, and the slot is a token. */
   const glyphPx = lengthInPx(glyphSize);
   assert.ok(glyphPx !== null, `--chrome-icon-glyph-size is "${glyphSize}", which this pin cannot measure`);
-  const painted = chromeGlyphAttributes(componentSources[menuFile]);
-  assert.equal(
-    painted.width,
-    glyphPx,
-    `${menuFile} paints its chrome glyph at ${painted.width}px while the shared token says ${glyphPx}px`
+  assert.match(
+    componentSources[menuFile],
+    /<Icon name="mode-dark" slot="chrome" \/>/,
+    `${menuFile} draws its own trigger glyph again instead of the icon family's`
   );
-  assert.equal(painted.height, glyphPx, `${menuFile} paints a chrome glyph that is not square`);
+  const familyPx = lengthInPx(resolveToken('--icon-chrome', tokens));
+  assert.equal(
+    familyPx,
+    glyphPx,
+    `the icon family's chrome mark is ${familyPx}px while the chrome grammar says ${glyphPx}px`
+  );
+  assert.doesNotMatch(
+    componentSources[menuFile],
+    /<svg[^>]*\bwidth="/,
+    `${menuFile} states a painted glyph size as an attribute again; a chrome size is a token`
+  );
 
   /* The swatch wears the chrome's absence of chrome. Each of these is one
      innocent-looking declaration away from returning, and together they are

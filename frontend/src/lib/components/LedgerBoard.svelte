@@ -1,87 +1,111 @@
-<!-- LedgerBoard is the board of cards (owner directive, 2026-09-11, issues 267
-  and 311): a three-by-two grid of ruled boxes, each showing one reading and
-  the facts behind it, and each turning to ink when it is pressed.
+<!-- LedgerBoard is the board of cards (owner directive, 2026-09-11, issues 267,
+  311 and 316): a three-by-two grid of ruled boxes, each showing one reading
+  and the facts behind it.
 
-  ONE FACE, NOT TWO. The squares this replaces carried a front and a back,
-  rotated between them, and kept both in the DOM at once — which is why they
-  needed backface culling, a visibility swap for the engines that flatten a 3D
-  context inside a button, an aria-hidden on whichever face was turned away,
-  and a fixed box that clipped anything the far face could not fit. A turn is
-  now an INVERSION of the same content: one `[data-turned]` remap swaps the
-  card's paper and ink tokens and nothing moves. Nothing is hidden, so nothing
-  can be hidden by accident; a card's height follows its content, so nothing
-  is clipped; and there is no second face to keep a screen reader out of.
+  NOTHING ON A CARD IS PRESSED ANY MORE. The cards used to be buttons that
+  inverted their own ink, and the owner's answer to that was "these shouldn't
+  change colour when I click on them" (2026-09-11, issue 316). The turn
+  revealed nothing — one face, one token remap — so a control whose whole
+  effect was to repaint what the reader was already reading is a control with
+  no subject, and it goes. The RHYTHM stays: the adapter still opens every
+  second source card inverted, which is the board the owner approved, and it
+  is now static paint rather than a state anybody can change.
 
-  EACH CARD IS A REAL BUTTON with `aria-pressed`, so the turn is operable by
-  keyboard, announced as a state, and reachable by a finger at the site's own
-  touch floor — a card is far larger than the floor, but the floor is declared
-  on the control anyway, because a control sized only by its content is a
-  control whose size depends on its content.
+  What replaced the press is the daily line under the card, which SCRUBS: a
+  pointer, a finger or an arrow key along the chart names a day, and while it
+  does the card's own figure and its sub area read that day instead of the
+  card's lifetime. Nothing is added at rest — the scrub paints only what the
+  card already has, plus the date — and the reading is a READ of the current
+  payload, never a remembered one, which is why `scrub` is dropped whenever
+  the cards change underneath it and why the lookup below refuses an index
+  the current series cannot answer.
 
   It formats nothing and names nothing. A figure, a sub-line, a set of facts,
-  a set of model rows, a daily series: every one of them arrives written, from
-  an adapter that knows which source it read. A card whose source said nothing
-  renders its own note rather than a zero, which is the honest-states floor at
-  the one place a reader would never see it being broken. -->
+  a set of model rows, a daily series and every scrubbed day's date and
+  figures: every one of them arrives written, from an adapter that knows
+  which source it read. A card whose source said nothing renders its own note
+  rather than a zero, which is the honest-states floor at the one place a
+  reader would never see it being broken. -->
 <script lang="ts">
-  import type { LedgerBoardProps } from '../blocks.ts';
+  import { scrubReading, type LedgerBoardProps, type LedgerCard } from '../blocks.ts';
   import FeedCard from './FeedCard.svelte';
+  import Icon from './Icon.svelte';
   import PanelShell from './PanelShell.svelte';
   import Sparkline from './Sparkline.svelte';
 
-  let {
-    title,
-    status,
-    generatedAt,
-    cards,
-    emptyNote,
-    staleNote,
-    turnLabel,
-    returnLabel
-  }: LedgerBoardProps = $props();
+  let { title, mark, status, generatedAt, cards, emptyNote, staleNote }: LedgerBoardProps = $props();
 
-  /* THE BOARD'S OPENING STATE IS THE ADAPTER'S, and every turn after it is the
-     reader's. Seeded once, from the first payload that mounts this component —
-     the block host renders nothing until an envelope arrives, so there is no
-     null-props pass to seed from — and never reseeded, because a refresh
-     thirty seconds later must not fold a card the reader has just opened. */
-  // svelte-ignore state_referenced_locally
-  let turned = $state(new Set(cards.filter((card) => card.turned).map((card) => card.key)));
+  /* WHICH CARD IS BEING READ, AND WHICH DAY OF IT. One cursor for the whole
+     board rather than one per card: only one line can be under a pointer at a
+     time, and a second card holding a stale reading beside the live one would
+     be two answers to the same question. */
+  let scrub = $state<{ key: string; index: number } | null>(null);
 
-  function turn(key: string): void {
-    const next = new Set(turned);
-    if (!next.delete(key)) {
-      next.add(key);
-    }
-    turned = next;
+  /* A NEW PAYLOAD IS A NEW SET OF DAYS. The poll rebuilds every card every
+     thirty seconds, and a reading taken from the last delivery must not
+     survive one it was never measured in — so the cursor is dropped on any
+     change of `cards`, and the reader's next pointer move takes a fresh one.
+     `void` because the read IS the dependency; nothing here needs its value. */
+  $effect(() => {
+    void cards;
+    scrub = null;
+  });
+
+  /* ONE CARD IS BEING READ, NEVER THE BOARD. The cursor names a card by key,
+     so the reading lands on the line the pointer is actually over and every
+     other card keeps its own figure — six cards all showing one card's day
+     would be five wrong numbers.
+     What that day SAYS is lib/blocks.ts's scrubReading, which is pure and
+     therefore has its hostile cases decided by the unit suite rather than
+     reasoned about in markup: an index the current payload cannot answer
+     yields no reading at all. That is a second guard on the same fact as the
+     effect above, and deliberately so — the effect drops a reading the payload
+     replaced, and the lookup refuses one the payload cannot back. */
+  function reading(card: LedgerCard): { readonly figure: string; readonly line: string } | null {
+    return scrub === null || scrub.key !== card.key ? null : scrubReading(card, scrub.index);
   }
 </script>
 
-<PanelShell {title} {status} {generatedAt} note={staleNote}>
+<PanelShell {title} {mark} {status} {generatedAt} note={staleNote}>
   <FeedCard variant="board">
     {#if cards.length === 0}
       <p class="board-note">{emptyNote}</p>
     {:else}
       <div class="board-grid">
         {#each cards as card (card.key)}
-          {@const open = turned.has(card.key)}
-          <button
+          {@const scrubbed = reading(card)}
+          <!-- A GROUP, NOT A CONTROL. There is nothing to press, and the role
+            is what keeps the card's own written name — the one the adapter
+            composed — attached to the box a reader is inside, now that the
+            button that used to carry it is gone. -->
+          <div
             class="board-card"
-            type="button"
-            aria-pressed={open}
-            aria-label={`${open ? returnLabel : turnLabel} ${card.ariaLabel}`}
-            data-turned={open ? 'true' : 'false'}
-            onclick={() => turn(card.key)}>
+            role="group"
+            aria-label={card.ariaLabel}
+            data-turned={card.turned ? 'true' : 'false'}>
             <span class="board-head">
-              <span class="board-label">{card.label}</span>
+              <span class="board-name">{#if card.mark}<Icon name={card.mark} slot="cell" />{/if}<span class="board-label">{card.label}</span></span>
               {#if card.ctx}<span class="board-ctx">{card.ctx}</span>{/if}
             </span>
             {#if card.figure}
               <span class="board-headline">
-                <span class="board-figure">{card.figure}</span>
-                {#if card.sub}
-                  <span class="board-sub">
-                    {#each card.sub as line (line)}<span class="board-sub-line">{line}</span>{/each}
+                <span class="board-figure">{scrubbed ? scrubbed.figure : card.figure}</span>
+                {#if card.sub || card.spark}
+                  <!-- THE SUB AREA KEEPS ITS HEIGHT WHATEVER IT PRINTS, and
+                    that is the zero-CLS floor rather than tidiness: the card's
+                    own two lines become ONE scrubbed line, and without a
+                    reserve the headline would shrink by a line the moment a
+                    pointer touched the chart — taking the fact ladder below it
+                    with it. The reserve is the card's own line count, which is
+                    a dynamic length and therefore reaches the sheet as a
+                    custom property. -->
+                  <span class="board-sub" style:--board-sub-lines={card.sub?.length ?? 1}>
+                    {#if scrubbed}
+                      <span class="board-sub-line">{scrubbed.line}</span>
+                    {:else if card.sub}
+                      {#each card.sub as line (line)}<span class="board-sub-line">{line}</span
+                        >{/each}
+                    {/if}
                   </span>
                 {/if}
               </span>
@@ -124,10 +148,16 @@
               </span>
             {/if}
             {#if card.spark}
-              <Sparkline totals={card.spark.totals} ariaLabel={card.spark.ariaLabel} />
+              <Sparkline
+                totals={card.spark.totals}
+                ariaLabel={card.spark.ariaLabel}
+                dayLabels={card.spark.dayLabels}
+                dayFigures={card.spark.dayFigures}
+                dayExact={card.spark.dayExact}
+                onScrub={(index) => (scrub = index === null ? null : { key: card.key, index })} />
             {/if}
             {#if card.note}<span class="board-card-note">{card.note}</span>{/if}
-          </button>
+          </div>
         {/each}
       </div>
     {/if}

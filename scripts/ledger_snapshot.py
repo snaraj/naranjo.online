@@ -46,7 +46,7 @@ import usage_ledger as ledger  # noqa: E402
 # read and the stream it lands in. A panel that mints a NEW kind version is a
 # conscious edit here, never a silent reinterpretation of a changed payload.
 PANEL_VCS = ("vcs-activity", "vcs-activity/v1", ledger.STREAM_GITHUB)
-PANEL_PROJECTS = ("coding-projects", "coding-projects/v1", ledger.STREAM_PROJECTS)
+PANEL_PROJECTS = ("coding-projects", "coding-projects/v2", ledger.STREAM_PROJECTS)
 PANEL_BOSSES = ("boss-log", "boss-log/v1", ledger.STREAM_OSRS)
 PANELS = (PANEL_VCS, PANEL_PROJECTS, PANEL_BOSSES)
 
@@ -276,12 +276,14 @@ def activity_rows(data, day, stamp, exporter, digest, skipped):
     return rows
 
 
-# The repository figures the projects panel reports, each with the unit its
-# reading is counted in.
+# The repository figures the coding-projects/v2 panel reports, each with the
+# unit its reading is counted in. The release tag the panel also carries is a
+# name rather than a level and is not a ledger reading; openIssues and
+# openPulls left the wire with v2 and are not looked for, so a row that still
+# carried one would record nothing under the retired kinds.
 PROJECT_FIGURES = (
     ("stars", ledger.KIND_STARS, ledger.UNIT_STARS),
-    ("openIssues", ledger.KIND_OPEN_ISSUES, ledger.UNIT_COUNT),
-    ("openPulls", ledger.KIND_OPEN_PULLS, ledger.UNIT_COUNT),
+    ("closedPulls", ledger.KIND_CLOSED_PULLS, ledger.UNIT_COUNT),
 )
 
 

@@ -74,12 +74,19 @@ export const sparkInset = 8;
 const topInset = sparkInset;
 const baseInset = sparkInset;
 
-/* sparklinePath plots one daily series. `totals` is indexed by day, oldest
- * first, and a null entry is a day the source reported nothing for. */
-export function sparklinePath(
-  totals: readonly (number | null)[],
-  box: SparkBox
-): SparkPath | null {
+/* THE ONE MAPPING FROM A DAY TO A POINT, so the line, the mark and the
+ * scrubber's cursor cannot land in three slightly different places. Null for
+ * a series with nothing plottable, which is the refusal sparklinePath makes
+ * and sparkPointAt inherits. */
+interface SparkScale {
+  readonly span: number;
+  readonly ceiling: number;
+  readonly floor: number;
+  readonly rise: number;
+  readonly step: number;
+}
+
+function sparkScale(totals: readonly (number | null)[], box: SparkBox): SparkScale | null {
   const span = totals.length;
   /* ONE refusal, not two. An empty array carries no readings either, so a
      separate length check would be a guard no input could reach independently
@@ -88,16 +95,81 @@ export function sparklinePath(
   if (readings.length === 0) {
     return null;
   }
-  /* The denominator is never zero and never negative: a window whose every
-     day recorded nothing still has a real shape to draw — a line along its
-     own floor — and that is a different picture from a window nobody
-     measured, which returned null above. */
-  const ceiling = Math.max(1, ...readings);
-  const floor = box.height - baseInset;
-  const rise = box.height - topInset - baseInset;
-  /* A one-day series has no interval to divide by, so its single point sits
-     at the start edge and the segment below stretches it across the box. */
-  const step = span === 1 ? 0 : box.width / (span - 1);
+  return {
+    span,
+    /* The denominator is never zero and never negative: a window whose every
+       day recorded nothing still has a real shape to draw — a line along its
+       own floor — and that is a different picture from a window nobody
+       measured, which returned null above. */
+    ceiling: Math.max(1, ...readings),
+    floor: box.height - baseInset,
+    rise: box.height - topInset - baseInset,
+    /* A one-day series has no interval to divide by, so its single point sits
+       at the start edge and the segment below stretches it across the box. */
+    step: span === 1 ? 0 : box.width / (span - 1)
+  };
+}
+
+/* WHICH DAY A POINTER AT `fraction` ACROSS THE PLOT NAMES (owner directive,
+ * 2026-09-11, issue 316). The same linear step the line is drawn on, read
+ * backwards and rounded to the NEAREST day, so the cursor lands on the day a
+ * reader is pointing at rather than on the one behind it.
+ *
+ * CLAMPED AT BOTH ENDS, because a pointer genuinely arrives outside: a finger
+ * that started on the chart and slid past its edge keeps reporting, and a box
+ * measured one frame before a resize answers a fraction slightly outside
+ * [0, 1]. The honest answer there is the end day, never an index the series
+ * cannot answer. A series with no days at all names none. */
+export function sparkIndexAt(fraction: number, span: number): number | null {
+  if (!Number.isFinite(fraction) || span <= 0) {
+    return null;
+  }
+  /* ONE clamp, on the INDEX rather than on the fraction as well. Clamping both
+     was the obvious shape and the wrong one: the index clamp makes the
+     fraction clamp unreachable, and a guard no input can redden is decoration
+     — MEASURED, by deleting the fraction clamp and watching the whole suite
+     stay green. */
+  return Math.min(span - 1, Math.max(0, Math.round(fraction * (span - 1))));
+}
+
+/* WHERE ONE DAY SITS ON THE DRAWN LINE, in the box's own units, or null for a
+ * day that is not on it: an index outside the series, and a day nobody
+ * measured — which draws no point, so there is nothing to put a cursor on.
+ *
+ * The single-day case answers the box's far edge rather than its origin,
+ * because that is where sparklinePath puts that series' only mark: one day
+ * is drawn as a line across the whole box, and the cursor belongs on the mark
+ * rather than at an edge the reader cannot see the reading at. */
+export function sparkPointAt(
+  totals: readonly (number | null)[],
+  box: SparkBox,
+  index: number
+): SparkPoint | null {
+  const scale = sparkScale(totals, box);
+  if (scale === null || !Number.isInteger(index) || index < 0 || index >= scale.span) {
+    return null;
+  }
+  const value = totals[index];
+  if (value === null) {
+    return null;
+  }
+  return {
+    x: round(scale.span === 1 ? box.width : index * scale.step),
+    y: round(scale.floor - (value / scale.ceiling) * scale.rise)
+  };
+}
+
+/* sparklinePath plots one daily series. `totals` is indexed by day, oldest
+ * first, and a null entry is a day the source reported nothing for. */
+export function sparklinePath(
+  totals: readonly (number | null)[],
+  box: SparkBox
+): SparkPath | null {
+  const scale = sparkScale(totals, box);
+  if (scale === null) {
+    return null;
+  }
+  const { span, ceiling, floor, rise, step } = scale;
   const points: SparkPoint[] = [];
   for (let day = 0; day < span; day += 1) {
     const value = totals[day];

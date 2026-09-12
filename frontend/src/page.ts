@@ -12,42 +12,52 @@
 
 import { section, type PageSection } from './lib/blocks.ts';
 import { bossTicker } from './lib/blocks/bossTicker.ts';
-import { codingProjects } from './lib/blocks/codingProjects.ts';
-import { commitLog } from './lib/blocks/commitLog.ts';
+import { contributionCalendar } from './lib/blocks/contributionCalendar.ts';
 import { mediaGallery } from './lib/blocks/mediaGallery.ts';
+import { projectsCommits } from './lib/blocks/projectsCommits.ts';
 import { tokenBoard } from './lib/blocks/tokenBoard.ts';
 import { workHistory } from './lib/blocks/workHistory.ts';
 
-/* THE LEDGER'S FIVE SECTIONS (owner directive, 2026-09-03, issue 287), and
- * every one of them is one line, which is the whole point of the manifest.
+/* THE LEDGER'S FOUR SECTIONS (owner design decision, 2026-09-11, issue 318),
+ * and every one of them is one line, which is the whole point of the manifest.
  *
- * The page used to be three sections: Professional Experience, Projects (with
- * the media gallery folded into it), and a Trackers stack holding all three
- * live panels. The redesign gives each of the owner's five headings a section
- * of its own — 01 through 05 down the sheet — which moves exactly two things
- * and adds one:
+ * The sheet had five. The owner's decision — option B on the design canvas —
+ * pairs Projects and Commits into ONE section of two columns and sends the
+ * contribution calendar down into Trackers, under the token cards it already
+ * shares a 53-week window with:
  *
- *   * COMMITS is now its own section rather than a card inside Trackers. It
- *     leads with the contribution calendar, and the calendar cycles between
- *     that and each token source's daily series, so the section is one block
- *     reading two panels (lib/blocks/commitLog.ts).
- *   * GALLERY leaves Projects, where it was a sub-heading, and becomes the
- *     sheet's last section under its own number.
- *   * TRACKERS keeps its stack layout and keeps exactly the two blocks that
- *     are still trackers once the calendar has moved out: the board of token
- *     cards and the boss ticker.
+ *   * PROJECTS · COMMITS is one block reading two panels: the repositories on
+ *     the left (the owner's pinned set plus the one pushed most recently
+ *     outside it) and, beside them, every commit on every repository. They are
+ *     one picture — what the owner keeps, and what actually landed in it — and
+ *     the two columns reserve one height, which a pair of sections could not
+ *     promise (lib/blocks/projectsCommits.ts).
+ *   * TRACKERS takes the calendar back. It is a tracker: a year of daily
+ *     counts the reader cycles between three sources, which is what the board
+ *     above it and the ticker below it are too.
  *
  * The IDS do not move. An id is the fragment a nav link jumps to and an
- * address a reader may already have shared, so `work` stays `work` — renaming
- * it would break those to change a word nobody reads off the URL. `commits`
- * and `gallery` are new ids because they name new sections.
+ * address a reader may already have shared, so `projects` stays `projects`.
+ * `commits` is no longer a SECTION id — but it is still an address, so the
+ * commit column carries it (lib/commits.ts names it once, the adapter hands it
+ * through, and the nav never links it): a reader who bookmarked #commits still
+ * lands on the commits.
  *
  * "About Me" is still gone (owner directive, 2026-08-28), and its absence is
- * still one missing line rather than a gap left behind. */
+ * still one missing line rather than a gap left behind.
+ *
+ * EACH SECTION ALSO CARRIES ITS MARK (owner design decision, 2026-09-11,
+ * issue 313). The nav prints the mark and the number where the words used to
+ * be, and the section head prints the mark beside them; both read this one
+ * entry, so the two can never show different marks for one section. The
+ * NUMBER is not here — it is the entry's position in this array, so a section
+ * moved renumbers itself and no two can claim the same number. */
 export const page: readonly PageSection[] = [
-  section('work', 'Professional Experience', [workHistory]),
-  section('projects', 'Projects', [codingProjects]),
-  section('commits', 'Commits', [commitLog], { layout: 'stack' }),
-  section('trackers', 'Trackers', [tokenBoard, bossTicker], { layout: 'stack' }),
-  section('gallery', 'Gallery', [mediaGallery])
+  section('work', 'Professional Experience', [workHistory], { mark: 'work' }),
+  section('projects', 'Projects · Commits', [projectsCommits], { mark: 'folder' }),
+  section('trackers', 'Trackers', [tokenBoard, contributionCalendar, bossTicker], {
+    mark: 'chip',
+    layout: 'stack'
+  }),
+  section('gallery', 'Gallery', [mediaGallery], { mark: 'photo' })
 ];
