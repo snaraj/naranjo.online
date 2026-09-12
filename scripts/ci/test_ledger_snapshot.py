@@ -198,6 +198,13 @@ class SnapshotCase(unittest.TestCase):
             return []
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
+    def refusal(self, url, code, phrase):
+        """An HTTP refusal a test stages. The error owns a body and warns
+        from its finalizer until closed, so every one is closed on teardown."""
+        error = urllib.error.HTTPError(url, code, phrase, {}, io.BytesIO(b""))
+        self.addCleanup(error.close)
+        return error
+
 
 class TransportBoundsTest(SnapshotCase):
     """Everything the fetch refuses, staged rather than described."""
@@ -234,7 +241,7 @@ class TransportBoundsTest(SnapshotCase):
     def test_a_redirect_is_refused_rather_than_followed(self):
         url = snapshot.panel_url(SITE, "vcs-activity")
         opener = FakeOpener(
-            {url: urllib.error.HTTPError(url, 302, "Found", {}, io.BytesIO(b""))}
+            {url: self.refusal(url, 302, "Found")}
         )
         with self.assertRaises(ledger.LedgerError) as caught:
             snapshot.fetch_panel(opener, url, HOST)
@@ -533,7 +540,7 @@ class PanelIdentityAndRefusalTest(SnapshotCase):
     def test_a_refused_panel_is_named_with_its_status_and_the_others_still_record(self):
         url = snapshot.panel_url(SITE, "coding-projects")
         answers = all_panels()
-        answers[url] = urllib.error.HTTPError(url, 403, "Forbidden", {}, io.BytesIO(b""))
+        answers[url] = self.refusal(url, 403, "Forbidden")
         appended, _, _, refused = self.take(answers)
         self.assertEqual(refused, 1)
         self.assertGreater(appended, 0)
@@ -546,9 +553,7 @@ class PanelIdentityAndRefusalTest(SnapshotCase):
     def test_a_refusal_names_the_standard_phrase_never_the_upstream_text(self):
         url = snapshot.panel_url(SITE, "vcs-activity")
         answers = all_panels()
-        answers[url] = urllib.error.HTTPError(
-            url, 503, "the upstream's own prose", {}, io.BytesIO(b"")
-        )
+        answers[url] = self.refusal(url, 503, "the upstream's own prose")
         self.take(answers)
         self.assertIn("refused vcs-activity: HTTP 503 Service Unavailable", self.stderr)
         self.assertNotIn("own prose", self.stderr)
@@ -559,7 +564,7 @@ class PanelIdentityAndRefusalTest(SnapshotCase):
         # says the phrase is unknown rather than raising past main's handlers.
         url = snapshot.panel_url(SITE, "vcs-activity")
         answers = all_panels()
-        answers[url] = urllib.error.HTTPError(url, 520, "Web Server Error", {}, io.BytesIO(b""))
+        answers[url] = self.refusal(url, 520, "Web Server Error")
         _, _, _, refused = self.take(answers)
         self.assertEqual(refused, 1)
         self.assertIn("refused vcs-activity: HTTP 520 unknown status", self.stderr)
@@ -582,7 +587,7 @@ class PanelIdentityAndRefusalTest(SnapshotCase):
     def test_a_redirect_is_still_a_hard_refusal_of_the_run(self):
         url = snapshot.panel_url(SITE, "vcs-activity")
         answers = all_panels()
-        answers[url] = urllib.error.HTTPError(url, 302, "Found", {}, io.BytesIO(b""))
+        answers[url] = self.refusal(url, 302, "Found")
         with self.assertRaises(ledger.LedgerError) as caught:
             self.take(answers)
         self.assertIn("redirected", str(caught.exception))
@@ -590,7 +595,7 @@ class PanelIdentityAndRefusalTest(SnapshotCase):
     def test_the_run_exits_non_zero_when_any_panel_was_refused(self):
         url = snapshot.panel_url(SITE, "coding-projects")
         answers = all_panels()
-        answers[url] = urllib.error.HTTPError(url, 403, "Forbidden", {}, io.BytesIO(b""))
+        answers[url] = self.refusal(url, 403, "Forbidden")
         with (
             contextlib.redirect_stderr(io.StringIO()) as captured,
             mock.patch.object(snapshot, "build_opener", lambda: FakeOpener(answers)),
