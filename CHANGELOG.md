@@ -20,6 +20,13 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   reported by panel and standard status phrase while the other streams still
   record, the summary counts `refused=` beside `unreported=`, and the run
   still exits non-zero so the agent's last exit status stays the signal.
+- The usage export (issue #322) failed every run after 0.1.83 retired
+  `codex-auto-review` from the model vocabulary: the capture's history store
+  still carried that key on eleven days and the reader refused the whole
+  store as a key outside its vocabulary. The capture now declares the keys
+  the vocabulary retired and folds each into the residual on read — the day
+  still sums, the store is written back folded once — while a key that is
+  neither in the vocabulary nor retired still refuses the run.
 
 ## [0.1.83] - 2026-09-12
 

@@ -1679,6 +1679,62 @@ class HistoryStoreTest(unittest.TestCase):
         self.assertEqual(document["schema"], capture_usage_series.HISTORY_SCHEMA)
         return document["days"]
 
+    def write_store(self, days):
+        self.store.write_text(
+            json.dumps(
+                {
+                    capture_usage_series.HISTORY_SCHEMA_KEY: capture_usage_series.HISTORY_SCHEMA,
+                    capture_usage_series.HISTORY_DAYS_KEY: days,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_a_retired_model_key_in_the_store_folds_into_the_residual(self):
+        # The store was written under a vocabulary that still named the key
+        # (issue #322): the day survives, its tokens land on the residual, the
+        # day still sums, and the store is written back without the key.
+        retired = next(iter(capture_usage_series.RETIRED_MODEL_KEYS))
+        named = capture_usage_series.MODEL_KEYS[1]
+        other = capture_usage_series.MODEL_OTHER
+        self.write_store(
+            {
+                "2026-08-10": {"total": 30, "models": {retired: 10, named: 20}},
+                "2026-08-11": {"total": 30, "models": {other: 5, retired: 10, named: 15}},
+            }
+        )
+        self.write_tree(self.day_line("2026-08-12", "c", 30))
+        section, _ = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [30, 30, 60])
+        self.assertEqual(section["models"][other][:2], [10, 15])
+        self.assertEqual(section["models"][named][:2], [20, 15])
+        self.assertNotIn(retired, section["models"])
+        stored = self.stored_days()
+        self.assertEqual(stored["2026-08-10"]["models"], {other: 10, named: 20})
+        self.assertEqual(stored["2026-08-11"]["models"], {other: 15, named: 15})
+        self.assertNotIn(retired, json.dumps(stored))
+
+    def test_an_unknown_model_key_in_the_store_still_refuses(self):
+        # The fold is for keys the vocabulary retired, never for whatever a
+        # corrupted store happens to carry.
+        self.write_store({"2026-08-10": {"total": 30, "models": {"never-a-key": 30}}})
+        self.write_tree(self.day_line("2026-08-12", "c", 30))
+        with self.assertRaisesRegex(
+            capture_usage_series.CaptureError, "breakdown key outside its vocabulary"
+        ):
+            self.run_capture()
+
+    def test_a_retired_key_never_folds_a_category_breakdown(self):
+        # The retirement table names MODEL keys; a category breakdown carrying
+        # one of those names is corruption of a different section.
+        retired = next(iter(capture_usage_series.RETIRED_MODEL_KEYS))
+        self.write_store({"2026-08-10": {"total": 30, "categories": {retired: 30}}})
+        self.write_tree(self.day_line("2026-08-12", "c", 30))
+        with self.assertRaisesRegex(
+            capture_usage_series.CaptureError, "breakdown key outside its vocabulary"
+        ):
+            self.run_capture()
+
     def test_a_pruned_day_survives_from_the_store_with_its_breakdowns(self):
         # Run 1 measures two days; run 2's tree has lost the older one, which
         # is exactly what retention pruning does. The day, its category

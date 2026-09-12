@@ -424,6 +424,23 @@ except CaptureError as error:  # pragma: no cover - proven by subprocess
     print(str(error), file=sys.stderr)
     raise SystemExit(1)
 
+# Model keys the vocabulary once held and has since RETIRED. A history store
+# written under the older vocabulary still carries them, and the store is the
+# pipeline's own durable memory: refusing it would end every capture (issue
+# #322 — seven failed runs an hour after the retirement shipped), and
+# dropping the key would leave a day's breakdown short of its total. Each
+# retired key folds into the residual on read, which is exactly what the
+# retirement meant — those tokens were never a model's — and the store is
+# written back folded, so the fold happens once. A key that is neither in
+# the vocabulary nor on this list is still corruption and still refuses.
+RETIRED_MODEL_KEYS = frozenset(
+    {
+        # Retired 2026-09-12 (owner ruling, issue #316): the Codex journals' id
+        # for the auto-review feature, never a model.
+        "codex-auto-review",
+    }
+)
+
 # Every field name the emission may legitimately contain, CLOSED. The guard
 # refuses any dictionary key outside this set (plus the caller's explicitly
 # declared extra keys — the operator-typed source labels, which the origin
@@ -2479,18 +2496,22 @@ def read_history_store(path):
                 continue
             if not isinstance(values, dict) or not values:
                 raise CaptureError("the history store carries a malformed breakdown")
+            folded = {}
             for key, value in values.items():
-                if key not in vocabulary:
+                if name == "models" and key in RETIRED_MODEL_KEYS:
+                    key = MODEL_OTHER
+                elif key not in vocabulary:
                     raise CaptureError(
                         "the history store carries a breakdown key outside its vocabulary"
                     )
                 if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                     raise CaptureError("the history store carries a malformed breakdown count")
-            if sum(values.values()) != total:
+                folded[key] = folded.get(key, 0) + value
+            if sum(folded.values()) != total:
                 raise CaptureError(
                     "a history store breakdown sums to a different figure than its day"
                 )
-            admitted[name] = dict(values)
+            admitted[name] = folded
         stored[day] = admitted
     return stored
 
