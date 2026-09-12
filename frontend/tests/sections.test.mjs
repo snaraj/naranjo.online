@@ -304,27 +304,36 @@ test('every nav link lands on the section the manifest renders', () => {
   // Structural now, not counted: the nav and the sections read the SAME
   // manifest entry, so a link cannot point at a section nobody rendered.
   assert.match(sectionNav, /import \{ page \} from '\.\.\/\.\.\/page\.ts'/);
-  assert.match(sectionNav, /\{#each page as section, position \(section\.id\)\}/);
+  assert.match(sectionNav, /\{#each page as section \(section\.id\)\}/);
   assert.match(sectionNav, /href=\{sectionHref\(section\)\}/);
   assert.match(sectionNav, /class="section-link"/);
-  /* A LINK IS A MARK AND A NUMBER, AND THE WORD IS ITS ACCESSIBLE NAME (owner
-     design decision, 2026-09-11, issue 313). Both halves of what a link shows
-     come from the manifest — the mark from the entry, the number from the
-     entry's POSITION through the shared ordinal rule — so a section moved in
-     src/page.ts renumbers its link and its head together and neither is a
-     literal in a component. The label is what a screen reader hears, and it is
-     the same word the heading the link points at is called. */
-  assert.match(sectionNav, /<Icon name=\{section\.mark\} slot="row" \/>/);
-  assert.match(sectionNav, /\{sectionOrdinal\(position\)\}/);
-  assert.match(sectionNav, /aria-label=\{section\.label\}/, 'a mark-only link with no accessible name');
+  /* A LINK IS ITS SECTION'S WORD (owner ruling, 2026-09-12, issue 325: "put
+     back words in here instead of the icons"). The word is the link's own
+     text, read from the manifest entry the section renders from, so a section
+     renamed renames its link and no component spells either.
+
+     The three things issue 313 put here are pinned ABSENT, each by name,
+     because each is a separate way the ruling could be half-undone: a mark
+     drawn beside the word, the ordinal printed with it, and the word demoted
+     back to an aria-label that only a screen-reader user ever receives. A
+     positive pin on the word alone would pass with any of the three back. */
+  assert.match(sectionNav, />\{section\.label\}</, 'the nav link no longer prints the section word');
+  assert.doesNotMatch(sectionNav, /<Icon\b/, 'the nav link draws a mark again; the owner asked for words');
   assert.doesNotMatch(
     sectionNav,
-    />\{section\.label\}</,
-    'the link prints the section word again; the word is the accessible name now'
+    /sectionOrdinal|section-link-number/,
+    'the nav link prints the sheet number again; the word replaced it'
   );
-  /* ONE ordinal rule for two surfaces, EXECUTED rather than matched: the nav
-     and the page both call it, so the sheet cannot end up numbered two ways.
-     Two digits, and the position is the caller's. */
+  assert.doesNotMatch(
+    sectionNav,
+    /aria-label=\{section\.label\}/,
+    'the word is back in an aria-label; it is the link\u2019s own text now'
+  );
+  /* THE ORDINAL RULE, EXECUTED rather than matched. It has ONE caller since
+     the owner's ruling of 2026-09-12 — the page, which numbers the section
+     heads — and it stays a shared rule rather than being folded into its one
+     caller because the numbering is a property of the sheet, not of the head
+     that prints it. Two digits, and the position is the caller's. */
   assert.equal(sectionOrdinal(0), '01');
   assert.equal(sectionOrdinal(4), '05');
   assert.equal(sectionOrdinal(9), '10');

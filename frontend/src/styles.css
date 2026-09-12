@@ -1535,17 +1535,33 @@ html[data-column-resizing] {
   border-block-end: var(--ledger-heavy) solid var(--ledger-rule);
 }
 
-/* The wordmark. An anchor to the page's own name, so the row's first stop is
-   "back to the top" rather than a decorative glyph. */
+/* The home link. An anchor to the page's own name, so the row's first stop is
+   "back to the top" — and since the owner's ruling of 2026-09-12 (issue 325)
+   what it DRAWS is the mirrored dragon rather than the "SN." wordmark.
+
+   The BOX is all that is left here, and that is the point: the link is a 44px
+   hit lane holding a picture that states its own size, so every typographic
+   declaration this rule used to carry — the sans face, the 1.25rem, the 900
+   weight, the tight tracking, the ink and the underline suppression — was
+   styling text that no longer exists. They are deleted rather than kept warm;
+   a rule that paints nothing is a rule the next reader has to disprove.
+
+   THE LINK'S PAINT STAYS, and that is a deliberate line rather than an
+   oversight: the site's one link doctrine (owner directive, 2026-08-25) is
+   that no link wears a resting underline and every link marks itself the
+   moment intent is shown, and experience.test.mjs holds EVERY link class the
+   markup declares to it. A picture draws none of those marks today — but the
+   class would have to be written OUT of that doctrine to drop them, and a link
+   class exempt from the site's link rule is a class the next home link, with
+   words in it again, would inherit the exemption from. The ring is the one
+   that paints on this link today: it is the only thing telling a keyboard
+   reader where they are, it marks the box rather than the text, and it is
+   unchanged. */
 .page-mark {
   display: inline-flex;
   align-items: center;
   min-inline-size: var(--control-target);
   min-block-size: var(--control-target);
-  font-family: var(--font-sans);
-  font-size: 1.25rem;
-  font-weight: 900;
-  letter-spacing: -0.03em;
   color: var(--ledger-ink);
   text-decoration: none;
 }
@@ -1616,6 +1632,24 @@ html[data-column-resizing] {
   background-repeat: no-repeat;
   background-position: 0 0;
   background-size: var(--rime-sheet-inline) var(--rime-sheet-block);
+}
+
+/* THE SAME DRAGON, FACING THE OTHER WAY (owner ruling, 2026-09-12, issue 325:
+   "replace this with another dragon facing inwards to match the opposite
+   side"). One declaration is the whole difference between the two seats: the
+   sheet, the reserved 44px box, the still at frame 0 and both steps()
+   animations above are SHARED, so the second dragon costs one element and no
+   second request — two boxes naming one background-image are one resource.
+
+   It is a static transform rather than motion, so it sits out here with the
+   rest of the mark's shape instead of inside the no-preference block: a reader
+   who asked for less motion gets the same still pose, facing the same way.
+   transform-origin is stated because the flip has to happen about the box's
+   own middle — the default IS the centre, and saying so is what keeps a later
+   origin change from silently sliding the dragon out of his own hit lane. */
+.rime-mark-mirrored {
+  transform: scaleX(-1);
+  transform-origin: center;
 }
 
 /* The place label is the first thing to go when the row runs out of room: it
@@ -1746,7 +1780,6 @@ main {
      The row scrolls instead: each link keeps the width its label needs, and
      the floor goes back to being a floor for the SHORT labels. */
   flex: none;
-  gap: var(--icon-gap);
   min-inline-size: var(--control-target);
   min-block-size: var(--control-target);
   padding-inline: 0.25rem;
@@ -1809,13 +1842,13 @@ main {
   color: var(--ledger-ink);
 }
 
-/* The ledger's separator, and the ONE place it is written. The nav link and
-   the section head both print a number followed by a slash (owner design
-   decision, 2026-09-11, issue 313 moved the number into the link), so the
-   slash is a generated mark on both rather than a character typed into two
-   components that would drift. */
-.section-number::after,
-.section-link-number::after {
+/* The ledger's separator. The section head prints a number followed by a
+   slash, and the slash is generated rather than typed into the component: it
+   is punctuation the sheet draws, not a character the manifest supplies. The
+   nav link shared this rule while it printed a number of its own (issue 313);
+   the owner's ruling of 2026-09-12 put the WORDS back in the nav, so the
+   number, its span and this selector's second arm left with them. */
+.section-number::after {
   content: ' /';
 }
 

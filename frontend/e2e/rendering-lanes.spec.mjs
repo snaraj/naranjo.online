@@ -756,17 +756,32 @@ test('the page name clears the fixed chrome row rather than starting under it', 
   }
 });
 
-/* RIME FLIES AT THE END OF THE ROW (owner decision, 2026-09-11, issue 314).
+/* RIME BOOKENDS THE CHROME ROW (owner decision, 2026-09-11, issue 314; owner
+ * ruling, 2026-09-12, issue 325: "replace this with another dragon facing
+ * inwards to match the opposite side").
  *
  * The source pins in tests/experience.test.mjs hold the declarations; this
  * holds what an engine did with them, which for a sprite is the only place the
  * claim can be tested at all: "the picture advances" is not a property of any
  * declaration, it is 480 background positions a compositor steps through.
  *
- * Both halves of the motion doctrine are measured, in two contexts, because
- * "no animation" must never mean "no dragon": with the preference reduced he
- * is still there, still 44px, still showing frame 0 — he simply holds it. */
-test('Rime holds a reserved 44px box at both viewports, flies where motion is welcome, and holds still where it is not (owner 2026-09-11, issue 314)', async ({
+ * THERE ARE TWO OF HIM NOW AND STILL ONE SHEET, which is the claim the second
+ * dragon has to earn: the mirror is a transform on a shared rule, so the two
+ * boxes name one background-image and the browser fetches it once. A second
+ * URL — a mirrored copy of the file, a rule of its own per seat — would look
+ * identical on the page and cost every first paint another 880kB, so the
+ * requests are COUNTED rather than reasoned about.
+ *
+ * Both halves of the motion doctrine are measured, in two contexts and at both
+ * seats, because "no animation" must never mean "no dragon": with the
+ * preference reduced they are still there, still 44px, still showing frame 0 —
+ * they simply hold it, still facing each other. */
+const rimeSeats = [
+  ['.page-mark .rime-mark', 'the home link', 'matrix(-1, 0, 0, 1, 0, 0)'],
+  ['.page-chrome .rime-mark', "the row's end", 'none'],
+];
+
+test('Rime bookends the row from one sheet, mirrored at the start, flying where motion is welcome and still where it is not (owner 2026-09-11 issue 314, 2026-09-12 issue 325)', async ({
   browser,
 }) => {
   for (const motion of ['no-preference', 'reduce']) {
@@ -774,21 +789,33 @@ test('Rime holds a reserved 44px box at both viewports, flies where motion is we
       reducedMotion: motion === 'reduce' ? 'reduce' : 'no-preference',
     });
     const page = await context.newPage();
+    /* Counted from before the navigation, so the sheet's own first load is in
+       the tally rather than only whatever a later viewport change provokes. */
+    const sheetRequests = [];
+    page.on('request', (request) => {
+      if (/rime-flight[^/]*\.webp$/.test(new URL(request.url()).pathname)) {
+        sheetRequests.push(request.url());
+      }
+    });
     await visit(page);
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await settled(page);
-      const mark = page.locator('.rime-mark');
-      await expect(mark, `Rime is not in the row at ${width}px`).toHaveCount(1);
-      const box = await mark.boundingBox();
-      expect(box.width, `Rime is ${box.width}px wide at ${width}px with motion ${motion}`).toBeCloseTo(
-        touchFloorPx,
-        0
-      );
-      expect(box.height, `Rime is ${box.height}px tall at ${width}px with motion ${motion}`).toBeCloseTo(
-        touchFloorPx,
-        0
-      );
+      await expect(
+        page.locator('.rime-mark'),
+        `the row does not hold both dragons at ${width}px`
+      ).toHaveCount(2);
+      for (const [selector, seat] of rimeSeats) {
+        const box = await page.locator(selector).boundingBox();
+        expect(
+          box.width,
+          `Rime at ${seat} is ${box.width}px wide at ${width}px with motion ${motion}`
+        ).toBeCloseTo(touchFloorPx, 0);
+        expect(
+          box.height,
+          `Rime at ${seat} is ${box.height}px tall at ${width}px with motion ${motion}`
+        ).toBeCloseTo(touchFloorPx, 0);
+      }
       /* THE BOX IS RESERVED, so the row he sits in is exactly as tall as the
          row's own stated reserve: the site's hit lane plus the one rule it
          draws. A mark sized by its picture instead would make this taller the
@@ -808,12 +835,40 @@ test('Rime holds a reserved 44px box at both viewports, flies where motion is we
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await settled(page);
-    const mark = page.locator('.rime-mark');
-    const declared = await mark.evaluate((node) => ({
-      name: getComputedStyle(node).animationName,
-      timing: getComputedStyle(node).animationTimingFunction,
-      position: getComputedStyle(node).backgroundPosition,
-    }));
+    /* ONE SHEET. One distinct URL is "the two seats share a picture"; at most
+       one request for it is "the browser fetched that picture once" — and a
+       set of one already requires at least one request, so the pair is exact
+       without pinning a count an engine's preload heuristics could
+       legitimately change. */
+    expect(
+      new Set(sheetRequests).size,
+      `the page asked for ${new Set(sheetRequests).size} different flight sheets: ${[...new Set(sheetRequests)].join(', ')}`
+    ).toBe(1);
+    expect(
+      sheetRequests.length,
+      `the one flight sheet was requested ${sheetRequests.length} times; the two seats are not sharing it`
+    ).toBeLessThanOrEqual(1);
+
+    const seatImages = [];
+    for (const [selector, seat, expectedTransform] of rimeSeats) {
+      const mark = page.locator(selector);
+      const declared = await mark.evaluate((node) => ({
+        name: getComputedStyle(node).animationName,
+        timing: getComputedStyle(node).animationTimingFunction,
+        position: getComputedStyle(node).backgroundPosition,
+        transform: getComputedStyle(node).transform,
+        image: getComputedStyle(node).backgroundImage,
+      }));
+      seatImages.push(declared.image);
+      /* FACING EACH OTHER, as the engine computed it: the start of the row is
+         the inline flip and the end of the row is untransformed. Both
+         directions are asserted, which is what makes it a mirror rather than a
+         pair — a rule that flipped everything, or nothing, satisfies one of
+         these and fails the other. */
+      expect(
+        declared.transform,
+        `Rime at ${seat} computed transform "${declared.transform}" rather than ${expectedTransform}`
+      ).toBe(expectedTransform);
     /* THE SPRITE REALLY MOVES, sampled rather than reasoned: every animation
        frame for longer than one full pass across the sheet's 20 columns,
        counting the DISTINCT background positions an engine actually computed.
@@ -831,84 +886,116 @@ test('Rime holds a reserved 44px box at both viewports, flies where motion is we
        the mutant draws 3. The floor is 8, low enough that a loaded machine
        sampling at half rate still clears it and high enough that no mutant
        this lane is for can reach it. */
-    const frames = await mark.evaluate(
-      (node) =>
-        new Promise((done) => {
-          const seen = new Set();
-          const opened = performance.now();
-          const sample = () => {
-            seen.add(getComputedStyle(node).backgroundPosition);
-            if (performance.now() - opened < 600) requestAnimationFrame(sample);
-            else done([...seen]);
-          };
-          requestAnimationFrame(sample);
-        })
-    );
-
-    if (motion === 'reduce') {
-      expect(
-        declared.name,
-        `Rime animates (${declared.name}) with the reader's motion reduced`
-      ).toBe('none');
-      expect(
-        frames,
-        `Rime advanced through ${frames.length} positions with the reader's motion reduced`
-      ).toHaveLength(1);
-      /* He is on frame 0 — the pose, not a blank box. */
-      expect(declared.position, `Rime rests at ${declared.position} rather than on his first frame`).toMatch(
-        /^0(?:px|%)? 0(?:px|%)?$/
+      const frames = await mark.evaluate(
+        (node) =>
+          new Promise((done) => {
+            const seen = new Set();
+            const opened = performance.now();
+            const sample = () => {
+              seen.add(getComputedStyle(node).backgroundPosition);
+              if (performance.now() - opened < 600) requestAnimationFrame(sample);
+              else done([...seen]);
+            };
+            requestAnimationFrame(sample);
+          })
       );
-    } else {
-      for (const keyframes of ['rime-flight-strip', 'rime-flight']) {
+
+      if (motion === 'reduce') {
         expect(
           declared.name,
-          `Rime's computed animation-name is "${declared.name}" and does not include ${keyframes}`
-        ).toContain(keyframes);
+          `Rime at ${seat} animates (${declared.name}) with the reader's motion reduced`
+        ).toBe('none');
+        expect(
+          frames,
+          `Rime at ${seat} advanced through ${frames.length} positions with the reader's motion reduced`
+        ).toHaveLength(1);
+        /* He is on frame 0 — the pose, not a blank box. */
+        expect(
+          declared.position,
+          `Rime at ${seat} rests at ${declared.position} rather than on his first frame`
+        ).toMatch(/^0(?:px|%)? 0(?:px|%)?$/);
+      } else {
+        for (const keyframes of ['rime-flight-strip', 'rime-flight']) {
+          expect(
+            declared.name,
+            `Rime at ${seat} computed animation-name "${declared.name}", which does not include ${keyframes}`
+          ).toContain(keyframes);
+        }
+        /* steps(), not a tween: a sprite has no in-between state, and an
+           interpolating timing function paints two half-frames at once. */
+        expect(
+          declared.timing,
+          `Rime at ${seat} has tweened frames (${declared.timing}), not stepped ones`
+        ).toContain('steps(');
+        /* The floor is per project, measured: a desktop engine draws 30-plus
+           distinct frames in 600 ms and the one-step mutant three; the two
+           emulated phones on a hosted runner without a GPU drew five (WebKit,
+           iOS profile), which is still a moving sheet and still not the mutant,
+           so their floor sits between the two rather than above what the
+           runner can paint. */
+        const floor = test.info().project.use.isMobile ? 4 : 8;
+        expect(
+          frames.length,
+          `Rime at ${seat} drew only ${frames.length} distinct frames in 600ms (floor ${floor}): ${frames.slice(0, 4).join(' / ')}`
+        ).toBeGreaterThanOrEqual(floor);
       }
-      /* steps(), not a tween: a sprite has no in-between state, and an
-         interpolating timing function paints two half-frames at once. */
-      expect(declared.timing, `Rime's frames are tweened (${declared.timing}), not stepped`).toContain(
-        'steps('
-      );
-      /* The floor is per project, measured: a desktop engine draws 30-plus
-         distinct frames in 600 ms and the one-step mutant three; the two
-         emulated phones on a hosted runner without a GPU drew five (WebKit,
-         iOS profile), which is still a moving sheet and still not the mutant,
-         so their floor sits between the two rather than above what the
-         runner can paint. */
-      const floor = test.info().project.use.isMobile ? 4 : 8;
-      expect(
-        frames.length,
-        `Rime drew only ${frames.length} distinct frames in 600ms (floor ${floor}): ${frames.slice(0, 4).join(' / ')}`
-      ).toBeGreaterThanOrEqual(floor);
     }
 
-    /* THE KEYBOARD ORDER IS UNCHANGED. He is a picture, so he must not be in
-       it at all — asked of the row's own focusable inventory rather than by
-       pressing Tab, because engines in this matrix disagree about whether a
-       plain link is tabbable and that disagreement would decide the result
-       instead of the change under test. */
+    /* ...AND IT IS THE SAME PICTURE IN BOTH, asked of the two elements rather
+       than of the network. The request tally above is name-based and a sheet
+       under some other name would slip past it — MEASURED: a mutant pointing
+       the mirrored seat at a second file was deduplicated by the bundler onto
+       an existing asset's name and survived the tally. Comparing what the two
+       seats actually resolved closes that: any second image, under any name,
+       makes these two strings differ. */
+    expect(
+      new Set(seatImages).size,
+      `the two seats resolved different pictures: ${seatImages.join(' vs ')}`
+    ).toBe(1);
+    expect(seatImages[0], 'neither seat draws the flight sheet').toMatch(/rime-flight[^/]*\.webp/);
+
+    /* THE KEYBOARD ORDER IS UNCHANGED, and the second dragon is the reason to
+       ask again: he sits INSIDE the row's first stop now, and a picture that
+       became focusable there would put a nameless stop in front of every
+       keyboard reader on arrival. Asked of the row's own focusable inventory
+       rather than by pressing Tab, because engines in this matrix disagree
+       about whether a plain link is tabbable and that disagreement would
+       decide the result instead of the change under test. */
     const order = await page.evaluate(() => {
       const header = window.document.querySelector('.page-header');
       const focusable = [
         ...header.querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])'),
       ];
+      const inOrder = [...header.querySelectorAll('*')];
       return {
         classes: focusable.map((node) => node.className || node.tagName.toLowerCase()),
         includesMark: focusable.some((node) => node.classList.contains('rime-mark')),
+        firstStop: focusable[0]?.className ?? '',
         markAfterMode:
-          [...header.querySelectorAll('*')].indexOf(header.querySelector('.rime-mark')) >
-          [...header.querySelectorAll('*')].indexOf(
-            header.querySelector('[aria-label="Reading mode"], button')
-          ),
+          inOrder.indexOf(header.querySelector('.page-chrome .rime-mark')) >
+          inOrder.indexOf(header.querySelector('[aria-label="Reading mode"], button')),
       };
     });
-    expect(order.includesMark, 'Rime is a keyboard stop; the row’s pinned order has gained one').toBe(
-      false
-    );
+    expect(
+      order.includesMark,
+      'a dragon is a keyboard stop; the row’s pinned order has gained one'
+    ).toBe(false);
+    expect(
+      order.firstStop,
+      `the row’s first stop is "${order.firstStop}" rather than the home link`
+    ).toContain('page-mark');
     expect(order.markAfterMode, 'Rime is drawn before the reading mode, so he sits between two stops').toBe(
       true
     );
+    /* AND THE FIRST STOP SAYS SOMETHING. The link's whole content is
+       aria-hidden, so its name has to be computed from the heading it scrolls
+       to — and only a real accessibility tree can report whether that
+       resolved. An aria-labelledby pointing at nothing renders a silent first
+       stop and looks perfect in the source. */
+    await expect(
+      page.getByRole('link', { name: 'Samuel Naranjo', exact: true }),
+      'the home link answers to no name; the row opens on a silent stop'
+    ).toHaveCount(1);
     await context.close();
   }
 });
@@ -4298,13 +4385,13 @@ test('the experience section renders four complete roles, and no placeholder sur
     const section = window.document.querySelector('#work');
     return {
       heading: section.querySelector('.section-title')?.textContent.trim(),
-      /* THE NAV LINK'S WORD MOVED CHANNEL (owner design decision, 2026-09-11,
-         issue 313): the link prints a mark and the section's number, and the
-         section's own label is its accessible name. So the label is read off
-         aria-label and the PRINTED text is asserted separately to be the
-         number — a link that quietly lost its accessible name and a link that
-         quietly printed the heading again are two different failures, and
-         reading only one of the two channels could not tell them apart. */
+      /* THE NAV LINK'S WORD CAME BACK TO THE PAGE (owner ruling, 2026-09-12,
+         issue 325: "put back words in here instead of the icons"). Both
+         channels are still read, because the two failures they separate are
+         still different ones: a link that stopped PRINTING the word, and a
+         link that kept an aria-label beside it — which would announce the
+         word twice to a screen reader and is exactly the shape the ruling
+         undid. The label must now be absent, and the text must be the word. */
       firstNavLabel: window.document.querySelector('.section-link')?.getAttribute('aria-label'),
       firstNavText: window.document.querySelector('.section-link')?.textContent.trim(),
       /* The id is the address a reader may already have shared; renaming a
@@ -4339,24 +4426,26 @@ test('the experience section renders four complete roles, and no placeholder sur
     };
   });
   expect(observed.heading).toBe('Professional Experience');
-  expect(observed.firstNavLabel, 'the nav link lost the section word as its accessible name').toBe(
+  expect(observed.firstNavText, 'the nav link stopped printing the section word').toBe(
     'Professional Experience'
   );
-  expect(observed.firstNavText, 'the nav link prints the heading again instead of the sheet number').toBe(
-    '01'
-  );
-  /* The ledger's slash is GENERATED content, which is why it is absent from
-     the text above and measured here instead: it is punctuation the section
-     head already draws the same way, and drawing it from one rule is what
-     keeps the two from drifting. */
-  const separator = await page
-    .locator('.section-link-number')
-    .first()
-    .evaluate((node) => getComputedStyle(node, '::after').content);
-  expect(separator, 'the nav number lost the ledger separator the section head draws').toContain('/');
+  expect(
+    observed.firstNavLabel,
+    `the nav link carries an aria-label ("${observed.firstNavLabel}") beside the word it now prints`
+  ).toBe(null);
+  /* The sheet number left the nav with the words' return, and it left the
+     RENDERED page rather than only the source: the span that carried it and
+     the generated slash that followed it are both gone from the row. The
+     section head still draws both, which is asserted where the heads are
+     measured. */
+  await expect(
+    page.locator('.section-nav .section-link-number'),
+    'the nav prints the sheet number beside the word again'
+  ).toHaveCount(0);
   /* And the engine agrees, which is the assertion that matters: an accessible
      name is computed, not declared, so only a real accessibility tree can say
-     the aria-label actually became the link's name. */
+     the printed word actually became the link's name — text-transform,
+     aria-hidden content and a stray label would each change the answer. */
   await expect(
     page.getByRole('link', { name: 'Professional Experience', exact: true }),
     'no link answers to the section word any more'
@@ -11364,11 +11453,22 @@ for (const viewport of markViewports) {
            and it is invisible until two rows are compared. */
         monograms: [...window.document.querySelectorAll('.ledger-monogram')].map(box),
         names: [...window.document.querySelectorAll('.ledger-name')].map((node) => box(node).x),
-        /* The nav's numbers: same top edge on every link, so a mark beside a
-           figure has not lifted one of them off the row's line. */
-        navNumbers: [...window.document.querySelectorAll('.section-link-number')].map(
-          (node) => box(node).y
-        ),
+        /* THE NAV IS ONE LINE AND IT SCROLLS (owner ruling, 2026-09-12, issue
+           325: words again, "and let it be a carousel as well as it was
+           before"). Same top edge on every link is the no-wrap claim — a
+           wrapping nav changes the height of the row that is the sheet's own
+           top rule — and the strip's own scroll width against its box is the
+           carousel: the words run past the edge and the reader pushes them
+           along, INSIDE the strip, which is why the document below must still
+           not scroll sideways. */
+        navStrip: (() => {
+          const strip = window.document.querySelector('.section-nav');
+          return {
+            scrollWidth: strip.scrollWidth,
+            clientWidth: strip.clientWidth,
+            overflowX: getComputedStyle(strip).overflowX,
+          };
+        })(),
         navLinks: [...window.document.querySelectorAll('.section-link')].map((node) => ({
           name: node.getAttribute('aria-label'),
           text: node.textContent.trim(),
@@ -11421,32 +11521,50 @@ for (const viewport of markViewports) {
       `the employer names start at ${new Set(observed.names).size} different offsets; the monogram column varies per row`
     ).toBe(1);
     expect(
-      new Set(observed.navNumbers).size,
-      'the nav numbers sit at different heights; a mark has lifted one off the row'
+      new Set(observed.navLinks.map((link) => link.y)).size,
+      `the nav links sit at ${new Set(observed.navLinks.map((link) => link.y)).size} different heights; the row wrapped instead of scrolling`
     ).toBe(1);
+    expect(
+      observed.navStrip.overflowX,
+      `the nav strip's overflow-x is "${observed.navStrip.overflowX}"; the words cannot be pushed along`
+    ).toBe('auto');
 
     /* FOUR links since the owner's design decision of 2026-09-11 (issue 318):
        Projects and Commits are one section of two columns, and the calendar
-       went back into Trackers. */
+       went back into Trackers. They print WORDS again (owner ruling,
+       2026-09-12, issue 325), and carry no aria-label beside the word — a
+       label there would announce the section twice. */
     expect(observed.navLinks, 'the nav renders the wrong number of links').toHaveLength(4);
     expect(
-      observed.navLinks.map((link) => link.name),
-      'the nav links lost the section words as their accessible names'
+      observed.navLinks.map((link) => link.text),
+      'the nav prints something other than the section words'
     ).toEqual(['Professional Experience', 'Projects · Commits', 'Trackers', 'Gallery']);
     expect(
-      observed.navLinks.map((link) => link.text),
-      'the nav prints something other than the sheet numbers'
-    ).toEqual(['01', '02', '03', '04']);
+      observed.navLinks.map((link) => link.name),
+      'a nav link carries an aria-label beside the word it prints'
+    ).toEqual([null, null, null, null]);
     for (const link of observed.navLinks) {
-      /* The touch floor survives the words leaving: a link that is now a mark
-         and two digits is a SMALLER box, which is exactly the direction that
-         breaks a 44px minimum. */
-      expect(link.width, `the "${link.name}" link is ${link.width}px wide`).toBeGreaterThanOrEqual(
+      /* The touch floor holds with the words back: they make each link WIDER,
+         so the block axis is the one that can still fail — and a link squeezed
+         to the floor by its neighbours is the defect the strip scrolls to
+         prevent. */
+      expect(link.width, `the "${link.text}" link is ${link.width}px wide`).toBeGreaterThanOrEqual(
         44
       );
-      expect(link.height, `the "${link.name}" link is ${link.height}px tall`).toBeGreaterThanOrEqual(
+      expect(link.height, `the "${link.text}" link is ${link.height}px tall`).toBeGreaterThanOrEqual(
         44
       );
+    }
+    /* THE CAROUSEL, at the width it exists for: four section words are wider
+       than a phone, so the strip is scrollable there — and the document below
+       it still is not, which is the pair the whole arrangement is for. At 1440
+       there is room for all four, so overflow is not asserted; the one-line
+       and no-sideways-scroll claims above are. */
+    if (viewport.width <= 430) {
+      expect(
+        observed.navStrip.scrollWidth,
+        `the nav holds ${observed.navStrip.scrollWidth}px of words in a ${observed.navStrip.clientWidth}px strip at ${viewport.width}px; nothing scrolls and the words are cut off instead`
+      ).toBeGreaterThan(observed.navStrip.clientWidth);
     }
 
     expect(
@@ -11456,15 +11574,18 @@ for (const viewport of markViewports) {
   });
 }
 
-test('the keyboard still walks the chrome row: the wordmark, the four nav links, then the reading mode', async ({
+test('the keyboard still walks the chrome row: the home link, the four nav links, then the reading mode', async ({
   page,
 }) => {
   await visit(page);
-  /* The nav links became marks and numbers; a control with no text is exactly
-     the kind of control that quietly leaves the tab order — a span someone
-     styled to look pressable, an anchor that lost its href. So the walk is
-     measured from the wordmark forward, naming what it lands on at each step,
-     rather than asserting a count of focusable things. */
+  /* THE ROW'S FIRST STOP IS A PICTURE NOW (owner ruling, 2026-09-12, issue
+     325): the home link draws the mirrored dragon rather than the "SN."
+     wordmark, and a control with no text of its own is exactly the kind that
+     quietly leaves the tab order — an anchor that lost its href, a span
+     someone styled to look pressable. The nav links went the other way in the
+     same ruling and got their words back. Either change could move a stop, so
+     the walk is measured from the home link forward, naming what it lands on
+     at each step, rather than asserting a count of focusable things. */
   await page.locator('.page-mark').evaluate((node) => node.focus());
   const landed = [];
   for (let step = 0; step < 5; step += 1) {
@@ -11520,6 +11641,16 @@ test('the keyboard still walks the chrome row: the wordmark, the four nav links,
   expect(landed[4].name, 'the reading mode no longer follows the nav in the tab order').toBe(
     'Reading mode'
   );
+  /* And the stop the walk STARTED from is itself reachable and named. It is
+     focused directly above rather than tabbed to, so without this the lane
+     would prove the order after the first stop while saying nothing about the
+     first stop — which is the one the ruling changed. */
+  const home = await page.locator('.page-mark').evaluate((node) => ({
+    tabbable: node.tabIndex >= 0,
+    text: node.textContent.trim(),
+  }));
+  expect(home.tabbable, 'the home link left the tab order').toBe(true);
+  expect(home.text, `the home link prints "${home.text}"; its content is a picture now`).toBe('');
 });
 
 /* THE TABLE'S HEAD IS MARKS AND ITS NUMERALS ARE A COLUMN (owner directive,

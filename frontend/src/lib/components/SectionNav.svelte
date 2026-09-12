@@ -29,9 +29,8 @@
   actually makes a refresh load at the top instead of silently restoring
   whatever the reader happened to be scrolled to. -->
 <script lang="ts">
-  import { sectionHref, sectionOrdinal } from '../blocks.ts';
+  import { sectionHref } from '../blocks.ts';
   import { page } from '../../page.ts';
-  import Icon from './Icon.svelte';
 
   if (typeof history !== 'undefined' && 'scrollRestoration' in history) {
     history.scrollRestoration = 'manual';
@@ -55,30 +54,34 @@
   }
 </script>
 
-<!-- A LINK IS A MARK AND A NUMBER (owner design decision, 2026-09-11, issue
-  313): the sheet's sections are numbered, so the nav names them the way the
-  sheet does rather than repeating five headings the reader is about to read
-  again. Both halves come from the manifest — the mark from the entry, the
-  number from the entry's POSITION — so a section moved renumbers its link and
-  its head together, and no component spells either.
+<!-- A LINK IS ITS SECTION'S WORD (owner ruling, 2026-09-12, issue 325: "put
+  back words in here instead of the icons and let it be a carousel as well as
+  it was before").
 
-  The WORD did not disappear, it moved channel: aria-label carries the
-  section's own label, which is also what the heading the link points at is
-  called, so a screen-reader user hears "Professional Experience" where a
-  sighted reader sees a briefcase and 01. An aria-label REPLACES an element's
-  contents in the accessibility tree, which is exactly what is wanted here —
-  "01 / Professional Experience" would announce a decoration the visual
-  channel already carries. -->
+  Issue 313 had replaced the word with the section's mark and its number, on
+  the reasoning that the sheet numbers its sections and the nav could name them
+  the way the sheet does. The owner read the live page and ruled otherwise: a
+  briefcase and "01" are two decorations a reader has to learn, and the word is
+  the one channel that needs no learning at all. So the word comes back as the
+  link's own text — not as an aria-label beside a drawing, which is a word only
+  the readers who cannot see the page ever got.
+
+  The mark did not leave the sheet with it: src/page.ts still carries one per
+  section and the section HEAD still draws it, where it sits beside the word
+  rather than instead of it.
+
+  Nothing else is restated here. The row that holds these links is the same
+  sideways-scrolling strip it has been since the ledger (styles.css,
+  `.section-nav`): the words run past the edge on a phone and the reader pushes
+  them along, which is the carousel the owner means — and the reason the words
+  fit at all is that each link keeps its own width instead of being squeezed to
+  the touch floor. -->
 <nav class="section-nav" aria-label="Page sections">
-  {#each page as section, position (section.id)}
+  {#each page as section (section.id)}
     <a
       class="section-link"
       href={sectionHref(section)}
-      aria-label={section.label}
-      onclick={(event) => onNavClick(event, section.id)}
-      ><Icon name={section.mark} slot="row" /><span class="section-link-number"
-        >{sectionOrdinal(position)}</span
-      ></a
+      onclick={(event) => onNavClick(event, section.id)}>{section.label}</a
     >
   {/each}
 </nav>
