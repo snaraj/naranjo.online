@@ -9,6 +9,14 @@
   blocks would each have to be told the other's row count, which is one fact in
   two places and the way a zero-CLS promise quietly stops being true.
 
+  THE LOG DOES NOT SCROLL ON A PHONE (owner ruling, 2026-09-12: there it is "an
+  endless scroll field that I have to fight out of"). At that width the box
+  takes no overflow of its own and shows the first rows with a control under
+  them that reveals the rest inline, so the page's own scroll is the only
+  scroll a thumb can land on. The control is absent on a desktop, where the box
+  keeps its reserve and scrolls inside it, and absent when there is nothing to
+  reveal.
+
   IT IS ROWS, NOT A <table>, on both sides — the reason LedgerTable gave before
   this component replaced it: every row here collapses to two stacked lines on
   a phone, and a real table cannot do that without either scrolling sideways
@@ -52,9 +60,10 @@
     emptyNote,
     logHead,
     logAnchor,
+    logListId,
     logRows,
     logNote,
-    staleNote
+    logDisclosure
   }: LedgerSpreadProps = $props();
 
   /* The head row's marks, in column order, paired with the words the adapter
@@ -80,9 +89,26 @@
      who rotates a phone or drags a window across the breakpoint. */
   let wide = $state(browserMedia(spreadMediaQuery).matches);
   $effect(() => watchMedia(browserMedia, spreadMediaQuery, (matches) => (wide = matches)));
+
+  /* Whether the reader has asked for the whole log. Component-local and never
+     persisted: it is an answer to "show me the rest of this list", which is
+     about this visit to this screen, and a stored one would decide the page's
+     height before a reader has looked at it. It is deliberately NOT reset when
+     the width changes — a reader who opened the log and rotated the phone
+     asked for the rows, not for the orientation. */
+  let expanded = $state(false);
+
+  /* The rows this render draws. A phone with more rows than it shows at once
+     draws the first few until the reader presses; every other case draws the
+     whole list, which is what keeps the desktop column exactly what it was. */
+  const shownLogRows = $derived(
+    logDisclosure !== undefined && !wide && !expanded
+      ? logRows.slice(0, logDisclosure.collapsed)
+      : logRows
+  );
 </script>
 
-<PanelShell {status} {generatedAt} note={staleNote}>
+<PanelShell {status} {generatedAt}>
   <FeedCard variant="table">
     <div class="ledger-spread">
       <div class="spread-column">
@@ -121,12 +147,6 @@
                 {:else}
                   <span class="table-name">{row.link.text}</span>
                 {/if}
-                <!-- The chip is a WORD, not a colour: this sheet spends its one
-                  mark on text a reader can read (the no-colour-alone floor), so
-                  a row that is here for a different reason says so in the
-                  page's own vocabulary and a reader who cannot see the hairline
-                  around it still hears the word. -->
-                {#if row.chip}<span class="table-chip">{row.chip}</span>{/if}
               </span>
               {#each row.counts as count (count.key)}
                 <!-- Focusable so the detail's keyboard reveal matches its hover
@@ -171,37 +191,64 @@
         <!-- The log's box is RESERVED, not grown into: it is exactly as tall as
           the rows the table beside it shows, so a payload landing a moment after
           first paint lands without moving the page under a reader. The empty
-          note sits inside the same box for the same reason. -->
+          note sits inside the same box for the same reason, and on a phone the
+          reserve holds the collapsed log — its rows AND its control — so the
+          arriving payload lands in a box that was already its size. -->
         <div class="commit-rows">
-          {#if logRows.length === 0}
-            <p class="commit-note">{logNote}</p>
-          {:else}
-            {#each logRows as row (row.key)}
-              <div class="commit-row">
-                <span class="commit-age">{row.age}</span>
-                {#if row.source.href}
-                  <a
-                    class="commit-source"
-                    href={row.source.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={row.source.label}>{row.source.text}</a>
-                {:else}
-                  <span class="commit-source-text">{row.source.text}</span>
-                {/if}
-                {#if row.title.href}
-                  <a
-                    class="commit-title"
-                    href={row.title.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={row.title.label}>{row.title.text}</a>
-                {:else}
-                  <span class="commit-title-text">{row.title.text}</span>
-                {/if}
-                {#if wide}<span class="commit-mark">{row.mark}</span>{/if}
-              </div>
-            {/each}
+          <div class="commit-list" id={logListId}>
+            {#if logRows.length === 0}
+              <p class="commit-note">{logNote}</p>
+            {:else}
+              {#each shownLogRows as row (row.key)}
+                <div class="commit-row">
+                  <span class="commit-age">{row.age}</span>
+                  {#if row.source.href}
+                    <a
+                      class="commit-source"
+                      href={row.source.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={row.source.label}>{row.source.text}</a>
+                  {:else}
+                    <span class="commit-source-text">{row.source.text}</span>
+                  {/if}
+                  {#if row.title.href}
+                    <a
+                      class="commit-title"
+                      href={row.title.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={row.title.label}>{row.title.text}</a>
+                  {:else}
+                    <span class="commit-title-text">{row.title.text}</span>
+                  {/if}
+                  {#if wide}<span class="commit-mark">{row.mark}</span>{/if}
+                </div>
+              {/each}
+            {/if}
+          </div>
+          <!-- THE PHONE'S DISCLOSURE (owner ruling, 2026-09-12: the log is "an
+            endless scroll field that I have to fight out of" there). At that
+            width the box stops scrolling and shows the first rows with this
+            control under them, so the only scroll is the page's own. It is a
+            real <button> carrying `aria-expanded` and naming the list it grows,
+            which is what brings keyboard operation and the disclosure role with
+            it — the same answer LedgerLog's openable row gives.
+
+            IT IS ABSENT ON A DESKTOP rather than hidden, for the reason the
+            short identity beside it is: a `display: none` control is still
+            something a screen reader can be walked into, and there is nothing
+            for it to do where the box keeps its reserve and scrolls. And it is
+            absent when the adapter built no disclosure, which is its way of
+            saying the log holds nothing the collapsed list does not show. -->
+          {#if logDisclosure !== undefined && !wide}
+            <button
+              class="commit-disclosure"
+              type="button"
+              aria-expanded={expanded}
+              aria-controls={logListId}
+              onclick={() => (expanded = !expanded)}
+              >{expanded ? logDisclosure.fewer : logDisclosure.more}</button>
           {/if}
         </div>
       </div>

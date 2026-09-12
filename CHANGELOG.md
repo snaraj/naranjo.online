@@ -7,6 +7,28 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.85] - 2026-09-12
+
+### Changed
+
+- The token-usage board (issue #323, owner review of 2026-09-12): no freshness
+  line and no title above the cards; every card shares one paint (the
+  inverted card is gone); the two model lists are sorted by usage, largest
+  first; the streak and longest-session lines leave the source cards for the
+  Sessions card, which reads per source; the token cubes carry no caption.
+- Projects · Commits (issue #324): the table lists the pinned repositories
+  only (the "latest" row and its chip are gone) and the commit log reserves
+  rows to match; no freshness line above the log; on a phone the log is no
+  longer a nested scroll region — five rows and an inline disclosure for
+  the rest, so the page's own scroll is the only scroll.
+- The section nav (issue #325) shows the section words again instead of
+  marks, as the sideways-scrolling strip it was before 0.1.83.
+- The chrome row (issue #327): the wordmark is a second Rime, mirrored to
+  face the first across the row; the place reads California.
+- The role rows (issue #326) carry each organisation's own mark as a uniform
+  square tile in place of the two-letter monogram, and name the employer
+  once.
+
 ## [0.1.84] - 2026-09-12
 
 ### Fixed

@@ -734,12 +734,21 @@
      name track spent on white space. */
   --ledger-spread-gap: 2.5rem;
   --ledger-cell-gap: 0.75rem;
-  /* The employer monogram's square (owner design decision, 2026-09-11, issue
-     313): a hairline box the size of the ledger's other row furniture, not a
-     logo. Its own token because the row grid declares it as a TRACK and the
-     tile declares it as a box, and a row whose track and tile disagree is a
-     row with a gap down one side of every entry. */
-  --ledger-monogram: 1.75rem;
+  /* The organisation mark's square (owner ruling, 2026-09-12, issue 326): a
+     hairline box holding the organisation's own tile. Its own token because
+     the row grid declares it as a TRACK and the tile declares it as a box, and
+     a row whose track and tile disagree is a row with a gap down one side of
+     every entry.
+
+     IT IS THE SITE'S CONTROL TARGET, not a length of its own (owner decision,
+     2026-09-12). The first cut drew the tiles at 1.75rem, the size of the
+     letters they replaced, and a wordmark fitted into that box — Panasonic's
+     is 8.7:1 — drew about 22 x 3 CSS pixels and read as a dark bar rather than
+     as a mark. 2.75rem is the one length this sheet already uses for something
+     a reader is meant to resolve, so the tile borrows it instead of minting a
+     fifth number. Custom properties resolve at computed-value time, so naming
+     --control-target here, above its own declaration, is exact. */
+  --ledger-mark: var(--control-target);
 
   /* The mono LABEL, which is the ledger's connective tissue: section numbers,
      column heads, sub-lines, the footer. One size, one tracking, everywhere. */
@@ -893,21 +902,17 @@
   --panel-radius: 0rem;
   --panel-padding: 0rem;
   --panel-gap: 0rem;
-  /* Each block's own caption row: the ORIGIN's title for the panel and its
-     data-through line, both set as the sheet's mono label under the section
-     head. The title is origin-served data — it is what the envelope carries —
-     so it renders rather than being hidden: a heading a page receives and then
-     drops is a page deciding what its own backend meant. */
+  /* Each block's own caption row: the ORIGIN's title for the panel, set as the
+     sheet's mono label under the section head. The title is origin-served data
+     — it is what the envelope carries — so it renders rather than being
+     hidden: a heading a page receives and then drops is a page deciding what
+     its own backend meant. */
   --panel-title-size: var(--ledger-label-size);
   --panel-title-family: var(--font-mono);
   --panel-title-weight: 500;
   --panel-title-tracking: var(--ledger-label-tracking);
   --panel-title-transform: uppercase;
   --panel-heading: var(--ledger-muted);
-  --panel-note-size: var(--ledger-label-size);
-  --panel-note-family: var(--font-mono);
-  --panel-note-tracking: var(--ledger-label-tracking);
-  --panel-note-transform: uppercase;
   --panel-tip-surface: var(--color-surface-overlay);
   --usage-tile-surface: var(--color-surface);
   --panel-border: var(--card-border-color);
@@ -1535,17 +1540,33 @@ html[data-column-resizing] {
   border-block-end: var(--ledger-heavy) solid var(--ledger-rule);
 }
 
-/* The wordmark. An anchor to the page's own name, so the row's first stop is
-   "back to the top" rather than a decorative glyph. */
+/* The home link. An anchor to the page's own name, so the row's first stop is
+   "back to the top" — and since the owner's ruling of 2026-09-12 (issue 325)
+   what it DRAWS is the mirrored dragon rather than the "SN." wordmark.
+
+   The BOX is all that is left here, and that is the point: the link is a 44px
+   hit lane holding a picture that states its own size, so every typographic
+   declaration this rule used to carry — the sans face, the 1.25rem, the 900
+   weight, the tight tracking, the ink and the underline suppression — was
+   styling text that no longer exists. They are deleted rather than kept warm;
+   a rule that paints nothing is a rule the next reader has to disprove.
+
+   THE LINK'S PAINT STAYS, and that is a deliberate line rather than an
+   oversight: the site's one link doctrine (owner directive, 2026-08-25) is
+   that no link wears a resting underline and every link marks itself the
+   moment intent is shown, and experience.test.mjs holds EVERY link class the
+   markup declares to it. A picture draws none of those marks today — but the
+   class would have to be written OUT of that doctrine to drop them, and a link
+   class exempt from the site's link rule is a class the next home link, with
+   words in it again, would inherit the exemption from. The ring is the one
+   that paints on this link today: it is the only thing telling a keyboard
+   reader where they are, it marks the box rather than the text, and it is
+   unchanged. */
 .page-mark {
   display: inline-flex;
   align-items: center;
   min-inline-size: var(--control-target);
   min-block-size: var(--control-target);
-  font-family: var(--font-sans);
-  font-size: 1.25rem;
-  font-weight: 900;
-  letter-spacing: -0.03em;
   color: var(--ledger-ink);
   text-decoration: none;
 }
@@ -1616,6 +1637,24 @@ html[data-column-resizing] {
   background-repeat: no-repeat;
   background-position: 0 0;
   background-size: var(--rime-sheet-inline) var(--rime-sheet-block);
+}
+
+/* THE SAME DRAGON, FACING THE OTHER WAY (owner ruling, 2026-09-12, issue 325:
+   "replace this with another dragon facing inwards to match the opposite
+   side"). One declaration is the whole difference between the two seats: the
+   sheet, the reserved 44px box, the still at frame 0 and both steps()
+   animations above are SHARED, so the second dragon costs one element and no
+   second request — two boxes naming one background-image are one resource.
+
+   It is a static transform rather than motion, so it sits out here with the
+   rest of the mark's shape instead of inside the no-preference block: a reader
+   who asked for less motion gets the same still pose, facing the same way.
+   transform-origin is stated because the flip has to happen about the box's
+   own middle — the default IS the centre, and saying so is what keeps a later
+   origin change from silently sliding the dragon out of his own hit lane. */
+.rime-mark-mirrored {
+  transform: scaleX(-1);
+  transform-origin: center;
 }
 
 /* The place label is the first thing to go when the row runs out of room: it
@@ -1746,7 +1785,6 @@ main {
      The row scrolls instead: each link keeps the width its label needs, and
      the floor goes back to being a floor for the SHORT labels. */
   flex: none;
-  gap: var(--icon-gap);
   min-inline-size: var(--control-target);
   min-block-size: var(--control-target);
   padding-inline: 0.25rem;
@@ -1809,13 +1847,13 @@ main {
   color: var(--ledger-ink);
 }
 
-/* The ledger's separator, and the ONE place it is written. The nav link and
-   the section head both print a number followed by a slash (owner design
-   decision, 2026-09-11, issue 313 moved the number into the link), so the
-   slash is a generated mark on both rather than a character typed into two
-   components that would drift. */
-.section-number::after,
-.section-link-number::after {
+/* The ledger's separator. The section head prints a number followed by a
+   slash, and the slash is generated rather than typed into the component: it
+   is punctuation the sheet draws, not a character the manifest supplies. The
+   nav link shared this rule while it printed a number of its own (issue 313);
+   the owner's ruling of 2026-09-12 put the WORDS back in the nav, so the
+   number, its span and this selector's second arm left with them. */
+.section-number::after {
   content: ' /';
 }
 
@@ -2193,7 +2231,7 @@ h1 {
 
 .ledger-row {
   display: grid;
-  grid-template-columns: 8.75rem var(--ledger-monogram) 1.1fr 1.3fr 9.375rem var(--control-target);
+  grid-template-columns: 8.75rem var(--ledger-mark) 1.1fr 1.3fr 9.375rem var(--control-target);
   align-items: center;
   gap: var(--ledger-column-gap);
   min-block-size: var(--control-target);
@@ -2206,22 +2244,25 @@ h1 {
   font: inherit;
 }
 
-/* THE MONOGRAM TILE (owner design decision, 2026-09-11, issue 313): two
-   letters in a hairline square, in the sheet's own rule colour and the sheet's
-   own mono face. It is deliberately NOT a logo — a logo is a trademark, and
-   the page draws none — and deliberately not a disc or a filled chip either,
-   because the ledger rules everything else it draws with the same hairline.
+/* THE MARK TILE (owner ruling, 2026-09-12, issue 326): the organisation's own
+   mark, vendored as one square tile on the sheet's paper, inside the same
+   hairline the ledger rules everything else with. Issue 313 set two letters
+   here instead; the hairline is what survived that decision, because it is
+   what makes a black wordmark, a navy badge, a pale ring and a coloured shield
+   read as one set of four rather than four borrowed pictures.
+
+   `display: block` because an inline image sits on the text baseline and
+   leaves a descender's worth of air under itself — in a row whose other cells
+   are centred, that air is a tile hanging low.
+
    Square by construction: one token drives the tile here and the row's track
-   above, so the two cannot disagree. */
-.ledger-monogram {
-  display: grid;
-  place-items: center;
-  inline-size: var(--ledger-monogram);
-  block-size: var(--ledger-monogram);
+   above, so the two cannot disagree, and both axes come from it — which is why
+   no object-fit is needed, every tile being square already. */
+.ledger-mark {
+  display: block;
+  inline-size: var(--ledger-mark);
+  block-size: var(--ledger-mark);
   border: var(--ledger-hairline) solid var(--ledger-rule);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-figure-size);
-  color: var(--ledger-muted);
 }
 
 .ledger-row:hover {
@@ -2320,6 +2361,13 @@ h1 {
   background: var(--ledger-ink);
 }
 
+
+/* THE DRAWER'S LINK (issue 243, kept by the owner's ruling of 2026-09-12,
+   issue 326). What changed is its TEXT, not its existence: it prints the host
+   it goes to rather than the organisation's name a second time. Mono and muted
+   because it reads as an address, at the site's touch floor because it is a
+   control, and indented to the same 10.25rem the points are so the drawer has
+   one left edge. */
 .ledger-link {
   display: inline-flex;
   align-items: center;
@@ -2457,11 +2505,10 @@ h1 {
   text-align: end;
 }
 
-/* The name and its chip are ONE cell, so the chip sits against the name it
-   qualifies rather than in a track of its own that every other row would leave
-   empty. The cell is the row's flexible track, so a long repository name
-   ellipsizes inside it — and the chip does not, because it is the shorter of
-   the two and the one that says why the row is here at all.
+/* The name is the row's flexible track. The cell held a second thing until the
+   owner's ruling of 2026-09-12 — the `latest` chip, set against the name it
+   qualified — and it is a flex cell still, because the link inside it keeps its
+   own floor while the cell keeps the track's width.
 
    The cell CLIPS rather than letting its contents decide its width, and the
    link inside it keeps its own 44px floor: a repository whose name is shorter
@@ -2499,22 +2546,6 @@ h1 {
 .table-link:focus-visible {
   color: var(--ledger-highlight);
   text-decoration: underline;
-}
-
-/* THE `latest` CHIP (owner design decision, 2026-09-11, issue 318): the sheet's
-   mono label in a hairline box, muted, and deliberately in NO colour of its
-   own — the page spends its one mark on text, and a chip that said "this row is
-   different" with a hue would be encoding a value by colour alone, which the
-   dataviz floor forbids. The word IS the channel. */
-.table-chip {
-  flex: none;
-  padding: 0.0625rem 0.3125rem;
-  border: var(--ledger-hairline) solid var(--ledger-rule);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-  color: var(--ledger-muted);
 }
 
 /* THE MARK SLOT IS FIXED AND THE FIGURE FILLS THE REST (owner directive,
@@ -2636,19 +2667,6 @@ h1 {
   padding-block: 0.5rem;
 }
 
-.commit-caption {
-  margin: 0;
-  /* ONE LINE OF RESERVE, and see the phone override: a caption that grows when
-     the reader presses a segment is the reader's own action moving the page
-     under them, which is the shift the zero-CLS floor is actually about. */
-  min-block-size: 1.25rem;
-  padding-block-end: 0.375rem;
-  border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-figure-size);
-  color: var(--ledger-muted);
-}
-
 /* THE LOG'S BOX IS RESERVED (issue 285's reserve, kept through the redesign):
    exactly as tall as the rows it holds open, so a payload that lands a moment
    after first paint lands without moving the page. The number is a
@@ -2657,22 +2675,22 @@ h1 {
    adapter's own constant — so the box and the number of rows it holds cannot
    drift apart.
 
-   SEVEN, because the table beside it shows seven (owner design decision,
-   2026-09-11, issue 318: "seven rows ... to match the seven repository rows").
-   The two columns of the paired section are one picture and the reserve is the
-   one place that pairing is expressible as a length — so the constant this
-   recomputes from is `shownProjectRows` in lib/projects.ts, the SAME number
-   the table selects its rows with, rather than a second one for this box to
-   disagree with.
+   SIX, because the table beside it shows six (owner ruling, 2026-09-12: the
+   seventh, "latest" row went, and the table is the pinned set). The two columns
+   of the paired section are one picture and the reserve is the one place that
+   pairing is expressible as a length — so the constant this recomputes from is
+   `shownProjectRows` in lib/projects.ts, the SAME number the table selects its
+   rows with, rather than a second one for this box to disagree with.
 
-   IT SCROLLS FOR THE REST (owner directive, 2026-09-11, issue 315 — written
-   hashless because three digits after a hash read as a hex color to the
-   stylesheet's own color sweep). The log lists every contribution now, which
-   is more rows than any reserve should hold open; a box that GREW to fit them
-   would move every section under it the moment a payload landed, which is the
-   shift the reserve exists to prevent. So the box keeps its exact height
+   IT SCROLLS FOR THE REST ON A DESKTOP (owner directive, 2026-09-11, issue 315
+   — written hashless because three digits after a hash read as a hex color to
+   the stylesheet's own color sweep). The log lists every contribution now,
+   which is more rows than any reserve should hold open; a box that GREW to fit
+   them would move every section under it the moment a payload landed, which is
+   the shift the reserve exists to prevent. So the box keeps its exact height
    whatever arrives and the rows past it scroll inside it — the page's layout
-   is decided before the data, and stays decided.
+   is decided before the data, and stays decided. A PHONE does not do this, and
+   the phone block below says why.
 
    There is deliberately NO `scrollbar-gutter` reservation here, and that is
    this repository's own measured ruling rather than an omission: a reserved
@@ -2686,8 +2704,52 @@ h1 {
    no-reading-hints ruling): the scrollbar and the clipped row are the
    affordance. */
 .commit-rows {
-  block-size: calc(7 * var(--commit-row-height));
+  block-size: calc(6 * var(--commit-row-height));
   overflow-y: auto;
+}
+
+/* THE PHONE LOG'S DISCLOSURE (owner ruling, 2026-09-12). Declared here rather
+   than inside the phone block because it is the control's whole appearance and
+   the component renders it at one width only — a rule split across two places
+   would be the same button described twice. It wears the head row's face: this
+   is chrome the sheet rules, not a figure.
+
+   FULL WIDTH AND AT THE TOUCH FLOOR, because it is the one thing under the log
+   a finger aims at, and a control narrower than its own row is a target a thumb
+   has to find. The width is its GRID COLUMN's, taken by stretching rather than
+   declared here (see the phone block), so the touch-floor sweep can still
+   measure both of its axes in pixels. The floor is a MINIMUM so a wrapped word
+   grows the box rather than being clipped by it, and the collapsed reserve is
+   computed from the same token, so an unwrapped control costs exactly what the
+   reserve holds open for it. */
+.commit-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--control-target);
+  margin-block-start: var(--ledger-cell-gap);
+  padding: 0;
+  border: var(--ledger-hairline) solid var(--ledger-rule);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: var(--ledger-label-size);
+  letter-spacing: var(--ledger-label-tracking);
+  text-transform: uppercase;
+  color: var(--ledger-muted);
+  cursor: pointer;
+}
+
+.commit-disclosure:hover {
+  background: var(--ledger-raised);
+  color: var(--ledger-ink);
+}
+
+/* The ring is INSET, like the sheet's other full-width controls: an outset one
+   on a control that already reaches its column's edge would be drawn outside
+   the column, and on a phone that is the document scrolling sideways. */
+.commit-disclosure:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
 }
 
 .commit-row {
@@ -2818,11 +2880,12 @@ h1 {
   }
 }
 
-/* THE CARD IS ITS OWN TOKEN LAYER, and that is what makes a turn one rule
-   rather than a rule per painted thing. Every colour inside a card reads one
-   of these five roles; the turned block below swaps what the roles point at,
-   so the whole card inverts — rules, muted text, tracks and fills together —
-   without a single component learning that it can be inverted. */
+/* THE CARD IS ITS OWN TOKEN LAYER. Every colour inside a card reads one of
+   these five roles, which is what let the board be restyled in one place — and
+   is now what makes "everything should follow the same pattern" (owner
+   directive, 2026-09-12, issue 323) a deletion rather than a sweep: the remap
+   that pointed the roles at their opposites on every second card is gone, so
+   the six cards are six reads of one declaration. */
 .board-card {
   --board-paper: var(--ledger-bg);
   --board-ink: var(--ledger-ink);
@@ -2857,22 +2920,6 @@ h1 {
 
 .board-card > * {
   min-inline-size: 0;
-}
-
-/* THE INVERSION IS THE BOARD'S RHYTHM, and it is this rule and nothing else
-   (owner directive, 2026-09-11; issue 316 retired the press that used to
-   toggle it). Paper becomes ink, ink becomes paper, and the muted role goes
-   to full paper rather than to a dimmer one: on ink there is no dimmer paper
-   to be had that keeps a small mono line legible, and the hierarchy is
-   already carried by size and weight. The raised role takes the muted ink,
-   which is the only value on the sheet that reads as a groove against ink
-   the way --ledger-raised reads as one against paper. */
-.board-card[data-turned='true'] {
-  --board-paper: var(--ledger-ink);
-  --board-ink: var(--ledger-bg);
-  --board-rule: var(--ledger-ink);
-  --board-muted: var(--ledger-bg);
-  --board-raised: var(--ledger-muted);
 }
 
 .board-head {
@@ -2942,17 +2989,31 @@ h1 {
 
    AND IT KEEPS THE HEIGHT OF THE CARD'S OWN LINES WHATEVER IT IS PRINTING.
    Scrubbing the daily line replaces these with ONE line (owner directive,
-   2026-09-11, issue 316), and without a reserve a two-line card would lose a
-   line's height the moment a pointer touched its chart — MEASURED as the
-   headline's box, which baseline alignment sizes from the taller of the
-   figure and this stack. The fact ladder under it is `flex: 1` with its rows
-   spread through the slack, so every one of them would move. The reserve is
-   the card's own line count, a dynamic length, and it therefore reaches this
-   sheet as a custom property rather than as a style string. `em` because the
-   unit that has to stay in step is this element's own line box: 1.4em is
-   exactly the line-height declared above it. */
+   2026-09-11, issue 316), and without a reserve a card would lose a line's
+   height the moment a pointer touched its chart — MEASURED as the headline's
+   box, which baseline alignment sizes from the taller of the figure and this
+   stack. The fact ladder under it is `flex: 1` with its rows spread through
+   the slack, so every one of them would move. The reserve is the card's own
+   line count, a dynamic length, and it therefore reaches this sheet as a
+   custom property rather than as a style string. `em` because the unit that
+   has to stay in step is this element's own line box: 1.4em is exactly the
+   line-height declared above it.
+
+   AND IT KEEPS ITS SEAT WHETHER OR NOT IT IS PRINTING ANYTHING, which is the
+   half the records move exposed (owner directive, 2026-09-12, issue 323). A
+   source card's two lines went to the records card, so its sub area is now
+   EMPTY until a pointer touches the chart — and an empty box has no text
+   baseline, so the headline's baseline alignment synthesized one from its
+   bottom margin edge and seated the box 4.39px higher than the same box with
+   a line in it, so the first scrub dropped it by that much. Measured in
+   chromium at 1440px: the reserved area held its height perfectly and still
+   moved on the first scrub. The reserve is a BOX
+   the sheet states, so it is seated by that box's own edge rather than by
+   whatever happens to be inside it; the figure beside it is taller and decides
+   the row either way. */
 .board-sub {
   display: grid;
+  align-self: end;
   justify-items: end;
   font-family: var(--font-mono);
   font-size: var(--ledger-label-size);
@@ -3343,7 +3404,7 @@ h1 {
      the page does not scroll sideways at any width, and a table that did would
      take the whole document with it. */
   .ledger-row {
-    grid-template-columns: var(--ledger-monogram) minmax(0, 1fr) var(--control-target);
+    grid-template-columns: var(--ledger-mark) minmax(0, 1fr) var(--control-target);
     grid-template-areas:
       'mark span chevron'
       'mark name chevron'
@@ -3351,16 +3412,16 @@ h1 {
       'mark place chevron';
     align-items: start;
     row-gap: 0.125rem;
-    /* The stacked row pays for the monogram out of its own gutters rather than
+    /* The stacked row pays for the mark out of its own gutters rather than
        mostly out of the words. At the sheet's 1.5rem column gap the tile would
-       cost the text column 3.25rem — the tile plus a second gutter; at 0.625rem
-       it costs 1.5rem, which is 24px of a 390px viewport. The gutter is
+       cost the text column 4.25rem — the tile plus a second gutter; at 0.625rem
+       it costs 3.375rem, which is 54px of a 390px viewport. The gutter is
        narrowed only here, where there is one text column and a control beside
        it; the desktop row keeps the sheet's own gap. */
     column-gap: 0.625rem;
   }
 
-  .ledger-monogram {
+  .ledger-mark {
     grid-area: mark;
     align-self: center;
   }
@@ -3395,6 +3456,7 @@ h1 {
   .ledger-link {
     margin-inline-start: 0;
   }
+
 
   /* THE COLUMNS STACK, repositories first (owner design decision, 2026-09-11,
      issue 318). One track, and the gap that separated them side by side now
@@ -3475,18 +3537,45 @@ h1 {
     letter-spacing: 0.06em;
   }
 
-  /* TWO LINES OF RESERVE, because at this width a token set's caption needs
-     two and the contributions caption needs one — and the reader chooses
-     between them by pressing a segment. A caption that grew on that press
-     moved the whole page under the hand that pressed it, which is the zero-CLS
-     floor breaking in the one place a reader can actually feel it: measured on
-     a Pixel 5, the commits section went from 809.6px to 828.2px on a segment
-     switch. The number is the TALLER state measured — two lines of the
-     caption's own type plus the rule's padding, 44.2px — rounded up to the
-     next half step, so the one-line state is padded out to meet it rather
-     than the two-line state being allowed to push. */
-  .commit-caption {
-    min-block-size: 2.875rem;
+  /* THE LOG IS NOT A SCROLL REGION HERE (owner ruling, 2026-09-12, on the live
+     page: at this width the log is "quite busy ... an endless scroll field that
+     I have to fight out of"). A box that scrolls inside a page that scrolls is
+     two scrolls under one thumb, and the inner one captures the gesture meant
+     for the outer — which is the fight the owner described. So the box keeps no
+     fixed height and takes no overflow of its own: it shows the first rows, a
+     control under them reveals the rest inline (LedgerSpread.svelte), and the
+     page's own scroll is the only scroll.
+
+     IT STILL RESERVES, and the reserve is the COLLAPSED log rather than the
+     whole of it: five rows plus the control and the gap above it, which is
+     exactly what the box holds the moment a payload lands. Without it the empty
+     box would be one note tall and the arriving rows would push every section
+     under them down the page — the zero-CLS floor, broken by the same arrival
+     the desktop reserve exists to absorb. A MINIMUM rather than a height,
+     because the reader's own press is allowed to grow it; nothing else is.
+
+     The five is `phoneLogRows` in lib/commits.ts, which is the number the
+     component slices with, and a frontend test recomputes this calc from it so
+     the box and the slice cannot come to hold different numbers of rows. */
+  .commit-rows {
+    /* ONE COLUMN, so the list and the control under it both take the log's
+       full width without either of them declaring a width: a grid item
+       stretches to its column, and a <button> is one of the few elements whose
+       own `auto` width does NOT fill its parent — measured in Chromium at
+       390px, where the same control laid out as a plain block came to 99px of
+       a 358px column. Declaring `inline-size: 100%` instead would put a
+       percentage on a control the touch-floor sweep measures in pixels
+       (tests/experience.test.mjs), which is a guard going blind rather than a
+       control getting wider. `align-content: start` keeps the rows their own
+       height inside the reserve below rather than stretching to fill it. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    block-size: auto;
+    min-block-size: calc(
+      5 * var(--commit-row-height) + var(--control-target) + var(--ledger-cell-gap)
+    );
+    overflow-y: visible;
   }
 
   /* A COMMIT ROW IS TWO LINES HERE TOO, and the short identity is not one of
@@ -3548,7 +3637,6 @@ h1 {
   .ledger-chevron,
   .table-head,
   .table-row,
-  .commit-caption,
   .commit-row,
   .commit-segment,
   .board-card,

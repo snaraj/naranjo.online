@@ -1573,10 +1573,11 @@ test('Rime is a picture in the chrome row, reserved, silent, and stepped only wh
   assert.ok(mark, 'the mark component is not where this pin expects it');
   const markup = stripComments(mark).trim();
 
-  /* SILENT AND UNREACHABLE. SN. at the start of the row is the page's
-     accessible mark; a decorative dragon that announced itself would be a
-     name every screen reader reads past on every visit, and a focusable one
-     would be a fourth stop on a keyboard order the rendering lanes pin. */
+  /* SILENT AND UNREACHABLE, in BOTH seats. The home link at the start of the
+     row carries the page's accessible name (below); a decorative dragon that
+     announced itself would be a name every screen reader reads past twice on
+     every visit, and a focusable one would be a new stop on a keyboard order
+     the rendering lanes pin. */
   assert.match(markup, /aria-hidden="true"/, 'the mark is announced to a screen reader');
   assert.doesNotMatch(markup, />[^<\s][\s\S]*</, 'the mark carries text');
   assert.doesNotMatch(
@@ -1598,6 +1599,64 @@ test('Rime is a picture in the chrome row, reserved, silent, and stepped only wh
   assert.ok(
     chrome[1].indexOf('<RimeMark') > chrome[1].indexOf('<ThemeMenu'),
     'Rime is drawn before the reading mode, so he now sits between two keyboard stops'
+  );
+
+  /* AND FIRST IN THE ROW, FACING THE OTHER WAY (owner ruling, 2026-09-12,
+     issue 325: "replace this with another dragon facing inwards to match the
+     opposite side"). The home link's content is the same component with
+     `mirrored` set — not a second sprite, not a second rule — which is what
+     makes the pair cost one sheet. */
+  const home = /<a class="page-mark"([^>]*)>([\s\S]*?)<\/a>/.exec(header);
+  assert.ok(home, 'the home link is not where this pin expects it');
+  assert.match(home[2], /<RimeMark mirrored \/>/, 'the home link no longer draws the mirrored dragon');
+  assert.doesNotMatch(home[2], /SN\./, 'the wordmark is back inside the home link');
+  /* The link is still a link to the page's own name, and it is NAMED — by the
+     heading it scrolls to, so "Samuel Naranjo" is written once, in the
+     masthead, and never a second time in this component. Its content is
+     aria-hidden, so without this the row's first stop would announce nothing
+     at all. */
+  assert.match(home[1], /href="#page-title"/, 'the home link stopped pointing at the page name');
+  assert.match(home[1], /aria-labelledby="page-title"/, 'the home link has no accessible name');
+  assert.doesNotMatch(home[1], /aria-label=/, 'the home link spells the page name a second time');
+
+  /* ONE component, TWO seats, and the mirror is a class rather than a second
+     copy of the sprite: `mirrored` is a prop the element turns into a class,
+     and the class's whole rule is the flip. A style attribute could not do it
+     at all — this origin serves no unsafe-inline. */
+  assert.match(
+    markup,
+    /let \{ mirrored = false \}: \{ mirrored\?: boolean \} = \$props\(\);/,
+    'the mark no longer takes the mirror as a prop'
+  );
+  assert.match(
+    markup,
+    /class:rime-mark-mirrored=\{mirrored\}/,
+    'the mirror is not a class on the shared element'
+  );
+  assert.doesNotMatch(markup, /style=/, 'the mark writes an inline style; this origin serves no unsafe-inline');
+
+  const flipped = sweptRules.find((rule) => rule.selector === '.rime-mark-mirrored');
+  assert.ok(flipped, 'the mirrored seat has no rule, so both dragons face the same way');
+  assert.ok(
+    !flipped.enclosing.some((at) => at.startsWith('@media')),
+    'the flip is inside a media block, so a reader who asked for less motion gets a dragon facing the wrong way'
+  );
+  const flip = Object.fromEntries(
+    declarationsOf(flipped.body).map(({ property, value }) => [property, value])
+  );
+  assert.deepEqual(
+    flip,
+    { transform: 'scaleX(-1)', 'transform-origin': 'center' },
+    'the mirrored rule states something other than the flip; the sheet, the box and the flight are shared'
+  );
+  /* SHARED, and this is the pin that proves it rather than asserting it: the
+     sheet is named exactly once in the whole stylesheet, so the second dragon
+     can never become a second URL, and the box and the flight are declared on
+     the base class both seats carry. */
+  assert.equal(
+    (stylesCode.match(/rime-flight\.webp/g) ?? []).length,
+    1,
+    'the flight sheet is named more than once; the second dragon is a second request'
   );
 
   const rest = sweptRules.find(

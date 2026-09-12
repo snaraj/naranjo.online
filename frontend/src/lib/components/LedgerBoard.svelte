@@ -2,14 +2,15 @@
   311 and 316): a three-by-two grid of ruled boxes, each showing one reading
   and the facts behind it.
 
-  NOTHING ON A CARD IS PRESSED ANY MORE. The cards used to be buttons that
-  inverted their own ink, and the owner's answer to that was "these shouldn't
-  change colour when I click on them" (2026-09-11, issue 316). The turn
-  revealed nothing — one face, one token remap — so a control whose whole
-  effect was to repaint what the reader was already reading is a control with
-  no subject, and it goes. The RHYTHM stays: the adapter still opens every
-  second source card inverted, which is the board the owner approved, and it
-  is now static paint rather than a state anybody can change.
+  NOTHING ON A CARD IS PRESSED, AND EVERY CARD WEARS ONE PAINT. The cards used
+  to be buttons that inverted their own ink; the owner's answer to that was
+  "these shouldn't change colour when I click on them" (2026-09-11, issue 316),
+  which retired the press and left the alternating ink as static paint. The ink
+  itself went a day later: "there is no reason for Codex to be black while the
+  rest are not, everything should follow the same pattern" (2026-09-12, issue
+  323). A rhythm that says nothing about the card wearing it is decoration
+  standing where a reading should be, so there is no turn, no remap, and no
+  attribute a card can carry to be painted differently from its neighbours.
 
   What replaced the press is the daily line under the card, which SCRUBS: a
   pointer, a finger or an arrow key along the chart names a day, and while it
@@ -33,7 +34,7 @@
   import PanelShell from './PanelShell.svelte';
   import Sparkline from './Sparkline.svelte';
 
-  let { title, mark, status, generatedAt, cards, emptyNote, staleNote }: LedgerBoardProps = $props();
+  let { status, generatedAt, cards, emptyNote }: LedgerBoardProps = $props();
 
   /* WHICH CARD IS BEING READ, AND WHICH DAY OF IT. One cursor for the whole
      board rather than one per card: only one line can be under a pointer at a
@@ -66,7 +67,7 @@
   }
 </script>
 
-<PanelShell {title} {mark} {status} {generatedAt} note={staleNote}>
+<PanelShell {status} {generatedAt}>
   <FeedCard variant="board">
     {#if cards.length === 0}
       <p class="board-note">{emptyNote}</p>
@@ -78,11 +79,7 @@
             is what keeps the card's own written name — the one the adapter
             composed — attached to the box a reader is inside, now that the
             button that used to carry it is gone. -->
-          <div
-            class="board-card"
-            role="group"
-            aria-label={card.ariaLabel}
-            data-turned={card.turned ? 'true' : 'false'}>
+          <div class="board-card" role="group" aria-label={card.ariaLabel}>
             <span class="board-head">
               <span class="board-name">{#if card.mark}<Icon name={card.mark} slot="cell" />{/if}<span class="board-label">{card.label}</span></span>
               {#if card.ctx}<span class="board-ctx">{card.ctx}</span>{/if}

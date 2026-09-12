@@ -254,21 +254,27 @@ export type ActivityLink = {
 
 /* One openable row of a ledger: four columns of fact and a drawer of points.
  * The row itself is the disclosure control, so nothing inside it may be
- * interactive — the entry's outbound link therefore rides INSIDE the drawer
- * (`link`), where it is a link in its own right rather than a control nested
- * in a control, which is invalid and unreachable by a keyboard alike. */
+ * interactive.
+ *
+ * The entry's outbound link therefore rides INSIDE the drawer (`link`), where
+ * it is a link in its own right rather than a control nested in a control,
+ * which is invalid and unreachable by a keyboard alike. Its TEXT is where it
+ * goes, never who it is (owner ruling, 2026-09-12, issue 326): the row already
+ * prints the organisation's name in the heading, and that link printing it
+ * again was the third mention the owner counted. The information layer decides
+ * what a link says; this contract only says a row may carry one. */
 export type LedgerRow = {
   readonly key: string;
   /* The years, already written the way the source writes them. */
   readonly span: string;
-  /* The short name the row leads with, and the monogram tile that leads the
-   * name (owner design decision, 2026-09-11, issue 313). The monogram is
-   * DATA rather than initials this component derives: an employer's own short
-   * form is an editorial judgement, exactly as `name` already is, and a rule
-   * that guessed "UMBC LIDAR Research Group" would guess wrong. A trademark
-   * is never drawn — a monogram in the site's own ink is the mark. */
+  /* The short name the row leads with, and the URL of the square mark that
+   * leads the name (owner ruling, 2026-09-12, issue 326). A resolved URL
+   * rather than a file name: the binding layer owns the bundler's file map, so
+   * this component draws a picture it is handed and knows no path of its own.
+   * The tile's accessible name is the short name beside it (issue 326), and
+   * the row's own control names the row, so neither is announced twice. */
   readonly name: string;
-  readonly mark: string;
+  readonly markSrc: string;
   /* The one-line description under (or beside) the name. */
   readonly role: string;
   /* Where it happened. */
@@ -308,17 +314,11 @@ export type LedgerTableRow = {
   readonly key: string;
   /* The row's leading cell, as navigation the information layer validated. */
   readonly link: ActivityLink;
-  /* A small word set after the name for a row that is on this table for a
-   * reason the rows around it are not (owner design decision, 2026-09-11,
-   * issue 318). Absent on every row that needs none, which is why it is
-   * optional rather than an empty string: "no chip" and "a chip with no word"
-   * are different states and only one of them is ever meant.
-   *
-   * The description cell left with the same directive. The column was the
-   * widest thing in the row and the section holds HALF a sheet now, so the
-   * four figures and the name are what a repository gets; the description is
-   * one click away on the row's own link. */
-  readonly chip?: string;
+  /* No chip and no description. The description cell left with the owner's
+   * 2026-09-11 directive — the column was the widest thing in the row and the
+   * section holds HALF a sheet now — and the `latest` chip left with the
+   * ruling of 2026-09-12 that retired the row it labelled. A row is its name
+   * and its four figures. */
   /* How long since the row's own last change — the same counter the other
    * three are, so its provenance and its exact instant reach a reader the same
    * way theirs do. It sits in its own column rather than in the cluster. */
@@ -351,9 +351,36 @@ export type LedgerSpreadProps = {
   /* The log column's own head, its anchor, its rows and its empty line. */
   readonly logHead: string;
   readonly logAnchor: string;
+  /* The id of the list itself, which is what the phone's disclosure control
+   * names in `aria-controls` — the anchor above addresses the whole column,
+   * head included, and a control that claimed to operate the head would be
+   * describing something it does not touch. It arrives as data for the same
+   * reason `logAnchor` does: this contract is where the page's addresses
+   * live. */
+  readonly logListId: string;
   readonly logRows: readonly CommitLogRow[];
   readonly logNote: string;
-  readonly staleNote?: string;
+  /* Present only when the log holds more rows than a phone shows at once; see
+   * LogDisclosure. Absent means there is nothing to reveal, and a control that
+   * revealed nothing would be a promise the page cannot keep. */
+  readonly logDisclosure?: LogDisclosure;
+};
+
+/* THE PHONE LOG'S DISCLOSURE (owner ruling, 2026-09-12: on a phone the commit
+ * log is "an endless scroll field that I have to fight out of"). The log stops
+ * being a scroll region at that width and shows a few rows with a control that
+ * reveals the rest inline, so the page's own scroll is the only scroll.
+ *
+ * Every word and every number is the ADAPTER's: the count in "show all N" is a
+ * figure, and a component that composed it would be formatting. Whether this
+ * object exists at all is the threshold — the adapter builds one only when
+ * there are rows the collapsed log does not show. */
+export type LogDisclosure = {
+  /* How many rows the collapsed log shows. */
+  readonly collapsed: number;
+  /* The words the control wears, in both of its states. */
+  readonly more: string;
+  readonly fewer: string;
 };
 
 /* One selectable calendar in the trackers' calendar block: a heatmap and the
@@ -363,8 +390,6 @@ export type CalendarSet = {
   readonly key: string;
   readonly label: string;
   readonly columns: GridCell[][];
-  /* The set's own reading, under the grid. */
-  readonly caption: string;
   /* What one cell counts, singular. */
   readonly noun: string;
   /* The grid's accessible name. */
@@ -399,7 +424,6 @@ export type ContributionCalendarProps = {
   readonly status: PanelStatus;
   readonly generatedAt?: string;
   readonly sets: readonly CalendarSet[];
-  readonly staleNote?: string;
 };
 
 /* One model's row on a models card: its written name, how long its rule runs
@@ -488,11 +512,13 @@ export type SparklineProps = LedgerSpark & {
  * fixed template with blanks in it — and a card whose source said nothing
  * renders its own note rather than a zero.
  *
- * There is ONE face and NOTHING TO PRESS (owner directive, 2026-09-11, issue
- * 316: "these shouldn't change colour when I click on them"). A card whose
- * `turned` is set is drawn inverted through a single token remap and stays
- * that way; the inversion is the board's own rhythm, decided by the adapter,
- * and no reader can change it. */
+ * There is ONE FACE, NOTHING TO PRESS, and ONE PAINT. The press went at issue
+ * 316 ("these shouldn't change colour when I click on them"); the alternating
+ * ink it used to toggle went at issue 323, on the owner's reading of the live
+ * board — "there is no reason for Codex to be black while the rest are not,
+ * everything should follow the same pattern". So no card carries a state, a
+ * flag or an attribute that would let it be painted differently from the five
+ * beside it. */
 export type LedgerCard = {
   readonly key: string;
   readonly label: string;
@@ -525,10 +551,6 @@ export type LedgerCard = {
   readonly spark?: LedgerSpark;
   /* What the card says when it has nothing else to say. */
   readonly note?: string;
-  /* Whether the card is drawn inverted. The board's rhythm, decided by the
-     adapter over the sources it read, never by the component and never by a
-     reader. */
-  readonly turned?: boolean;
   readonly ariaLabel: string;
 };
 
@@ -563,16 +585,15 @@ export function scrubReading(
   return { figure, line: `${exact} · ${label}` };
 }
 
+/* NO TITLE AND NO MARK (owner directive, 2026-09-12, issue 323). The board's
+ * head row named it "TOKEN USAGE" under a section head that already says so,
+ * which is the same doubled label the Projects table lost at issue 292 — so
+ * the board is handed status and provenance and nothing else to draw. */
 export type LedgerBoardProps = {
-  readonly title: string;
-  /* The mark that leads the panel's title (the same decision, for the
-     board's own name: "Token usage — panel title mark"). */
-  readonly mark?: IconName;
   readonly status: PanelStatus;
   readonly generatedAt?: string;
   readonly cards: readonly LedgerCard[];
   readonly emptyNote: string;
-  readonly staleNote?: string;
 };
 
 /* One item of the scrolling strip: a small icon (or its initials fallback),
@@ -598,7 +619,6 @@ export type TickerProps = {
   readonly generatedAt?: string;
   readonly items: readonly TickerItem[];
   readonly emptyNote: string;
-  readonly staleNote?: string;
   /* The strip's accessible name. */
   readonly label: string;
   /* The lead item's picture, if the collection has one: a same-origin URL the

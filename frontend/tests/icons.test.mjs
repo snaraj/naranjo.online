@@ -103,8 +103,11 @@ const dataDrivenNames = {
   /* The projects table's head marks and its counters' glyphs (issue 317). */
   '../src/lib/components/LedgerSpread.svelte': ['pull', 'tag', 'star', 'clock'],
   '../src/lib/projects.ts': ['star', 'pull', 'tag', 'clock'],
-  /* The board's title mark and the Sessions card's, decided by the adapter. */
-  '../src/lib/token-usage.ts': ['chip', 'sessions'],
+  /* The records card's mark, decided by the adapter. The board's own title
+     mark left with the title (owner directive, 2026-09-12, issue 323); `chip`
+     itself did not leave the page — the Trackers section head draws it, one
+     line above, which is where the page names the thing this board counts. */
+  '../src/lib/token-usage.ts': ['sessions'],
   /* The strip's lead mark, in the binding layer where the domain lives. */
   '../src/lib/blocks/bossTicker.ts': ['sword'],
   /* The gallery segment's mark, derived from what the set holds. */
@@ -389,21 +392,35 @@ const speech = (inner) => {
   return out.trim();
 };
 
-test('no control is a mark with nothing to say', () => {
+test('no control is a drawing with nothing to say', () => {
+  /* WHAT COUNTS AS A DRAWING WIDENED (owner ruling, 2026-09-12, issue 325).
+     This walk used to look only at controls holding an `<Icon>`, which was the
+     only wordless content any control had — and then the home link stopped
+     being the "SN." wordmark and became a mirrored dragon, a <RimeMark>
+     rather than an Icon. A silent link is silent whichever component drew the
+     picture inside it, so the subject is now every control whose whole content
+     says nothing to a reader who cannot see it: marks, sprites, and anything
+     else a later component invents.
+
+     Either naming attribute satisfies it. aria-labelledby is the stronger of
+     the two where the name already exists on the page — the home link is
+     named by the very heading it scrolls to, so the page's name is written
+     once — and the rendering lanes ask the ENGINE for the computed name, which
+     is the half a source pin cannot make: an aria-labelledby pointing at
+     nothing looks identical to one pointing at the masthead from here. */
   let inspected = 0;
   for (const [file, source] of Object.entries(componentSources)) {
     for (const control of controls(source)) {
-      if (!control.inner.includes('<Icon')) continue;
       if (speech(control.inner).length > 0) continue;
       inspected += 1;
       assert.match(
         control.attributes,
-        /aria-label=/,
-        `${file} draws a <${control.tag}> whose whole content is marks and which carries no accessible name`
+        /aria-label(?:ledby)?=/,
+        `${file} draws a <${control.tag}> whose whole content is a drawing and which carries no accessible name`
       );
     }
   }
-  assert.ok(inspected > 0, 'no mark-only control was inspected, so the rule above was never applied');
+  assert.ok(inspected > 0, 'no wordless control was inspected, so the rule above was never applied');
 });
 
 test('a link that is already words grows no trailing mark', () => {
@@ -466,18 +483,30 @@ test('the words the marks replaced are still on the page or in its accessibility
      still reach it, and this is the walk that proves it for every surface the
      map names. */
   const header = componentSources['lib/components/PageHeader.svelte'];
-  assert.match(header, /<Icon name="location" slot="chrome" \/>Irvine</, 'the place lost its city');
-  assert.doesNotMatch(markup(header), /Irvine, CA/, 'the state abbreviation is back');
+  /* The pin and the place beside it. The WORD moved once more (owner ruling,
+     2026-09-12, issue 327): the line reads California, the state, rather than
+     Irvine, the city — a portfolio line owes a reader the region, not the
+     street. The city is pinned gone by name, so a revert of the ruling is a
+     red build rather than a quiet reappearance, and the role rows keep their
+     own "Irvine, CA" because that is a different fact in a different place
+     (lib/work.ts). */
+  assert.match(header, /<Icon name="location" slot="chrome" \/>California</, 'the place lost its state');
+  assert.doesNotMatch(markup(header), /Irvine/, 'the chrome row names the city again');
 
   const footer = componentSources['App.svelte'];
   assert.match(footer, /<Icon name="license" slot="row" \/>MIT ·/, 'the licence lost its word');
   assert.match(footer, /<Icon name="source" slot="row" \/>snaraj/, 'the author lost their name');
   assert.doesNotMatch(markup(footer), /github\.com\/snaraj/, 'the footer prints the host again');
 
-  /* The nav link's word became its accessible name — which is the SAME word
-     the heading it points at is called, so the two channels agree. */
+  /* THE NAV LINK'S WORD CAME BACK TO THE PAGE (owner ruling, 2026-09-12, issue
+     325), so it is no longer a row of this map at all: a word nobody replaced
+     needs nowhere to have survived to. What replaces the old row is the
+     stronger claim in the same direction — the word is PRINTED, in the channel
+     every reader shares, and it is the same word the heading it points at is
+     called. */
   const nav = componentSources['lib/components/SectionNav.svelte'];
-  assert.match(nav, /aria-label=\{section\.label\}/);
+  assert.match(nav, />\{section\.label\}</, 'the nav link stopped printing the section word');
+  assert.doesNotMatch(nav, /<Icon\b/, 'the nav link draws a mark instead of its word again');
   const head = componentSources['lib/components/PageSection.svelte'];
   assert.match(head, /<h2 class="section-title" id=\{`\$\{section\.id\}-title`\}>\{section\.label\}<\/h2>/);
   /* The mark on the head is decoration, exactly as the number beside it
@@ -490,11 +519,15 @@ test('the words the marks replaced are still on the page or in its accessibility
   const gallery = componentSources['lib/components/MediaGallery.svelte'];
   assert.match(gallery, /aria-label=\{`\$\{name\} · \$\{countOf\(name\)\}`\}/);
 
-  /* The employer monogram is a mark for the eye only: the row's own accessible
-     name already carries the employer in full, so a tile that also announced
-     "PA" would say the name twice. */
+  /* The organisation's mark is named for the organisation (issue 326: the
+     tiles land "named"), with the same short name the heading prints, and the
+     row's control names the row with its aria-label — which replaces the
+     control's content in the accessible-name computation, so the picture's
+     name is never a second announcement. A literal alt string here would be a
+     name typed beside the data that already carries it. */
   const log = componentSources['lib/components/LedgerLog.svelte'];
-  assert.match(log, /<span class="ledger-monogram" aria-hidden="true">\{row\.mark\}<\/span>/);
+  assert.match(log, /<img\s+class="ledger-mark"\s+src=\{row\.markSrc\}\s+alt=\{row\.name\}/);
+  assert.doesNotMatch(log, /class="ledger-mark"[^>]*alt="[^"]*"/, 'the mark tile carries a literal alt instead of the row\u2019s name');
   assert.match(log, /aria-label=\{`\$\{open \? collapseLabel : expandLabel\} \$\{row\.name\}`\}/);
 
   /* The strip's lead: a second decorative mark beside the picture, with the

@@ -756,17 +756,32 @@ test('the page name clears the fixed chrome row rather than starting under it', 
   }
 });
 
-/* RIME FLIES AT THE END OF THE ROW (owner decision, 2026-09-11, issue 314).
+/* RIME BOOKENDS THE CHROME ROW (owner decision, 2026-09-11, issue 314; owner
+ * ruling, 2026-09-12, issue 325: "replace this with another dragon facing
+ * inwards to match the opposite side").
  *
  * The source pins in tests/experience.test.mjs hold the declarations; this
  * holds what an engine did with them, which for a sprite is the only place the
  * claim can be tested at all: "the picture advances" is not a property of any
  * declaration, it is 480 background positions a compositor steps through.
  *
- * Both halves of the motion doctrine are measured, in two contexts, because
- * "no animation" must never mean "no dragon": with the preference reduced he
- * is still there, still 44px, still showing frame 0 — he simply holds it. */
-test('Rime holds a reserved 44px box at both viewports, flies where motion is welcome, and holds still where it is not (owner 2026-09-11, issue 314)', async ({
+ * THERE ARE TWO OF HIM NOW AND STILL ONE SHEET, which is the claim the second
+ * dragon has to earn: the mirror is a transform on a shared rule, so the two
+ * boxes name one background-image and the browser fetches it once. A second
+ * URL — a mirrored copy of the file, a rule of its own per seat — would look
+ * identical on the page and cost every first paint another 880kB, so the
+ * requests are COUNTED rather than reasoned about.
+ *
+ * Both halves of the motion doctrine are measured, in two contexts and at both
+ * seats, because "no animation" must never mean "no dragon": with the
+ * preference reduced they are still there, still 44px, still showing frame 0 —
+ * they simply hold it, still facing each other. */
+const rimeSeats = [
+  ['.page-mark .rime-mark', 'the home link', 'matrix(-1, 0, 0, 1, 0, 0)'],
+  ['.page-chrome .rime-mark', "the row's end", 'none'],
+];
+
+test('Rime bookends the row from one sheet, mirrored at the start, flying where motion is welcome and still where it is not (owner 2026-09-11 issue 314, 2026-09-12 issue 325)', async ({
   browser,
 }) => {
   for (const motion of ['no-preference', 'reduce']) {
@@ -774,21 +789,33 @@ test('Rime holds a reserved 44px box at both viewports, flies where motion is we
       reducedMotion: motion === 'reduce' ? 'reduce' : 'no-preference',
     });
     const page = await context.newPage();
+    /* Counted from before the navigation, so the sheet's own first load is in
+       the tally rather than only whatever a later viewport change provokes. */
+    const sheetRequests = [];
+    page.on('request', (request) => {
+      if (/rime-flight[^/]*\.webp$/.test(new URL(request.url()).pathname)) {
+        sheetRequests.push(request.url());
+      }
+    });
     await visit(page);
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await settled(page);
-      const mark = page.locator('.rime-mark');
-      await expect(mark, `Rime is not in the row at ${width}px`).toHaveCount(1);
-      const box = await mark.boundingBox();
-      expect(box.width, `Rime is ${box.width}px wide at ${width}px with motion ${motion}`).toBeCloseTo(
-        touchFloorPx,
-        0
-      );
-      expect(box.height, `Rime is ${box.height}px tall at ${width}px with motion ${motion}`).toBeCloseTo(
-        touchFloorPx,
-        0
-      );
+      await expect(
+        page.locator('.rime-mark'),
+        `the row does not hold both dragons at ${width}px`
+      ).toHaveCount(2);
+      for (const [selector, seat] of rimeSeats) {
+        const box = await page.locator(selector).boundingBox();
+        expect(
+          box.width,
+          `Rime at ${seat} is ${box.width}px wide at ${width}px with motion ${motion}`
+        ).toBeCloseTo(touchFloorPx, 0);
+        expect(
+          box.height,
+          `Rime at ${seat} is ${box.height}px tall at ${width}px with motion ${motion}`
+        ).toBeCloseTo(touchFloorPx, 0);
+      }
       /* THE BOX IS RESERVED, so the row he sits in is exactly as tall as the
          row's own stated reserve: the site's hit lane plus the one rule it
          draws. A mark sized by its picture instead would make this taller the
@@ -808,12 +835,40 @@ test('Rime holds a reserved 44px box at both viewports, flies where motion is we
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await settled(page);
-    const mark = page.locator('.rime-mark');
-    const declared = await mark.evaluate((node) => ({
-      name: getComputedStyle(node).animationName,
-      timing: getComputedStyle(node).animationTimingFunction,
-      position: getComputedStyle(node).backgroundPosition,
-    }));
+    /* ONE SHEET. One distinct URL is "the two seats share a picture"; at most
+       one request for it is "the browser fetched that picture once" — and a
+       set of one already requires at least one request, so the pair is exact
+       without pinning a count an engine's preload heuristics could
+       legitimately change. */
+    expect(
+      new Set(sheetRequests).size,
+      `the page asked for ${new Set(sheetRequests).size} different flight sheets: ${[...new Set(sheetRequests)].join(', ')}`
+    ).toBe(1);
+    expect(
+      sheetRequests.length,
+      `the one flight sheet was requested ${sheetRequests.length} times; the two seats are not sharing it`
+    ).toBeLessThanOrEqual(1);
+
+    const seatImages = [];
+    for (const [selector, seat, expectedTransform] of rimeSeats) {
+      const mark = page.locator(selector);
+      const declared = await mark.evaluate((node) => ({
+        name: getComputedStyle(node).animationName,
+        timing: getComputedStyle(node).animationTimingFunction,
+        position: getComputedStyle(node).backgroundPosition,
+        transform: getComputedStyle(node).transform,
+        image: getComputedStyle(node).backgroundImage,
+      }));
+      seatImages.push(declared.image);
+      /* FACING EACH OTHER, as the engine computed it: the start of the row is
+         the inline flip and the end of the row is untransformed. Both
+         directions are asserted, which is what makes it a mirror rather than a
+         pair — a rule that flipped everything, or nothing, satisfies one of
+         these and fails the other. */
+      expect(
+        declared.transform,
+        `Rime at ${seat} computed transform "${declared.transform}" rather than ${expectedTransform}`
+      ).toBe(expectedTransform);
     /* THE SPRITE REALLY MOVES, sampled rather than reasoned: every animation
        frame for longer than one full pass across the sheet's 20 columns,
        counting the DISTINCT background positions an engine actually computed.
@@ -831,84 +886,116 @@ test('Rime holds a reserved 44px box at both viewports, flies where motion is we
        the mutant draws 3. The floor is 8, low enough that a loaded machine
        sampling at half rate still clears it and high enough that no mutant
        this lane is for can reach it. */
-    const frames = await mark.evaluate(
-      (node) =>
-        new Promise((done) => {
-          const seen = new Set();
-          const opened = performance.now();
-          const sample = () => {
-            seen.add(getComputedStyle(node).backgroundPosition);
-            if (performance.now() - opened < 600) requestAnimationFrame(sample);
-            else done([...seen]);
-          };
-          requestAnimationFrame(sample);
-        })
-    );
-
-    if (motion === 'reduce') {
-      expect(
-        declared.name,
-        `Rime animates (${declared.name}) with the reader's motion reduced`
-      ).toBe('none');
-      expect(
-        frames,
-        `Rime advanced through ${frames.length} positions with the reader's motion reduced`
-      ).toHaveLength(1);
-      /* He is on frame 0 — the pose, not a blank box. */
-      expect(declared.position, `Rime rests at ${declared.position} rather than on his first frame`).toMatch(
-        /^0(?:px|%)? 0(?:px|%)?$/
+      const frames = await mark.evaluate(
+        (node) =>
+          new Promise((done) => {
+            const seen = new Set();
+            const opened = performance.now();
+            const sample = () => {
+              seen.add(getComputedStyle(node).backgroundPosition);
+              if (performance.now() - opened < 600) requestAnimationFrame(sample);
+              else done([...seen]);
+            };
+            requestAnimationFrame(sample);
+          })
       );
-    } else {
-      for (const keyframes of ['rime-flight-strip', 'rime-flight']) {
+
+      if (motion === 'reduce') {
         expect(
           declared.name,
-          `Rime's computed animation-name is "${declared.name}" and does not include ${keyframes}`
-        ).toContain(keyframes);
+          `Rime at ${seat} animates (${declared.name}) with the reader's motion reduced`
+        ).toBe('none');
+        expect(
+          frames,
+          `Rime at ${seat} advanced through ${frames.length} positions with the reader's motion reduced`
+        ).toHaveLength(1);
+        /* He is on frame 0 — the pose, not a blank box. */
+        expect(
+          declared.position,
+          `Rime at ${seat} rests at ${declared.position} rather than on his first frame`
+        ).toMatch(/^0(?:px|%)? 0(?:px|%)?$/);
+      } else {
+        for (const keyframes of ['rime-flight-strip', 'rime-flight']) {
+          expect(
+            declared.name,
+            `Rime at ${seat} computed animation-name "${declared.name}", which does not include ${keyframes}`
+          ).toContain(keyframes);
+        }
+        /* steps(), not a tween: a sprite has no in-between state, and an
+           interpolating timing function paints two half-frames at once. */
+        expect(
+          declared.timing,
+          `Rime at ${seat} has tweened frames (${declared.timing}), not stepped ones`
+        ).toContain('steps(');
+        /* The floor is per project, measured: a desktop engine draws 30-plus
+           distinct frames in 600 ms and the one-step mutant three; the two
+           emulated phones on a hosted runner without a GPU drew five (WebKit,
+           iOS profile), which is still a moving sheet and still not the mutant,
+           so their floor sits between the two rather than above what the
+           runner can paint. */
+        const floor = test.info().project.use.isMobile ? 4 : 8;
+        expect(
+          frames.length,
+          `Rime at ${seat} drew only ${frames.length} distinct frames in 600ms (floor ${floor}): ${frames.slice(0, 4).join(' / ')}`
+        ).toBeGreaterThanOrEqual(floor);
       }
-      /* steps(), not a tween: a sprite has no in-between state, and an
-         interpolating timing function paints two half-frames at once. */
-      expect(declared.timing, `Rime's frames are tweened (${declared.timing}), not stepped`).toContain(
-        'steps('
-      );
-      /* The floor is per project, measured: a desktop engine draws 30-plus
-         distinct frames in 600 ms and the one-step mutant three; the two
-         emulated phones on a hosted runner without a GPU drew five (WebKit,
-         iOS profile), which is still a moving sheet and still not the mutant,
-         so their floor sits between the two rather than above what the
-         runner can paint. */
-      const floor = test.info().project.use.isMobile ? 4 : 8;
-      expect(
-        frames.length,
-        `Rime drew only ${frames.length} distinct frames in 600ms (floor ${floor}): ${frames.slice(0, 4).join(' / ')}`
-      ).toBeGreaterThanOrEqual(floor);
     }
 
-    /* THE KEYBOARD ORDER IS UNCHANGED. He is a picture, so he must not be in
-       it at all — asked of the row's own focusable inventory rather than by
-       pressing Tab, because engines in this matrix disagree about whether a
-       plain link is tabbable and that disagreement would decide the result
-       instead of the change under test. */
+    /* ...AND IT IS THE SAME PICTURE IN BOTH, asked of the two elements rather
+       than of the network. The request tally above is name-based and a sheet
+       under some other name would slip past it — MEASURED: a mutant pointing
+       the mirrored seat at a second file was deduplicated by the bundler onto
+       an existing asset's name and survived the tally. Comparing what the two
+       seats actually resolved closes that: any second image, under any name,
+       makes these two strings differ. */
+    expect(
+      new Set(seatImages).size,
+      `the two seats resolved different pictures: ${seatImages.join(' vs ')}`
+    ).toBe(1);
+    expect(seatImages[0], 'neither seat draws the flight sheet').toMatch(/rime-flight[^/]*\.webp/);
+
+    /* THE KEYBOARD ORDER IS UNCHANGED, and the second dragon is the reason to
+       ask again: he sits INSIDE the row's first stop now, and a picture that
+       became focusable there would put a nameless stop in front of every
+       keyboard reader on arrival. Asked of the row's own focusable inventory
+       rather than by pressing Tab, because engines in this matrix disagree
+       about whether a plain link is tabbable and that disagreement would
+       decide the result instead of the change under test. */
     const order = await page.evaluate(() => {
       const header = window.document.querySelector('.page-header');
       const focusable = [
         ...header.querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])'),
       ];
+      const inOrder = [...header.querySelectorAll('*')];
       return {
         classes: focusable.map((node) => node.className || node.tagName.toLowerCase()),
         includesMark: focusable.some((node) => node.classList.contains('rime-mark')),
+        firstStop: focusable[0]?.className ?? '',
         markAfterMode:
-          [...header.querySelectorAll('*')].indexOf(header.querySelector('.rime-mark')) >
-          [...header.querySelectorAll('*')].indexOf(
-            header.querySelector('[aria-label="Reading mode"], button')
-          ),
+          inOrder.indexOf(header.querySelector('.page-chrome .rime-mark')) >
+          inOrder.indexOf(header.querySelector('[aria-label="Reading mode"], button')),
       };
     });
-    expect(order.includesMark, 'Rime is a keyboard stop; the row’s pinned order has gained one').toBe(
-      false
-    );
+    expect(
+      order.includesMark,
+      'a dragon is a keyboard stop; the row’s pinned order has gained one'
+    ).toBe(false);
+    expect(
+      order.firstStop,
+      `the row’s first stop is "${order.firstStop}" rather than the home link`
+    ).toContain('page-mark');
     expect(order.markAfterMode, 'Rime is drawn before the reading mode, so he sits between two stops').toBe(
       true
     );
+    /* AND THE FIRST STOP SAYS SOMETHING. The link's whole content is
+       aria-hidden, so its name has to be computed from the heading it scrolls
+       to — and only a real accessibility tree can report whether that
+       resolved. An aria-labelledby pointing at nothing renders a silent first
+       stop and looks perfect in the source. */
+    await expect(
+      page.getByRole('link', { name: 'Samuel Naranjo', exact: true }),
+      'the home link answers to no name; the row opens on a silent stop'
+    ).toHaveCount(1);
     await context.close();
   }
 });
@@ -1681,8 +1768,7 @@ test('every model row the card draws is a real member with a real rule', async (
  *
  * ONE PASS, because there is no longer a second state to walk into (owner
  * directive, 2026-09-11, issue 316). The lane used to press every card and
- * measure again; the press is gone, the inversion the adapter composed is
- * already on the board when it arrives, and clicking six cards to observe the
+ * measure again; the press is gone, and clicking six cards to observe the
  * identical geometry twice would be a lane measuring its own no-op.
  */
 test('every board card shows all of its own content (owner 2026-09-11)', async ({
@@ -1702,7 +1788,8 @@ test('every board card shows all of its own content (owner 2026-09-11)', async (
         };
         return {
           label: card.querySelector('.board-label')?.textContent.trim() ?? '',
-          turned: card.getAttribute('data-turned'),
+          paint: getComputedStyle(card).backgroundColor,
+          ink: getComputedStyle(card).color,
           scrollHeight: card.scrollHeight,
           clientHeight: card.clientHeight,
           rows: rows.length,
@@ -1738,10 +1825,8 @@ test('every board card shows all of its own content (owner 2026-09-11)', async (
         `"${card.label}" draws ${card.facts} facts ${at} and shows ${card.factsShown}`
       ).toBe(card.facts);
     }
-    /* Non-vacuity, three ways: a board whose cards all held a single short
-       figure would satisfy everything above without exercising the shapes that
-       clipped, and a board with no inverted card would leave the token remap
-       unmeasured by the one lane that reads every card. */
+    /* Non-vacuity: a board whose cards all held a single short figure would
+       satisfy everything above without exercising the shapes that clipped. */
     expect(
       Math.max(...observed.map((card) => card.rows)),
       `no card draws model rows at ${width}px; the shape that clipped is not on the page`
@@ -1750,10 +1835,17 @@ test('every board card shows all of its own content (owner 2026-09-11)', async (
       Math.max(...observed.map((card) => card.facts)),
       `no card draws a fact ladder at ${width}px`
     ).toBeGreaterThan(1);
+    /* AND EVERY CARD WEARS ONE PAINT (owner directive, 2026-09-12, issue 323:
+       "there is no reason for Codex to be black while the rest are not,
+       everything should follow the same pattern"). Measured as COMPUTED
+       colour on every card the board drew, at both widths, so a remap
+       restored in the sheet, the component or the adapter fails here whichever
+       of the three brought it back. */
+    const paints = new Set(observed.map((card) => `${card.paint} on ${card.ink}`));
     expect(
-      observed.filter((card) => card.turned === 'true').length,
-      `no card on the board is inverted at ${width}px; the adapter's rhythm is not on the page`
-    ).toBe(1);
+      [...paints],
+      `the board draws ${paints.size} different paints at ${width}px; every card must wear one`
+    ).toHaveLength(1);
   }
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -2000,8 +2092,7 @@ test('the daily line scrubs to a day and the card reads it, moving nothing (owne
     await settled(page);
     /* The follower source's own card: tokenCards composes the total, then one
        card per source in wire order, so the second source's card is the third
-       on the board. It is also the one the adapter draws inverted, which is
-       why the scrub is exercised on ink rather than on paper. */
+       on the board. */
     const card = page.locator('.board-card').nth(2);
     const figure = card.locator('.board-figure');
     const spark = card.locator('.spark');
@@ -2011,7 +2102,6 @@ test('the daily line scrubs to a day and the card reads it, moving nothing (owne
        box read before scrolling names a point no pointer can reach. Scrolled
        once, so every frame below is compared against the same origin. */
     await spark.scrollIntoViewIfNeeded();
-    await expect(card).toHaveAttribute('data-turned', 'true');
     const days = Number(await spark.getAttribute('aria-valuemax')) + 1;
     expect(days, `the staged line is ${days} days rather than the seven this lane reads`).toBe(7);
     const rest = (await figure.textContent()).trim();
@@ -2356,12 +2446,14 @@ test('the page spends its one mark on its own green, legible as text, in every r
  * board is clicked exactly as it used to be, and every paint the press used to
  * change is read before and after and must be IDENTICAL.
  *
- * The inversion itself is still measured, because removing the press must not
- * quietly remove the rhythm with it: the card the adapter composed inverted
- * really wears the swapped ink, in both motion preferences, with nothing
- * animating it into place.
+ * AND EVERY CARD WEARS THE SAME PAINT (owner directive, 2026-09-12, issue
+ * 323). The rhythm the press used to toggle is gone too — "there is no reason
+ * for Codex to be black while the rest are not, everything should follow the
+ * same pattern" — so the second half of this lane is the same measurement with
+ * the opposite expectation again: every card on the board is read, in both
+ * motion preferences, and they must all paint identically.
  */
-test('a card never repaints when it is clicked, and the composed inversion is still painted (owner 2026-09-11, issue 316)', async ({
+test('a card never repaints when it is clicked, and every card wears one paint (owner 2026-09-11 issue 316, 2026-09-12 issue 323)', async ({
   browser,
 }) => {
   for (const motion of ['no-preference', 'reduce']) {
@@ -2373,7 +2465,6 @@ test('a card never repaints when it is clicked, and the composed inversion is st
     await visit(page);
     const readCard = (card) =>
       card.evaluate((node) => ({
-        turned: node.getAttribute('data-turned'),
         pressed: node.getAttribute('aria-pressed'),
         tag: node.tagName.toLowerCase(),
         background: getComputedStyle(node).backgroundColor,
@@ -2392,28 +2483,30 @@ test('a card never repaints when it is clicked, and the composed inversion is st
        would read here as the press having changed something. */
     await card.click();
     await page.mouse.move(0, 0);
-    await expect(card).toHaveAttribute('data-turned', before.turned);
     const after = await readCard(card);
     expect(after.background, `clicking a card repainted its paper with motion ${motion}`).toBe(
       before.background
     );
     expect(after.ink, `clicking a card repainted its ink with motion ${motion}`).toBe(before.ink);
 
-    /* AND THE COMPOSED INVERSION IS REAL. Non-vacuity for everything above: a
-       board that had lost the [data-turned] remap entirely would satisfy every
-       "nothing changed" assertion perfectly. */
-    const inverted = page.locator('.board-card[data-turned="true"]').first();
-    await expect(inverted, 'no card on the board is inverted').toBeVisible();
-    const paint = await readCard(inverted);
-    expect(paint.background, 'an inverted card wears the same paper as a plain one').not.toBe(
-      before.background
-    );
-    expect(paint.background, "an inverted card's paper is not the plain card's ink").toBe(
-      before.ink
-    );
-    expect(paint.ink, "an inverted card's ink is not the plain card's paper").toBe(
-      before.background
-    );
+    /* AND NO CARD IS PAINTED DIFFERENTLY FROM ITS NEIGHBOURS. Every card the
+       board drew is read — not a sample — so a remap that came back on any one
+       of the six fails here, and the attribute that used to carry it is gone
+       from the DOM entirely. */
+    await expect(page.locator('.board-card[data-turned]')).toHaveCount(0);
+    const cards = page.locator('.board-card');
+    const drawn = await cards.count();
+    expect(drawn, 'the board drew no cards to compare').toBeGreaterThan(1);
+    for (let index = 0; index < drawn; index += 1) {
+      const paint = await readCard(cards.nth(index));
+      expect(
+        paint.background,
+        `card ${index} wears a different paper with motion ${motion}`
+      ).toBe(before.background);
+      expect(paint.ink, `card ${index} wears a different ink with motion ${motion}`).toBe(
+        before.ink
+      );
+    }
     await page.unrouteAll({ behavior: 'ignoreErrors' });
     await context.close();
   }
@@ -3597,10 +3690,21 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
   });
   await visit(page);
 
-  const totals = await page.locator('.commit-caption').innerText();
-  expect(totals, 'the panel fell back to its empty state on an old-shape payload').not.toContain(
-    'no activity data'
-  );
+  /* The calendar drew REAL DAYS rather than its empty face. Read off the grid
+     itself now: the sentence under it that used to carry this claim left with
+     every other chart caption (owner directive, 2026-09-12, issue 323), and
+     the cells are the stronger subject anyway — the empty face is one note in
+     place of the whole strip, so a measured cell is proof the payload was
+     admitted. */
+  await page.locator('.commit-segment').filter({ hasText: 'Contributions' }).click();
+  await expect(
+    page.locator('.grid-empty'),
+    'the panel fell back to its empty state on an old-shape payload'
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-grid-cell][data-grid-absent="false"]').first(),
+    'the calendar drew no measured day from an old-shape payload'
+  ).toBeVisible();
 
   const rows = page.locator('.commit-row');
   const rowCount = await rows.count();
@@ -3988,10 +4092,19 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
        SPEC 5 collapses the row. The token is what makes "five rows" the same
        number before and after arrival, so the lane compares against it
        rather than against a hardcoded one-line row. */
-    const rowToken = parseFloat(getComputedStyle(list).getPropertyValue('--commit-row-height'));
+    const remPx = parseFloat(getComputedStyle(window.document.documentElement).fontSize);
+    const token = (name) => {
+      const value = parseFloat(getComputedStyle(list).getPropertyValue(name));
+      return Number.isFinite(value) ? value * remPx : NaN;
+    };
     return {
       listHeight: list.getBoundingClientRect().height,
-      rowToken: Number.isFinite(rowToken) ? rowToken * parseFloat(getComputedStyle(window.document.documentElement).fontSize) : NaN,
+      rowToken: token('--commit-row-height'),
+      controlToken: token('--control-target'),
+      gapToken: token('--ledger-cell-gap'),
+      /* The phone log carries its disclosure INSIDE the box (owner ruling,
+         2026-09-12, issue 324), so the box reserves the control too. */
+      disclosed: list.querySelector('.commit-disclosure') !== null,
       fontPx: parseFloat(getComputedStyle(list).fontSize),
       rows: rows.map((row) => ({
         top: row.getBoundingClientRect().top,
@@ -4054,10 +4167,28 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
   }
   const reserved = await page.locator('#projects .table-row').count();
   expect(reserved, 'the repositories table drew no rows to pair the reserve against').toBeGreaterThan(0);
-  expect(
-    observed.listHeight,
-    `the ${reserved}-row reservation changed size; it must stay paired with the table beside it`
-  ).toBeCloseTo(reserved * observed.rowToken, 0);
+  if (observed.disclosed) {
+    /* On a phone the table is stacked above the log rather than beside it,
+       and the box reserves what it holds when collapsed (owner ruling,
+       2026-09-12, issue 324): five rows, the control at the touch floor and
+       the gap between them, so a payload's arrival moves nothing. The lane
+       "at 390 the log shows five rows and a control" pins the collapsed
+       reading; this one pins that the reserve is exactly that sum and not a
+       minimum the rows overran. */
+    expect(observed.controlToken, 'the log declares no control target to reserve').toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
+    expect(observed.gapToken, 'the log declares no cell gap to reserve').toBeGreaterThan(0);
+    expect(
+      observed.listHeight,
+      'the collapsed phone log is not exactly five rows, the control and its gap'
+    ).toBeCloseTo(5 * observed.rowToken + observed.controlToken + observed.gapToken, 0);
+  } else {
+    expect(
+      observed.listHeight,
+      `the ${reserved}-row reservation changed size; it must stay paired with the table beside it`
+    ).toBeCloseTo(reserved * observed.rowToken, 0);
+  }
 });
 
 test('the shortest admitted repo slug still clears the touch floor on both axes (issue 157)', async ({
@@ -4294,17 +4425,38 @@ test('the experience section renders four complete roles, and no placeholder sur
   page,
 }) => {
   await visit(page);
+  /* THE ROLE MARKS ARE PICTURES NOW (owner ruling, 2026-09-12, issue 326), so
+     "is the tile there" stopped being "is there a box": an <img> pointed at
+     bytes the build never emitted paints an empty frame of exactly the right
+     size, and every geometry assertion in this file would be satisfied by it.
+     Waiting for the decode is what makes the rest of the measurement mean
+     something, and it is the one question a source pin cannot answer. */
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            [...window.document.querySelectorAll('#work .ledger-mark')].filter(
+              (tile) => tile.complete && tile.naturalWidth > 0
+            ).length
+        ),
+      {
+        message:
+          'the role marks never decoded; a row is pointing at bytes this build did not emit',
+      }
+    )
+    .toBe(4);
   const observed = await page.evaluate(() => {
     const section = window.document.querySelector('#work');
     return {
       heading: section.querySelector('.section-title')?.textContent.trim(),
-      /* THE NAV LINK'S WORD MOVED CHANNEL (owner design decision, 2026-09-11,
-         issue 313): the link prints a mark and the section's number, and the
-         section's own label is its accessible name. So the label is read off
-         aria-label and the PRINTED text is asserted separately to be the
-         number — a link that quietly lost its accessible name and a link that
-         quietly printed the heading again are two different failures, and
-         reading only one of the two channels could not tell them apart. */
+      /* THE NAV LINK'S WORD CAME BACK TO THE PAGE (owner ruling, 2026-09-12,
+         issue 325: "put back words in here instead of the icons"). Both
+         channels are still read, because the two failures they separate are
+         still different ones: a link that stopped PRINTING the word, and a
+         link that kept an aria-label beside it — which would announce the
+         word twice to a screen reader and is exactly the shape the ruling
+         undid. The label must now be absent, and the text must be the word. */
       firstNavLabel: window.document.querySelector('.section-link')?.getAttribute('aria-label'),
       firstNavText: window.document.querySelector('.section-link')?.textContent.trim(),
       /* The id is the address a reader may already have shared; renaming a
@@ -4330,33 +4482,48 @@ test('the experience section renders four complete roles, and no placeholder sur
            section: it opens as a summary and expands on request. */
         open: entry.querySelector('.ledger-drawer')?.getAttribute('data-open') ?? '',
         expandLabel: entry.querySelector('.ledger-row')?.getAttribute('aria-label') ?? '',
-        /* The employer link's own text, which is the full legal name rather
-           than the row's short one — read from the DOM rather than through a
-           role query, because the drawer is closed and a closed drawer's
-           contents are correctly absent from the accessibility tree. */
+        /* THE ORGANISATION'S OWN MARK, replacing the monogram (owner ruling,
+           2026-09-12, issue 326). Read from the DOM rather than through a role
+           query, as everything else in this snapshot is: the drawer is closed
+           and a closed drawer's contents are correctly absent from the
+           accessibility tree. */
+        markTag: entry.querySelector('.ledger-mark')?.tagName ?? '',
+        markAlt: entry.querySelector('.ledger-mark')?.getAttribute('alt') ?? null,
+        /* The employer link's own text, which is the HOST it goes to since the
+           same ruling — where, not who — and the name it declares, which still
+           says whose site it is. */
         linkText: entry.querySelector('.ledger-link')?.textContent.trim() ?? '',
+        linkLabel: entry.querySelector('.ledger-link')?.getAttribute('aria-label') ?? '',
+        anchors: entry.querySelectorAll('a').length,
+        /* And the count the ruling is actually about: how many times the row's
+           own visible text says the organisation's name. The split is
+           case-sensitive on purpose — a host is lower case and is nobody's
+           second mention of the name as written. */
+        rowText: entry.textContent,
       })),
     };
   });
   expect(observed.heading).toBe('Professional Experience');
-  expect(observed.firstNavLabel, 'the nav link lost the section word as its accessible name').toBe(
+  expect(observed.firstNavText, 'the nav link stopped printing the section word').toBe(
     'Professional Experience'
   );
-  expect(observed.firstNavText, 'the nav link prints the heading again instead of the sheet number').toBe(
-    '01'
-  );
-  /* The ledger's slash is GENERATED content, which is why it is absent from
-     the text above and measured here instead: it is punctuation the section
-     head already draws the same way, and drawing it from one rule is what
-     keeps the two from drifting. */
-  const separator = await page
-    .locator('.section-link-number')
-    .first()
-    .evaluate((node) => getComputedStyle(node, '::after').content);
-  expect(separator, 'the nav number lost the ledger separator the section head draws').toContain('/');
+  expect(
+    observed.firstNavLabel,
+    `the nav link carries an aria-label ("${observed.firstNavLabel}") beside the word it now prints`
+  ).toBe(null);
+  /* The sheet number left the nav with the words' return, and it left the
+     RENDERED page rather than only the source: the span that carried it and
+     the generated slash that followed it are both gone from the row. The
+     section head still draws both, which is asserted where the heads are
+     measured. */
+  await expect(
+    page.locator('.section-nav .section-link-number'),
+    'the nav prints the sheet number beside the word again'
+  ).toHaveCount(0);
   /* And the engine agrees, which is the assertion that matters: an accessible
      name is computed, not declared, so only a real accessibility tree can say
-     the aria-label actually became the link's name. */
+     the printed word actually became the link's name — text-transform,
+     aria-hidden content and a stray label would each change the answer. */
   await expect(
     page.getByRole('link', { name: 'Professional Experience', exact: true }),
     'no link answers to the section word any more'
@@ -4372,6 +4539,28 @@ test('the experience section renders four complete roles, and no placeholder sur
     expect(entry.role, `"${entry.title}" renders no role`).not.toBe('');
     expect(entry.place, `"${entry.title}" renders no place`).not.toBe('');
     expect(entry.points, `"${entry.title}" renders no accomplishments`).toBeGreaterThan(0);
+    /* The organisation's own mark, named for the organisation it shows (issue
+       326: the tiles land "named") with the same short name the heading
+       prints. It is not a second announcement: the tile sits inside the row's
+       control, whose aria-label replaces its content in the accessible-name
+       computation — the accessibility lane above reads one name per row. */
+    expect(entry.markTag, `"${entry.title}" draws no mark tile`).toBe('IMG');
+    expect(entry.markAlt, `"${entry.title}" gives its mark a name other than its own`).toBe(entry.title);
+    /* And the employer is named ONCE (owner ruling, 2026-09-12, issue 326).
+       The row keeps its one outbound link — the ruling was about the NAME —
+       and that link prints the host it goes to, so the only visible mention of
+       the organisation is the heading. */
+    expect(entry.anchors, `"${entry.title}" renders ${entry.anchors} anchors; the drawer holds exactly one`).toBe(1);
+    expect(
+      entry.rowText.split(entry.title).length - 1,
+      `"${entry.title}" is printed ${entry.rowText.split(entry.title).length - 1} times in its own row`
+    ).toBe(1);
+    expect(entry.linkText, `"${entry.title}" carries no employer link to name`).not.toBe('');
+    expect(
+      entry.linkText,
+      `"${entry.title}" links through "${entry.linkText}", which is not a bare host`
+    ).toMatch(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/);
+    expect(entry.linkText, 'the drawer prints a host with the www label still on it').not.toMatch(/^www\./);
     /* Closed on arrival, and the control says what pressing it will do. */
     expect(entry.open, `"${entry.title}" opens its drawer before anyone asked`).toBe('false');
     expect(
@@ -4393,31 +4582,53 @@ test('the experience section renders four complete roles, and no placeholder sur
      The ledger has no per-role heading to borrow a name from: the section
      carries one heading and each role is a disclosure BUTTON over a drawer. So
      the same principle is measured on the two surfaces that do exist. The
-     button must answer to what pressing it does, naming its own employer, and
-     the employer link inside the drawer must still tell the reader a new tab
-     is coming. Measured through `getByRole` rather than read off the source,
-     because an accessible name is something the ENGINE computes and only an
-     engine can settle. */
+     button must answer to what pressing it does, naming its own employer —
+     EXACTLY, which is also what proves the tile beside it contributes nothing
+     to that name: a mark that grew an alt would append its words here and the
+     count would fall to zero. And the drawer's link must still tell a reader
+     whose site it is and that a new tab is coming, which its accessible name
+     carries while its visible text prints only the host (owner ruling,
+     2026-09-12, issue 326). Measured through `getByRole` rather than read off
+     the source, because an accessible name is something the ENGINE computes
+     and only an engine can settle. */
   for (const entry of observed.entries) {
     const control = page.getByRole('button', { name: `Expand ${entry.title}`, exact: true });
     await expect(
       control,
       `the "${entry.title}" row control does not answer to its own employer name`
     ).toHaveCount(1);
-    /* THE DRAWER IS OPENED TO REACH THE LINK, and that is the assertion as
-       much as the setup: a closed drawer's contents are correctly out of the
-       accessibility tree, so the link can only be named once the disclosure
-       has actually disclosed something. A control whose press changed nothing
-       fails on the count below rather than on the press. */
+    /* THE DRAWER IS OPENED, and what it discloses is the assertion: the
+       points, and nothing that names the employer again. A closed drawer's
+       contents are correctly out of the accessibility tree, so an open one is
+       the only place this can be settled — and a control whose press changed
+       nothing fails on the count below rather than on the press. */
     await control.click();
     await expect(
       page.getByRole('button', { name: `Collapse ${entry.title}`, exact: true }),
       `pressing the "${entry.title}" row did not open it`
     ).toHaveCount(1);
-    expect(entry.linkText, `"${entry.title}" carries no employer link to name`).not.toBe('');
+    const opened = page.locator('#work .ledger-entry').filter({ hasText: entry.title });
     await expect(
-      page.getByRole('link', { name: `${entry.linkText}, opens in a new tab`, exact: true }),
-      `the "${entry.title}" employer link no longer tells the reader a new tab is coming`
+      opened.locator('.ledger-points > li'),
+      `the "${entry.title}" drawer opened onto nothing`
+    ).toHaveCount(entry.points);
+    /* The link is disclosed, it prints where it goes, and its NAME still tells
+       a reader whose site it is and that a new tab is coming — the
+       accessibility tree was never the visible repetition the owner counted.
+       The name's composition is executed against the entries in
+       tests/sections.test.mjs; what only an engine can settle is that the
+       declared name is the one the accessibility tree actually computed. */
+    expect(
+      entry.linkLabel,
+      `the "${entry.title}" link declares "${entry.linkLabel}", which does not name a site or a new tab`
+    ).toMatch(/^.+ website, opens in a new tab$/);
+    expect(
+      entry.linkLabel.replace(/ website, opens in a new tab$/, ''),
+      'the link is named after the host it prints rather than after its employer'
+    ).not.toBe(entry.linkText);
+    await expect(
+      opened.getByRole('link', { name: entry.linkLabel, exact: true }),
+      `the "${entry.title}" employer link no longer answers to the name it declares`
     ).toHaveCount(1);
     /* Left as it was found, so the next role is measured from the same closed
        start this section ships in. */
@@ -6168,16 +6379,18 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
 });
 
 /* THE HEAD ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
- * issue 292). The Projects table renders no panel label, so its head holds
- * only the stale line when there is one — and a row whose height came from
- * its title alone would collapse to the note, then to nothing, and grow back
- * the moment a note arrived, which is the zero-CLS floor breaking in the one
- * row the shell keeps open for exactly that arrival. Measured rather than
- * trusted: the bare head is exactly as tall as every titled head on the page,
- * and stays so with its note taken away. Review finding 1 on PR #293 showed
+ * issue 292), AND NOW WITHOUT ANYTHING IN IT AT ALL (2026-09-12, issue 323).
+ *
+ * Most panels render no label, and their heads used to hold the data-through
+ * line when there was one. The owner removed that line from every head, so
+ * most heads are empty boxes — and a row whose height came from its contents
+ * would now be nothing at all, which is the zero-CLS floor breaking in the one
+ * row the shell keeps open for a later arrival. Measured rather than trusted:
+ * every bare head is exactly as tall as every titled head on the page, and no
+ * head anywhere carries a freshness line. Review finding 1 on PR #293 showed
  * the declaration could be deleted with every suite green; the source pin in
  * tests/sections.test.mjs and this lane are the two halves that close it. */
-test('a panel head with no title keeps the reserved row, with and without its note (issue 292)', async ({
+test('a panel head with no title keeps the reserved row, and no head draws a freshness line (issues 292, 323)', async ({
   page,
 }) => {
   await visit(page);
@@ -6186,28 +6399,37 @@ test('a panel head with no title keeps the reserved row, with and without its no
     const height = (head) => head.getBoundingClientRect().height;
     const titled = heads.filter((head) => head.querySelector('.panel-title') !== null);
     const bare = heads.filter((head) => head.querySelector('.panel-title') === null);
-    const before = bare.map(height);
-    for (const head of bare) head.querySelector('[data-panel-note]')?.remove();
-    const after = bare.map(height);
-    return { titled: titled.map(height), before, after };
+    return {
+      titled: titled.map(height),
+      bare: bare.map(height),
+      notes: window.document.querySelectorAll('[data-panel-note], .panel-note').length,
+      statuses: [...window.document.querySelectorAll('.panel-shell')].map((shell) =>
+        shell.getAttribute('data-panel-status')
+      ),
+    };
   });
   expect(measured.titled.length, 'no titled panel head to measure the reserve against').toBeGreaterThan(0);
-  /* Two bare heads now: the Projects table (issue 292) and the commits
-     calendar, which dropped its host label when it began opening on a token
-     series (issue 294). Each is measured; none is exempt. */
-  expect(measured.before.length, 'exactly two panels render without a label: Projects and the commits calendar').toBe(
-    2
+  /* Three bare heads now: the Projects table (issue 292), the commits calendar
+     (issue 294) and the token board, which lost its own title at issue 323.
+     Each is measured; none is exempt. */
+  expect(measured.bare.length, 'three panels render without a label: Projects, the calendar and the board').toBe(
+    3
   );
   const reserve = measured.titled[0];
   for (const height of measured.titled) {
     expect(height, 'titled heads disagree about the row height').toBeCloseTo(reserve, 1);
   }
-  for (const height of measured.before) {
+  for (const height of measured.bare) {
     expect(height, 'a head with no title is not as tall as one with').toBeCloseTo(reserve, 1);
   }
-  for (const height of measured.after) {
-    expect(height, 'taking the note away collapsed the head; the row is not reserved').toBeCloseTo(reserve, 1);
-  }
+  /* NO HEAD DRAWS A FRESHNESS LINE, and the reading it carried is still on the
+     page as data — which is the whole of what issue 323 removed and the whole
+     of what it kept. */
+  expect(measured.notes, 'a panel head draws a freshness line again').toBe(0);
+  expect(
+    measured.statuses.filter((status) => status !== null).length,
+    'panels stopped publishing their own status'
+  ).toBe(measured.statuses.length);
 });
 
 /* THE PHONE CHROME AND THE MASTHEAD (owner directives, 2026-09-04, issue 294),
@@ -6372,7 +6594,7 @@ test('the name is two lines, the chrome row has one rule, the calendar opens on 
  * own accessible text, and the three counters keep one line of their own. A
  * table that merely shrank would fail the phone half by taking the document
  * sideways; one that collapsed and lost a counter fails the inventory. */
-test('the repo table is one right-anchored ruled row per repository, aligned across rows, and it collapses on a phone (issue 188; owner 2026-09-03, issue 287; 2026-09-11, issue 318)', async ({
+test('the repo table is one right-anchored ruled row per repository, aligned across rows, and it collapses on a phone (issue 188; owner 2026-09-03, issue 287; 2026-09-12)', async ({
   page,
 }) => {
   await visit(page);
@@ -6383,14 +6605,13 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
   const rowCount = await rows.count();
   expect(rowCount, 'the repository table rendered no rows').toBeGreaterThan(1);
 
-  /* THE ROSTER IS SELECTED, NOT TRUNCATED (owner design decision, 2026-09-11,
-     issue 318): the owner's pinned set plus the one most recently pushed
-     repository outside it. The bound is read from the origin's own envelope
-     rather than from a number typed here — the table draws exactly the pinned
-     rows the payload flagged plus one, that roster is larger than what is
-     drawn, and the ONE unpinned row is the newest push outside the set and
-     wears the chip that says so. A build that dropped a pinned row, drew them
-     all, or marked the wrong row fails here. */
+  /* THE ROSTER IS SELECTED, NOT TRUNCATED (owner ruling, 2026-09-12: "remove
+     latest, this makes no sense"): the owner's pinned set, and nothing outside
+     it. The bound is read from the origin's own envelope rather than from a
+     number typed here — the table draws exactly the rows the payload flagged,
+     that roster is larger than what is drawn, and the newest push on the wire
+     is NOT on the table unless it is pinned. A build that dropped a pinned row,
+     drew them all, or let an unpinned one back in fails here. */
   await expect(page.locator('#projects .table-caption'), 'the roster caption came back').toHaveCount(0);
   const roster = await page.evaluate(async () => {
     const response = await fetch('/api/panels/coding-projects');
@@ -6402,32 +6623,34 @@ test('the repo table is one right-anchored ruled row per repository, aligned acr
     return {
       total: repos.length,
       pinned: ordered.filter((repo) => repo.pinned === true).map((repo) => repo.name),
-      latest: ordered.find((repo) => repo.pinned !== true)?.name ?? null,
+      newestUnpinned: ordered.find((repo) => repo.pinned !== true)?.name ?? null,
     };
   });
   expect(roster, 'the origin served no roster to bound the table against').not.toBeNull();
   expect(roster.pinned.length, 'the served roster flags no pinned repositories at all').toBeGreaterThan(0);
-  expect(roster.latest, 'the served roster is entirely pinned; the chip claim has no subject').not.toBeNull();
+  expect(
+    roster.newestUnpinned,
+    'the served roster is entirely pinned, so "nothing outside the set" has no subject'
+  ).not.toBeNull();
   expect(rowCount, `the table drew ${rowCount} rows of a ${roster.total}-repository roster`).toBe(
-    roster.pinned.length + 1
+    roster.pinned.length
   );
   expect(roster.total, 'the roster is meant to be larger than the rows the table shows').toBeGreaterThan(rowCount);
   const drawnNames = await rows.locator('.table-link').allTextContents();
+  expect([...drawnNames].sort(), 'the table is not exactly the pinned set').toEqual(
+    [...roster.pinned].sort()
+  );
   expect(
-    [...drawnNames].sort(),
-    'the table is not the pinned set plus the one latest repository outside it'
-  ).toEqual([...roster.pinned, roster.latest].sort());
-  /* ONE chip, on that one row, and it is a WORD rather than a colour — the
-     dataviz floor: a value is never carried by colour alone. */
-  const chips = page.locator('#projects .table-chip');
-  await expect(chips, 'the latest row wears no chip, or more than one row does').toHaveCount(1);
-  await expect(chips, 'the chip says nothing a reader could read').not.toHaveText('');
-  const chipRow = await chips.evaluate(
-    (node) => node.closest('.table-row')?.querySelector('.table-link')?.textContent?.trim() ?? ''
-  );
-  expect(chipRow, 'the chip is on a row that is not the latest one outside the pinned set').toBe(
-    roster.latest
-  );
+    drawnNames,
+    `the newest unpinned repository (${roster.newestUnpinned}) is still on the table`
+  ).not.toContain(roster.newestUnpinned);
+  /* AND NO ROW WEARS A WORD. The chip existed to explain the seventh row's
+     presence and left with it; a returning one would be a cell drawn over a
+     claim nothing supports. */
+  await expect(
+    page.locator('#projects .table-chip'),
+    'a row wears a chip again'
+  ).toHaveCount(0);
 
   const overlapsVertically = (first, second) =>
     first.y < second.y + second.height && second.y < first.y + first.height;
@@ -6700,20 +6923,25 @@ test('the token panel detail card reads a human period phrase for the one lens t
   expect(dailyRows[0], 'the first row must be the raw count').toMatch(/^\d[\d,]*$/);
   expect(dailyRows[1], 'the daily card must read "on <month> <day>"').toMatch(/^on [A-Z][a-z]{2} \d{1,2}$/);
 
-  /* The SENTENCE under the strip describes the same graph in the same period,
-     read from the live DOM rather than from the source, because that is the
-     only place the two can be seen to agree. It is the active set's own
-     caption now, which is the same sentence in the same place — under the
-     graph it describes — composed per set rather than per card. */
-  const summary = (await page.locator('.commit-caption').first().textContent()).trim();
-  expect(summary, 'the sentence must count days and name a day peak').toMatch(
-    /tokens over [\d,]+ days? · peak /
-  );
-  /* And it is the DAILY sentence in particular: the three phrasings the other
-     lenses produce are what a stray default would put here instead. */
-  for (const retired of [/per week/, /per month/, /accumulated over/]) {
-    expect(summary, `the sentence reads a lens no reader can choose: "${summary}"`).not.toMatch(retired);
-  }
+  /* AND THERE IS NO SENTENCE UNDER THE STRIP AT ALL (owner directive,
+     2026-09-12, issue 323). This lane used to read a caption composed per set
+     — "30.4B tokens over 30 days · peak 3B · data through …" — and check it
+     described the daily graph rather than one of the retired lenses. The
+     caption is gone, so the detail card measured above IS the reading, and
+     what is asserted here is that nothing came back to restate it. */
+  await expect(
+    page.locator('.commit-caption'),
+    'a caption row came back under the calendar'
+  ).toHaveCount(0);
+  const under = await page.evaluate(() => {
+    const block = window.document.querySelector('.grid-block');
+    const card = block.closest('.panel-shell');
+    return [...card.querySelectorAll('p')].map((node) => node.textContent.trim());
+  });
+  expect(
+    under.filter((line) => /tokens over|peak |data through/.test(line)),
+    `the retired reading sentence is on the page again: ${under.join(' | ')}`
+  ).toHaveLength(0);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
@@ -8211,7 +8439,7 @@ test('the token board offers no display control, and every reported source still
           claimed: Number(block.getAttribute('data-grid-columns')),
           columns: block.querySelectorAll('[data-grid-cell]').length / 7,
           strip: strip.getAttribute('aria-label'),
-          caption: window.document.querySelector('.commit-caption').textContent.trim(),
+          captions: window.document.querySelectorAll('.commit-caption').length,
         };
       }, label)
     );
@@ -8226,10 +8454,11 @@ test('the token board offers no display control, and every reported source still
     expect(graph.strip, `"${graph.label}" still announces a lens or a window`).not.toMatch(
       /view|range|only/
     );
-    // The daily sentence, which states what the source actually captured.
-    expect(graph.caption, `"${graph.label}" renders no daily summary sentence`).toMatch(
-      /tokens over [\d,]+ days? · peak /
-    );
+    /* AND NO SENTENCE UNDER IT. Each set used to carry a reading composed from
+       the days it drew; the owner removed every chart caption (2026-09-12,
+       issue 323), so a set that grew one back fails on whichever segment
+       brought it. */
+    expect(graph.captions, `"${graph.label}" draws a caption row again`).toBe(0);
   }
   const [first, ...rest] = drawn;
   for (const graph of rest) {
@@ -11180,14 +11409,19 @@ function straightLine(x, y, dx, dy, steps) {
  * open — is measured directly by the master-on-demand lane earlier in this
  * file. */
 
-/* THE CALENDAR SAYS WHEN ITS DATA STOPPED, AND SHOWS THE DAYS SINCE (issue
- * 285). This lane's origin serves the embedded snapshot exactly as a cold
- * deployment does — status stale, endDate weeks back — which is the state the
- * live site was measured in: a total and a calendar two weeks old with nothing
- * saying so. The stale line is dated by the payload, and the window's right
- * edge is the reader's own week, with every day the payload never reached
- * drawn as a dated absence. Every engine, both viewport classes. */
-test('the contribution calendar carries a data-through line and trails today past a stalled payload (issue 285)', async ({
+/* THE CALENDAR SHOWS THE DAYS SINCE ITS DATA STOPPED (issue 285). This lane's
+ * origin serves the embedded snapshot exactly as a cold deployment does —
+ * status stale, endDate weeks back — which is the state the live site was
+ * measured in: a total and a calendar two weeks old with nothing saying so.
+ *
+ * Issue 285 answered that twice: a dated line in the head, and a window whose
+ * right edge is the reader's own week with every day the payload never reached
+ * drawn as a dated absence. The owner removed the line on 2026-09-12 (issue
+ * 323) after reading it on the live page; the DRAWN half is the half that was
+ * doing the work, and it is what this lane measures now — plus the machine
+ * readable status the line was worded from, which stays. Every engine, both
+ * viewport classes. */
+test('the contribution calendar trails today past a stalled payload, and says so only as data (issues 285, 323)', async ({
   page,
   request,
 }) => {
@@ -11204,24 +11438,28 @@ test('the contribution calendar carries a data-through line and trails today pas
      grid identifies its own card without a scoping attribute and without
      `:has()`, which this matrix may not assume in every engine. */
   const panel = page.locator('.panel-shell').filter({ has: page.locator('.grid-block') });
-  const stale = panel.locator('[data-panel-note]');
-  await expect(stale, 'the stale calendar carries no data-through line').toHaveCount(1);
-  await expect(stale).toHaveText(/^data through [A-Z][a-z]{2} \d{1,2}, \d{4} · last capture .+ ago$/);
-  /* In the head's reserved row, no taller than that row, and never past the
-     card's edge: the note is the one thing allowed to appear on arrival
-     precisely because it costs the card no height and no width. The commits
-     card wears no title any more (issue 294), so the row itself is the
-     measure, and the note keeps to its end column of it. */
+  /* NOT A WORD ABOUT IT IN THE HEAD (owner directive, 2026-09-12, issue 323),
+     and the reading the head used to word still published as data — measured
+     against the SAME stale envelope the assertion above proved this lane is
+     serving, so the claim is about a panel that genuinely has something to
+     report rather than about a fresh one with nothing to say. */
+  await expect(
+    panel.locator('[data-panel-note], .panel-note'),
+    'the calendar draws a data-through line again'
+  ).toHaveCount(0);
+  await expect(panel).toHaveAttribute('data-panel-status', 'stale');
   const head = await page.evaluate(() => {
     const card = window.document.querySelector('.grid-block').closest('.panel-shell');
     const row = card.querySelector('.panel-head').getBoundingClientRect();
-    const note = card.querySelector('[data-panel-note]').getBoundingClientRect();
-    const cardBox = card.getBoundingClientRect();
-    return { rowHeight: row.height, rowLeft: row.left, noteHeight: note.height, noteRight: note.right, cardRight: cardBox.right, noteLeft: note.left };
+    return { rowHeight: row.height, generatedAt: card.getAttribute('data-panel-generated-at') };
   });
-  expect(head.noteHeight, 'the note is taller than the head row it sits in').toBeLessThanOrEqual(head.rowHeight + subPixel);
-  expect(head.noteRight, 'the note runs past the card').toBeLessThanOrEqual(head.cardRight + subPixel);
-  expect(head.noteLeft, 'the note left its end column').toBeGreaterThan(head.rowLeft);
+  /* The row is still RESERVED, empty or not: it is the one place a later
+     addition can land without moving anything below it, and a head that
+     collapsed to nothing would give that back. */
+  expect(head.rowHeight, 'the reserved head row collapsed once nothing was drawn in it').toBeGreaterThan(0);
+  expect(head.generatedAt, 'the panel stopped publishing when it was generated').toMatch(
+    /^\d{4}-\d{2}-\d{2}T/
+  );
 
   /* The window ends on the Saturday of the reader's (UTC) week; the cells
      between the payload's last day and that Saturday are absences, and they
@@ -11273,7 +11511,7 @@ test('the contribution calendar carries a data-through line and trails today pas
  *
  * Both viewports, because the chrome row and the ledger rows lay out
  * differently on a phone — the place label is hidden entirely below 45rem and
- * the ledger row restacks into a monogram column, a text column and the
+ * the ledger row restacks into a mark column, a text column and the
  * chevron — so a measurement taken only at the reading width would be a
  * measurement of one of the two layouts.
  * ======================================================================== */
@@ -11315,6 +11553,25 @@ for (const viewport of markViewports) {
       }).observe({ type: 'layout-shift', buffered: true });
     });
     await visit(page);
+    /* The four role marks are PICTURES since the owner's ruling of 2026-09-12
+       (issue 326), so they are waited for rather than assumed: an <img> whose
+       bytes never arrived paints an empty frame at exactly the size this lane
+       is about to measure, and every box below would be satisfied by it. */
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              [...window.document.querySelectorAll('.ledger-mark')].filter(
+                (tile) => tile.complete && tile.naturalWidth > 0
+              ).length
+          ),
+        {
+          message:
+            'the role marks never decoded; a row is pointing at bytes this build did not emit',
+        }
+      )
+      .toBe(4);
 
     const observed = await page.evaluate(() => {
       const round = (value) => Math.round(value * 100) / 100;
@@ -11358,17 +11615,42 @@ for (const viewport of markViewports) {
                   ? 'the column head the phone restack drops'
                   : 'nothing',
         })),
-        /* The monogram column: one square per role, all the same size, and
-           every employer name starting at the same inline offset. A track
-           that varied per row is the defect a fixed column exists to prevent,
-           and it is invisible until two rows are compared. */
-        monograms: [...window.document.querySelectorAll('.ledger-monogram')].map(box),
+        /* The mark column: one square per role, all the same size, every
+           picture actually decoded, and every employer name starting at the
+           same inline offset. A track that varied per row is the defect a
+           fixed column exists to prevent, and it is invisible until two rows
+           are compared. The organisation's own tile replaced the monogram on
+           the owner's ruling of 2026-09-12 (issue 326), so "square" is now a
+           claim about a PICTURE: a tile the bundler emitted at some other
+           aspect would be drawn into this box and distorted. */
+        markTiles: [...window.document.querySelectorAll('.ledger-mark')].map((tile) => ({
+          ...box(tile),
+          tag: tile.tagName,
+          alt: tile.getAttribute('alt'),
+          name: tile.closest('.ledger-row')?.querySelector('.ledger-name')?.textContent.trim() ?? null,
+          decoded: tile.complete && tile.naturalWidth > 0,
+          square: tile.naturalWidth === tile.naturalHeight,
+          sameOrigin:
+            new URL(tile.currentSrc || tile.src, window.location.href).origin ===
+            window.location.origin,
+        })),
         names: [...window.document.querySelectorAll('.ledger-name')].map((node) => box(node).x),
-        /* The nav's numbers: same top edge on every link, so a mark beside a
-           figure has not lifted one of them off the row's line. */
-        navNumbers: [...window.document.querySelectorAll('.section-link-number')].map(
-          (node) => box(node).y
-        ),
+        /* THE NAV IS ONE LINE AND IT SCROLLS (owner ruling, 2026-09-12, issue
+           325: words again, "and let it be a carousel as well as it was
+           before"). Same top edge on every link is the no-wrap claim — a
+           wrapping nav changes the height of the row that is the sheet's own
+           top rule — and the strip's own scroll width against its box is the
+           carousel: the words run past the edge and the reader pushes them
+           along, INSIDE the strip, which is why the document below must still
+           not scroll sideways. */
+        navStrip: (() => {
+          const strip = window.document.querySelector('.section-nav');
+          return {
+            scrollWidth: strip.scrollWidth,
+            clientWidth: strip.clientWidth,
+            overflowX: getComputedStyle(strip).overflowX,
+          };
+        })(),
         navLinks: [...window.document.querySelectorAll('.section-link')].map((node) => ({
           name: node.getAttribute('aria-label'),
           text: node.textContent.trim(),
@@ -11408,45 +11690,74 @@ for (const viewport of markViewports) {
       expect(mark.ink, `a mark (${mark.classes}) painted no ink`).toMatch(/^rgba?\(/);
     }
 
-    expect(observed.monograms, 'the roles render no monogram tiles').toHaveLength(4);
-    for (const tile of observed.monograms) {
-      expect(tile.height, 'a monogram tile is not square').toBeCloseTo(tile.width, 1);
-      expect(tile.width, 'a monogram tile has a different size from its siblings').toBeCloseTo(
-        observed.monograms[0].width,
+    expect(observed.markTiles, 'the roles render no mark tiles').toHaveLength(4);
+    for (const tile of observed.markTiles) {
+      expect(tile.tag, 'a role mark is not an image').toBe('IMG');
+      /* Named for the organisation it shows (issue 326), and the CSP's own
+         subject: the origin serves `default-src 'self'`, so a mark that ever
+         pointed off-origin would not load at all — this is the measurement
+         that says the vendored bytes are what arrived. */
+      expect(tile.alt, 'a role mark carries no organisation name').toBe(tile.name);
+      expect(tile.decoded, 'a role mark painted an empty frame; its bytes never arrived').toBe(true);
+      expect(tile.sameOrigin, 'a role mark loaded from somewhere other than the origin').toBe(true);
+      expect(tile.square, 'a role mark tile is not a square file; drawing it square distorts it').toBe(
+        true
+      );
+      expect(tile.height, 'a mark tile is not drawn square').toBeCloseTo(tile.width, 1);
+      expect(tile.width, 'a mark tile has a different size from its siblings').toBeCloseTo(
+        observed.markTiles[0].width,
         1
       );
     }
     expect(
       new Set(observed.names).size,
-      `the employer names start at ${new Set(observed.names).size} different offsets; the monogram column varies per row`
+      `the employer names start at ${new Set(observed.names).size} different offsets; the mark column varies per row`
     ).toBe(1);
     expect(
-      new Set(observed.navNumbers).size,
-      'the nav numbers sit at different heights; a mark has lifted one off the row'
+      new Set(observed.navLinks.map((link) => link.y)).size,
+      `the nav links sit at ${new Set(observed.navLinks.map((link) => link.y)).size} different heights; the row wrapped instead of scrolling`
     ).toBe(1);
+    expect(
+      observed.navStrip.overflowX,
+      `the nav strip's overflow-x is "${observed.navStrip.overflowX}"; the words cannot be pushed along`
+    ).toBe('auto');
 
     /* FOUR links since the owner's design decision of 2026-09-11 (issue 318):
        Projects and Commits are one section of two columns, and the calendar
-       went back into Trackers. */
+       went back into Trackers. They print WORDS again (owner ruling,
+       2026-09-12, issue 325), and carry no aria-label beside the word — a
+       label there would announce the section twice. */
     expect(observed.navLinks, 'the nav renders the wrong number of links').toHaveLength(4);
     expect(
-      observed.navLinks.map((link) => link.name),
-      'the nav links lost the section words as their accessible names'
+      observed.navLinks.map((link) => link.text),
+      'the nav prints something other than the section words'
     ).toEqual(['Professional Experience', 'Projects · Commits', 'Trackers', 'Gallery']);
     expect(
-      observed.navLinks.map((link) => link.text),
-      'the nav prints something other than the sheet numbers'
-    ).toEqual(['01', '02', '03', '04']);
+      observed.navLinks.map((link) => link.name),
+      'a nav link carries an aria-label beside the word it prints'
+    ).toEqual([null, null, null, null]);
     for (const link of observed.navLinks) {
-      /* The touch floor survives the words leaving: a link that is now a mark
-         and two digits is a SMALLER box, which is exactly the direction that
-         breaks a 44px minimum. */
-      expect(link.width, `the "${link.name}" link is ${link.width}px wide`).toBeGreaterThanOrEqual(
+      /* The touch floor holds with the words back: they make each link WIDER,
+         so the block axis is the one that can still fail — and a link squeezed
+         to the floor by its neighbours is the defect the strip scrolls to
+         prevent. */
+      expect(link.width, `the "${link.text}" link is ${link.width}px wide`).toBeGreaterThanOrEqual(
         44
       );
-      expect(link.height, `the "${link.name}" link is ${link.height}px tall`).toBeGreaterThanOrEqual(
+      expect(link.height, `the "${link.text}" link is ${link.height}px tall`).toBeGreaterThanOrEqual(
         44
       );
+    }
+    /* THE CAROUSEL, at the width it exists for: four section words are wider
+       than a phone, so the strip is scrollable there — and the document below
+       it still is not, which is the pair the whole arrangement is for. At 1440
+       there is room for all four, so overflow is not asserted; the one-line
+       and no-sideways-scroll claims above are. */
+    if (viewport.width <= 430) {
+      expect(
+        observed.navStrip.scrollWidth,
+        `the nav holds ${observed.navStrip.scrollWidth}px of words in a ${observed.navStrip.clientWidth}px strip at ${viewport.width}px; nothing scrolls and the words are cut off instead`
+      ).toBeGreaterThan(observed.navStrip.clientWidth);
     }
 
     expect(
@@ -11456,15 +11767,18 @@ for (const viewport of markViewports) {
   });
 }
 
-test('the keyboard still walks the chrome row: the wordmark, the four nav links, then the reading mode', async ({
+test('the keyboard still walks the chrome row: the home link, the four nav links, then the reading mode', async ({
   page,
 }) => {
   await visit(page);
-  /* The nav links became marks and numbers; a control with no text is exactly
-     the kind of control that quietly leaves the tab order — a span someone
-     styled to look pressable, an anchor that lost its href. So the walk is
-     measured from the wordmark forward, naming what it lands on at each step,
-     rather than asserting a count of focusable things. */
+  /* THE ROW'S FIRST STOP IS A PICTURE NOW (owner ruling, 2026-09-12, issue
+     325): the home link draws the mirrored dragon rather than the "SN."
+     wordmark, and a control with no text of its own is exactly the kind that
+     quietly leaves the tab order — an anchor that lost its href, a span
+     someone styled to look pressable. The nav links went the other way in the
+     same ruling and got their words back. Either change could move a stop, so
+     the walk is measured from the home link forward, naming what it lands on
+     at each step, rather than asserting a count of focusable things. */
   await page.locator('.page-mark').evaluate((node) => node.focus());
   const landed = [];
   for (let step = 0; step < 5; step += 1) {
@@ -11520,6 +11834,16 @@ test('the keyboard still walks the chrome row: the wordmark, the four nav links,
   expect(landed[4].name, 'the reading mode no longer follows the nav in the tab order').toBe(
     'Reading mode'
   );
+  /* And the stop the walk STARTED from is itself reachable and named. It is
+     focused directly above rather than tabbed to, so without this the lane
+     would prove the order after the first stop while saying nothing about the
+     first stop — which is the one the ruling changed. */
+  const home = await page.locator('.page-mark').evaluate((node) => ({
+    tabbable: node.tabIndex >= 0,
+    text: node.textContent.trim(),
+  }));
+  expect(home.tabbable, 'the home link left the tab order').toBe(true);
+  expect(home.text, `the home link prints "${home.text}"; its content is a picture now`).toBe('');
 });
 
 /* THE TABLE'S HEAD IS MARKS AND ITS NUMERALS ARE A COLUMN (owner directive,
@@ -11633,9 +11957,9 @@ for (const width of [1440, 390]) {
   });
 }
 
-/* THE LOG RESERVES SEVEN ROWS AND SCROLLS FOR THE REST (owner design decision,
- * 2026-09-11, issue 318: "seven rows ... to match the seven repository rows";
- * ten at issue #315), and the reserve is a HEIGHT the engine gave the box
+/* THE LOG RESERVES SIX ROWS AND SCROLLS FOR THE REST ON A DESKTOP (owner
+ * ruling, 2026-09-12, which retired the seventh "latest" row; seven at issue
+ * 318, ten at issue #315), and the reserve is a HEIGHT the engine gave the box
  * rather than a number in a stylesheet. The claim is the zero-CLS one: the box
  * is exactly as tall as its reserve whether it holds three rows or thirty, so
  * a payload landing after first paint moves nothing under the reader — and it
@@ -11643,75 +11967,292 @@ for (const width of [1440, 390]) {
  * asked for and the reason this lane counts the table's rows rather than
  * typing a number.
  *
- * Measured at both viewports because the row pitch is taller on a phone — the
- * repository stacks over the subject there — and a reserve computed from one
- * width while the rows are drawn at another is a box that clips its own last
- * row. */
-for (const width of [1440, 390]) {
-  test(`the commit log holds its reserve and scrolls inside it at ${width}px (owner 2026-09-11, issue 318)`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width, height: 900 });
-    await visit(page);
-    const measured = await page.evaluate(() => {
+ * A PHONE DOES THE OPPOSITE, and it has a lane of its own below: there the box
+ * takes no overflow at all. */
+test('the commit log holds its reserve and scrolls inside it at 1440px (owner 2026-09-12)', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await visit(page);
+  const measured = await page.evaluate(() => {
+    const box = window.document.querySelector('.commit-rows');
+    if (box === null) {
+      return null;
+    }
+    /* The paired column's own row count: the reserve is expressed in terms
+       of the table beside it, so the lane asks the page how many rows that
+       table drew rather than restating the number the stylesheet has. */
+    const paired = window.document.querySelectorAll('#projects .table-row').length;
+    const rows = [...box.querySelectorAll('.commit-row')];
+    const pitch = parseFloat(
+      getComputedStyle(window.document.documentElement).getPropertyValue('--commit-row-height')
+    );
+    const rem = parseFloat(getComputedStyle(window.document.documentElement).fontSize);
+    return {
+      clientHeight: Math.round(box.clientHeight),
+      scrollHeight: Math.round(box.scrollHeight),
+      overflowY: getComputedStyle(box).overflowY,
+      rows: rows.length,
+      rowHeights: [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))],
+      paired,
+      reserve: Math.round(pitch * rem * paired),
+      /* The box's own right edge against the card's: a scrollbar may take
+         width from the row, and must never push the box past its column. */
+      boxRight: Math.round(box.getBoundingClientRect().right),
+      cardRight: Math.round(box.parentElement.getBoundingClientRect().right),
+      /* No control here: the disclosure belongs to the width that has no
+         scroll, and a `display: none` one would still be in the tree. */
+      controls: window.document.querySelectorAll('#projects .commit-disclosure').length,
+    };
+  });
+  expect(measured, 'the sheet drew no log box').not.toBeNull();
+  /* The two columns hold the same number of rows, which is the owner's own
+     wording for the pairing and the reason the reserve is expressible at
+     all. Six is what the pinned set comes to. */
+  expect(measured.paired, 'the repositories table drew no rows to pair against').toBe(6);
+  // THE RESERVE: six rows at the pitch this viewport draws them at.
+  expect(
+    measured.clientHeight,
+    `the log box is ${measured.clientHeight}px, want the ${measured.reserve}px ${measured.paired}-row reserve`
+  ).toBe(measured.reserve);
+  expect(measured.overflowY, 'the log box does not scroll for the rows past its reserve').toBe(
+    'auto'
+  );
+  // Every row is drawn at the pitch the reserve is computed from, or the
+  // box and its contents are two different measurements.
+  expect(
+    measured.rowHeights,
+    `rows are drawn at ${measured.rowHeights}px, not the ${measured.reserve / measured.paired}px pitch`
+  ).toEqual([measured.reserve / measured.paired]);
+  // And the box never widens past the card it sits in, whatever the engine
+  // charged for its scrollbar.
+  expect(measured.boxRight).toBeLessThanOrEqual(measured.cardRight);
+  // The shipped snapshot carries more rows than the reserve holds, which is
+  // what makes the scroll real rather than theoretical.
+  expect(
+    measured.rows,
+    `the log drew ${measured.rows} rows; the reserve holds ${measured.paired}, so fewer would not exercise the scroll`
+  ).toBeGreaterThan(measured.paired);
+  expect(measured.scrollHeight).toBeGreaterThan(measured.clientHeight);
+  expect(measured.controls, 'the phone’s disclosure control rendered at a desktop width').toBe(0);
+});
+
+/* THE PHONE LOG IS NOT A SCROLL TRAP (owner ruling, 2026-09-12, on the live
+ * page: at 390px the log is "quite busy ... an endless scroll field that I have
+ * to fight out of").
+ *
+ * Every claim here is about boxes the engine produced, because every one of
+ * them is a thing a thumb meets: the box has no scroll of its own to capture a
+ * gesture meant for the page, the collapsed list is five rows and a control
+ * that says what pressing it does, the press reveals the whole log inline, and
+ * nothing ABOVE the log moves when it does. The document never goes sideways in
+ * either state. */
+test('at 390 the log shows five rows and a control, and the only scroll is the page’s (owner 2026-09-12)', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await visit(page);
+
+  const shape = () =>
+    page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
       const box = window.document.querySelector('.commit-rows');
-      if (box === null) {
-        return null;
-      }
-      /* The paired column's own row count: the reserve is expressed in terms
-         of the table beside it, so the lane asks the page how many rows that
-         table drew rather than restating the number the stylesheet has. */
-      const paired = window.document.querySelectorAll('#projects .table-row').length;
-      const rows = [...box.querySelectorAll('.commit-row')];
-      const pitch = parseFloat(
-        getComputedStyle(window.document.documentElement).getPropertyValue('--commit-row-height')
-      );
-      const rem = parseFloat(getComputedStyle(window.document.documentElement).fontSize);
+      const list = window.document.querySelector('.commit-list');
+      const control = window.document.querySelector('.commit-disclosure');
+      const section = window.document.getElementById('projects');
+      const head = window.document.querySelector('#projects .spread-log-head');
+      const table = window.document.querySelector('#projects .spread-column');
+      const box2 = (node) => {
+        if (node === null) return null;
+        const rect = node.getBoundingClientRect();
+        return { top: round(rect.top + window.scrollY), height: round(rect.height), right: round(rect.right) };
+      };
       return {
         clientHeight: Math.round(box.clientHeight),
         scrollHeight: Math.round(box.scrollHeight),
         overflowY: getComputedStyle(box).overflowY,
-        rows: rows.length,
-        rowHeights: [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))],
-        paired,
-        reserve: Math.round(pitch * rem * paired),
-        /* The box's own right edge against the card's: a scrollbar may take
-           width from the row, and must never push the box past its column. */
-        boxRight: Math.round(box.getBoundingClientRect().right),
-        cardRight: Math.round(box.parentElement.getBoundingClientRect().right),
+        rows: list.querySelectorAll('.commit-row').length,
+        listId: list.id,
+        control:
+          control === null
+            ? null
+            : {
+                tag: control.tagName,
+                type: control.getAttribute('type'),
+                expanded: control.getAttribute('aria-expanded'),
+                controls: control.getAttribute('aria-controls'),
+                text: control.textContent.trim(),
+                height: round(control.getBoundingClientRect().height),
+                width: round(control.getBoundingClientRect().width),
+                marks: control.querySelectorAll('svg').length,
+              },
+        listWidth: round(list.getBoundingClientRect().width),
+        sectionBox: box2(section),
+        headBox: box2(head),
+        tableBox: box2(table),
+        boxTop: box2(box).top,
+        documentWidth: window.document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
       };
     });
-    expect(measured, 'the sheet drew no log box').not.toBeNull();
-    /* The two columns hold the same number of rows, which is the owner's own
-       wording for the pairing and the reason the reserve is expressible at
-       all. Seven is what the pinned set plus the latest comes to. */
-    expect(measured.paired, 'the repositories table drew no rows to pair against').toBe(7);
-    // THE RESERVE: seven rows at the pitch this viewport draws them at.
-    expect(
-      measured.clientHeight + (measured.overflowY === 'auto' ? 0 : 0),
-      `the log box is ${measured.clientHeight}px, want the ${measured.reserve}px ${measured.paired}-row reserve`
-    ).toBe(measured.reserve);
-    expect(measured.overflowY, 'the log box does not scroll for the rows past its reserve').toBe(
-      'auto'
-    );
-    // Every row is drawn at the pitch the reserve is computed from, or the
-    // box and its contents are two different measurements.
-    expect(
-      measured.rowHeights,
-      `rows are drawn at ${measured.rowHeights}px, not the ${measured.reserve / measured.paired}px pitch`
-    ).toEqual([measured.reserve / measured.paired]);
-    // And the box never widens past the card it sits in, whatever the engine
-    // charged for its scrollbar.
-    expect(measured.boxRight).toBeLessThanOrEqual(measured.cardRight);
-    // The shipped snapshot carries more rows than the reserve holds, which is
-    // what makes the scroll real rather than theoretical.
-    expect(
-      measured.rows,
-      `the log drew ${measured.rows} rows; the reserve holds ${measured.paired}, so fewer would not exercise the scroll`
-    ).toBeGreaterThan(measured.paired);
-    expect(measured.scrollHeight).toBeGreaterThan(measured.clientHeight);
+
+  /* The wire's own row count, so "the rest" is a number the origin served
+     rather than one typed here. */
+  const served = await page.evaluate(async () => {
+    const response = await fetch('/api/panels/vcs-activity');
+    const envelope = await response.json();
+    return Array.isArray(envelope?.data?.recentCommits) ? envelope.data.recentCommits.length : null;
   });
-}
+  expect(served, 'the origin served no commits to collapse').not.toBeNull();
+  expect(served, 'the served log already fits in five rows; the disclosure has no subject').toBeGreaterThan(5);
+
+  const collapsed = await shape();
+  /* NO SCROLL OF ITS OWN: the box is exactly as tall as what is in it, and its
+     overflow is the initial one. Either half alone would still trap a thumb. */
+  expect(
+    collapsed.scrollHeight,
+    `the collapsed log scrolls inside itself (${collapsed.scrollHeight} > ${collapsed.clientHeight})`
+  ).toBe(collapsed.clientHeight);
+  expect(collapsed.overflowY, 'the log still takes an overflow of its own on a phone').toBe('visible');
+  // FIVE ROWS, and a control under them that says how many the press brings.
+  expect(collapsed.rows, 'the collapsed log does not show five rows').toBe(5);
+  expect(collapsed.control, 'the collapsed log drew no control to reveal the rest').not.toBeNull();
+  expect(collapsed.control.tag, 'the control is not a real button').toBe('BUTTON');
+  expect(collapsed.control.type, 'a button inside no form still declares its type').toBe('button');
+  expect(collapsed.control.expanded, 'the control does not report its state').toBe('false');
+  expect(collapsed.control.controls, 'the control does not name the list it grows').toBe(
+    collapsed.listId
+  );
+  expect(collapsed.listId, 'the list has no id for the control to name').not.toBe('');
+  expect(collapsed.control.text, 'the control says nothing a reader could read').toBe(
+    `show all ${served}`
+  );
+  expect(collapsed.control.marks, 'the control draws a mark instead of saying what it does').toBe(0);
+  // The touch floor, measured rather than declared.
+  expect(collapsed.control.height, 'the control is under the 44px touch floor').toBeGreaterThanOrEqual(44);
+  /* AND IT TAKES THE LOG'S WHOLE WIDTH. A <button> is one of the few elements
+     whose own `auto` width does not fill its parent, so this is a real claim
+     rather than a default: the same control laid out as a plain block measured
+     99px of a 358px column, which is a target a thumb has to find under a list
+     that spans the screen. */
+  expect(
+    collapsed.control.width,
+    `the control is ${collapsed.control.width}px under a ${collapsed.listWidth}px list`
+  ).toBeCloseTo(collapsed.listWidth, 0);
+  expect(
+    collapsed.documentWidth,
+    `the collapsed log took the document sideways (${collapsed.documentWidth} > ${collapsed.viewportWidth})`
+  ).toBeLessThanOrEqual(collapsed.viewportWidth + subPixel);
+
+  /* THE ENGINE'S OWN SHIFT LEDGER, armed just before the press, and scoped to
+     the complement of what a disclosure is ALLOWED to move. Opening a list
+     grows it: the log's own box changes, the section around it changes with it,
+     and everything after it on the page moves down — that is the reader's own
+     press doing exactly what they pressed for, and the owner's ruling asks for
+     it in preference to a box they have to fight out of.
+
+     What must not move is anything ABOVE or BESIDE the log: the section's top
+     edge, the repositories column, the log's own head. So an entry is counted
+     when it names a node that is neither inside the log, nor an ancestor of it,
+     nor anywhere after it in the document — which is exactly that set, and is
+     a set the engine can genuinely report. `hadRecentInput` is deliberately NOT
+     filtered here: filtering it would excuse every shift a click causes, which
+     is the whole of what this press does, and the channel would report nothing
+     whatever the page did. A node the entry cannot name is counted too — an
+     unattributable shift is the one most worth hearing about. */
+  const watching = await page.evaluate(() => {
+    const types = PerformanceObserver.supportedEntryTypes ?? [];
+    if (!types.includes('layout-shift')) return false;
+    const box = window.document.querySelector('.commit-rows');
+    window.__logShift = [];
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const above = [...(entry.sources ?? [])].filter((source) => {
+          const node = source.node;
+          if (!(node instanceof Element)) return true;
+          if (box.contains(node) || node.contains(box)) return false;
+          return (
+            (box.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) === 0
+          );
+        });
+        if (above.length === 0) continue;
+        window.__logShift.push({
+          value: entry.value,
+          moved: above.map((source) => `${source.node?.tagName ?? 'unnamed'}.${source.node?.className ?? ''}`),
+        });
+      }
+    }).observe({ type: 'layout-shift', buffered: false });
+    return true;
+  });
+
+  await page.locator('.commit-disclosure').click();
+  await settled(page);
+  const expanded = await shape();
+
+  // EVERY ROW, inline, and the control now offers the way back.
+  expect(expanded.rows, `pressing the control revealed ${expanded.rows} rows, not the ${served} served`).toBe(
+    served
+  );
+  expect(expanded.control.expanded, 'the control does not report its new state').toBe('true');
+  expect(expanded.control.text, 'the control offers no way back').toBe('show fewer');
+  /* STILL NO SCROLL OF ITS OWN: the log grew into the page rather than into a
+     box, which is the whole of the owner's ruling. */
+  expect(
+    expanded.scrollHeight,
+    `the expanded log scrolls inside itself (${expanded.scrollHeight} > ${expanded.clientHeight})`
+  ).toBe(expanded.clientHeight);
+  expect(expanded.clientHeight, 'the expanded log is no taller than the collapsed one').toBeGreaterThan(
+    collapsed.clientHeight
+  );
+  expect(
+    expanded.documentWidth,
+    `the expanded log took the document sideways (${expanded.documentWidth} > ${expanded.viewportWidth})`
+  ).toBeLessThanOrEqual(expanded.viewportWidth + subPixel);
+
+  /* NOTHING ABOVE THE LOG MOVED. The section's own top, the table column
+     beside it and the log's head are all where they were; the section is
+     TALLER by exactly the log's growth, which is the reader's own press
+     expanding the thing they pressed on. */
+  expect(expanded.sectionBox.top, 'the section moved when the log opened').toBeCloseTo(
+    collapsed.sectionBox.top,
+    1
+  );
+  expect(expanded.tableBox.height, 'the repositories column changed size when the log opened').toBeCloseTo(
+    collapsed.tableBox.height,
+    1
+  );
+  expect(expanded.headBox.top, 'the log’s head moved when the log opened').toBeCloseTo(
+    collapsed.headBox.top,
+    1
+  );
+  expect(expanded.boxTop, 'the log box itself moved instead of growing').toBeCloseTo(collapsed.boxTop, 1);
+  expect(
+    expanded.sectionBox.height - collapsed.sectionBox.height,
+    'the section grew by something other than the log’s own growth'
+  ).toBeCloseTo(expanded.clientHeight - collapsed.clientHeight, 1);
+
+  const shifts = await page.evaluate(() => window.__logShift ?? null);
+  if (watching) {
+    expect(
+      shifts,
+      `the press moved something above or beside the log: ${JSON.stringify(shifts)}`
+    ).toEqual([]);
+  } else {
+    expect(shifts, 'the layout-shift observer was armed but reported nothing at all').toBeNull();
+  }
+
+  // AND BACK: the control closes what it opened, and the page returns to the
+  // shape it started in.
+  await page.locator('.commit-disclosure').click();
+  await settled(page);
+  const closed = await shape();
+  expect(closed.rows, 'the control cannot close what it opened').toBe(5);
+  expect(closed.control.text).toBe(`show all ${served}`);
+  expect(closed.sectionBox.height, 'closing the log left the section a different size').toBeCloseTo(
+    collapsed.sectionBox.height,
+    1
+  );
+});
 
 /* ===========================================================================
  * 02 / PROJECTS · COMMITS — the sheet's paired section
@@ -11802,7 +12343,7 @@ test('at 1440 the two columns fill the sheet with no dead space (owner 2026-09-1
       cardLeft: round(card.getBoundingClientRect().left),
       cardRight: round(card.getBoundingClientRect().right),
       tableEnds: [...spread.querySelectorAll('.table-row')].map(rowEnd),
-      logEnds: [...spread.querySelectorAll('.commit-row')].slice(0, 7).map(rowEnd),
+      logEnds: [...spread.querySelectorAll('.commit-row')].slice(0, 6).map(rowEnd),
       headEnd: rowEnd(spread.querySelector('.table-head')),
       logHeadRight: round(
         spread.querySelector('.spread-log-head').getBoundingClientRect().right

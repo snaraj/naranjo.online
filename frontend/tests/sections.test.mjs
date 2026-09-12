@@ -18,6 +18,7 @@
  * cannot execute it — the constructors it is written in are executed instead.
  */
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
@@ -28,21 +29,19 @@ import { commitColumnHead, commitColumnId, projectsCommitsProps } from '../src/l
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
 import {
   roleLedgerProps,
+  siteHost,
   workCollapseLabel,
   workEntries,
   workExpandLabel,
 } from '../src/lib/work.ts';
 import {
   codingProjectsPanelId,
-  latestRowChip,
   projectColumns,
   projectHost,
   projectLinkLabel,
   projects,
   projectsCapturedOn,
   projectsEmptyNote,
-  projectsStaleAfterMs,
-  projectsStaleNote,
   projectTableHeads,
   projectTableProps,
   projectUrl,
@@ -57,6 +56,42 @@ import {
 } from '../src/lib/gallery.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
+
+/* THE ROLE LEDGER'S PROPS ARE A FUNCTION OF ONE RESOLVER (owner ruling,
+   2026-09-12, issue 326). Each role's mark is a vendored tile, and turning its
+   FILE NAME into the content-hashed URL the build emitted is the bundler's
+   job — done in lib/blocks/workHistory.ts, which is therefore not importable
+   by plain Node. Handing the adapter a resolver is what keeps it a pure
+   function this suite can execute, and the stub below is deliberately NOT the
+   identity function: a props object that carried the file name through
+   unresolved would still deep-equal the entries, and this way it cannot. */
+const markStub = (file) => `resolved:${file}`;
+/* The container build ships only frontend/ into the image (Dockerfile), so a
+   pin that reads a repository-root file is declared skipped there with its
+   reason, exactly as tests/panels-ui.test.mjs declares its attribution pin;
+   the full-checkout gate is where the pin is enforced. */
+const fullCheckout = existsSync(new URL('../../internal/panels/snapshots', import.meta.url));
+const reducedContextNote = fullCheckout
+  ? false
+  : 'reduced build context ships only frontend/; the full-checkout gate enforces this pin';
+
+const roleLedger = roleLedgerProps(markStub);
+
+/* HTML comments removed, to a fixed point. A pin that reads markup has to read
+   the markup: this component explains at length, in prose, the very anchor the
+   employer-named-once pin below forbids. One pass is not enough — removing a
+   comment can splice a new opener out of the text either side of it — which is
+   the incomplete multi-character sanitization CodeQL flags, and looping to a
+   fixed point is what makes "removed" mean removed. */
+const withoutHtmlComments = (source) => {
+  let stripped = source;
+  let previous;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(/<!--[\s\S]*?-->/g, ' ');
+  } while (stripped !== previous);
+  return stripped;
+};
 
 /* The ledger's own components (owner directive of 2026-09-03, issue 287):
    EntryLog drew the work history AND the projects feed as cards, and both
@@ -304,27 +339,36 @@ test('every nav link lands on the section the manifest renders', () => {
   // Structural now, not counted: the nav and the sections read the SAME
   // manifest entry, so a link cannot point at a section nobody rendered.
   assert.match(sectionNav, /import \{ page \} from '\.\.\/\.\.\/page\.ts'/);
-  assert.match(sectionNav, /\{#each page as section, position \(section\.id\)\}/);
+  assert.match(sectionNav, /\{#each page as section \(section\.id\)\}/);
   assert.match(sectionNav, /href=\{sectionHref\(section\)\}/);
   assert.match(sectionNav, /class="section-link"/);
-  /* A LINK IS A MARK AND A NUMBER, AND THE WORD IS ITS ACCESSIBLE NAME (owner
-     design decision, 2026-09-11, issue 313). Both halves of what a link shows
-     come from the manifest — the mark from the entry, the number from the
-     entry's POSITION through the shared ordinal rule — so a section moved in
-     src/page.ts renumbers its link and its head together and neither is a
-     literal in a component. The label is what a screen reader hears, and it is
-     the same word the heading the link points at is called. */
-  assert.match(sectionNav, /<Icon name=\{section\.mark\} slot="row" \/>/);
-  assert.match(sectionNav, /\{sectionOrdinal\(position\)\}/);
-  assert.match(sectionNav, /aria-label=\{section\.label\}/, 'a mark-only link with no accessible name');
+  /* A LINK IS ITS SECTION'S WORD (owner ruling, 2026-09-12, issue 325: "put
+     back words in here instead of the icons"). The word is the link's own
+     text, read from the manifest entry the section renders from, so a section
+     renamed renames its link and no component spells either.
+
+     The three things issue 313 put here are pinned ABSENT, each by name,
+     because each is a separate way the ruling could be half-undone: a mark
+     drawn beside the word, the ordinal printed with it, and the word demoted
+     back to an aria-label that only a screen-reader user ever receives. A
+     positive pin on the word alone would pass with any of the three back. */
+  assert.match(sectionNav, />\{section\.label\}</, 'the nav link no longer prints the section word');
+  assert.doesNotMatch(sectionNav, /<Icon\b/, 'the nav link draws a mark again; the owner asked for words');
   assert.doesNotMatch(
     sectionNav,
-    />\{section\.label\}</,
-    'the link prints the section word again; the word is the accessible name now'
+    /sectionOrdinal|section-link-number/,
+    'the nav link prints the sheet number again; the word replaced it'
   );
-  /* ONE ordinal rule for two surfaces, EXECUTED rather than matched: the nav
-     and the page both call it, so the sheet cannot end up numbered two ways.
-     Two digits, and the position is the caller's. */
+  assert.doesNotMatch(
+    sectionNav,
+    /aria-label=\{section\.label\}/,
+    'the word is back in an aria-label; it is the link\u2019s own text now'
+  );
+  /* THE ORDINAL RULE, EXECUTED rather than matched. It has ONE caller since
+     the owner's ruling of 2026-09-12 — the page, which numbers the section
+     heads — and it stays a shared rule rather than being folded into its one
+     caller because the numbering is a property of the sheet, not of the head
+     that prints it. Two digits, and the position is the caller's. */
   assert.equal(sectionOrdinal(0), '01');
   assert.equal(sectionOrdinal(4), '05');
   assert.equal(sectionOrdinal(9), '10');
@@ -767,18 +811,32 @@ test('the experience section carries four complete real entries, newest first', 
        each is a shorter rendering of the long form beside it — and both are
        required rather than optional so a later entry cannot ship without one
        and quietly render an empty column. */
-    for (const field of ['company', 'short', 'years', 'role', 'dates', 'location', 'site']) {
+    for (const field of ['company', 'short', 'years', 'markFile', 'role', 'dates', 'location', 'site']) {
       assert.ok(entry[field].trim().length > 0, `an experience entry has an empty ${field}`);
     }
     /* The employer's own home on the web (issue 243), and it is checked rather
        than merely present: an absolute https origin, no credentials, no query,
        no path pretending to be one. A relative or http value would render an
-       anchor the reader could press and the site could not honour. */
+       anchor the reader could press and the site could not honour — and since
+       the owner's ruling of 2026-09-12 (issue 326) it would also be the text
+       the drawer PRINTS, so a malformed value is now visible as well as
+       unfollowable. */
     const site = new URL(entry.site);
     assert.equal(site.protocol, 'https:', `${entry.company} links over ${site.protocol}`);
     assert.equal(site.username, '', `${entry.company}'s link carries credentials`);
     assert.equal(site.search, '', `${entry.company}'s link carries a query string`);
     assert.ok(site.hostname.includes('.'), `${entry.company} links to ${site.hostname}`);
+    /* THE MARK IS A FILE NAME, and it is checked as one (owner ruling,
+       2026-09-12, issue 326). A bare name, no directory and no traversal: the
+       binding layer looks the value up in a map keyed by exactly one
+       directory, so a path here resolves to nothing and renders a tile with no
+       picture. The inventory test below is the other half — this one says the
+       name is well formed, that one says the file is really there. */
+    assert.match(
+      entry.markFile,
+      /^[a-z0-9]+\.png$/,
+      `${entry.company} names "${entry.markFile}", which is not a plain tile file name`
+    );
     assert.ok(entry.points.length > 0, `${entry.company} lists no accomplishments`);
     for (const point of entry.points) {
       assert.ok(point.trim().length > 0, `${entry.company} carries an empty accomplishment`);
@@ -793,6 +851,13 @@ test('the experience section carries four complete real entries, newest first', 
   }
   // Every employer appears once, so the keyed each below cannot collide.
   assert.equal(new Set(workEntries.map((entry) => entry.company)).size, workEntries.length);
+  // And every employer wears its OWN mark: four rows sharing one tile is the
+  // copy-paste this catches, and it is invisible until two rows are compared.
+  assert.equal(
+    new Set(workEntries.map((entry) => entry.markFile)).size,
+    workEntries.length,
+    'two roles are drawn with the same mark tile'
+  );
 
   // NEWEST FIRST, read off the entries themselves rather than asserted about
   // them: the first entry is the current role, and every later one names an
@@ -827,7 +892,7 @@ test('the experience section carries four complete real entries, newest first', 
   // It binds the ledger log (owner directive of 2026-09-03, issue 287).
   assert.match(
     workBinding,
-    /staticBlock\('work-history', LedgerLog, roleLedgerProps\)/,
+    /staticBlock\(\s*'work-history',\s*LedgerLog,\s*roleLedgerProps\(markUrl\)\s*\)/,
     'the experience block still declares a section note'
   );
 
@@ -839,43 +904,101 @@ test('the experience section carries four complete real entries, newest first', 
      facts are pinned as the three fields they became — which is the same
      claim with one fewer place to lose something in. */
   assert.deepEqual(
-    roleLedgerProps.rows.map((row) => [row.key, row.span, row.name, row.role, row.place, row.points]),
+    roleLedger.rows.map((row) => [row.key, row.span, row.name, row.markSrc, row.role, row.place, row.points]),
     workEntries.map((entry) => [
       entry.company,
       entry.years,
       entry.short,
+      /* The mark's URL is the resolver's answer for THIS entry's file, which
+         is why the stub is not the identity: a row that resolved its
+         neighbour's tile would still be four URLs of four real files, and
+         only an expectation built per entry can see the swap. */
+      markStub(entry.markFile),
       entry.role,
       entry.location,
       entry.points,
     ])
   );
-  /* THE EMPLOYER LINK SURVIVES AND MOVES (issue 243, carried into the ledger):
-     the row itself is the disclosure control now, and an anchor inside a
-     button is invalid content no keyboard can reach — so the link renders
-     inside the drawer, still the employer's own public home, still opened in a
-     new tab, still saying so in its accessible name. */
-  assert.deepEqual(
-    roleLedgerProps.rows.map((row) => [row.link.text, row.link.href, row.link.label]),
-    workEntries.map((entry) => [
-      entry.company,
-      entry.site,
-      `${entry.company}, opens in a new tab`,
-    ])
+  /* THE EMPLOYER IS NAMED ONCE (owner ruling, 2026-09-12, issue 326): "inside
+     Professional Experience there is no need to list the company name 3 times
+     in a row, only once is enough." The three were the tile's initials, the
+     heading, and the long name again in the drawer's link (issue 243, which
+     had put it there because an anchor inside a button is invalid content no
+     keyboard can reach).
+
+     The NAME was the objection, not the link. The tile carries a picture, the
+     heading keeps the name, and the link prints the host it goes to — so the
+     row says WHO once and WHERE once, and this walks every visible cell of
+     every row to prove the count is one.
+
+     The comparison is exact and case-sensitive on purpose. A host is lower
+     case and is not the name as written: "fathom5.com" contains the letters of
+     "Fathom5" and is nobody's second mention of it, while a cell that IS the
+     name is the repetition the owner counted. */
+  for (const [index, row] of roleLedger.rows.entries()) {
+    const entry = workEntries[index];
+    const printed = [row.span, row.name, row.role, row.place, ...row.points, row.link.text];
+    const named = printed.filter((cell) => cell === entry.company || cell === entry.short);
+    assert.deepEqual(
+      named,
+      [entry.short],
+      `"${entry.company}" is printed ${named.length} times in its own row; the owner asked for one`
+    );
+    /* WHERE IT GOES, DERIVED from the address it goes to (owner decision,
+       2026-09-12): the authority, no scheme, no path, no port, no `www.`. A
+       fourth spelled string would be a fourth thing to keep in step with the
+       other three. */
+    assert.equal(row.link.text, siteHost(entry.site));
+    assert.doesNotMatch(row.link.text, /[:/\s]/, `the drawer prints "${row.link.text}" rather than a bare host`);
+    assert.doesNotMatch(row.link.text, /^www\./, `the drawer prints "${row.link.text}" with the www label still on it`);
+    assert.equal(row.link.href, entry.site);
+    /* The accessible name may still carry the employer: a screen reader meets
+       this link out of the row's context, and assistive technology is not the
+       visible repetition the owner counted. It still says a new tab is coming,
+       which is this page's convention for every outbound anchor. */
+    assert.equal(row.link.label, `${entry.company} website, opens in a new tab`);
+  }
+  const ledgerMarkup = withoutHtmlComments(ledgerLog);
+  assert.match(ledgerMarkup, /<a\s+class="ledger-link"/);
+  /* Drawn on HAVING a link and on nothing else. The markup pins above all
+     survive a condition that can never be true — an anchor nobody renders is
+     still an anchor in the file — so the condition is read back too: the row
+     contract makes `link` optional, and "the drawer draws one when the row has
+     one" is the claim, not "the file contains an anchor". */
+  assert.match(
+    ledgerMarkup,
+    /\{#if row\.link && row\.link\.href\}/,
+    'the drawer draws its link on some condition other than the row having one'
   );
-  assert.match(ledgerLog, /<a\s+class="ledger-link"/);
-  assert.match(ledgerLog, /target="_blank"/);
-  assert.match(ledgerLog, /rel="noopener noreferrer"/);
-  assert.match(ledgerLog, /aria-label=\{row\.link\.label\}/);
+  assert.match(ledgerMarkup, /target="_blank"/);
+  assert.match(ledgerMarkup, /rel="noopener noreferrer"/);
+  assert.match(ledgerMarkup, /aria-label=\{row\.link\.label\}>\{row\.link\.text\}<\/a>/);
   assert.deepEqual(
-    [...ledgerLog.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression),
+    [...ledgerMarkup.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression),
     ['row.link.href'],
     'the ledger may render exactly the one validated href and construct none'
   );
+  assert.deepEqual(
+    [...new Set([...ledgerMarkup.matchAll(/\{row\.(\w+)\}/g)].map(([, field]) => field))].toSorted(),
+    ['markSrc', 'name', 'place', 'role', 'span'],
+    'the row prints a field it did not before, or has stopped printing one'
+  );
+
+  /* THE HOST DERIVATION, driven directly with the shapes the four entries do
+     not have: a path, a port, credentials, and a host with no `www.` label to
+     strip. A derivation only ever exercised on four well-behaved addresses is
+     a derivation nobody has tested. */
+  assert.equal(siteHost('https://www.example.com/careers/team'), 'example.com');
+  assert.equal(siteHost('https://www.example.com:8443/x?y=1'), 'example.com');
+  assert.equal(siteHost('https://example.com'), 'example.com');
+  assert.equal(siteHost('https://wwwx.example.com'), 'wwwx.example.com', 'the www strip ate a real label');
+  assert.equal(siteHost('https://sub.www.example.com'), 'sub.www.example.com', 'the www strip is not anchored');
+  assert.throws(() => siteHost('not a url'), TypeError, 'an unparseable address renders as text instead of failing');
   /* The chevron's words are DATA, so the component composes no sentence: a
      component that wrote "Expand Fathom5" would be a component with an opinion
      about English. */
-  assert.equal(roleLedgerProps.expandLabel, workExpandLabel);
-  assert.equal(roleLedgerProps.collapseLabel, workCollapseLabel);
+  assert.equal(roleLedger.expandLabel, workExpandLabel);
+  assert.equal(roleLedger.collapseLabel, workCollapseLabel);
   assert.match(ledgerLog, /aria-label=\{`\$\{open \? collapseLabel : expandLabel\} \$\{row\.name\}`\}/);
   /* And the row is a REAL disclosure: a button with aria-expanded, so the
      drawer is operable by keyboard and announced as a state rather than being
@@ -885,8 +1008,165 @@ test('the experience section carries four complete real entries, newest first', 
   // request, which is what the owner asked for.
   assert.match(ledgerLog, /let opened = \$state\(new Set<string>\(\)\)/);
   // An empty roster says so rather than rendering nothing at all.
-  assert.equal(roleLedgerProps.emptyNote.trim().length > 0, true);
+  assert.equal(roleLedger.emptyNote.trim().length > 0, true);
   assert.match(ledgerLog, /\{#if rows\.length === 0\}\s*<p class="ledger-note">\{emptyNote\}<\/p>/);
+});
+
+test('the role marks are exactly the four vendored tiles the entries name, each a square under its ceiling (owner ruling, 2026-09-12, issue 326)', async () => {
+  /* The third dated requirement-11 exception, and the narrowest of the three:
+     four organisation marks, ~10KB the whole set, fetched once from each
+     organisation's own publication and vendored with their provenance beside
+     them. The CSP is `default-src 'self'`, so an external logo could never
+     load at all — a mark on this page is a vendored file or it is nothing.
+
+     The allowlist half is what makes a missing tile a red build rather than an
+     empty box: a build that dropped a file, or a fifth file nobody reviewed,
+     fails here before a reader ever meets a row with no mark in it. */
+  const dir = new URL('../src/assets/images/marks/', import.meta.url);
+  const entries = (await readdir(dir)).filter((entry) => !entry.startsWith('.'));
+  const named = workEntries.map((entry) => entry.markFile);
+  assert.deepEqual(
+    [...entries].sort(),
+    [...named, 'SOURCES.md'].sort(),
+    'the vendored marks directory holds a file the work entries and the manifest do not both name'
+  );
+
+  /* THE SQUARE IS READ OUT OF THE BYTES, not asserted about them. The owner
+     asked for uniform squares — "LinkedIn style … they all have to be uniform
+     so square may be the best way" — and a tile that was not square would be
+     drawn into a square box and distort the mark it exists to show. The
+     component's width and height attributes are checked against the SAME
+     measurement, so the two numbers that reserve the box cannot drift from the
+     file they describe.
+
+     The ceiling is 16KB per tile against a measured largest of 3,557 bytes:
+     headroom for a re-cut mark, nowhere near enough for somebody to drop a
+     photograph in here. */
+  const declared = /<img\s+class="ledger-mark"[\s\S]*?width=\{(\d+)\}\s*\n\s*height=\{(\d+)\}/.exec(ledgerLog);
+  assert.ok(declared, 'the row no longer draws its mark as an <img> with its own pixel size');
+  let total = 0;
+  for (const file of named) {
+    const bytes = await readFile(new URL(file, dir));
+    total += bytes.length;
+    assert.ok(bytes.length <= 16 * 1024, `${file} is ${bytes.length} bytes, over the 16KB per-mark ceiling`);
+    assert.equal(bytes.subarray(1, 4).toString('ascii'), 'PNG', `${file} is not a PNG`);
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    assert.equal(height, width, `${file} is ${width}x${height}; the marks are square`);
+    assert.equal(
+      Number(declared[1]),
+      width,
+      `${file} is ${width}px wide and the row reserves ${declared[1]}px for it`
+    );
+    assert.equal(
+      Number(declared[2]),
+      height,
+      `${file} is ${height}px tall and the row reserves ${declared[2]}px for it`
+    );
+  }
+  assert.ok(total <= 64 * 1024, `the vendored marks are ${total} bytes, over the 64KB total ceiling`);
+
+  /* PROVENANCE TRAVELS WITH THE ASSET (AGENTS.md, third-party attribution):
+     every tile is named in the note beside it, with where it came from and on
+     what terms. A mark added without its origin is the failure this catches. */
+  const sources = await read('../src/assets/images/marks/SOURCES.md');
+  for (const file of named) {
+    assert.ok(sources.includes(file), `SOURCES.md does not record where ${file} came from`);
+    assert.match(sources, /https:\/\//, 'SOURCES.md records no origin at all');
+  }
+  assert.match(sources, /licence|license/i, 'SOURCES.md states no terms for the vendored marks');
+  assert.match(sources, /trademark/i, 'SOURCES.md drops the trademark statement');
+});
+
+test(
+  'the attribution index sends a reviewer to the marks\u2019 own provenance note (issue 326)',
+  { skip: reducedContextNote },
+  async () => {
+    /* The repository's one attribution index points at the note beside the
+       tiles, the way it already points at the textures' (AGENTS.md,
+       "Attribution for third-party assets"). These four are somebody else's
+       TRADEMARKS, which is the fact a reviewer opens ATTRIBUTION.md to find — a
+       provenance note only the directory knows about is a note nobody reads.
+       The index lives at the repository root, outside the image build's
+       context, so this is the one pin here the reduced context skips by name. */
+    const attribution = await readFile(new URL('../../ATTRIBUTION.md', import.meta.url), 'utf8');
+    assert.match(
+      attribution,
+      /frontend\/src\/assets\/images\/marks\/SOURCES\.md/,
+      'ATTRIBUTION.md does not send a reviewer to the marks\u2019 own provenance note'
+    );
+    assert.match(
+      attribution,
+      /remains its owner['\u2019]s trademark/,
+      'ATTRIBUTION.md drops the trademark boundary for the organisation marks'
+    );
+  }
+);
+
+test('the mark is named as a file, resolved by the bundler, and drawn by a component that knows no file (issue 326)', () => {
+  /* The same three-layer rule the gallery follows, for the same reason: a
+     component that spelled a file name would be a component the build could
+     silently break, and a data module that held a URL would be a data module
+     the bundler had to run. So work.ts names files, the binding resolves them
+     through import.meta.glob, and the row draws what it is handed. */
+  assert.match(workBinding, /import\.meta\.glob\('\.\.\/\.\.\/assets\/images\/marks\/\*\.png'/);
+  assert.match(workBinding, /markFiles\[`\.\.\/\.\.\/assets\/images\/marks\/\$\{file\}`\]/);
+  const markup = withoutHtmlComments(ledgerLog);
+  assert.doesNotMatch(
+    markup,
+    /\.png|import\.meta\.glob/,
+    'the row names a file of its own; the bundler owns that name'
+  );
+  /* NAMED, AND NAMED ONCE. The tile's alt is the organisation's short name
+     (issue 326 acceptance: "present, uniform, named") — the same string the
+     heading prints, so the two cannot drift. It is not a second announcement:
+     the tile sits inside the row's control, whose aria-label replaces its
+     content in the accessible-name computation, which the rendering lane "the
+     role rows carry the organisations' own marks" measures as one name per
+     row. */
+  assert.match(
+    markup,
+    /<img\s+class="ledger-mark"\s+src=\{row\.markSrc\}\s+alt=\{row\.name\}/,
+    'the mark tile lost the organisation\u2019s name as its alt, or stopped drawing the URL it is handed'
+  );
+  assert.match(markup, /decoding="async"/);
+  assert.doesNotMatch(
+    markup,
+    /loading="lazy"/,
+    'the marks are the first section of the sheet and the first row is above the fold at 390px; a lazy tile on some rows and not others is the inconsistency this forbids'
+  );
+  // Every row draws one, and the button around it keeps the accessible name
+  // that carries the employer.
+  assert.equal(
+    (markup.match(/<img\s+class="ledger-mark"/g) ?? []).length,
+    1,
+    'the row draws its mark somewhere other than the one place'
+  );
+  assert.match(markup, /aria-label=\{`\$\{open \? collapseLabel : expandLabel\} \$\{row\.name\}`\}/);
+
+  /* THE TILE'S BOX IS ONE TOKEN IN BOTH AXES, and the row's track reads the
+     same one — which is what makes the column square by construction rather
+     than by agreement. The hairline around it is the thing that survived issue
+     313's monogram: it is what makes a black wordmark, a navy badge, a pale
+     ring and a coloured shield read as one set of four. */
+  const rule = /\.ledger-mark \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(rule, /inline-size: var\(--ledger-mark\)/);
+  assert.match(rule, /block-size: var\(--ledger-mark\)/);
+  assert.match(rule, /border: var\(--ledger-hairline\) solid var\(--ledger-rule\)/);
+  assert.match(
+    styles,
+    /grid-template-columns: 8\.75rem var\(--ledger-mark\)/,
+    'the row track stopped reading the tile\u2019s own token; the column can drift from the tile'
+  );
+  /* And the token is the SITE'S control target rather than a fifth length
+     (owner decision, 2026-09-12): the tile is something a reader is meant to
+     resolve, and this sheet already has one size for that. A literal here
+     would be a number nothing else moves with. */
+  assert.match(
+    styles,
+    /--ledger-mark: var\(--control-target\)/,
+    'the mark box restated a length of its own instead of borrowing the site\u2019s control target'
+  );
 });
 
 /* THE SAME DOCTRINE, ONE SHAPE FEWER (owner directive of 2026-09-03, issue
@@ -894,37 +1174,47 @@ test('the experience section carries four complete real entries, newest first', 
  * and drew each only when it held something, because a card that reserved an
  * empty <p> for content it did not have was the defect.
  *
- * The table's half of that claim moved rather than lapsed (owner design
- * decision, 2026-09-11, issue 318). The description cell it used to be about
- * is gone — the section holds half a sheet now — and what replaced it is a
- * cell drawn only for the row that has something in it: the `latest` chip. So
- * the claim is the same claim, against the one optional cell the table still
- * has: it is present exactly on the row that earned it and absent everywhere
- * else, never an empty box held open. */
+ * The table's half of that claim moved TWICE and lapsed neither time. The
+ * description cell it used to be about went with the owner's 2026-09-11
+ * directive — the section holds half a sheet now — and the `latest` chip that
+ * replaced it went with the ruling of 2026-09-12 that retired the row it
+ * labelled. The table has no optional cell left at all, which is the strongest
+ * form of the claim rather than its absence, and the SHEET's one remaining
+ * conditional region is in the log beside it: the phone's disclosure control,
+ * drawn only when there are rows it would reveal. So the claim is the same
+ * claim, against the shape that still carries it. */
 test('a row draws only the body it has, and every shipped row has one', () => {
   // The drawer is a region drawn from data, and the row's own points are what
   // fill it; an entry with none would open onto an empty box.
   assert.match(ledgerLog, /\{#each row\.points as point, index \(index\)\}/);
-  for (const row of roleLedgerProps.rows) {
+  for (const row of roleLedger.rows) {
     assert.ok(row.points.length > 0, `the ledger ships "${row.key}" with an empty drawer`);
   }
-  // The chip is conditional in BOTH directions: the markup draws it only when
-  // the row carries one...
-  assert.match(ledgerSpread, /\{#if row\.chip\}<span class="table-chip">\{row\.chip\}<\/span>\{\/if\}/);
-  // ...and no row ever carries an empty one, which would be a box with nothing
-  // in it drawn by a truthy test that happens to be false.
-  const chips = projectTableProps(
+  /* THE RETIRED CELL STAYS RETIRED, in both places it could come back: the
+     markup draws no chip, and no row the adapter builds carries a field for one
+     — a live payload with an unpinned newest repository is exactly the shape
+     that used to produce one. */
+  assert.doesNotMatch(ledgerSpread, /table-chip/);
+  const live = projectTableProps(
     projectsEnvelope([
       { name: 'kept', description: 'x', stars: 1, pushedAt: '2026-09-01T09:00:00Z', pinned: true },
       { name: 'newest', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' }
     ])
-  )
-    .rows.map((row) => row.chip)
-    .filter((chip) => chip !== undefined);
-  assert.deepEqual(chips, [latestRowChip]);
-  for (const row of projectTableProps(null).rows) {
-    assert.equal(row.chip, undefined, `the captured face marked "${row.key}" latest`);
+  );
+  assert.deepEqual(live.rows.map((row) => row.link.text), ['kept']);
+  for (const row of [...live.rows, ...projectTableProps(null).rows]) {
+    assert.ok(!('chip' in row), `the row "${row.key}" carries a chip field again`);
   }
+  /* And the log's disclosure is conditional in BOTH directions: the markup
+     draws it only when the adapter built one, and the adapter builds one only
+     when there are rows the collapsed list does not show — never an empty
+     control held open for a list that has nothing behind it. */
+  assert.match(ledgerSpread, /\{#if logDisclosure !== undefined && !wide\}/);
+  assert.equal(
+    projectsCommitsProps([null, null]).logDisclosure,
+    undefined,
+    'an empty log built a control with nothing to reveal'
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1093,91 +1383,100 @@ test('a payload name outside the repository grammar refuses the whole payload', 
   }
 });
 
-test('a card looks stale when its envelope says so (issue 281, defect 2)', () => {
+/* THE FRESHNESS LINE IS GONE FROM THIS SECTION (owner ruling, 2026-09-12, on
+ * the live page: "DATA THROUGH SEP 12, 2026 · LAST CAPTURE JUST NOW" goes).
+ *
+ * Issue 281's defect 2 was the opposite failure — the envelope said stale while
+ * the card LOOKED fresh — and the answer then was a line in the shell's head.
+ * The owner has now read that line on the shipped page and struck it: the
+ * figures in both columns are dated in their own rows, an unavailable panel
+ * renders its honest empty note where its rows would be, and a caption dating
+ * the whole sheet was a fourth statement of facts that already state
+ * themselves. What REPLACES the old pin is this one — the three envelope
+ * shapes that each used to produce a line, proved to produce none, and the
+ * builder that composed them proved absent from the module rather than merely
+ * unused, because an unused exported builder is one import away from coming
+ * back. */
+test('the repositories table composes no freshness line, in any envelope state (owner 2026-09-12)', async () => {
   const now = Date.parse('2026-09-01T12:30:00Z');
-  const repos = [{ name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' }];
-  // A fresh ok panel carries no note, and neither does the pre-envelope face.
-  assert.equal(projectTableProps(projectsEnvelope(repos), now).staleNote, undefined);
-  assert.equal(projectTableProps(null, now).staleNote, undefined);
-  // The non-ok fixture: the origin says stale, and the card SAYS SO, dated by
-  // the envelope's own generatedAt — status plus timestamp, nothing invented.
-  const stale = projectTableProps(
-    projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T07:30:00Z' }),
-    now
-  );
-  assert.equal(stale.staleNote, 'stale · data as of 5h ago');
-  // The status half ALONE, unmasked by age: a refused-row round marks the
-  // envelope stale while stamping a CURRENT generatedAt (defect 1's refusal
-  // path), so the timestamp above — 5h old, past the 2h threshold — cannot
-  // distinguish the origin's verdict from mere aging. This fixture can: five
-  // minutes old, well inside the threshold, the note must come from the
-  // status. Review receipt 5497788881 caught this input missing.
-  const freshStale = projectTableProps(
-    projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T12:25:00Z' }),
-    now
-  );
-  assert.equal(freshStale.staleNote, 'stale · data as of 5m ago');
-  // Unavailable renders the captured face and says which face it is.
-  const unavailable = projectTableProps(
-    projectsEnvelope([], { status: 'unavailable', generatedAt: undefined, data: null }),
-    now
-  );
-  assert.equal(unavailable.staleNote, 'live repository data unavailable · showing captured figures');
-  assert.equal(unavailable.rows.length, shownProjectRows);
-  // An ok envelope whose generatedAt stopped advancing is the wedged-loop
-  // state a status alone cannot see: past the threshold the card says so.
-  const wedged = projectsEnvelope(repos, {
-    generatedAt: new Date(now - projectsStaleAfterMs - 60_000).toISOString(),
-  });
-  assert.match(projectTableProps(wedged, now).staleNote, /^stale · data as of /);
-  // Executed at the seam too: the note builder itself, from both sides of
-  // the threshold, so the boundary is arithmetic rather than luck.
-  assert.equal(
-    projectsStaleNote(projectsEnvelope(repos, { generatedAt: new Date(now - projectsStaleAfterMs + 60_000).toISOString() }), now),
-    undefined
-  );
-  assert.notEqual(
-    projectsStaleNote(projectsEnvelope(repos, { generatedAt: new Date(now - projectsStaleAfterMs - 60_000).toISOString() }), now),
-    undefined
-  );
+  const repos = [
+    { name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z', pinned: true }
+  ];
+  const states = [
+    ['a fresh ok panel', projectsEnvelope(repos)],
+    ['the pre-envelope captured face', null],
+    ['the origin saying stale', projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T07:30:00Z' })],
+    /* The status half ALONE, unmasked by age: a refused-row round marks the
+       envelope stale while stamping a CURRENT generatedAt (defect 1's refusal
+       path), which is the input that used to prove the note came from the
+       status rather than from the clock. */
+    ['a freshly-stamped stale panel', projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T12:25:00Z' })],
+    ['an unavailable panel', projectsEnvelope([], { status: 'unavailable', generatedAt: undefined, data: null })],
+    /* An ok envelope whose generatedAt stopped advancing — the wedged-loop
+       state a status alone cannot see, which is what the two-hour threshold was
+       for. Four hours past it here. */
+    ['a wedged refresh loop', projectsEnvelope(repos, { generatedAt: '2026-09-01T06:30:00Z' })]
+  ];
+  for (const [name, envelope] of states) {
+    const props = projectTableProps(envelope, now);
+    assert.equal(props.staleNote, undefined, `${name} composed a stale note`);
+    assert.ok(!('staleNote' in props), `${name} carries a staleNote field for one to come back on`);
+  }
+  // The captured face still renders, which is what makes "no note" a statement
+  // about the caption rather than about an empty table.
+  assert.equal(projectTableProps(projectsEnvelope([], { status: 'unavailable', data: null }), now).rows.length, shownProjectRows);
+  /* THE BUILDER IS GONE, not merely unread. It had one caller, and a module
+     that still exported it would be one import away from the line returning. */
+  const module = await read('../src/lib/projects.ts');
+  assert.doesNotMatch(module, /projectsStaleNote|projectsStaleAfterMs/);
+  for (const phrase of ['data as of', 'showing captured figures', 'is not current']) {
+    assert.ok(!module.includes(phrase), `the retired line's words are still spelled in the module: "${phrase}"`);
+  }
 });
 
-/* THE STALE LINE MOVED TO THE ONE ROW EVERY PANEL ALREADY RESERVES (owner
- * directive of 2026-09-03, issue 287). The entry log rendered it above its own
- * list; the ledger's blocks render through PanelShell, whose head is the row
- * the card holds open for exactly "a later addition beside the title" — which
- * is where the calendar's own data-through line already went at issue 285. One
- * idiom, one place, one geometry, and it costs no layout shift because the row
- * is reserved whether or not there is a line for it.
+/* THE STALE LINE LEFT THE HEAD ALTOGETHER (owner directive, 2026-09-12, issue
+ * 323). It moved there at issue 287 — the head is the one row every panel
+ * already reserves, so a line arriving late cost no layout shift — and the
+ * owner removed it after reading the result on the live page: "DATA THROUGH
+ * SEP 11, 2026 · LAST CAPTURE 11H AGO" set over the figures it qualified.
  *
- * The claim is unchanged: the note renders only when the adapter proved there
- * is one, it reaches the reader BEFORE the figures it qualifies, and a static
- * surface passes none. */
-test('the table renders its stale line in the reserved head, and only when it has one', async () => {
+ * The row itself STAYS RESERVED, and that is the half this test now carries.
+ * A head whose height came from its title alone would be nothing at all on the
+ * panels that render no label, and the geometry a card reserves must not
+ * depend on what happens to be in the row today. Review finding 1 on PR #293
+ * showed the declaration could be deleted with every suite green; this pin and
+ * the rendering lane are the two halves that close it. */
+test('the panel head reserves its row and draws no freshness line', async () => {
   const shell = await read('../src/lib/components/PanelShell.svelte');
-  /* NO TITLE PROP AT ALL (owner directive, 2026-09-04, issue 292; the section
-     head names the sheet): the shell is handed status, provenance and the note
-     and nothing else, so the reserved head row is what keeps the geometry. */
-  assert.match(ledgerSpread, /<PanelShell \{status\} \{generatedAt\} note=\{staleNote\}>/);
-  assert.match(shell, /\{#if note\}<span class="panel-note" data-panel-note>\{note\}<\/span>\{\/if\}/);
+  /* NOTHING BUT AN OPTIONAL TITLE IS DRAWN IN IT. Swept over the whole file,
+     because the note lived in three places at once — a prop, an element and a
+     token family — and any one of them coming back is the same regression. */
+  assert.ok(!shell.includes('note'), 'the shell takes a note prop again');
+  assert.ok(!shell.includes('panel-note'), 'the shell draws a freshness line again');
+  assert.ok(!shell.includes('data-panel-note'), 'the shell still marks a freshness line');
+  /* The repositories sheet hands the shell status and provenance and nothing
+     else (owner ruling, 2026-09-12), so the reserved head row is what keeps
+     its geometry with nothing in it. */
+  assert.match(ledgerSpread, /<PanelShell \{status\} \{generatedAt\}>/);
+  assert.doesNotMatch(ledgerSpread, /note=/, 'the sheet hands the shell a note again');
   assert.ok(
-    shell.indexOf('data-panel-note') < shell.indexOf('<div class="panel-body">'),
-    'the stale line renders after the figures it qualifies'
+    !(await read('../src/styles.css')).includes('--panel-note'),
+    'the note token family outlived the note'
   );
-  // The static work history has no envelope and therefore no line to render;
-  // its props carry no channel for one at all.
-  assert.equal(roleLedgerProps.staleNote, undefined, 'the static work history grew a stale note');
-  // The line is a token-inked reading, not an italic apology.
-  assert.match(styleBlock(shell), /\.panel-note \{[^}]*color: var\(--panel-muted/s);
+  /* THE READING STAYS MACHINE-READABLE. Status and provenance arrive on every
+     envelope and still ride this element as data attributes: a reading nobody
+     displays is still a reading the page can be audited for. */
+  assert.match(shell, /data-panel-status=\{status\}/);
+  assert.match(shell, /data-panel-generated-at=\{generatedAt\}/);
+  // The static work history has no envelope and no channel for a line at all.
+  assert.equal(roleLedger.staleNote, undefined, 'the static work history grew a stale note');
   /* THE ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
      issue 292): the Projects table renders no panel label, so the head's
      height can no longer come from its h2. Pinned where it is decided — the
      row wears the title's face and size and declares one line of it as its
      minimum, the `lh` line box with an em fallback under it — and the
      rendering lane "a panel head with no title keeps the reserved row"
-     measures it in every engine. Deleting either declaration left the whole
-     suite green while the head collapsed to whatever happened to be in it
-     (review finding 1, PR #293). */
+     measures it in every engine. */
   const head = /\.panel-head \{([^}]*)\}/s.exec(styleBlock(shell));
   assert.ok(head, 'PanelShell no longer styles .panel-head');
   assert.match(head[1], /font-family: var\(--panel-title-family, inherit\);/, 'the head must wear the title face its lh is measured in');
@@ -1189,14 +1488,14 @@ test('the table renders its stale line in the reserved head, and only when it ha
   );
   assert.match(
     shell,
-    /\{#if title\}<h2 class="panel-title"[^>]*>(?:\{#if mark\}<span class="panel-mark">.*?<\/span>\{\/if\})?\{title\}<\/h2>\{\/if\}/,
-    'the title is optional; a bare head is the Projects table'
+    /\{#if title\}<h2 class="panel-title">\{title\}<\/h2>\{\/if\}/,
+    'the title is optional, and it is the only thing the head draws'
   );
-  assert.match(
-    styleBlock(shell),
-    /\.panel-note \{[^}]*grid-column: 2;/s,
-    'the note must keep the end column when there is no title beside it'
-  );
+  /* THE MARK THAT LED IT IS GONE TOO (issue 323). The board was the one panel
+     that passed one, and it passes no title now, so the positioned cell and
+     the padding that made room for it are dead weight rather than a reserve. */
+  assert.ok(!shell.includes('panel-mark'), 'the shell still draws a title mark');
+  assert.ok(!shell.includes('Icon'), 'the shell still imports the icon it stopped drawing');
   assert.equal(projectTableProps(null).title, undefined, 'the Projects table grew a panel label back');
   assert.doesNotMatch(ledgerSpread, /\{title\}/, 'the sheet passes a panel label again');
 });

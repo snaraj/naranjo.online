@@ -32,7 +32,7 @@
   import Icon from './Icon.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let { title, status, generatedAt, items, emptyNote, staleNote, label, mark }: TickerProps =
+  let { title, status, generatedAt, items, emptyNote, label, mark }: TickerProps =
     $props();
 
   /* ONE DETAIL FOR THE WHOLE STRIP, and the reason is not economy — it is
@@ -87,7 +87,7 @@
   );
 </script>
 
-<PanelShell {title} {status} {generatedAt} note={staleNote}>
+<PanelShell {title} {status} {generatedAt}>
   <FeedCard variant="strip">
     {#if items.length === 0}
       <p class="ticker-note">{emptyNote}</p>

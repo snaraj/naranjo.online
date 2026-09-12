@@ -17,6 +17,13 @@
   Inside the drawer the link is a link, at the site's own touch floor, beside
   the points it belongs to.
 
+  WHAT IT SAYS CHANGED, not whether it exists (owner ruling, 2026-09-12, issue
+  326). The owner read an open row and counted the organisation's name three
+  times in it: the tile's initials, the heading, and this link. The tile
+  carries a picture now, the heading keeps the name, and the link prints the
+  HOST it goes to — where, not who. The component composes none of that: the
+  text, the href and the accessible name all arrive as data.
+
   THE DRAWER GROWS RATHER THAN SNAPS. `grid-template-rows: 0fr → 1fr` over an
   `overflow: hidden` wrapper is the one arrangement that animates to a content
   height nobody measured, which is why it is that and not a max-height guess: a
@@ -24,8 +31,8 @@
   wrong speed for every shorter one. Under reduced motion the same two states
   apply instantly — the row still opens, it simply does not travel.
 
-  No domain anywhere: a span, a name, a role, a place, and points. The work
-  history renders it today. -->
+  No domain anywhere: a span, a mark it is handed, a name, a role, a place,
+  points, and a link it is handed whole. The work history renders it today. -->
 <script lang="ts">
   import type { LedgerLogProps } from '../blocks.ts';
   import FeedCard from './FeedCard.svelte';
@@ -63,16 +70,34 @@
           data-open={open ? 'true' : 'false'}
           onclick={() => toggle(row.key)}>
           <span class="ledger-span">{row.span}</span>
-          <!-- THE MONOGRAM IS NOT A LOGO (owner design decision, 2026-09-11,
-            issue 313). An employer's logo is its trademark and this page draws
-            none; two letters in the site's own ink, inside the same hairline
-            square the rest of the sheet is ruled with, identify the row at a
-            glance without borrowing anyone's art. The letters are DATA, from
-            the entry — deriving them would have to guess at "University of
-            Maryland, Baltimore County — LIDAR Research Group" — and the tile
-            is aria-hidden because the row's accessible name already carries
-            the employer in full. -->
-          <span class="ledger-monogram" aria-hidden="true">{row.mark}</span>
+          <!-- THE ORGANISATION'S OWN MARK (owner ruling, 2026-09-12, issue
+            326). Issue 313 drew two letters here instead, on the reasoning
+            that a logo is a trademark; the owner looked at four lettered
+            squares and asked for the real marks, uniform and square. Each is a
+            vendored tile on the sheet's own paper, framed by the same hairline
+            the rest of the sheet is ruled with — which is what makes a pale
+            mark and a dark badge read as one set rather than four strangers.
+
+            THE ALT IS THE ORGANISATION'S NAME (issue 326: the tiles land
+            "named"). It is never said twice: the tile sits inside the row's
+            control, whose aria-label replaces its content in the name
+            computation, so the row announces "Expand <name>" and the picture
+            names its subject only when a reader asks the image itself. The
+            same short name the heading prints, so the two can never disagree.
+
+            The width and height are the tile's OWN pixels, so the box is
+            reserved before the picture arrives; tests/sections.test.mjs reads
+            them back out of the PNG headers, so these two numbers cannot drift
+            from the bytes they describe. The CSS box is one token, in both
+            axes, which is why no object-fit is needed: every tile is square
+            and is drawn in a square. -->
+          <img
+            class="ledger-mark"
+            src={row.markSrc}
+            alt={row.name}
+            width={96}
+            height={96}
+            decoding="async" />
           <span class="ledger-name">{row.name}</span>
           <span class="ledger-role">{row.role}</span>
           <span class="ledger-place">{row.place}</span>

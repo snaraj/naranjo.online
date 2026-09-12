@@ -61,20 +61,18 @@ import {
   commitRepoUrl,
   commitShaUrl,
   commitTitleLink,
-  contributionsLabel,
   isValidCommitSha,
   parseVCSActivity
 } from './activity.ts';
 import type { CalendarSet, CommitLogRow, ContributionCalendarProps, LedgerSpreadProps } from './blocks.ts';
 import {
-  addDays,
   calendarColumns,
   formatMagnitude,
   formatWhole,
   pendingWeeks,
   seriesCells
 } from './grid.ts';
-import { panelAge, panelKinds, panelStaleNote } from './panels.ts';
+import { panelAge, panelKinds } from './panels.ts';
 import type {
   PanelEnvelope,
   TokenUsageSource,
@@ -83,12 +81,7 @@ import type {
   VCSPrivateDay
 } from './panels';
 import { codingProjectsPanelId, projectTableProps } from './projects.ts';
-import {
-  sourceName,
-  tokenUsagePanelId,
-  tokenUsageSources,
-  usageDataThrough
-} from './token-usage.ts';
+import { sourceName, tokenUsagePanelId, tokenUsageSources } from './token-usage.ts';
 
 /* The panels each block binds, in the order its adapter reads them. The block
  * modules name them once, from here, so the order a binding declares and the
@@ -104,6 +97,34 @@ export const spreadPanelIds: readonly string[] = [codingProjectsPanelId, activit
  * resolving it. It is the PAGE's word, not the host's, which is why it is
  * spelled here in the adapter and reaches the component as data. */
 export const commitColumnId = 'commits';
+
+/* The id of the list inside that column. The disclosure control below names it
+ * in `aria-controls`, and the two ids are different things on purpose: the
+ * anchor above addresses the column a shared address has to keep landing on,
+ * head and all, while this one names exactly the list the control grows. */
+export const commitLogListId = 'commits-log';
+
+/* HOW MANY ROWS THE LOG SHOWS ON A PHONE BEFORE THE READER ASKS FOR MORE
+ * (owner ruling, 2026-09-12: at that width the log is "quite busy ... an
+ * endless scroll field that I have to fight out of"). A phone row is two lines
+ * tall, so five of them is already most of a screen; the rest arrive on a
+ * press, in the page's own scroll, rather than inside a box a finger has to
+ * escape.
+ *
+ * ONE constant, TWO seats: this number and the stylesheet's collapsed reserve
+ * are the same fact, and tests/activity.test.mjs recomputes the reserve's calc
+ * from this constant so the box and the slice cannot drift apart. */
+export const phoneLogRows = 5;
+
+/* The control's two words. "show all N" carries the figure because a reader
+ * deciding whether to press it is deciding about that number; "show fewer"
+ * carries none, because the collapsed count is not a promise worth restating
+ * in a word the reader is pressing to leave. */
+export const logCollapseWord = 'show fewer';
+
+export function logExpandWord(rows: number): string {
+  return `show all ${rows}`;
+}
 
 /* The commit column's own ruled head. The table beside it names five columns;
  * this one names the whole stream, because the owner's ruling is that it is
@@ -168,31 +189,6 @@ export function tokenSetLabel(source: string): string {
 
 export const contributionsEmptyNote = activityStripEmptyNote;
 export const tokenSeriesEmptyNote = 'no daily series captured';
-
-/* The contributions caption: the total the payload reported, worded against
- * the coverage it declared, and the streak beside it. */
-export function contributionsCaption(activity: VCSActivityData): string {
-  return `${formatWhole(activity.totalContributions)}${contributionsLabel(activity.coverage)} · ${formatWhole(activity.streak)}-day streak`;
-}
-
-/* One token source's caption. Every number in it is measured from the days the
- * payload actually carries: the sum over them, how many of them there are, the
- * largest single day, and the last day covered. */
-export function tokenCaption(source: TokenUsageSource): string {
-  const totals = source.series?.totals ?? [];
-  const days = totals.length;
-  const sum = seriesSum(totals);
-  const peak = totals.reduce((largest, value) => (value > largest ? value : largest), 0);
-  const through = source.series ? addDays(source.series.startDate, days - 1) : '';
-  const parts = [
-    `${formatMagnitude(sum)} tokens over ${formatWhole(days)} ${days === 1 ? 'day' : 'days'}`,
-    `peak ${formatMagnitude(peak)}`
-  ];
-  if (through !== '') {
-    parts.push(`data through ${through}`);
-  }
-  return parts.join(' · ');
-}
 
 /* The anchor every set's calendar ends on. It is the contributions window's
  * own last day — today while the producer is live, and the payload's own end
@@ -330,7 +326,6 @@ export function contributionCalendarProps(
     key: 'contributions',
     label: contributionsSetLabel,
     columns: activity === null ? [] : calendarColumns(activityCells(activity), pendingWeeks, anchor),
-    caption: activity === null ? contributionsEmptyNote : contributionsCaption(activity),
     noun: 'contribution',
     stripLabel:
       activity === null
@@ -360,7 +355,6 @@ export function contributionCalendarProps(
       key: source.label,
       label: tokenSetLabel(source.label),
       columns: calendarColumns(seriesCells(series.startDate, series.totals), pendingWeeks, anchor),
-      caption: tokenCaption(source),
       noun: 'token',
       stripLabel: `${sourceName(source.label)} token calendar: daily totals, newest last`,
       /* The note the grid would draw if this set were ever empty. The guard
@@ -384,30 +378,8 @@ export function contributionCalendarProps(
   return {
     status: activityEnvelope?.status ?? 'unavailable',
     generatedAt: activityEnvelope?.generatedAt,
-    sets,
-    /* The staleness line is the CALENDAR's, because the calendar is what this
-       block is; the token sets carry their own data-through inside their
-       captions, which is where a reader meets them. */
-    staleNote:
-      activityStaleNote(activityEnvelope, activity, now) ??
-      usageThroughNote(usageEnvelope, sources, now)
+    sets
   };
-}
-
-/* The contributions panel's own staleness line, read by both adapters below
- * so the calendar and the log cannot describe the same envelope two different
- * ways. */
-function activityStaleNote(
-  envelope: PanelEnvelope | null,
-  activity: VCSActivityData | null,
-  now: Date
-): string | undefined {
-  return panelStaleNote(
-    envelope?.status ?? 'unavailable',
-    envelope?.generatedAt,
-    activity?.endDate,
-    now
-  );
 }
 
 /* THE SHEET'S PAIRED SECTION (owner design decision, 2026-09-11, issue 318):
@@ -416,23 +388,25 @@ function activityStaleNote(
  *
  * The two halves are handed through rather than rebuilt: the table half IS
  * `projectTableProps`, with every rule it already proved — the payload's
- * roster, the effective instant, the captured fallback face, the three honest
- * staleness states and the one validated href shape — and the log half is the
- * same `logRows` walk the calendar block used to render under its own grid.
+ * roster, the effective instant, the captured fallback face and the one
+ * validated href shape — and the log half is the same `logRows` walk the
+ * calendar block used to render under its own grid.
  *
- * THE SHELL'S READING IS THE TABLE'S. One section, one head row, and the head
- * holds one line: the sheet opens with the repositories, so their envelope is
- * what the shell's status, timestamp and note describe, and the commits panel
- * speaks for itself inside its own column — an unavailable one renders the
- * log's honest empty note where its rows would be, which is a truer statement
- * than a second caveat in a row that has space for one. The activity note is
- * the fallback exactly where the table has nothing to say, so a wedged
- * contributions panel is never silent.
+ * THE SECTION CARRIES NO FRESHNESS LINE (owner ruling, 2026-09-12, on the live
+ * page: "DATA THROUGH SEP 12, 2026 · LAST CAPTURE JUST NOW" goes). It composed
+ * one from whichever of its two envelopes had something to say, and the reader
+ * it was written for does not exist: the figures are dated in their own rows,
+ * an unavailable panel still renders its honest empty note where its rows
+ * would be, and a line dating the whole sheet was a caption over facts that
+ * already carry their own. The contributions panel keeps its data-through line
+ * where the reader meets that panel — under the calendar, in
+ * `contributionCalendarProps` — so nothing was made silent, it stopped being
+ * said twice.
  *
- * NOTHING IS SLICED. The log renders every row the wire carried and the box
- * scrolls for the rest (issue #315); the RESERVE — how many rows the box holds
- * open — is a stylesheet fact built from `shownProjectRows`, because it is the
- * table beside it that decides how tall the pair is. */
+ * NOTHING IS SLICED IN THIS FUNCTION. Every row the wire carried reaches the
+ * component; how many of them a PHONE shows before the reader asks for the
+ * rest is `logDisclosure`, which is a rendering decision the component makes
+ * against a width, not a cap on the record. */
 export function projectsCommitsProps(
   envelopes: readonly (PanelEnvelope | null)[],
   now: Date = new Date()
@@ -443,27 +417,27 @@ export function projectsCommitsProps(
     activityEnvelope !== null && activityEnvelope.kind === panelKinds.vcsActivity
       ? parseVCSActivity(activityEnvelope.data)
       : null;
+  const rows = activity === null ? [] : logRows(activity, now);
   return {
     ...table,
     logHead: commitColumnHead,
     logAnchor: commitColumnId,
-    logRows: activity === null ? [] : logRows(activity, now),
+    logListId: commitLogListId,
+    logRows: rows,
     logNote: activityEntriesNote,
-    staleNote: table.staleNote ?? activityStaleNote(activityEnvelope, activity, now)
+    /* THE THRESHOLD: a control exists only when pressing it would reveal
+       something. Five rows of five, or of three, hide nothing, so those
+       payloads render the whole log and no control at all — a disclosure over
+       a complete list is a button that says "show all 5" and then does
+       nothing, which is the honest-states floor breaking on a control. */
+    ...(rows.length > phoneLogRows
+      ? {
+          logDisclosure: {
+            collapsed: phoneLogRows,
+            more: logExpandWord(rows.length),
+            fewer: logCollapseWord
+          }
+        }
+      : {})
   };
-}
-
-/* The token panel's own data-through line, used only when the calendar has
- * nothing to say about staleness: two stale lines over one section would be
- * the same caveat twice, and the calendar's is the one that describes what the
- * section leads with. */
-function usageThroughNote(
-  envelope: PanelEnvelope | null,
-  sources: readonly TokenUsageSource[],
-  now: Date
-): string | undefined {
-  if (envelope === null) {
-    return undefined;
-  }
-  return panelStaleNote(envelope.status, envelope.generatedAt, usageDataThrough(sources), now);
 }

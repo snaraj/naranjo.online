@@ -12,7 +12,7 @@
 import type { ActivityLink } from './blocks.ts';
 import { addDays, type GridCell } from './grid.ts';
 
-import type { VCSActivityData, VCSCoverage, VCSPrivateDay } from './panels';
+import type { VCSActivityData, VCSPrivateDay } from './panels';
 import { projectHost, projectHostLabel } from './projects.ts';
 
 /* The registry identifier the activity strip loads; the one place the id is
@@ -345,24 +345,6 @@ export function commitShaLinkLabel(message: string, sha: string): string {
  * lib/projects.ts — one constant for a height two columns share, rather than
  * a second one here free to disagree with it.
  * ------------------------------------------------------------------------ */
-
-/* contributionsLabel words the headline figure against the coverage the
- * payload declared, and it exists because the two producers count different
- * things.
- *
- * An anonymous read of the public document reports only what an anonymous
- * reader may see; a credentialed read reports the account holder's whole
- * record. Serving either under one unlabelled "contributions" would make the
- * figure change meaning — by hundreds — the day a credential is added or
- * expires, with nothing on the page to say why. So the narrower one says it is
- * narrow, and the complete one simply reads as the total it is.
- *
- * An absent coverage is the pre-field payload state and words the figure the
- * way it has always been worded, so a mid-rollout replica renders no worse
- * than it did before this existed. */
-export function contributionsLabel(coverage: VCSCoverage | undefined): string {
-  return coverage === 'public' ? ' public contributions' : ' contributions';
-}
 
 /* The two honest empty-state lines, verbatim from the retired component. The
  * third — the figures note — left with the figures row: the headline totals
