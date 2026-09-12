@@ -3004,9 +3004,10 @@ h1 {
    source card's two lines went to the records card, so its sub area is now
    EMPTY until a pointer touches the chart — and an empty box has no text
    baseline, so the headline's baseline alignment synthesized one from its
-   bottom margin edge and seated the box 4.39px lower than the same box with a
-   line in it. Measured in chromium at 1440px: the reserved area held its
-   height perfectly and still moved on the first scrub. The reserve is a BOX
+   bottom margin edge and seated the box 4.39px higher than the same box with
+   a line in it, so the first scrub dropped it by that much. Measured in
+   chromium at 1440px: the reserved area held its height perfectly and still
+   moved on the first scrub. The reserve is a BOX
    the sheet states, so it is seated by that box's own edge rather than by
    whatever happens to be inside it; the figure beside it is taller and decides
    the row either way. */

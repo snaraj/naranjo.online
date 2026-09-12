@@ -519,14 +519,15 @@ test('the words the marks replaced are still on the page or in its accessibility
   const gallery = componentSources['lib/components/MediaGallery.svelte'];
   assert.match(gallery, /aria-label=\{`\$\{name\} · \$\{countOf\(name\)\}`\}/);
 
-  /* The organisation's mark is a picture for the eye only (owner ruling,
-     2026-09-12, issue 326): the row's own accessible name already carries the
-     employer in full, so a tile with an alt would say the name twice. An empty
-     alt is the whole mechanism — aria-hidden on an <img> would hide a picture
-     that is already silent and leave a reader nothing either way. */
+  /* The organisation's mark is named for the organisation (issue 326: the
+     tiles land "named"), with the same short name the heading prints, and the
+     row's control names the row with its aria-label — which replaces the
+     control's content in the accessible-name computation, so the picture's
+     name is never a second announcement. A literal alt string here would be a
+     name typed beside the data that already carries it. */
   const log = componentSources['lib/components/LedgerLog.svelte'];
-  assert.match(log, /<img\s+class="ledger-mark"\s+src=\{row\.markSrc\}\s+alt=""/);
-  assert.doesNotMatch(log, /class="ledger-mark"[^>]*alt="[^"]+"/, 'the mark tile announces a name of its own');
+  assert.match(log, /<img\s+class="ledger-mark"\s+src=\{row\.markSrc\}\s+alt=\{row\.name\}/);
+  assert.doesNotMatch(log, /class="ledger-mark"[^>]*alt="[^"]*"/, 'the mark tile carries a literal alt instead of the row\u2019s name');
   assert.match(log, /aria-label=\{`\$\{open \? collapseLabel : expandLabel\} \$\{row\.name\}`\}/);
 
   /* The strip's lead: a second decorative mark beside the picture, with the

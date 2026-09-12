@@ -1117,14 +1117,17 @@ test('the mark is named as a file, resolved by the bundler, and drawn by a compo
     /\.png|import\.meta\.glob/,
     'the row names a file of its own; the bundler owns that name'
   );
-  /* DECORATIVE, AND SAYING SO. An empty alt is what keeps the row announced
-     once: the button's own accessible name already carries the organisation,
-     and a tile with a name of its own would say it twice to the one reader who
-     cannot see that it is printed once. */
+  /* NAMED, AND NAMED ONCE. The tile's alt is the organisation's short name
+     (issue 326 acceptance: "present, uniform, named") — the same string the
+     heading prints, so the two cannot drift. It is not a second announcement:
+     the tile sits inside the row's control, whose aria-label replaces its
+     content in the accessible-name computation, which the rendering lane "the
+     role rows carry the organisations' own marks" measures as one name per
+     row. */
   assert.match(
     markup,
-    /<img\s+class="ledger-mark"\s+src=\{row\.markSrc\}\s+alt=""/,
-    'the mark tile lost its empty alt, or stopped drawing the URL it is handed'
+    /<img\s+class="ledger-mark"\s+src=\{row\.markSrc\}\s+alt=\{row\.name\}/,
+    'the mark tile lost the organisation\u2019s name as its alt, or stopped drawing the URL it is handed'
   );
   assert.match(markup, /decoding="async"/);
   assert.doesNotMatch(

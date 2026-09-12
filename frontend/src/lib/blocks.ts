@@ -271,8 +271,8 @@ export type LedgerRow = {
    * leads the name (owner ruling, 2026-09-12, issue 326). A resolved URL
    * rather than a file name: the binding layer owns the bundler's file map, so
    * this component draws a picture it is handed and knows no path of its own.
-   * The tile is decorative — an empty alt — because the row's own accessible
-   * name already carries the organisation. */
+   * The tile's accessible name is the short name beside it (issue 326), and
+   * the row's own control names the row, so neither is announced twice. */
   readonly name: string;
   readonly markSrc: string;
   /* The one-line description under (or beside) the name. */

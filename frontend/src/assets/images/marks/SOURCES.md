@@ -60,7 +60,8 @@ one.
 
 ## Fathom5 — `fathom5.png`
 
-The circle mark on brand navy (`#E4ECEE` on `#1B2747`), from the company's own
+The circle mark on brand navy (`#E4ECEE` on `#1B2747` as published; the
+256-colour palette lands the ink on `#e4eced`), from the company's own
 site, used unaltered. Fathom5's two published vector assets are drawn only in a
 near-white ghost ink for a dark ground and would be invisible on this paper; no
 dark variant is published, and recolouring a trademark was rejected in favour

@@ -4539,11 +4539,13 @@ test('the experience section renders four complete roles, and no placeholder sur
     expect(entry.role, `"${entry.title}" renders no role`).not.toBe('');
     expect(entry.place, `"${entry.title}" renders no place`).not.toBe('');
     expect(entry.points, `"${entry.title}" renders no accomplishments`).toBeGreaterThan(0);
-    /* The organisation's own mark, drawn as a picture that says nothing: the
-       row's accessible name carries the employer, so an alt would name it
-       twice, and any alt at all is that failure. */
+    /* The organisation's own mark, named for the organisation it shows (issue
+       326: the tiles land "named") with the same short name the heading
+       prints. It is not a second announcement: the tile sits inside the row's
+       control, whose aria-label replaces its content in the accessible-name
+       computation — the accessibility lane above reads one name per row. */
     expect(entry.markTag, `"${entry.title}" draws no mark tile`).toBe('IMG');
-    expect(entry.markAlt, `"${entry.title}" gives its mark a name the row already carries`).toBe('');
+    expect(entry.markAlt, `"${entry.title}" gives its mark a name other than its own`).toBe(entry.title);
     /* And the employer is named ONCE (owner ruling, 2026-09-12, issue 326).
        The row keeps its one outbound link — the ruling was about the NAME —
        and that link prints the host it goes to, so the only visible mention of
@@ -11625,6 +11627,7 @@ for (const viewport of markViewports) {
           ...box(tile),
           tag: tile.tagName,
           alt: tile.getAttribute('alt'),
+          name: tile.closest('.ledger-row')?.querySelector('.ledger-name')?.textContent.trim() ?? null,
           decoded: tile.complete && tile.naturalWidth > 0,
           square: tile.naturalWidth === tile.naturalHeight,
           sameOrigin:
@@ -11690,11 +11693,11 @@ for (const viewport of markViewports) {
     expect(observed.markTiles, 'the roles render no mark tiles').toHaveLength(4);
     for (const tile of observed.markTiles) {
       expect(tile.tag, 'a role mark is not an image').toBe('IMG');
-      /* Decorative, and the CSP's own subject: the origin serves
-         `default-src 'self'`, so a mark that ever pointed off-origin would not
-         load at all — this is the measurement that says the vendored bytes are
-         what arrived. */
-      expect(tile.alt, 'a role mark announces a name the row already carries').toBe('');
+      /* Named for the organisation it shows (issue 326), and the CSP's own
+         subject: the origin serves `default-src 'self'`, so a mark that ever
+         pointed off-origin would not load at all — this is the measurement
+         that says the vendored bytes are what arrived. */
+      expect(tile.alt, 'a role mark carries no organisation name').toBe(tile.name);
       expect(tile.decoded, 'a role mark painted an empty frame; its bytes never arrived').toBe(true);
       expect(tile.sameOrigin, 'a role mark loaded from somewhere other than the origin').toBe(true);
       expect(tile.square, 'a role mark tile is not a square file; drawing it square distorts it').toBe(

@@ -78,10 +78,12 @@
             the rest of the sheet is ruled with — which is what makes a pale
             mark and a dark badge read as one set rather than four strangers.
 
-            THE ALT IS EMPTY ON PURPOSE. The row's accessible name already
-            carries the organisation, and a tile that also announced it would
-            say the name twice to the one reader who cannot see that it is
-            printed once.
+            THE ALT IS THE ORGANISATION'S NAME (issue 326: the tiles land
+            "named"). It is never said twice: the tile sits inside the row's
+            control, whose aria-label replaces its content in the name
+            computation, so the row announces "Expand <name>" and the picture
+            names its subject only when a reader asks the image itself. The
+            same short name the heading prints, so the two can never disagree.
 
             The width and height are the tile's OWN pixels, so the box is
             reserved before the picture arrives; tests/sections.test.mjs reads
@@ -92,7 +94,7 @@
           <img
             class="ledger-mark"
             src={row.markSrc}
-            alt=""
+            alt={row.name}
             width={96}
             height={96}
             decoding="async" />
