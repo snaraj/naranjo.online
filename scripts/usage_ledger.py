@@ -110,8 +110,12 @@ KIND_CONTRIBUTIONS = "contributions"
 KIND_STREAK = "streak"
 KIND_COMMIT = "commit"
 KIND_STARS = "stars"
+# open-issues and open-pulls were recorded until coding-projects/v2 stopped
+# carrying them (2026-09-12). They stay in the vocabulary so the rows already
+# in the ledger remain valid readings; no snapshot records them any more.
 KIND_OPEN_ISSUES = "open-issues"
 KIND_OPEN_PULLS = "open-pulls"
+KIND_CLOSED_PULLS = "closed-pulls"
 KIND_PUSHED = "pushed"
 KIND_SKILL_XP = "skill-xp"
 KIND_SKILL_LEVEL = "skill-level"
@@ -130,7 +134,13 @@ STREAM_KINDS = {
     ),
     STREAM_SESSIONS: (KIND_SESSION,),
     STREAM_GITHUB: (KIND_CONTRIBUTIONS, KIND_STREAK, KIND_COMMIT),
-    STREAM_PROJECTS: (KIND_STARS, KIND_OPEN_ISSUES, KIND_OPEN_PULLS, KIND_PUSHED),
+    STREAM_PROJECTS: (
+        KIND_STARS,
+        KIND_OPEN_ISSUES,
+        KIND_OPEN_PULLS,
+        KIND_CLOSED_PULLS,
+        KIND_PUSHED,
+    ),
     STREAM_OSRS: (
         KIND_SKILL_XP,
         KIND_SKILL_LEVEL,

@@ -104,8 +104,9 @@ PROJECTS = {
             "description": "sentinel",
             "stars": 4,
             "pushedAt": "2026-09-10T12:00:00Z",
-            "openIssues": 2,
-            "openPulls": 1,
+            "closedPulls": 9,
+            "release": "v1.2.3",
+            "pinned": True,
         }
     ]
 }
@@ -383,13 +384,28 @@ class SnapshotRowsTest(SnapshotCase):
             rows,
             {
                 ("stars", "stars", 4),
-                ("open-issues", "count", 2),
-                ("open-pulls", "count", 1),
+                ("closed-pulls", "count", 9),
                 ("pushed", "epoch-seconds", pushed),
             },
         )
         self.assertEqual({entry["day"] for entry in self.rows("projects")}, {TODAY})
         self.assertEqual({entry["source"] for entry in self.rows("projects")}, {"repo-one"})
+
+    def test_the_retired_v1_tallies_are_not_recorded_even_when_a_row_carries_them(self):
+        # coding-projects/v2 carries no openIssues/openPulls; a row that did
+        # would be drift on the wire, and the ledger records nothing under the
+        # two retired kinds rather than a reading the panel no longer reports.
+        row = dict(PROJECTS["repos"][0], openIssues=2, openPulls=1)
+        self.take(all_panels(**{
+            snapshot.panel_url(SITE, "coding-projects"): FakeResponse(
+                envelope("coding-projects", "coding-projects/v2", {"repos": [row]}),
+                snapshot.panel_url(SITE, "coding-projects"),
+            )
+        }))
+        kinds = {entry["kind"] for entry in self.rows("projects")}
+        self.assertEqual(kinds, {"stars", "closed-pulls", "pushed"})
+        self.assertNotIn("open-issues", kinds)
+        self.assertNotIn("open-pulls", kinds)
 
     def test_every_skill_and_boss_figure_is_recorded_under_its_name(self):
         self.take()
