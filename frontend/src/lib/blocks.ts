@@ -254,21 +254,27 @@ export type ActivityLink = {
 
 /* One openable row of a ledger: four columns of fact and a drawer of points.
  * The row itself is the disclosure control, so nothing inside it may be
- * interactive — the entry's outbound link therefore rides INSIDE the drawer
- * (`link`), where it is a link in its own right rather than a control nested
- * in a control, which is invalid and unreachable by a keyboard alike. */
+ * interactive.
+ *
+ * The entry's outbound link therefore rides INSIDE the drawer (`link`), where
+ * it is a link in its own right rather than a control nested in a control,
+ * which is invalid and unreachable by a keyboard alike. Its TEXT is where it
+ * goes, never who it is (owner ruling, 2026-09-12, issue 326): the row already
+ * prints the organisation's name in the heading, and that link printing it
+ * again was the third mention the owner counted. The information layer decides
+ * what a link says; this contract only says a row may carry one. */
 export type LedgerRow = {
   readonly key: string;
   /* The years, already written the way the source writes them. */
   readonly span: string;
-  /* The short name the row leads with, and the monogram tile that leads the
-   * name (owner design decision, 2026-09-11, issue 313). The monogram is
-   * DATA rather than initials this component derives: an employer's own short
-   * form is an editorial judgement, exactly as `name` already is, and a rule
-   * that guessed "UMBC LIDAR Research Group" would guess wrong. A trademark
-   * is never drawn — a monogram in the site's own ink is the mark. */
+  /* The short name the row leads with, and the URL of the square mark that
+   * leads the name (owner ruling, 2026-09-12, issue 326). A resolved URL
+   * rather than a file name: the binding layer owns the bundler's file map, so
+   * this component draws a picture it is handed and knows no path of its own.
+   * The tile is decorative — an empty alt — because the row's own accessible
+   * name already carries the organisation. */
   readonly name: string;
-  readonly mark: string;
+  readonly markSrc: string;
   /* The one-line description under (or beside) the name. */
   readonly role: string;
   /* Where it happened. */

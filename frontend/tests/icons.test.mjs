@@ -519,11 +519,14 @@ test('the words the marks replaced are still on the page or in its accessibility
   const gallery = componentSources['lib/components/MediaGallery.svelte'];
   assert.match(gallery, /aria-label=\{`\$\{name\} · \$\{countOf\(name\)\}`\}/);
 
-  /* The employer monogram is a mark for the eye only: the row's own accessible
-     name already carries the employer in full, so a tile that also announced
-     "PA" would say the name twice. */
+  /* The organisation's mark is a picture for the eye only (owner ruling,
+     2026-09-12, issue 326): the row's own accessible name already carries the
+     employer in full, so a tile with an alt would say the name twice. An empty
+     alt is the whole mechanism — aria-hidden on an <img> would hide a picture
+     that is already silent and leave a reader nothing either way. */
   const log = componentSources['lib/components/LedgerLog.svelte'];
-  assert.match(log, /<span class="ledger-monogram" aria-hidden="true">\{row\.mark\}<\/span>/);
+  assert.match(log, /<img\s+class="ledger-mark"\s+src=\{row\.markSrc\}\s+alt=""/);
+  assert.doesNotMatch(log, /class="ledger-mark"[^>]*alt="[^"]+"/, 'the mark tile announces a name of its own');
   assert.match(log, /aria-label=\{`\$\{open \? collapseLabel : expandLabel\} \$\{row\.name\}`\}/);
 
   /* The strip's lead: a second decorative mark beside the picture, with the

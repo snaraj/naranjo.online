@@ -142,3 +142,23 @@ RuneLite ships skill icons of its own under
 `runelite-client/src/main/resources/skill_icons/`; they were deliberately not
 used then and are not used now, so this boundary stays true and all game art in
 this repository has one source and one licence story.
+
+## Role-row organisation marks
+
+The four square tiles under `frontend/src/assets/images/marks/` carry the
+marks of the organisations the Professional Experience rows name (owner
+ruling, 2026-09-12, issue #326: the two-letter monograms issue #313 drew are
+replaced by the real marks, uniform and square). One of them — the Panasonic
+wordmark — carries an explicit public-domain licence from Wikimedia Commons;
+the other three are each organisation's own published mark, reproduced
+unaltered beyond scaling to identify the organisations this page's author
+worked for or attended. That is nominative, identifying use: no organisation
+here has granted a licence, and every mark remains its owner's trademark. UMBC
+publishes a usage rule for its shield, and these tiles comply with it.
+
+Each file's origin, its quoted licence or usage rule, and exactly what was
+done to it are recorded beside the files in
+`frontend/src/assets/images/marks/SOURCES.md`, which is the document a
+reviewer should read. Nothing was traced, redrawn, recoloured or generated,
+and a frontend test holds the directory to exactly the four tiles the work
+entries name.

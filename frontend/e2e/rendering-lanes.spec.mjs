@@ -4398,6 +4398,27 @@ test('the experience section renders four complete roles, and no placeholder sur
   page,
 }) => {
   await visit(page);
+  /* THE ROLE MARKS ARE PICTURES NOW (owner ruling, 2026-09-12, issue 326), so
+     "is the tile there" stopped being "is there a box": an <img> pointed at
+     bytes the build never emitted paints an empty frame of exactly the right
+     size, and every geometry assertion in this file would be satisfied by it.
+     Waiting for the decode is what makes the rest of the measurement mean
+     something, and it is the one question a source pin cannot answer. */
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            [...window.document.querySelectorAll('#work .ledger-mark')].filter(
+              (tile) => tile.complete && tile.naturalWidth > 0
+            ).length
+        ),
+      {
+        message:
+          'the role marks never decoded; a row is pointing at bytes this build did not emit',
+      }
+    )
+    .toBe(4);
   const observed = await page.evaluate(() => {
     const section = window.document.querySelector('#work');
     return {
@@ -4434,11 +4455,24 @@ test('the experience section renders four complete roles, and no placeholder sur
            section: it opens as a summary and expands on request. */
         open: entry.querySelector('.ledger-drawer')?.getAttribute('data-open') ?? '',
         expandLabel: entry.querySelector('.ledger-row')?.getAttribute('aria-label') ?? '',
-        /* The employer link's own text, which is the full legal name rather
-           than the row's short one — read from the DOM rather than through a
-           role query, because the drawer is closed and a closed drawer's
-           contents are correctly absent from the accessibility tree. */
+        /* THE ORGANISATION'S OWN MARK, replacing the monogram (owner ruling,
+           2026-09-12, issue 326). Read from the DOM rather than through a role
+           query, as everything else in this snapshot is: the drawer is closed
+           and a closed drawer's contents are correctly absent from the
+           accessibility tree. */
+        markTag: entry.querySelector('.ledger-mark')?.tagName ?? '',
+        markAlt: entry.querySelector('.ledger-mark')?.getAttribute('alt') ?? null,
+        /* The employer link's own text, which is the HOST it goes to since the
+           same ruling — where, not who — and the name it declares, which still
+           says whose site it is. */
         linkText: entry.querySelector('.ledger-link')?.textContent.trim() ?? '',
+        linkLabel: entry.querySelector('.ledger-link')?.getAttribute('aria-label') ?? '',
+        anchors: entry.querySelectorAll('a').length,
+        /* And the count the ruling is actually about: how many times the row's
+           own visible text says the organisation's name. The split is
+           case-sensitive on purpose — a host is lower case and is nobody's
+           second mention of the name as written. */
+        rowText: entry.textContent,
       })),
     };
   });
@@ -4478,6 +4512,26 @@ test('the experience section renders four complete roles, and no placeholder sur
     expect(entry.role, `"${entry.title}" renders no role`).not.toBe('');
     expect(entry.place, `"${entry.title}" renders no place`).not.toBe('');
     expect(entry.points, `"${entry.title}" renders no accomplishments`).toBeGreaterThan(0);
+    /* The organisation's own mark, drawn as a picture that says nothing: the
+       row's accessible name carries the employer, so an alt would name it
+       twice, and any alt at all is that failure. */
+    expect(entry.markTag, `"${entry.title}" draws no mark tile`).toBe('IMG');
+    expect(entry.markAlt, `"${entry.title}" gives its mark a name the row already carries`).toBe('');
+    /* And the employer is named ONCE (owner ruling, 2026-09-12, issue 326).
+       The row keeps its one outbound link — the ruling was about the NAME —
+       and that link prints the host it goes to, so the only visible mention of
+       the organisation is the heading. */
+    expect(entry.anchors, `"${entry.title}" renders ${entry.anchors} anchors; the drawer holds exactly one`).toBe(1);
+    expect(
+      entry.rowText.split(entry.title).length - 1,
+      `"${entry.title}" is printed ${entry.rowText.split(entry.title).length - 1} times in its own row`
+    ).toBe(1);
+    expect(entry.linkText, `"${entry.title}" carries no employer link to name`).not.toBe('');
+    expect(
+      entry.linkText,
+      `"${entry.title}" links through "${entry.linkText}", which is not a bare host`
+    ).toMatch(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/);
+    expect(entry.linkText, 'the drawer prints a host with the www label still on it').not.toMatch(/^www\./);
     /* Closed on arrival, and the control says what pressing it will do. */
     expect(entry.open, `"${entry.title}" opens its drawer before anyone asked`).toBe('false');
     expect(
@@ -4499,31 +4553,53 @@ test('the experience section renders four complete roles, and no placeholder sur
      The ledger has no per-role heading to borrow a name from: the section
      carries one heading and each role is a disclosure BUTTON over a drawer. So
      the same principle is measured on the two surfaces that do exist. The
-     button must answer to what pressing it does, naming its own employer, and
-     the employer link inside the drawer must still tell the reader a new tab
-     is coming. Measured through `getByRole` rather than read off the source,
-     because an accessible name is something the ENGINE computes and only an
-     engine can settle. */
+     button must answer to what pressing it does, naming its own employer —
+     EXACTLY, which is also what proves the tile beside it contributes nothing
+     to that name: a mark that grew an alt would append its words here and the
+     count would fall to zero. And the drawer's link must still tell a reader
+     whose site it is and that a new tab is coming, which its accessible name
+     carries while its visible text prints only the host (owner ruling,
+     2026-09-12, issue 326). Measured through `getByRole` rather than read off
+     the source, because an accessible name is something the ENGINE computes
+     and only an engine can settle. */
   for (const entry of observed.entries) {
     const control = page.getByRole('button', { name: `Expand ${entry.title}`, exact: true });
     await expect(
       control,
       `the "${entry.title}" row control does not answer to its own employer name`
     ).toHaveCount(1);
-    /* THE DRAWER IS OPENED TO REACH THE LINK, and that is the assertion as
-       much as the setup: a closed drawer's contents are correctly out of the
-       accessibility tree, so the link can only be named once the disclosure
-       has actually disclosed something. A control whose press changed nothing
-       fails on the count below rather than on the press. */
+    /* THE DRAWER IS OPENED, and what it discloses is the assertion: the
+       points, and nothing that names the employer again. A closed drawer's
+       contents are correctly out of the accessibility tree, so an open one is
+       the only place this can be settled — and a control whose press changed
+       nothing fails on the count below rather than on the press. */
     await control.click();
     await expect(
       page.getByRole('button', { name: `Collapse ${entry.title}`, exact: true }),
       `pressing the "${entry.title}" row did not open it`
     ).toHaveCount(1);
-    expect(entry.linkText, `"${entry.title}" carries no employer link to name`).not.toBe('');
+    const opened = page.locator('#work .ledger-entry').filter({ hasText: entry.title });
     await expect(
-      page.getByRole('link', { name: `${entry.linkText}, opens in a new tab`, exact: true }),
-      `the "${entry.title}" employer link no longer tells the reader a new tab is coming`
+      opened.locator('.ledger-points > li'),
+      `the "${entry.title}" drawer opened onto nothing`
+    ).toHaveCount(entry.points);
+    /* The link is disclosed, it prints where it goes, and its NAME still tells
+       a reader whose site it is and that a new tab is coming — the
+       accessibility tree was never the visible repetition the owner counted.
+       The name's composition is executed against the entries in
+       tests/sections.test.mjs; what only an engine can settle is that the
+       declared name is the one the accessibility tree actually computed. */
+    expect(
+      entry.linkLabel,
+      `the "${entry.title}" link declares "${entry.linkLabel}", which does not name a site or a new tab`
+    ).toMatch(/^.+ website, opens in a new tab$/);
+    expect(
+      entry.linkLabel.replace(/ website, opens in a new tab$/, ''),
+      'the link is named after the host it prints rather than after its employer'
+    ).not.toBe(entry.linkText);
+    await expect(
+      opened.getByRole('link', { name: entry.linkLabel, exact: true }),
+      `the "${entry.title}" employer link no longer answers to the name it declares`
     ).toHaveCount(1);
     /* Left as it was found, so the next role is measured from the same closed
        start this section ships in. */
@@ -11406,7 +11482,7 @@ test('the contribution calendar trails today past a stalled payload, and says so
  *
  * Both viewports, because the chrome row and the ledger rows lay out
  * differently on a phone — the place label is hidden entirely below 45rem and
- * the ledger row restacks into a monogram column, a text column and the
+ * the ledger row restacks into a mark column, a text column and the
  * chevron — so a measurement taken only at the reading width would be a
  * measurement of one of the two layouts.
  * ======================================================================== */
@@ -11448,6 +11524,25 @@ for (const viewport of markViewports) {
       }).observe({ type: 'layout-shift', buffered: true });
     });
     await visit(page);
+    /* The four role marks are PICTURES since the owner's ruling of 2026-09-12
+       (issue 326), so they are waited for rather than assumed: an <img> whose
+       bytes never arrived paints an empty frame at exactly the size this lane
+       is about to measure, and every box below would be satisfied by it. */
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              [...window.document.querySelectorAll('.ledger-mark')].filter(
+                (tile) => tile.complete && tile.naturalWidth > 0
+              ).length
+          ),
+        {
+          message:
+            'the role marks never decoded; a row is pointing at bytes this build did not emit',
+        }
+      )
+      .toBe(4);
 
     const observed = await page.evaluate(() => {
       const round = (value) => Math.round(value * 100) / 100;
@@ -11491,11 +11586,24 @@ for (const viewport of markViewports) {
                   ? 'the column head the phone restack drops'
                   : 'nothing',
         })),
-        /* The monogram column: one square per role, all the same size, and
-           every employer name starting at the same inline offset. A track
-           that varied per row is the defect a fixed column exists to prevent,
-           and it is invisible until two rows are compared. */
-        monograms: [...window.document.querySelectorAll('.ledger-monogram')].map(box),
+        /* The mark column: one square per role, all the same size, every
+           picture actually decoded, and every employer name starting at the
+           same inline offset. A track that varied per row is the defect a
+           fixed column exists to prevent, and it is invisible until two rows
+           are compared. The organisation's own tile replaced the monogram on
+           the owner's ruling of 2026-09-12 (issue 326), so "square" is now a
+           claim about a PICTURE: a tile the bundler emitted at some other
+           aspect would be drawn into this box and distorted. */
+        markTiles: [...window.document.querySelectorAll('.ledger-mark')].map((tile) => ({
+          ...box(tile),
+          tag: tile.tagName,
+          alt: tile.getAttribute('alt'),
+          decoded: tile.complete && tile.naturalWidth > 0,
+          square: tile.naturalWidth === tile.naturalHeight,
+          sameOrigin:
+            new URL(tile.currentSrc || tile.src, window.location.href).origin ===
+            window.location.origin,
+        })),
         names: [...window.document.querySelectorAll('.ledger-name')].map((node) => box(node).x),
         /* THE NAV IS ONE LINE AND IT SCROLLS (owner ruling, 2026-09-12, issue
            325: words again, "and let it be a carousel as well as it was
@@ -11552,17 +11660,28 @@ for (const viewport of markViewports) {
       expect(mark.ink, `a mark (${mark.classes}) painted no ink`).toMatch(/^rgba?\(/);
     }
 
-    expect(observed.monograms, 'the roles render no monogram tiles').toHaveLength(4);
-    for (const tile of observed.monograms) {
-      expect(tile.height, 'a monogram tile is not square').toBeCloseTo(tile.width, 1);
-      expect(tile.width, 'a monogram tile has a different size from its siblings').toBeCloseTo(
-        observed.monograms[0].width,
+    expect(observed.markTiles, 'the roles render no mark tiles').toHaveLength(4);
+    for (const tile of observed.markTiles) {
+      expect(tile.tag, 'a role mark is not an image').toBe('IMG');
+      /* Decorative, and the CSP's own subject: the origin serves
+         `default-src 'self'`, so a mark that ever pointed off-origin would not
+         load at all — this is the measurement that says the vendored bytes are
+         what arrived. */
+      expect(tile.alt, 'a role mark announces a name the row already carries').toBe('');
+      expect(tile.decoded, 'a role mark painted an empty frame; its bytes never arrived').toBe(true);
+      expect(tile.sameOrigin, 'a role mark loaded from somewhere other than the origin').toBe(true);
+      expect(tile.square, 'a role mark tile is not a square file; drawing it square distorts it').toBe(
+        true
+      );
+      expect(tile.height, 'a mark tile is not drawn square').toBeCloseTo(tile.width, 1);
+      expect(tile.width, 'a mark tile has a different size from its siblings').toBeCloseTo(
+        observed.markTiles[0].width,
         1
       );
     }
     expect(
       new Set(observed.names).size,
-      `the employer names start at ${new Set(observed.names).size} different offsets; the monogram column varies per row`
+      `the employer names start at ${new Set(observed.names).size} different offsets; the mark column varies per row`
     ).toBe(1);
     expect(
       new Set(observed.navLinks.map((link) => link.y)).size,

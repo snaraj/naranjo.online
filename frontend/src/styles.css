@@ -734,12 +734,21 @@
      name track spent on white space. */
   --ledger-spread-gap: 2.5rem;
   --ledger-cell-gap: 0.75rem;
-  /* The employer monogram's square (owner design decision, 2026-09-11, issue
-     313): a hairline box the size of the ledger's other row furniture, not a
-     logo. Its own token because the row grid declares it as a TRACK and the
-     tile declares it as a box, and a row whose track and tile disagree is a
-     row with a gap down one side of every entry. */
-  --ledger-monogram: 1.75rem;
+  /* The organisation mark's square (owner ruling, 2026-09-12, issue 326): a
+     hairline box holding the organisation's own tile. Its own token because
+     the row grid declares it as a TRACK and the tile declares it as a box, and
+     a row whose track and tile disagree is a row with a gap down one side of
+     every entry.
+
+     IT IS THE SITE'S CONTROL TARGET, not a length of its own (owner decision,
+     2026-09-12). The first cut drew the tiles at 1.75rem, the size of the
+     letters they replaced, and a wordmark fitted into that box — Panasonic's
+     is 8.7:1 — drew about 22 x 3 CSS pixels and read as a dark bar rather than
+     as a mark. 2.75rem is the one length this sheet already uses for something
+     a reader is meant to resolve, so the tile borrows it instead of minting a
+     fifth number. Custom properties resolve at computed-value time, so naming
+     --control-target here, above its own declaration, is exact. */
+  --ledger-mark: var(--control-target);
 
   /* The mono LABEL, which is the ledger's connective tissue: section numbers,
      column heads, sub-lines, the footer. One size, one tracking, everywhere. */
@@ -2222,7 +2231,7 @@ h1 {
 
 .ledger-row {
   display: grid;
-  grid-template-columns: 8.75rem var(--ledger-monogram) 1.1fr 1.3fr 9.375rem var(--control-target);
+  grid-template-columns: 8.75rem var(--ledger-mark) 1.1fr 1.3fr 9.375rem var(--control-target);
   align-items: center;
   gap: var(--ledger-column-gap);
   min-block-size: var(--control-target);
@@ -2235,22 +2244,25 @@ h1 {
   font: inherit;
 }
 
-/* THE MONOGRAM TILE (owner design decision, 2026-09-11, issue 313): two
-   letters in a hairline square, in the sheet's own rule colour and the sheet's
-   own mono face. It is deliberately NOT a logo — a logo is a trademark, and
-   the page draws none — and deliberately not a disc or a filled chip either,
-   because the ledger rules everything else it draws with the same hairline.
+/* THE MARK TILE (owner ruling, 2026-09-12, issue 326): the organisation's own
+   mark, vendored as one square tile on the sheet's paper, inside the same
+   hairline the ledger rules everything else with. Issue 313 set two letters
+   here instead; the hairline is what survived that decision, because it is
+   what makes a black wordmark, a navy badge, a pale ring and a coloured shield
+   read as one set of four rather than four borrowed pictures.
+
+   `display: block` because an inline image sits on the text baseline and
+   leaves a descender's worth of air under itself — in a row whose other cells
+   are centred, that air is a tile hanging low.
+
    Square by construction: one token drives the tile here and the row's track
-   above, so the two cannot disagree. */
-.ledger-monogram {
-  display: grid;
-  place-items: center;
-  inline-size: var(--ledger-monogram);
-  block-size: var(--ledger-monogram);
+   above, so the two cannot disagree, and both axes come from it — which is why
+   no object-fit is needed, every tile being square already. */
+.ledger-mark {
+  display: block;
+  inline-size: var(--ledger-mark);
+  block-size: var(--ledger-mark);
   border: var(--ledger-hairline) solid var(--ledger-rule);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-figure-size);
-  color: var(--ledger-muted);
 }
 
 .ledger-row:hover {
@@ -2349,6 +2361,13 @@ h1 {
   background: var(--ledger-ink);
 }
 
+
+/* THE DRAWER'S LINK (issue 243, kept by the owner's ruling of 2026-09-12,
+   issue 326). What changed is its TEXT, not its existence: it prints the host
+   it goes to rather than the organisation's name a second time. Mono and muted
+   because it reads as an address, at the site's touch floor because it is a
+   control, and indented to the same 10.25rem the points are so the drawer has
+   one left edge. */
 .ledger-link {
   display: inline-flex;
   align-items: center;
@@ -3384,7 +3403,7 @@ h1 {
      the page does not scroll sideways at any width, and a table that did would
      take the whole document with it. */
   .ledger-row {
-    grid-template-columns: var(--ledger-monogram) minmax(0, 1fr) var(--control-target);
+    grid-template-columns: var(--ledger-mark) minmax(0, 1fr) var(--control-target);
     grid-template-areas:
       'mark span chevron'
       'mark name chevron'
@@ -3392,16 +3411,16 @@ h1 {
       'mark place chevron';
     align-items: start;
     row-gap: 0.125rem;
-    /* The stacked row pays for the monogram out of its own gutters rather than
+    /* The stacked row pays for the mark out of its own gutters rather than
        mostly out of the words. At the sheet's 1.5rem column gap the tile would
-       cost the text column 3.25rem — the tile plus a second gutter; at 0.625rem
-       it costs 1.5rem, which is 24px of a 390px viewport. The gutter is
+       cost the text column 4.25rem — the tile plus a second gutter; at 0.625rem
+       it costs 3.375rem, which is 54px of a 390px viewport. The gutter is
        narrowed only here, where there is one text column and a control beside
        it; the desktop row keeps the sheet's own gap. */
     column-gap: 0.625rem;
   }
 
-  .ledger-monogram {
+  .ledger-mark {
     grid-area: mark;
     align-self: center;
   }
@@ -3436,6 +3455,7 @@ h1 {
   .ledger-link {
     margin-inline-start: 0;
   }
+
 
   /* THE COLUMNS STACK, repositories first (owner design decision, 2026-09-11,
      issue 318). One track, and the gap that separated them side by side now

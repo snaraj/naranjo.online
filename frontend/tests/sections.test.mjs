@@ -28,6 +28,7 @@ import { commitColumnHead, commitColumnId, projectsCommitsProps } from '../src/l
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
 import {
   roleLedgerProps,
+  siteHost,
   workCollapseLabel,
   workEntries,
   workExpandLabel,
@@ -54,6 +55,33 @@ import {
 } from '../src/lib/gallery.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
+
+/* THE ROLE LEDGER'S PROPS ARE A FUNCTION OF ONE RESOLVER (owner ruling,
+   2026-09-12, issue 326). Each role's mark is a vendored tile, and turning its
+   FILE NAME into the content-hashed URL the build emitted is the bundler's
+   job — done in lib/blocks/workHistory.ts, which is therefore not importable
+   by plain Node. Handing the adapter a resolver is what keeps it a pure
+   function this suite can execute, and the stub below is deliberately NOT the
+   identity function: a props object that carried the file name through
+   unresolved would still deep-equal the entries, and this way it cannot. */
+const markStub = (file) => `resolved:${file}`;
+const roleLedger = roleLedgerProps(markStub);
+
+/* HTML comments removed, to a fixed point. A pin that reads markup has to read
+   the markup: this component explains at length, in prose, the very anchor the
+   employer-named-once pin below forbids. One pass is not enough — removing a
+   comment can splice a new opener out of the text either side of it — which is
+   the incomplete multi-character sanitization CodeQL flags, and looping to a
+   fixed point is what makes "removed" mean removed. */
+const withoutHtmlComments = (source) => {
+  let stripped = source;
+  let previous;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(/<!--[\s\S]*?-->/g, ' ');
+  } while (stripped !== previous);
+  return stripped;
+};
 
 /* The ledger's own components (owner directive of 2026-09-03, issue 287):
    EntryLog drew the work history AND the projects feed as cards, and both
@@ -773,18 +801,32 @@ test('the experience section carries four complete real entries, newest first', 
        each is a shorter rendering of the long form beside it — and both are
        required rather than optional so a later entry cannot ship without one
        and quietly render an empty column. */
-    for (const field of ['company', 'short', 'years', 'role', 'dates', 'location', 'site']) {
+    for (const field of ['company', 'short', 'years', 'markFile', 'role', 'dates', 'location', 'site']) {
       assert.ok(entry[field].trim().length > 0, `an experience entry has an empty ${field}`);
     }
     /* The employer's own home on the web (issue 243), and it is checked rather
        than merely present: an absolute https origin, no credentials, no query,
        no path pretending to be one. A relative or http value would render an
-       anchor the reader could press and the site could not honour. */
+       anchor the reader could press and the site could not honour — and since
+       the owner's ruling of 2026-09-12 (issue 326) it would also be the text
+       the drawer PRINTS, so a malformed value is now visible as well as
+       unfollowable. */
     const site = new URL(entry.site);
     assert.equal(site.protocol, 'https:', `${entry.company} links over ${site.protocol}`);
     assert.equal(site.username, '', `${entry.company}'s link carries credentials`);
     assert.equal(site.search, '', `${entry.company}'s link carries a query string`);
     assert.ok(site.hostname.includes('.'), `${entry.company} links to ${site.hostname}`);
+    /* THE MARK IS A FILE NAME, and it is checked as one (owner ruling,
+       2026-09-12, issue 326). A bare name, no directory and no traversal: the
+       binding layer looks the value up in a map keyed by exactly one
+       directory, so a path here resolves to nothing and renders a tile with no
+       picture. The inventory test below is the other half — this one says the
+       name is well formed, that one says the file is really there. */
+    assert.match(
+      entry.markFile,
+      /^[a-z0-9]+\.png$/,
+      `${entry.company} names "${entry.markFile}", which is not a plain tile file name`
+    );
     assert.ok(entry.points.length > 0, `${entry.company} lists no accomplishments`);
     for (const point of entry.points) {
       assert.ok(point.trim().length > 0, `${entry.company} carries an empty accomplishment`);
@@ -799,6 +841,13 @@ test('the experience section carries four complete real entries, newest first', 
   }
   // Every employer appears once, so the keyed each below cannot collide.
   assert.equal(new Set(workEntries.map((entry) => entry.company)).size, workEntries.length);
+  // And every employer wears its OWN mark: four rows sharing one tile is the
+  // copy-paste this catches, and it is invisible until two rows are compared.
+  assert.equal(
+    new Set(workEntries.map((entry) => entry.markFile)).size,
+    workEntries.length,
+    'two roles are drawn with the same mark tile'
+  );
 
   // NEWEST FIRST, read off the entries themselves rather than asserted about
   // them: the first entry is the current role, and every later one names an
@@ -833,7 +882,7 @@ test('the experience section carries four complete real entries, newest first', 
   // It binds the ledger log (owner directive of 2026-09-03, issue 287).
   assert.match(
     workBinding,
-    /staticBlock\('work-history', LedgerLog, roleLedgerProps\)/,
+    /staticBlock\(\s*'work-history',\s*LedgerLog,\s*roleLedgerProps\(markUrl\)\s*\)/,
     'the experience block still declares a section note'
   );
 
@@ -845,43 +894,101 @@ test('the experience section carries four complete real entries, newest first', 
      facts are pinned as the three fields they became — which is the same
      claim with one fewer place to lose something in. */
   assert.deepEqual(
-    roleLedgerProps.rows.map((row) => [row.key, row.span, row.name, row.role, row.place, row.points]),
+    roleLedger.rows.map((row) => [row.key, row.span, row.name, row.markSrc, row.role, row.place, row.points]),
     workEntries.map((entry) => [
       entry.company,
       entry.years,
       entry.short,
+      /* The mark's URL is the resolver's answer for THIS entry's file, which
+         is why the stub is not the identity: a row that resolved its
+         neighbour's tile would still be four URLs of four real files, and
+         only an expectation built per entry can see the swap. */
+      markStub(entry.markFile),
       entry.role,
       entry.location,
       entry.points,
     ])
   );
-  /* THE EMPLOYER LINK SURVIVES AND MOVES (issue 243, carried into the ledger):
-     the row itself is the disclosure control now, and an anchor inside a
-     button is invalid content no keyboard can reach — so the link renders
-     inside the drawer, still the employer's own public home, still opened in a
-     new tab, still saying so in its accessible name. */
-  assert.deepEqual(
-    roleLedgerProps.rows.map((row) => [row.link.text, row.link.href, row.link.label]),
-    workEntries.map((entry) => [
-      entry.company,
-      entry.site,
-      `${entry.company}, opens in a new tab`,
-    ])
+  /* THE EMPLOYER IS NAMED ONCE (owner ruling, 2026-09-12, issue 326): "inside
+     Professional Experience there is no need to list the company name 3 times
+     in a row, only once is enough." The three were the tile's initials, the
+     heading, and the long name again in the drawer's link (issue 243, which
+     had put it there because an anchor inside a button is invalid content no
+     keyboard can reach).
+
+     The NAME was the objection, not the link. The tile carries a picture, the
+     heading keeps the name, and the link prints the host it goes to — so the
+     row says WHO once and WHERE once, and this walks every visible cell of
+     every row to prove the count is one.
+
+     The comparison is exact and case-sensitive on purpose. A host is lower
+     case and is not the name as written: "fathom5.com" contains the letters of
+     "Fathom5" and is nobody's second mention of it, while a cell that IS the
+     name is the repetition the owner counted. */
+  for (const [index, row] of roleLedger.rows.entries()) {
+    const entry = workEntries[index];
+    const printed = [row.span, row.name, row.role, row.place, ...row.points, row.link.text];
+    const named = printed.filter((cell) => cell === entry.company || cell === entry.short);
+    assert.deepEqual(
+      named,
+      [entry.short],
+      `"${entry.company}" is printed ${named.length} times in its own row; the owner asked for one`
+    );
+    /* WHERE IT GOES, DERIVED from the address it goes to (owner decision,
+       2026-09-12): the authority, no scheme, no path, no port, no `www.`. A
+       fourth spelled string would be a fourth thing to keep in step with the
+       other three. */
+    assert.equal(row.link.text, siteHost(entry.site));
+    assert.doesNotMatch(row.link.text, /[:/\s]/, `the drawer prints "${row.link.text}" rather than a bare host`);
+    assert.doesNotMatch(row.link.text, /^www\./, `the drawer prints "${row.link.text}" with the www label still on it`);
+    assert.equal(row.link.href, entry.site);
+    /* The accessible name may still carry the employer: a screen reader meets
+       this link out of the row's context, and assistive technology is not the
+       visible repetition the owner counted. It still says a new tab is coming,
+       which is this page's convention for every outbound anchor. */
+    assert.equal(row.link.label, `${entry.company} website, opens in a new tab`);
+  }
+  const ledgerMarkup = withoutHtmlComments(ledgerLog);
+  assert.match(ledgerMarkup, /<a\s+class="ledger-link"/);
+  /* Drawn on HAVING a link and on nothing else. The markup pins above all
+     survive a condition that can never be true — an anchor nobody renders is
+     still an anchor in the file — so the condition is read back too: the row
+     contract makes `link` optional, and "the drawer draws one when the row has
+     one" is the claim, not "the file contains an anchor". */
+  assert.match(
+    ledgerMarkup,
+    /\{#if row\.link && row\.link\.href\}/,
+    'the drawer draws its link on some condition other than the row having one'
   );
-  assert.match(ledgerLog, /<a\s+class="ledger-link"/);
-  assert.match(ledgerLog, /target="_blank"/);
-  assert.match(ledgerLog, /rel="noopener noreferrer"/);
-  assert.match(ledgerLog, /aria-label=\{row\.link\.label\}/);
+  assert.match(ledgerMarkup, /target="_blank"/);
+  assert.match(ledgerMarkup, /rel="noopener noreferrer"/);
+  assert.match(ledgerMarkup, /aria-label=\{row\.link\.label\}>\{row\.link\.text\}<\/a>/);
   assert.deepEqual(
-    [...ledgerLog.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression),
+    [...ledgerMarkup.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression),
     ['row.link.href'],
     'the ledger may render exactly the one validated href and construct none'
   );
+  assert.deepEqual(
+    [...new Set([...ledgerMarkup.matchAll(/\{row\.(\w+)\}/g)].map(([, field]) => field))].toSorted(),
+    ['markSrc', 'name', 'place', 'role', 'span'],
+    'the row prints a field it did not before, or has stopped printing one'
+  );
+
+  /* THE HOST DERIVATION, driven directly with the shapes the four entries do
+     not have: a path, a port, credentials, and a host with no `www.` label to
+     strip. A derivation only ever exercised on four well-behaved addresses is
+     a derivation nobody has tested. */
+  assert.equal(siteHost('https://www.example.com/careers/team'), 'example.com');
+  assert.equal(siteHost('https://www.example.com:8443/x?y=1'), 'example.com');
+  assert.equal(siteHost('https://example.com'), 'example.com');
+  assert.equal(siteHost('https://wwwx.example.com'), 'wwwx.example.com', 'the www strip ate a real label');
+  assert.equal(siteHost('https://sub.www.example.com'), 'sub.www.example.com', 'the www strip is not anchored');
+  assert.throws(() => siteHost('not a url'), TypeError, 'an unparseable address renders as text instead of failing');
   /* The chevron's words are DATA, so the component composes no sentence: a
      component that wrote "Expand Fathom5" would be a component with an opinion
      about English. */
-  assert.equal(roleLedgerProps.expandLabel, workExpandLabel);
-  assert.equal(roleLedgerProps.collapseLabel, workCollapseLabel);
+  assert.equal(roleLedger.expandLabel, workExpandLabel);
+  assert.equal(roleLedger.collapseLabel, workCollapseLabel);
   assert.match(ledgerLog, /aria-label=\{`\$\{open \? collapseLabel : expandLabel\} \$\{row\.name\}`\}/);
   /* And the row is a REAL disclosure: a button with aria-expanded, so the
      drawer is operable by keyboard and announced as a state rather than being
@@ -891,8 +998,154 @@ test('the experience section carries four complete real entries, newest first', 
   // request, which is what the owner asked for.
   assert.match(ledgerLog, /let opened = \$state\(new Set<string>\(\)\)/);
   // An empty roster says so rather than rendering nothing at all.
-  assert.equal(roleLedgerProps.emptyNote.trim().length > 0, true);
+  assert.equal(roleLedger.emptyNote.trim().length > 0, true);
   assert.match(ledgerLog, /\{#if rows\.length === 0\}\s*<p class="ledger-note">\{emptyNote\}<\/p>/);
+});
+
+test('the role marks are exactly the four vendored tiles the entries name, each a square under its ceiling (owner ruling, 2026-09-12, issue 326)', async () => {
+  /* The third dated requirement-11 exception, and the narrowest of the three:
+     four organisation marks, ~10KB the whole set, fetched once from each
+     organisation's own publication and vendored with their provenance beside
+     them. The CSP is `default-src 'self'`, so an external logo could never
+     load at all — a mark on this page is a vendored file or it is nothing.
+
+     The allowlist half is what makes a missing tile a red build rather than an
+     empty box: a build that dropped a file, or a fifth file nobody reviewed,
+     fails here before a reader ever meets a row with no mark in it. */
+  const dir = new URL('../src/assets/images/marks/', import.meta.url);
+  const entries = (await readdir(dir)).filter((entry) => !entry.startsWith('.'));
+  const named = workEntries.map((entry) => entry.markFile);
+  assert.deepEqual(
+    [...entries].sort(),
+    [...named, 'SOURCES.md'].sort(),
+    'the vendored marks directory holds a file the work entries and the manifest do not both name'
+  );
+
+  /* THE SQUARE IS READ OUT OF THE BYTES, not asserted about them. The owner
+     asked for uniform squares — "LinkedIn style … they all have to be uniform
+     so square may be the best way" — and a tile that was not square would be
+     drawn into a square box and distort the mark it exists to show. The
+     component's width and height attributes are checked against the SAME
+     measurement, so the two numbers that reserve the box cannot drift from the
+     file they describe.
+
+     The ceiling is 16KB per tile against a measured largest of 3,557 bytes:
+     headroom for a re-cut mark, nowhere near enough for somebody to drop a
+     photograph in here. */
+  const declared = /<img\s+class="ledger-mark"[\s\S]*?width=\{(\d+)\}\s*\n\s*height=\{(\d+)\}/.exec(ledgerLog);
+  assert.ok(declared, 'the row no longer draws its mark as an <img> with its own pixel size');
+  let total = 0;
+  for (const file of named) {
+    const bytes = await readFile(new URL(file, dir));
+    total += bytes.length;
+    assert.ok(bytes.length <= 16 * 1024, `${file} is ${bytes.length} bytes, over the 16KB per-mark ceiling`);
+    assert.equal(bytes.subarray(1, 4).toString('ascii'), 'PNG', `${file} is not a PNG`);
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    assert.equal(height, width, `${file} is ${width}x${height}; the marks are square`);
+    assert.equal(
+      Number(declared[1]),
+      width,
+      `${file} is ${width}px wide and the row reserves ${declared[1]}px for it`
+    );
+    assert.equal(
+      Number(declared[2]),
+      height,
+      `${file} is ${height}px tall and the row reserves ${declared[2]}px for it`
+    );
+  }
+  assert.ok(total <= 64 * 1024, `the vendored marks are ${total} bytes, over the 64KB total ceiling`);
+
+  /* PROVENANCE TRAVELS WITH THE ASSET (AGENTS.md, third-party attribution):
+     every tile is named in the note beside it, with where it came from and on
+     what terms. A mark added without its origin is the failure this catches. */
+  const sources = await read('../src/assets/images/marks/SOURCES.md');
+  for (const file of named) {
+    assert.ok(sources.includes(file), `SOURCES.md does not record where ${file} came from`);
+    assert.match(sources, /https:\/\//, 'SOURCES.md records no origin at all');
+  }
+  assert.match(sources, /licence|license/i, 'SOURCES.md states no terms for the vendored marks');
+  assert.match(sources, /trademark/i, 'SOURCES.md drops the trademark statement');
+
+  /* And the repository's one attribution index points at that note, the way it
+     already points at the textures' (AGENTS.md, "Attribution for third-party
+     assets"). These four are somebody else's TRADEMARKS, which is the fact a
+     reviewer opens ATTRIBUTION.md to find — a provenance note only the
+     directory knows about is a note nobody reads. */
+  const attribution = await readFile(new URL('../../ATTRIBUTION.md', import.meta.url), 'utf8');
+  assert.match(
+    attribution,
+    /frontend\/src\/assets\/images\/marks\/SOURCES\.md/,
+    'ATTRIBUTION.md does not send a reviewer to the marks\u2019 own provenance note'
+  );
+  assert.match(
+    attribution,
+    /remains its owner['\u2019]s trademark/,
+    'ATTRIBUTION.md drops the trademark boundary for the organisation marks'
+  );
+});
+
+test('the mark is named as a file, resolved by the bundler, and drawn by a component that knows no file (issue 326)', () => {
+  /* The same three-layer rule the gallery follows, for the same reason: a
+     component that spelled a file name would be a component the build could
+     silently break, and a data module that held a URL would be a data module
+     the bundler had to run. So work.ts names files, the binding resolves them
+     through import.meta.glob, and the row draws what it is handed. */
+  assert.match(workBinding, /import\.meta\.glob\('\.\.\/\.\.\/assets\/images\/marks\/\*\.png'/);
+  assert.match(workBinding, /markFiles\[`\.\.\/\.\.\/assets\/images\/marks\/\$\{file\}`\]/);
+  const markup = withoutHtmlComments(ledgerLog);
+  assert.doesNotMatch(
+    markup,
+    /\.png|import\.meta\.glob/,
+    'the row names a file of its own; the bundler owns that name'
+  );
+  /* DECORATIVE, AND SAYING SO. An empty alt is what keeps the row announced
+     once: the button's own accessible name already carries the organisation,
+     and a tile with a name of its own would say it twice to the one reader who
+     cannot see that it is printed once. */
+  assert.match(
+    markup,
+    /<img\s+class="ledger-mark"\s+src=\{row\.markSrc\}\s+alt=""/,
+    'the mark tile lost its empty alt, or stopped drawing the URL it is handed'
+  );
+  assert.match(markup, /decoding="async"/);
+  assert.doesNotMatch(
+    markup,
+    /loading="lazy"/,
+    'the marks are the first section of the sheet and the first row is above the fold at 390px; a lazy tile on some rows and not others is the inconsistency this forbids'
+  );
+  // Every row draws one, and the button around it keeps the accessible name
+  // that carries the employer.
+  assert.equal(
+    (markup.match(/<img\s+class="ledger-mark"/g) ?? []).length,
+    1,
+    'the row draws its mark somewhere other than the one place'
+  );
+  assert.match(markup, /aria-label=\{`\$\{open \? collapseLabel : expandLabel\} \$\{row\.name\}`\}/);
+
+  /* THE TILE'S BOX IS ONE TOKEN IN BOTH AXES, and the row's track reads the
+     same one — which is what makes the column square by construction rather
+     than by agreement. The hairline around it is the thing that survived issue
+     313's monogram: it is what makes a black wordmark, a navy badge, a pale
+     ring and a coloured shield read as one set of four. */
+  const rule = /\.ledger-mark \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(rule, /inline-size: var\(--ledger-mark\)/);
+  assert.match(rule, /block-size: var\(--ledger-mark\)/);
+  assert.match(rule, /border: var\(--ledger-hairline\) solid var\(--ledger-rule\)/);
+  assert.match(
+    styles,
+    /grid-template-columns: 8\.75rem var\(--ledger-mark\)/,
+    'the row track stopped reading the tile\u2019s own token; the column can drift from the tile'
+  );
+  /* And the token is the SITE'S control target rather than a fifth length
+     (owner decision, 2026-09-12): the tile is something a reader is meant to
+     resolve, and this sheet already has one size for that. A literal here
+     would be a number nothing else moves with. */
+  assert.match(
+    styles,
+    /--ledger-mark: var\(--control-target\)/,
+    'the mark box restated a length of its own instead of borrowing the site\u2019s control target'
+  );
 });
 
 /* THE SAME DOCTRINE, ONE SHAPE FEWER (owner directive of 2026-09-03, issue
@@ -913,7 +1166,7 @@ test('a row draws only the body it has, and every shipped row has one', () => {
   // The drawer is a region drawn from data, and the row's own points are what
   // fill it; an entry with none would open onto an empty box.
   assert.match(ledgerLog, /\{#each row\.points as point, index \(index\)\}/);
-  for (const row of roleLedgerProps.rows) {
+  for (const row of roleLedger.rows) {
     assert.ok(row.points.length > 0, `the ledger ships "${row.key}" with an empty drawer`);
   }
   /* THE RETIRED CELL STAYS RETIRED, in both places it could come back: the
@@ -1195,7 +1448,7 @@ test('the panel head reserves its row and draws no freshness line', async () => 
   assert.match(shell, /data-panel-status=\{status\}/);
   assert.match(shell, /data-panel-generated-at=\{generatedAt\}/);
   // The static work history has no envelope and no channel for a line at all.
-  assert.equal(roleLedgerProps.staleNote, undefined, 'the static work history grew a stale note');
+  assert.equal(roleLedger.staleNote, undefined, 'the static work history grew a stale note');
   /* THE ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
      issue 292): the Projects table renders no panel label, so the head's
      height can no longer come from its h2. Pinned where it is decided — the

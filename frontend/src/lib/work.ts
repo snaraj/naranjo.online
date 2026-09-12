@@ -7,8 +7,9 @@
  * nothing left to disclaim, and a "placeholder entries" line over four real
  * roles would be its own kind of false statement.
  *
- * The content is the owner's PORTFOLIO — employer, its public website, role,
- * dates, work location and what was accomplished there — the narrow exception
+ * The content is the owner's PORTFOLIO — employer, its mark, its public
+ * website, role, dates, work location and what was accomplished there — the
+ * narrow exception
  * requirement 12 names alongside the commit identity and the license. Nothing
  * beyond it is written down: no contact detail, no address, no account, no
  * private operational fact about any employer's systems. What is here is what
@@ -33,20 +34,27 @@ export interface WorkEntry {
    * shortening a name is an editorial judgement — "University of Maryland,
    * Baltimore County — LIDAR Research Group" has no mechanical short form, and
    * a rule that guessed one would guess wrong on the next entry. The long
-   * forms stay authoritative: they are what the accessible name and the
-   * drawer's link carry. */
+   * forms stay authoritative: `company` is what the ledger keys every row by,
+   * what the drawer link's accessible name carries, and what this module
+   * records as the employer's full name. */
   readonly short: string;
   readonly years: string;
-  /* The employer's MONOGRAM: two letters, the row's mark (owner design
-   * decision, 2026-09-11, issue 313). A logo is a trademark and this page
-   * draws none, so the mark is the employer's own initials set in the site's
-   * ink. It is data for the same reason `short` is — an institution's
-   * initials are an editorial judgement, and a rule deriving them from
-   * "University of Maryland, Baltimore County — LIDAR Research Group" would
-   * produce something nobody calls it. Two letters exactly, pinned by
-   * tests/sections.test.mjs: one reads as a typo and three do not fit the
-   * square. */
-  readonly mark: string;
+  /* The organisation's own MARK, as the file name of a vendored tile (owner
+   * ruling, 2026-09-12, issue 326). Issue 313 set the employer's initials in
+   * the site's own ink because a logo is a trademark; the owner has since
+   * looked at four lettered squares and asked for the real marks instead —
+   * "LinkedIn style … they all have to be uniform so square may be the best
+   * way". Each tile is one 96px square of the site's paper with the
+   * organisation's own mark fitted inside it, vendored under
+   * assets/images/marks with its provenance and licence note beside it; the
+   * marks are reproduced unaltered to identify the organisations this history
+   * names, and they remain their owners' trademarks.
+   *
+   * A FILE NAME rather than a URL, for the reason gallery.ts names files: the
+   * content-hashed URL is the bundler's to build, so it is built once in
+   * lib/blocks/workHistory.ts and this module stays executable by plain Node
+   * in tests/sections.test.mjs. */
+  readonly markFile: string;
   /* The role held there. */
   readonly role: string;
   /* The span, as the owner writes it — a portfolio date range, never an
@@ -56,13 +64,15 @@ export interface WorkEntry {
   /* Where the role was based. */
   readonly location: string;
   /* The employer's own home on the web (owner directive, 2026-08-28, issue
-   * 243). It is a public marketing address and nothing else: no account, no
-   * portal, no private host, which is what keeps it inside requirement 12's
-   * portfolio exception rather than outside it. Every one was resolved before
-   * being written down — the value here is the address that answered, so a
-   * reader is not sent through a redirect the site could have skipped.
-   * Required rather than optional: all four roles have one, and an optional
-   * field would invite a future entry to quietly ship without it. */
+   * 243, and kept by the owner's ruling of 2026-09-12, issue 326: the name was
+   * printed three times, the LINK was never the objection). It is a public
+   * marketing address and nothing else: no account, no portal, no private
+   * host, which is what keeps it inside requirement 12's portfolio exception
+   * rather than outside it. Every one was resolved before being written down —
+   * the value here is the address that answered, so a reader is not sent
+   * through a redirect the site could have skipped. Required rather than
+   * optional: all four roles have one, and an optional field would invite a
+   * future entry to quietly ship without it. */
   readonly site: string;
   /* What was accomplished, one bullet each. */
   readonly points: readonly string[];
@@ -73,7 +83,7 @@ export const workEntries: readonly WorkEntry[] = [
     company: 'Panasonic Avionics Corporation',
     short: 'Panasonic Avionics',
     years: '2023 —',
-    mark: 'PA',
+    markFile: 'panasonic.png',
     role: 'Software Engineer, Automation, DevOps and Tools',
     dates: 'July 2023 – Present',
     location: 'Irvine, CA',
@@ -91,7 +101,7 @@ export const workEntries: readonly WorkEntry[] = [
     company: 'Fathom5',
     short: 'Fathom5',
     years: '2022 – 23',
-    mark: 'F5',
+    markFile: 'fathom5.png',
     role: 'Software Engineer, Condition Based Maintenance',
     dates: 'Mar 2022 – July 2023',
     location: 'Austin, TX',
@@ -108,7 +118,7 @@ export const workEntries: readonly WorkEntry[] = [
     company: 'OnTrajectory',
     short: 'OnTrajectory',
     years: '2019',
-    mark: 'OT',
+    markFile: 'ontrajectory.png',
     role: 'Software Engineering Intern',
     dates: 'May 2019 – Aug 2019',
     location: 'Towson, MD',
@@ -122,7 +132,7 @@ export const workEntries: readonly WorkEntry[] = [
     company: 'University of Maryland, Baltimore County — LIDAR Research Group',
     short: 'UMBC LIDAR Research Group',
     years: '2017',
-    mark: 'UM',
+    markFile: 'umbc.png',
     role: 'Software Engineering Intern',
     dates: 'May 2017 – Aug 2017',
     location: 'Baltimore, MD',
@@ -144,36 +154,75 @@ export const workEntries: readonly WorkEntry[] = [
  * for — four cards of six bullets each was most of a screen before a reader
  * had chosen to read any of it.
  *
- * The employer link survives the change and moves INSIDE the drawer, because
- * the row itself is now the disclosure control and an anchor inside a button
- * is invalid content that no keyboard can reach. It is still the employer's
- * own public home, still opened in a new tab, still announced as doing so.
+ * THE EMPLOYER IS NAMED ONCE (owner ruling, 2026-09-12, issue 326): "inside
+ * Professional Experience there is no need to list the company name 3 times in
+ * a row, only once is enough." An open row said it three times — the initials
+ * in the tile, the short name in the heading, and the long name again in the
+ * link under the bullets. The NAME was the objection, not the link: the tile
+ * is the organisation's own mark now and carries no text at all, the heading
+ * keeps the name, and the link under the bullets prints the HOST it goes to.
+ * So the row says who once and where once, and the two are different facts.
+ *
+ * The host is DERIVED here rather than written down (owner decision,
+ * 2026-09-12). A fourth spelling of an employer is a fourth thing to keep in
+ * step with the other three, and this one has a mechanical answer: the
+ * authority of the address already in `site`. The leading `www.` goes with it,
+ * because it is a label the address works identically without and four rows
+ * reading "www.x / www.y / www.z / q" look like three rows and a typo. What is
+ * left is the one string a reader can check against the status bar before
+ * pressing.
+ *
+ * Nothing in the accessibility tree is a visible repetition, which is why the
+ * link's own name may still carry the employer: a screen reader meets the link
+ * out of the row's context, and "panasonic.aero, opens in a new tab" tells it
+ * nothing about whose site that is.
  *
  * The two words the chevron says are here rather than in the component for the
  * same reason every other label on this page is: a component that composed
  * "Expand Fathom5" would be a component with an opinion about English.
+ *
+ * IT IS A FUNCTION OF THE RESOLVER, not a constant, because the mark is a
+ * bundled file: `markFile` above is a NAME, and turning a name into a
+ * content-hashed URL is the bundler's job, done once in
+ * lib/blocks/workHistory.ts. Taking the resolver as an argument is what keeps
+ * this adapter a pure function plain Node can execute — tests/sections.test.mjs
+ * drives it with a resolver of its own — while the one `import.meta.glob` in
+ * the tree stays in the binding layer beside the gallery's.
  * ------------------------------------------------------------------------ */
+
+/* The address as a reader would say it: the authority, without the scheme,
+ * the path, the port or the `www.` label. It THROWS on anything `URL` cannot
+ * parse rather than falling back to the raw string, and that is the fail-closed
+ * choice: these four values are build-time data validated by
+ * tests/sections.test.mjs, so an unparseable one is a red suite long before it
+ * is a reader's problem, while a fallback would quietly print a malformed
+ * address beside an href nothing could honour. */
+export function siteHost(site: string): string {
+  return new URL(site).hostname.replace(/^www\./, '');
+}
 
 export const workExpandLabel = 'Expand';
 export const workCollapseLabel = 'Collapse';
 export const workEmptyNote = 'no roles recorded';
 
-export const roleLedgerProps: LedgerLogProps = {
-  rows: workEntries.map((entry) => ({
-    key: entry.company,
-    span: entry.years,
-    name: entry.short,
-    mark: entry.mark,
-    role: entry.role,
-    place: entry.location,
-    points: entry.points,
-    link: {
-      text: entry.company,
-      href: entry.site,
-      label: `${entry.company}, opens in a new tab`
-    }
-  })),
-  emptyNote: workEmptyNote,
-  expandLabel: workExpandLabel,
-  collapseLabel: workCollapseLabel
-};
+export function roleLedgerProps(markUrl: (file: string) => string): LedgerLogProps {
+  return {
+    rows: workEntries.map((entry) => ({
+      key: entry.company,
+      span: entry.years,
+      name: entry.short,
+      markSrc: markUrl(entry.markFile),
+      role: entry.role,
+      place: entry.location,
+      points: entry.points,
+      link: {
+        text: siteHost(entry.site),
+        href: entry.site,
+        label: `${entry.company} website, opens in a new tab`
+      }
+    })),
+    emptyNote: workEmptyNote,
+    expandLabel: workExpandLabel,
+    collapseLabel: workCollapseLabel
+  };
+}
