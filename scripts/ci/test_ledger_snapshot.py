@@ -37,6 +37,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+from unittest import mock
 
 
 def setUpModule():
@@ -197,6 +198,13 @@ class SnapshotCase(unittest.TestCase):
             return []
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
+    def refusal(self, url, code, phrase):
+        """An HTTP refusal a test stages. The error owns a body and warns
+        from its finalizer until closed, so every one is closed on teardown."""
+        error = urllib.error.HTTPError(url, code, phrase, {}, io.BytesIO(b""))
+        self.addCleanup(error.close)
+        return error
+
 
 class TransportBoundsTest(SnapshotCase):
     """Everything the fetch refuses, staged rather than described."""
@@ -233,7 +241,7 @@ class TransportBoundsTest(SnapshotCase):
     def test_a_redirect_is_refused_rather_than_followed(self):
         url = snapshot.panel_url(SITE, "vcs-activity")
         opener = FakeOpener(
-            {url: urllib.error.HTTPError(url, 302, "Found", {}, None)}
+            {url: self.refusal(url, 302, "Found")}
         )
         with self.assertRaises(ledger.LedgerError) as caught:
             snapshot.fetch_panel(opener, url, HOST)
@@ -495,7 +503,7 @@ class SnapshotArchiveTest(SnapshotCase):
         self.assertEqual(stored["data"]["streak"], 9)
 
     def test_a_second_identical_reading_appends_nothing(self):
-        appended, _, _ = self.take()
+        appended, _, _, _ = self.take()
         self.assertGreater(appended, 0)
         self.assertEqual(self.take()[0], 0)
 
@@ -505,6 +513,197 @@ class SnapshotArchiveTest(SnapshotCase):
         self.assertEqual(
             stat.S_IMODE((self.ledger / "github" / "2026.ndjson").stat().st_mode), 0o600
         )
+
+
+class PanelIdentityAndRefusalTest(SnapshotCase):
+    """How the job names itself on the wire, and how a refused panel is
+    reported (issue #320): the edge refused urllib's default agent string for
+    a day and the only line said `a panel request failed`."""
+
+    def test_every_panel_request_names_this_job_and_its_revision(self):
+        self.take()
+        agents = {request.get_header("User-agent") for request in self.opener.requests}
+        self.assertEqual(agents, {"naranjo-online-ledger-snapshot/snapshot"})
+        self.assertEqual(
+            {request.get_header("Accept") for request in self.opener.requests},
+            {"application/json"},
+        )
+        opener = FakeOpener(all_panels())
+        with contextlib.redirect_stderr(io.StringIO()):
+            snapshot.snapshot(self.ledger, SITE, NOW, TODAY, "abcdef123456", opener)
+        # The revision the rows are stamped with is the one the agent names.
+        self.assertEqual(
+            {request.get_header("User-agent") for request in opener.requests},
+            {"naranjo-online-ledger-snapshot/abcdef123456"},
+        )
+
+    def test_a_refused_panel_is_named_with_its_status_and_the_others_still_record(self):
+        url = snapshot.panel_url(SITE, "coding-projects")
+        answers = all_panels()
+        answers[url] = self.refusal(url, 403, "Forbidden")
+        appended, _, _, refused = self.take(answers)
+        self.assertEqual(refused, 1)
+        self.assertGreater(appended, 0)
+        self.assertIn("ledger snapshot refused coding-projects: HTTP 403 Forbidden", self.stderr)
+        self.assertIn("refused=1", self.stderr)
+        self.assertEqual(self.rows("projects"), [])
+        self.assertGreater(len(self.rows("github")), 0)
+        self.assertGreater(len(self.rows("osrs")), 0)
+
+    def test_a_refusal_names_the_standard_phrase_never_the_upstream_text(self):
+        url = snapshot.panel_url(SITE, "vcs-activity")
+        answers = all_panels()
+        answers[url] = self.refusal(url, 503, "the upstream's own prose")
+        self.take(answers)
+        self.assertIn("refused vcs-activity: HTTP 503 Service Unavailable", self.stderr)
+        self.assertNotIn("own prose", self.stderr)
+
+    def test_a_status_outside_the_standard_table_is_still_named_by_number(self):
+        # The edge in front of the origin emits statuses the standard table
+        # does not know (a 520 on a bad night); the line names the number and
+        # says the phrase is unknown rather than raising past main's handlers.
+        url = snapshot.panel_url(SITE, "vcs-activity")
+        answers = all_panels()
+        answers[url] = self.refusal(url, 520, "Web Server Error")
+        _, _, _, refused = self.take(answers)
+        self.assertEqual(refused, 1)
+        self.assertIn("refused vcs-activity: HTTP 520 unknown status", self.stderr)
+        self.assertNotIn("Web Server Error", self.stderr)
+
+    def test_an_unreachable_panel_is_named_by_its_failure_class(self):
+        url = snapshot.panel_url(SITE, "boss-log")
+        answers = all_panels()
+        answers[url] = urllib.error.URLError(TimeoutError("private-looking detail"))
+        self.take(answers)
+        self.assertIn("refused boss-log: unreachable (TimeoutError)", self.stderr)
+        self.assertNotIn("private-looking", self.stderr)
+        # A URLError whose reason is the resolver's own prose rather than an
+        # exception is named by its own class, and the prose stays out.
+        answers[url] = urllib.error.URLError("the resolver's own words about a host")
+        self.take(answers)
+        self.assertIn("refused boss-log: unreachable (URLError)", self.stderr)
+        self.assertNotIn("resolver's own words", self.stderr)
+
+    def test_a_redirect_is_still_a_hard_refusal_of_the_run(self):
+        url = snapshot.panel_url(SITE, "vcs-activity")
+        answers = all_panels()
+        answers[url] = self.refusal(url, 302, "Found")
+        with self.assertRaises(ledger.LedgerError) as caught:
+            self.take(answers)
+        self.assertIn("redirected", str(caught.exception))
+
+    def test_the_run_exits_non_zero_when_any_panel_was_refused(self):
+        url = snapshot.panel_url(SITE, "coding-projects")
+        answers = all_panels()
+        answers[url] = self.refusal(url, 403, "Forbidden")
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as captured,
+            mock.patch.object(snapshot, "build_opener", lambda: FakeOpener(answers)),
+        ):
+            status = snapshot.main(
+                ["--ledger", str(self.ledger), "--site", SITE, "--exporter-version", "abc1234"]
+            )
+        self.assertEqual(status, 1)
+        self.assertIn("refused coding-projects: HTTP 403 Forbidden", captured.getvalue())
+        self.assertIn("refused=1 exporter=abc1234", captured.getvalue())
+
+    def test_a_named_revision_is_held_to_the_label_shape_before_any_request(self):
+        # The value travels in a header and onto every row; a line break or
+        # over-long text is refused up front with the command's own message,
+        # and no request is made carrying it.
+        opener = FakeOpener(all_panels())
+        for value in ("bad\r\nvalue", "x" * (ledger.MAX_EXPORTER_LENGTH + 1), ""):
+            with (
+                contextlib.redirect_stderr(io.StringIO()) as captured,
+                mock.patch.object(snapshot, "build_opener", lambda: opener),
+            ):
+                status = snapshot.main(
+                    ["--ledger", str(self.ledger), "--site", SITE, "--exporter-version", value]
+                )
+            self.assertEqual(status, 2, repr(value))
+            self.assertIn("exporter version must be bounded printable text", captured.getvalue())
+        self.assertEqual(opener.requests, [])
+
+    def checkout(self, name, head, refs=(), packed=""):
+        """A fabricated checkout: a `.git` directory holding HEAD, loose refs
+        and a packed-refs table, plus a script file beside it to name."""
+        root = self.scratch / name
+        git = root / ".git"
+        git.mkdir(parents=True)
+        (git / "HEAD").write_text(head, encoding="utf-8")
+        for ref, value in refs:
+            (git / ref).parent.mkdir(parents=True, exist_ok=True)
+            (git / ref).write_text(value, encoding="utf-8")
+        if packed:
+            (git / "packed-refs").write_text(packed, encoding="utf-8")
+        return str(root / "x.py")
+
+    def test_the_exporter_defaults_to_the_checkout_revision(self):
+        # This test file lives in a checkout: the script's own revision is a
+        # short commit id, read from the checkout's files and nothing else.
+        revision = snapshot.checkout_revision()
+        self.assertRegex(revision, r"^[0-9a-f]{12}$")
+        # A directory that is no checkout yields the default.
+        self.assertEqual(snapshot.checkout_revision(str(self.scratch / "x.py")), "snapshot")
+        full = "0123456789abcdef0123456789abcdef01234567"
+        # A symbolic HEAD through a loose ref, through the packed table, and
+        # a detached HEAD each answer the first twelve characters.
+        self.assertEqual(
+            snapshot.checkout_revision(self.checkout("loose", "ref: refs/heads/main\n", [("refs/heads/main", full + "\n")])),
+            full[:12],
+        )
+        self.assertEqual(
+            snapshot.checkout_revision(self.checkout("packed", "ref: refs/heads/main\n", packed="# pack-refs\n%s refs/heads/main\n" % full)),
+            full[:12],
+        )
+        self.assertEqual(snapshot.checkout_revision(self.checkout("detached", full + "\n")), full[:12])
+        # A linked worktree names its git directory in a `.git` FILE, and its
+        # refs live in the common directory that file leads to.
+        main = self.scratch / "loose"
+        linked = self.scratch / "linked"
+        linked.mkdir()
+        (main / ".git" / "worktrees" / "linked").mkdir(parents=True)
+        (main / ".git" / "worktrees" / "linked" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (main / ".git" / "worktrees" / "linked" / "commondir").write_text("../..\n", encoding="utf-8")
+        (linked / ".git").write_text("gitdir: %s\n" % (main / ".git" / "worktrees" / "linked"), encoding="utf-8")
+        self.assertEqual(snapshot.checkout_revision(str(linked / "x.py")), full[:12])
+        # Whatever the files hold that is not a revision — a checkout with no
+        # commit, whose ref does not exist yet, or a HEAD of prose — is the
+        # default: the label the rows are stamped with is a revision or the
+        # honest word, never text copied from a file.
+        self.assertEqual(snapshot.checkout_revision(self.checkout("empty", "ref: refs/heads/main\n")), "snapshot")
+        self.assertEqual(snapshot.checkout_revision(self.checkout("prose", "not a revision at all\n")), "snapshot")
+        self.assertEqual(snapshot.checkout_revision(self.checkout("short", "abc12\n")), "snapshot")
+        self.assertEqual(snapshot.checkout_revision(self.checkout("long", full + "0\n")), "snapshot")
+        # The shapes git itself writes: CRLF line ends, a peeled tag entry
+        # following its ref in the packed table, an absolute common directory,
+        # and a gitdir pointer to a directory that is gone.
+        self.assertEqual(
+            snapshot.checkout_revision(self.checkout("crlf", "ref: refs/heads/main\r\n", [("refs/heads/main", full + "\r\n")])),
+            full[:12],
+        )
+        self.assertEqual(snapshot.checkout_revision(self.checkout("crlf-detached", full + "\r\n")), full[:12])
+        peeled = "# pack-refs with: peeled\n%s refs/tags/v1\n^%s\n%s refs/heads/main\n" % ("f" * 40, "e" * 40, full)
+        self.assertEqual(snapshot.checkout_revision(self.checkout("peeled", "ref: refs/heads/main\n", packed=peeled)), full[:12])
+        absolute = self.scratch / "absolute"
+        absolute.mkdir()
+        (main / ".git" / "worktrees" / "absolute").mkdir(parents=True)
+        (main / ".git" / "worktrees" / "absolute" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (main / ".git" / "worktrees" / "absolute" / "commondir").write_text(str(main / ".git") + "\n", encoding="utf-8")
+        (absolute / ".git").write_text("gitdir: %s\n" % (main / ".git" / "worktrees" / "absolute"), encoding="utf-8")
+        self.assertEqual(snapshot.checkout_revision(str(absolute / "x.py")), full[:12])
+        gone = self.scratch / "gone"
+        gone.mkdir()
+        (gone / ".git").write_text("gitdir: %s\n" % (self.scratch / "nowhere"), encoding="utf-8")
+        self.assertEqual(snapshot.checkout_revision(str(gone / "x.py")), "snapshot")
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as captured,
+            mock.patch.object(snapshot, "build_opener", lambda: FakeOpener(all_panels())),
+        ):
+            status = snapshot.main(["--ledger", str(self.ledger), "--site", SITE])
+        self.assertEqual(status, 0)
+        self.assertIn("exporter=%s" % revision, captured.getvalue())
+        self.assertEqual({r["exporter"] for r in self.rows("github")}, {revision})
 
 
 class SnapshotCommandTest(SnapshotCase):

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import http
 import json
 import pathlib
 import sys
@@ -65,9 +66,96 @@ SOURCE_OSRS = "osrs"
 KEY_ALL = "all"
 
 # The exporter field's value when this job took the reading and no revision
-# was supplied: the record says which program wrote a row, and "the snapshot"
-# is the honest answer when there is no checkout revision to name.
+# could be read: the record says which program wrote a row, and "the snapshot"
+# is the honest answer when there is no checkout revision to name. The
+# revision is read from the checkout this script runs from (the same short id
+# the usage exporter stamps), unless a caller names one.
 DEFAULT_EXPORTER = "snapshot"
+
+# The agent string every panel request carries: the product, then the
+# revision the rows are stamped with. A job that reads a public API names
+# itself; the edge in front of the origin refuses urllib's default agent
+# outright (issue #320), which is how this job ran refused for a day without a
+# line that said so.
+USER_AGENT_PRODUCT = "naranjo-online-ledger-snapshot"
+
+
+def user_agent(exporter):
+    return "%s/%s" % (USER_AGENT_PRODUCT, exporter)
+
+
+def is_revision(text):
+    """A commit id: seven to forty lowercase hex characters and nothing else."""
+    return 7 <= len(text) <= 40 and all(character in "0123456789abcdef" for character in text)
+
+
+def git_directory(start):
+    """The git directory of the checkout containing start, or None.
+
+    A checkout's `.git` is a directory, or — in a linked worktree — a file
+    naming one; either way the answer is the directory HEAD lives in.
+    """
+    for directory in (start, *start.parents):
+        candidate = directory / ".git"
+        if candidate.is_dir():
+            return candidate
+        if candidate.is_file():
+            pointer = candidate.read_text(encoding="utf-8").strip()
+            if pointer.startswith("gitdir: "):
+                # Relative to the checkout, or absolute; a directory that is
+                # not there fails the HEAD read, which answers the default.
+                return directory / pointer[len("gitdir: "):].strip()
+            return None
+    return None
+
+
+def resolve_ref(git, ref):
+    """What a symbolic ref points at: a loose ref file first, then the
+    packed-refs table, in this git directory and in the common one a linked
+    worktree shares."""
+    homes = [git]
+    common = git / "commondir"
+    if common.is_file():
+        # Relative to the git directory, or absolute — pathlib keeps an
+        # absolute right operand, so one join covers both.
+        homes.append(git / common.read_text(encoding="utf-8").strip())
+    for home in homes:
+        loose = home / ref
+        if loose.is_file():
+            return loose.read_text(encoding="utf-8").strip()
+    for home in homes:
+        packed = home / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[1] == ref:
+                    return parts[0]
+    return ""
+
+
+def checkout_revision(script=__file__):
+    """The short revision of the checkout this script runs from, or the
+    default. Read from the checkout's own files — HEAD, a loose ref, the
+    packed-refs table — and never by spawning git: the program that fetches
+    does not spawn (the import-surface contract), and these are plain files.
+    """
+    try:
+        git = git_directory(pathlib.Path(script).resolve().parent)
+        if git is None:
+            return DEFAULT_EXPORTER
+        head = (git / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref: "):
+            head = resolve_ref(git, head[len("ref: "):].strip())
+    except (OSError, UnicodeDecodeError):
+        return DEFAULT_EXPORTER
+    head = head.lower()
+    return head[:12] if is_revision(head) else DEFAULT_EXPORTER
+
+
+class PanelRefused(ledger.LedgerError):
+    """One panel could not be read this run. The run goes on to the others,
+    counts the refusal, names it, and exits non-zero at the end — a stream
+    the origin would not serve is one stream missing, not a night lost."""
 
 # Transport bounds. The body cap is read as cap+1 so an over-cap body is
 # REFUSED rather than truncated into something that parses.
@@ -109,16 +197,37 @@ def panel_url(site, panel):
     return "%s/api/panels/%s" % (site.rstrip("/"), panel)
 
 
-def fetch_panel(opener, url, host):
+def status_phrase(code):
+    """The standard phrase for a status code, never the upstream's own text."""
+    try:
+        return http.HTTPStatus(code).phrase
+    except ValueError:
+        return "unknown status"
+
+
+def failure_class(error):
+    """What kind of transport failure this was, as a class name and nothing
+    the upstream or the resolver wrote."""
+    reason = getattr(error, "reason", error)
+    if isinstance(reason, BaseException):
+        return type(reason).__name__
+    return type(error).__name__
+
+
+def fetch_panel(opener, url, host, agent=user_agent(DEFAULT_EXPORTER)):
     """One bounded read of one public envelope, or a refusal.
 
     The host is checked BEFORE the request is made and again on what the
     response says it came from: the first refuses a misconfigured site, the
-    second refuses a resolution that ended somewhere else.
+    second refuses a resolution that ended somewhere else. An answer that is
+    not an envelope at all — a status, an unreachable origin — is a
+    PanelRefused that names the panel's fate without a byte of upstream prose.
     """
     if urllib.parse.urlsplit(url).hostname != host:
         raise ledger.LedgerError("a panel request names a different host than the site")
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/json", "User-Agent": agent}
+    )
     try:
         with opener.open(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             if urllib.parse.urlsplit(response.geturl()).hostname != host:
@@ -127,9 +236,9 @@ def fetch_panel(opener, url, host):
     except urllib.error.HTTPError as error:
         if 300 <= error.code < 400:
             raise ledger.LedgerError("a panel request was redirected; the snapshot follows none")
-        raise ledger.LedgerError("a panel request failed")
-    except (urllib.error.URLError, OSError):
-        raise ledger.LedgerError("a panel request failed")
+        raise PanelRefused("HTTP %d %s" % (error.code, status_phrase(error.code)))
+    except (urllib.error.URLError, OSError) as error:
+        raise PanelRefused("unreachable (%s)" % failure_class(error))
     if len(body) > MAX_BODY_BYTES:
         raise ledger.LedgerError(
             "a panel response is larger than the %d byte bound" % MAX_BODY_BYTES
@@ -415,8 +524,15 @@ def snapshot(ledger_dir, site, now, today=None, exporter=DEFAULT_EXPORTER, opene
     if not ledger.valid_calendar_day(day):
         raise ledger.LedgerError("the snapshot was given a day that is not a calendar day")
     appended = kept = skipped_total = 0
+    refused = []
+    agent = user_agent(exporter)
     for panel, kind, stream in PANELS:
-        envelope = fetch_panel(opener, panel_url(site, panel), host)
+        try:
+            envelope = fetch_panel(opener, panel_url(site, panel), host, agent)
+        except PanelRefused as error:
+            print("ledger snapshot refused %s: %s" % (panel, error), file=sys.stderr)
+            refused.append(panel)
+            continue
         data = admit_payload(envelope, panel, kind)
         if data is None:
             print(
@@ -432,11 +548,11 @@ def snapshot(ledger_dir, site, now, today=None, exporter=DEFAULT_EXPORTER, opene
         kept += unchanged
         skipped_total += len(skipped)
     print(
-        "ledger snapshot appended=%d unchanged=%d unreported=%d"
-        % (appended, kept, skipped_total),
+        "ledger snapshot appended=%d unchanged=%d unreported=%d refused=%d exporter=%s"
+        % (appended, kept, skipped_total, len(refused), exporter),
         file=sys.stderr,
     )
-    return appended, kept, skipped_total
+    return appended, kept, skipped_total, len(refused)
 
 
 def parse_arguments(argv):
@@ -448,8 +564,9 @@ def parse_arguments(argv):
     parser.add_argument("--today", help="the calendar day the reading is filed under")
     parser.add_argument(
         "--exporter-version",
-        default=DEFAULT_EXPORTER,
-        help="the revision recorded beside every row this run writes",
+        default=None,
+        help="the revision recorded beside every row this run writes "
+        "(default: the checkout this script runs from)",
     )
     return parser.parse_args(argv)
 
@@ -463,14 +580,21 @@ def main(argv=None):
     if arguments.today is not None and not ledger.valid_calendar_day(arguments.today):
         print("the day must be a calendar day", file=sys.stderr)
         return 2
+    # The named revision travels in a request header and is stamped on every
+    # row: it is held to the ledger's own label shape here, before either.
+    if arguments.exporter_version is not None and not ledger.valid_name(
+        arguments.exporter_version, ledger.MAX_EXPORTER_LENGTH
+    ):
+        print("the exporter version must be bounded printable text", file=sys.stderr)
+        return 2
     now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     try:
-        snapshot(
+        _, _, _, refused = snapshot(
             ledger_dir,
             arguments.site,
             now,
             arguments.today,
-            arguments.exporter_version,
+            arguments.exporter_version or checkout_revision(),
         )
     except ledger.LedgerError as error:
         print(str(error), file=sys.stderr)
@@ -478,7 +602,9 @@ def main(argv=None):
     except OSError:
         print("the snapshot could not be written", file=sys.stderr)
         return 1
-    return 0
+    # A refused panel is reported above, panel by panel; the run still fails,
+    # so the agent's last exit status is the visible signal it always was.
+    return 1 if refused else 0
 
 
 if __name__ == "__main__":
