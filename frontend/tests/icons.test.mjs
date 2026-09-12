@@ -304,6 +304,31 @@ test('an unknown name draws nothing rather than something', () => {
  * who cannot see the mark (owner ruling, issue 313).
  * ======================================================================== */
 
+/* Where an opening tag ends, read character by character rather than by a
+ * regex that stops at the first `>`: a Svelte attribute may hold an
+ * expression — `onclick={() => close()}` — and the arrow's `>` is not the
+ * tag's end. Quotes and braces are tracked, the tag ends at the first `>`
+ * outside both, and a tag that never ends answers -1. */
+function openingTagEnd(source, from) {
+  let depth = 0;
+  let quote = null;
+  for (let index = from; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote !== null) {
+      if (char === quote) quote = null;
+    } else if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+    } else if (char === '>' && depth === 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 /* The inner content of every <button> and <a> in one component, by scanning
  * for the opening tag and its matching close. Neither element may legally
  * nest inside itself, so a depth counter is not needed — and a stray unclosed
@@ -311,18 +336,41 @@ test('an unknown name draws nothing rather than something', () => {
  * required rather than assumed. */
 function controls(source) {
   const found = [];
-  for (const opening of source.matchAll(/<(button|a)\b([^>]*)>/g)) {
+  for (const opening of source.matchAll(/<(button|a)(?=[\s>])/g)) {
     const tag = opening[1];
-    const close = source.indexOf(`</${tag}>`, opening.index + opening[0].length);
+    const start = opening.index + opening[0].length;
+    const end = openingTagEnd(source, start);
+    if (end === -1) continue;
+    const close = source.indexOf(`</${tag}>`, end + 1);
     if (close === -1) continue;
     found.push({
       tag,
-      attributes: opening[2],
-      inner: source.slice(opening.index + opening[0].length, close),
+      attributes: source.slice(start, end),
+      inner: source.slice(end + 1, close),
     });
   }
   return found;
 }
+
+test('the control scanner reads past an arrow handler to the tag’s real end', () => {
+  /* The blind spot a review found: with `[^>]*` the arrow in the handler
+     ended the attribute scan, so every control with an inline handler was
+     never inspected at all. The fixture is the shape that survived. */
+  const fixture =
+    '<button class="x" onclick={() => close("a>b")}><Icon name="close" /></button>' +
+    '<a href="/words" title=\'a > b\'>words</a><abbr>not a control</abbr>';
+  const found = controls(fixture);
+  assert.deepEqual(
+    found.map((control) => [control.tag, control.inner]),
+    [
+      ['button', '<Icon name="close" />'],
+      ['a', 'words'],
+    ]
+  );
+  assert.match(found[0].attributes, /onclick=\{\(\) => close\("a>b"\)\}/);
+  /* A control that never closes is nothing rather than a wrong answer. */
+  assert.equal(controls('<button onclick={() => x}><Icon name="close" />').length, 0);
+});
 
 /* What a control says to someone who cannot see it: its markup with every
  * comment, every mark, and every wrapper element removed. Whatever is left is
@@ -338,10 +386,12 @@ const speech = (inner) => {
 };
 
 test('no control is a mark with nothing to say', () => {
+  let inspected = 0;
   for (const [file, source] of Object.entries(componentSources)) {
     for (const control of controls(source)) {
       if (!control.inner.includes('<Icon')) continue;
       if (speech(control.inner).length > 0) continue;
+      inspected += 1;
       assert.match(
         control.attributes,
         /aria-label=/,
@@ -349,6 +399,7 @@ test('no control is a mark with nothing to say', () => {
       );
     }
   }
+  assert.ok(inspected > 0, 'no mark-only control was inspected, so the rule above was never applied');
 });
 
 test('a link that is already words grows no trailing mark', () => {

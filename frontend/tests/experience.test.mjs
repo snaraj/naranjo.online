@@ -1651,6 +1651,16 @@ test('Rime is a picture in the chrome row, reserved, silent, and stepped only wh
   assert.ok(flight, 'the mark’s motion rule declares no animation');
   assert.match(flight.value, /rime-flight-strip var\(--rime-flight-strip\) steps\(20\) infinite/);
   assert.match(flight.value, /rime-flight var\(--rime-flight\) steps\(24\) infinite/);
+  /* The strip is the loop DIVIDED, never a written decimal: 0.33333s × 24 is
+     0.08ms short of 8s, and that remainder walks the strip one column across
+     the sheet every 28 minutes until every row boundary shows a wrong frame
+     (found by the review of 588e64b). The quotient's divisor is the sheet's
+     row count, the same 24 the block axis steps. */
+  assert.match(
+    stylesCode,
+    /--rime-flight-strip: calc\(var\(--rime-flight\) \/ 24\);/,
+    'the strip duration is no longer the loop divided by its 24 rows, so the two animations drift apart'
+  );
   for (const [name, token] of [
     ['rime-flight-strip', '--rime-sheet-inline'],
     ['rime-flight', '--rime-sheet-block'],

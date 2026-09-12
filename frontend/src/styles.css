@@ -741,16 +741,6 @@
      row with a gap down one side of every entry. */
   --ledger-monogram: 1.75rem;
 
-  /* The three sizes a Hairline mark is drawn at (issue 313), named for the
-     SLOT the mark sits in rather than for a number at a call site: chrome is
-     the header row, row a list or control line, cell a table figure. A fourth
-     size would be a fourth token here, never a value written in a component.
-     --icon-gap is what a mark beside words spends. */
-  --icon-chrome: 1.125rem;
-  --icon-row: 1rem;
-  --icon-cell: 0.75rem;
-  --icon-gap: 0.375rem;
-
   /* The mono LABEL, which is the ledger's connective tissue: section numbers,
      column heads, sub-lines, the footer. One size, one tracking, everywhere. */
   --ledger-label-size: 0.6875rem;
@@ -853,12 +843,15 @@
   --ticker-duration: 90s;
   /* Rime's flight (owner decision, 2026-09-11, issue 314). The study is 480
      frames at 60Hz, laid out as 24 rows of 20: --rime-flight is the whole
-     loop and --rime-flight-strip is one row of it, so the two are 8s and
-     8s/24 and the browser lands on a new cell every 16.67ms. They are stated
-     rather than divided because CSS cannot carry the repeating decimal
-     honestly, and 0.33333s is what the canvas proved advancing. */
+     loop and --rime-flight-strip is one row of it, DIVIDED rather than
+     stated so the two stay phase-locked. A written 0.33333s is 0.08ms short
+     of a row: the strip gains a column on the sheet every 28 minutes and
+     every row boundary then shows a wrong frame — a stutter three times a
+     second that grows for as long as the tab stays open. calc keeps the
+     quotient exact to double precision and the browser lands on a new cell
+     every 16.67ms for the life of the page. */
   --rime-flight: 8s;
-  --rime-flight-strip: 0.33333s;
+  --rime-flight-strip: calc(var(--rime-flight) / 24);
 
   /* The panel theme layer. Every panel component was built "shaped, not
      styled" — each color reads a --panel-* custom property with a
