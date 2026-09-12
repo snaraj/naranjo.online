@@ -11283,17 +11283,21 @@ for (const viewport of markViewports) {
           /* A mark inside something the page is not showing has no box at
              all, and that is correct rather than broken — but "has no box"
              and "resolved no size" look identical from the outside, so each
-             boxless mark has to NAME why. Two reasons are legitimate: the
-             enlarged stage is a closed <dialog>, and the place label is
-             display:none below 45rem by the chrome row's own rule. Anything
-             else is a mark nobody can see and nobody would notice. */
+             boxless mark has to NAME why. Three reasons are legitimate: the
+             enlarged stage is a closed <dialog>, the place label is
+             display:none below 45rem by the chrome row's own rule, and the
+             projects table's head row is dropped by the phone restack (issue
+             317: every cell repeats its own word there). Anything else is a
+             mark nobody can see and nobody would notice. */
           laidOut: mark.getClientRects().length > 0,
           hiddenBy:
             mark.closest('dialog:not([open])') !== null
               ? 'the closed stage'
               : mark.closest('.page-place') !== null
                 ? 'the place the phone rule hides'
-                : 'nothing',
+                : mark.closest('.table-head') !== null
+                  ? 'the table head the phone restack drops'
+                  : 'nothing',
         })),
         /* The monogram column: one square per role, all the same size, and
            every employer name starting at the same inline offset. A track
