@@ -36,7 +36,7 @@ const noon = Date.parse('2026-08-28T12:00:00Z');
 const projectsEnvelope = (repos, overrides = {}) => ({
   schema: 'panel/v1',
   id: codingProjectsPanelId,
-  kind: 'coding-projects/v1',
+  kind: 'coding-projects/v2',
   title: 'Coding Projects',
   generatedAt: '2026-08-28T11:59:00Z',
   status: 'ok',

@@ -56,8 +56,10 @@ Nothing a live round can produce is larger, because every term is at the bound
 its own admission enforces. `TestActivityPayloadFitsTheOwnerBudget` builds it
 and fails if it grows past 15,000 without somebody re-measuring.
 
-`coding-projects/v1` gained `closedPulls`, `release` and `pinned`, and lost
-`openIssues`/`openPulls` with the two columns that drew them. Its maximal
+`coding-projects/v2` replaces `coding-projects/v1`: it carries `closedPulls`,
+`release` and `pinned`, and no longer carries `openIssues`/`openPulls` or the
+two columns that drew them — a breaking payload change, so a new kind version
+rather than a mutated one (the envelope doctrine). Its maximal
 document — twelve rows at the name, description and tag bounds, with both
 tallies at `maxCountValue` — measures **7,988 bytes**, 123,084 under the
 ceiling, pinned the same way by `TestProjectsPayloadFitsTheOwnerBudget`.

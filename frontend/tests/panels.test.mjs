@@ -82,7 +82,7 @@ describe('panel URLs', () => {
       tokenUsage: 'token-usage/v2',
       vcsActivity: 'vcs-activity/v1',
       bossLog: 'boss-log/v1',
-      codingProjects: 'coding-projects/v1'
+      codingProjects: 'coding-projects/v2'
     });
   });
 });

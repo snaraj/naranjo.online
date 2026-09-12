@@ -122,7 +122,7 @@ const (
 	// The kind is named for what it REPORTS, never for where it comes from,
 	// exactly as the version-control kind beside it is — the host is a config
 	// endpoint, and swapping it stays a data edit.
-	KindCodingProjects = "coding-projects/v1"
+	KindCodingProjects = "coding-projects/v2"
 )
 
 // Status is the envelope serving state. It reflects data provenance, never
@@ -486,7 +486,9 @@ const (
 	CoverageComplete = "complete"
 )
 
-// CodingProjectsData is the coding-projects/v1 payload: one row per
+// CodingProjectsData is the coding-projects/v2 payload (v1 carried open
+// issues and open pull requests; removing them is a breaking payload change,
+// and a breaking change mints a new kind version): one row per
 // repository the owner publishes, carrying what its host currently says about
 // it. Rows arrive most recently pushed first, DERIVED from the account's own
 // public listing at fetch time (issue 281): the owner's ruling is that a new
@@ -839,7 +841,7 @@ type panelFetchSpecs struct {
 	usage *tokenUsageFetchSpec
 	// vcs is set when this source feeds a vcs-activity/v1 panel.
 	vcs *vcsActivityFetchSpec
-	// projects is set when this source feeds a coding-projects/v1 panel.
+	// projects is set when this source feeds a coding-projects/v2 panel.
 	projects *codingProjectsFetchSpec
 }
 

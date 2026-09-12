@@ -939,7 +939,7 @@ test('the feed leads with the repository pushed most recently (issue 252)', () =
   const envelope = {
     schema: 'panel/v1',
     id: codingProjectsPanelId,
-    kind: 'coding-projects/v1',
+    kind: 'coding-projects/v2',
     title: 'Coding Projects',
     generatedAt: '2026-08-29T12:00:00Z',
     status: 'ok',
@@ -980,7 +980,7 @@ function projectsEnvelope(repos, overrides = {}) {
   return {
     schema: 'panel/v1',
     id: codingProjectsPanelId,
-    kind: 'coding-projects/v1',
+    kind: 'coding-projects/v2',
     title: 'Coding Projects',
     generatedAt: '2026-09-01T12:00:00Z',
     status: 'ok',

@@ -162,7 +162,7 @@ def all_panels(**overrides):
             snapshot.panel_url(SITE, "vcs-activity"),
         ),
         snapshot.panel_url(SITE, "coding-projects"): FakeResponse(
-            envelope("coding-projects", "coding-projects/v1", PROJECTS),
+            envelope("coding-projects", "coding-projects/v2", PROJECTS),
             snapshot.panel_url(SITE, "coding-projects"),
         ),
         snapshot.panel_url(SITE, "boss-log"): FakeResponse(
@@ -436,7 +436,7 @@ class SnapshotRowsTest(SnapshotCase):
             with self.subTest(data=data):
                 answers = all_panels(
                     **{snapshot.panel_url(SITE, "coding-projects"): FakeResponse(
-                        envelope("coding-projects", "coding-projects/v1", data),
+                        envelope("coding-projects", "coding-projects/v2", data),
                         snapshot.panel_url(SITE, "coding-projects"))}
                 )
                 if data["repos"] == "not a list":

@@ -769,7 +769,7 @@ func TestAGetProducerNeverBecomesAPost(t *testing.T) {
 }
 
 /* ---------------------------------------------------------------------------
- * coding-projects/v1
+ * coding-projects/v2
  * ------------------------------------------------------------------------ */
 
 // projectsSpec is the repository-metadata fixture spec: the account's listing

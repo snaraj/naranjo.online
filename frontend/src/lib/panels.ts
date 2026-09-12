@@ -19,7 +19,7 @@ export const panelKinds = {
   tokenUsage: 'token-usage/v2',
   vcsActivity: 'vcs-activity/v1',
   bossLog: 'boss-log/v1',
-  codingProjects: 'coding-projects/v1'
+  codingProjects: 'coding-projects/v2'
 } as const;
 
 export interface PanelEnvelope<Data = unknown> {
@@ -225,7 +225,7 @@ export interface BossLogData {
   bosses: BossLogEntry[];
 }
 
-/* coding-projects/v1 — the owner's repositories as their host describes them
+/* coding-projects/v2 — the owner's repositories as their host describes them
  * RIGHT NOW. Every figure is nullable and every row carries its own
  * provenance, so a row whose live read failed serves the shipped values and
  * says so rather than borrowing the freshness of the rows beside it. */

@@ -747,8 +747,8 @@ func TestVisitorReadsTheProjectFeed(t *testing.T) {
 		}
 		var envelope visitorPanelEnvelope
 		decodeVisitorJSON(t, response.Body, &envelope)
-		if envelope.Kind != "coding-projects/v1" {
-			t.Fatalf("kind = %q, want coding-projects/v1", envelope.Kind)
+		if envelope.Kind != "coding-projects/v2" {
+			t.Fatalf("kind = %q, want coding-projects/v2", envelope.Kind)
 		}
 		if want := visitorColdStatus[envelope.ID]; envelope.Status != want {
 			t.Errorf("status = %q, want %q on an egress-free boot", envelope.Status, want)

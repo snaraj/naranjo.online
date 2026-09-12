@@ -22,7 +22,7 @@
  * together with its egress allowance, and the gap showed up immediately — the
  * owner changed a repository description on the host and the site did not
  * follow. The origin now reads the repository metadata itself, on the panels
- * refresh cadence, and serves it as the coding-projects/v1 panel; this module
+ * refresh cadence, and serves it as the coding-projects/v2 panel; this module
  * adapts that panel and keeps the rows below as its FALLBACK.
  *
  * The page still makes no outbound request of its own. Requirement 1 keeps the

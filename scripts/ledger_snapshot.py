@@ -46,7 +46,7 @@ import usage_ledger as ledger  # noqa: E402
 # read and the stream it lands in. A panel that mints a NEW kind version is a
 # conscious edit here, never a silent reinterpretation of a changed payload.
 PANEL_VCS = ("vcs-activity", "vcs-activity/v1", ledger.STREAM_GITHUB)
-PANEL_PROJECTS = ("coding-projects", "coding-projects/v1", ledger.STREAM_PROJECTS)
+PANEL_PROJECTS = ("coding-projects", "coding-projects/v2", ledger.STREAM_PROJECTS)
 PANEL_BOSSES = ("boss-log", "boss-log/v1", ledger.STREAM_OSRS)
 PANELS = (PANEL_VCS, PANEL_PROJECTS, PANEL_BOSSES)
 
