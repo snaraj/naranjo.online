@@ -970,8 +970,11 @@ class ImportSurfaceTest(unittest.TestCase):
 
     SURFACES = {
         "ledger_snapshot": {
-            "__future__", "argparse", "datetime", "json", "pathlib", "sys",
-            "urllib", "usage_ledger",
+            # `http` is the standard-library status table (`http.HTTPStatus`),
+            # so a refused panel is named by the standard phrase and never by
+            # the upstream's own reason text (issue #320); it opens nothing.
+            "__future__", "argparse", "datetime", "http", "json", "pathlib",
+            "sys", "urllib", "usage_ledger",
         },
         "ledger_backfill_github": {
             "__future__", "argparse", "datetime", "json", "pathlib", "re",

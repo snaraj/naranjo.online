@@ -34,8 +34,6 @@ import datetime
 import http
 import json
 import pathlib
-import re
-import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -86,22 +84,72 @@ def user_agent(exporter):
     return "%s/%s" % (USER_AGENT_PRODUCT, exporter)
 
 
+def is_revision(text):
+    """A commit id: seven to forty lowercase hex characters and nothing else."""
+    return 7 <= len(text) <= 40 and all(character in "0123456789abcdef" for character in text)
+
+
+def git_directory(start):
+    """The git directory of the checkout containing start, or None.
+
+    A checkout's `.git` is a directory, or — in a linked worktree — a file
+    naming one; either way the answer is the directory HEAD lives in.
+    """
+    for directory in (start, *start.parents):
+        candidate = directory / ".git"
+        if candidate.is_dir():
+            return candidate
+        if candidate.is_file():
+            pointer = candidate.read_text(encoding="utf-8").strip()
+            if pointer.startswith("gitdir: "):
+                target = pathlib.Path(pointer[len("gitdir: "):].strip())
+                if not target.is_absolute():
+                    target = directory / target
+                return target if target.is_dir() else None
+            return None
+    return None
+
+
+def resolve_ref(git, ref):
+    """What a symbolic ref points at: a loose ref file first, then the
+    packed-refs table, in this git directory and in the common one a linked
+    worktree shares."""
+    homes = [git]
+    common = git / "commondir"
+    if common.is_file():
+        shared = pathlib.Path(common.read_text(encoding="utf-8").strip())
+        homes.append(shared if shared.is_absolute() else git / shared)
+    for home in homes:
+        loose = home / ref
+        if loose.is_file():
+            return loose.read_text(encoding="utf-8").strip()
+    for home in homes:
+        packed = home / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[1] == ref:
+                    return parts[0]
+    return ""
+
+
 def checkout_revision(script=__file__):
-    """The short revision of the checkout this script runs from, or the default."""
+    """The short revision of the checkout this script runs from, or the
+    default. Read from the checkout's own files — HEAD, a loose ref, the
+    packed-refs table — and never by spawning git: the program that fetches
+    does not spawn (the import-surface contract), and these are plain files.
+    """
     try:
-        completed = subprocess.run(
-            ["git", "-C", str(pathlib.Path(script).resolve().parent), "rev-parse", "--short=12", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
+        git = git_directory(pathlib.Path(script).resolve().parent)
+        if git is None:
+            return DEFAULT_EXPORTER
+        head = (git / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref: "):
+            head = resolve_ref(git, head[len("ref: "):].strip())
+    except (OSError, UnicodeDecodeError):
         return DEFAULT_EXPORTER
-    revision = completed.stdout.strip()
-    if completed.returncode != 0 or not re.fullmatch(r"[0-9a-f]{7,40}", revision):
-        return DEFAULT_EXPORTER
-    return revision
+    head = head.lower()
+    return head[:12] if is_revision(head) else DEFAULT_EXPORTER
 
 
 class PanelRefused(ledger.LedgerError):

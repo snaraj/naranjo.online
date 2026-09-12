@@ -33,7 +33,6 @@ import os
 import pathlib
 import shutil
 import stat
-import subprocess
 import tempfile
 import time
 import unittest
@@ -583,25 +582,56 @@ class PanelIdentityAndRefusalTest(SnapshotCase):
         self.assertIn("refused coding-projects: HTTP 403 Forbidden", captured.getvalue())
         self.assertIn("refused=1 exporter=abc1234", captured.getvalue())
 
+    def checkout(self, name, head, refs=(), packed=""):
+        """A fabricated checkout: a `.git` directory holding HEAD, loose refs
+        and a packed-refs table, plus a script file beside it to name."""
+        root = self.scratch / name
+        git = root / ".git"
+        git.mkdir(parents=True)
+        (git / "HEAD").write_text(head, encoding="utf-8")
+        for ref, value in refs:
+            (git / ref).parent.mkdir(parents=True, exist_ok=True)
+            (git / ref).write_text(value, encoding="utf-8")
+        if packed:
+            (git / "packed-refs").write_text(packed, encoding="utf-8")
+        return str(root / "x.py")
+
     def test_the_exporter_defaults_to_the_checkout_revision(self):
         # This test file lives in a checkout: the script's own revision is a
-        # short commit id. A directory that is no checkout yields the default.
+        # short commit id, read from the checkout's files and nothing else.
         revision = snapshot.checkout_revision()
-        self.assertRegex(revision, r"^[0-9a-f]{7,40}$")
+        self.assertRegex(revision, r"^[0-9a-f]{12}$")
+        # A directory that is no checkout yields the default.
         self.assertEqual(snapshot.checkout_revision(str(self.scratch / "x.py")), "snapshot")
-        # A checkout with no commit answers `HEAD` on stdout and a non-zero
-        # status: text that is not a revision is the default, not a label.
-        empty = self.scratch / "empty"
-        empty.mkdir()
-        subprocess.run(["git", "init", "-q", str(empty)], check=True, capture_output=True)
-        self.assertEqual(snapshot.checkout_revision(str(empty / "x.py")), "snapshot")
-        # And whatever git answers that is not a revision — a failed status
-        # with text on stdout, or a success that is not hex — is the default:
-        # the label the rows are stamped with is a revision or the honest word.
-        for returncode, stdout in ((128, "HEAD\n"), (0, "not-a-revision\n")):
-            answer = subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
-            with mock.patch.object(snapshot.subprocess, "run", return_value=answer):
-                self.assertEqual(snapshot.checkout_revision(), "snapshot", (returncode, stdout))
+        full = "0123456789abcdef0123456789abcdef01234567"
+        # A symbolic HEAD through a loose ref, through the packed table, and
+        # a detached HEAD each answer the first twelve characters.
+        self.assertEqual(
+            snapshot.checkout_revision(self.checkout("loose", "ref: refs/heads/main\n", [("refs/heads/main", full + "\n")])),
+            full[:12],
+        )
+        self.assertEqual(
+            snapshot.checkout_revision(self.checkout("packed", "ref: refs/heads/main\n", packed="# pack-refs\n%s refs/heads/main\n" % full)),
+            full[:12],
+        )
+        self.assertEqual(snapshot.checkout_revision(self.checkout("detached", full + "\n")), full[:12])
+        # A linked worktree names its git directory in a `.git` FILE, and its
+        # refs live in the common directory that file leads to.
+        main = self.scratch / "loose"
+        linked = self.scratch / "linked"
+        linked.mkdir()
+        (main / ".git" / "worktrees" / "linked").mkdir(parents=True)
+        (main / ".git" / "worktrees" / "linked" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (main / ".git" / "worktrees" / "linked" / "commondir").write_text("../..\n", encoding="utf-8")
+        (linked / ".git").write_text("gitdir: %s\n" % (main / ".git" / "worktrees" / "linked"), encoding="utf-8")
+        self.assertEqual(snapshot.checkout_revision(str(linked / "x.py")), full[:12])
+        # Whatever the files hold that is not a revision — a checkout with no
+        # commit, whose ref does not exist yet, or a HEAD of prose — is the
+        # default: the label the rows are stamped with is a revision or the
+        # honest word, never text copied from a file.
+        self.assertEqual(snapshot.checkout_revision(self.checkout("empty", "ref: refs/heads/main\n")), "snapshot")
+        self.assertEqual(snapshot.checkout_revision(self.checkout("prose", "not a revision at all\n")), "snapshot")
+        self.assertEqual(snapshot.checkout_revision(self.checkout("short", "abc12\n")), "snapshot")
         with (
             contextlib.redirect_stderr(io.StringIO()) as captured,
             mock.patch.object(snapshot, "build_opener", lambda: FakeOpener(all_panels())),
