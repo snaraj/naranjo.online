@@ -4092,10 +4092,19 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
        SPEC 5 collapses the row. The token is what makes "five rows" the same
        number before and after arrival, so the lane compares against it
        rather than against a hardcoded one-line row. */
-    const rowToken = parseFloat(getComputedStyle(list).getPropertyValue('--commit-row-height'));
+    const remPx = parseFloat(getComputedStyle(window.document.documentElement).fontSize);
+    const token = (name) => {
+      const value = parseFloat(getComputedStyle(list).getPropertyValue(name));
+      return Number.isFinite(value) ? value * remPx : NaN;
+    };
     return {
       listHeight: list.getBoundingClientRect().height,
-      rowToken: Number.isFinite(rowToken) ? rowToken * parseFloat(getComputedStyle(window.document.documentElement).fontSize) : NaN,
+      rowToken: token('--commit-row-height'),
+      controlToken: token('--control-target'),
+      gapToken: token('--ledger-cell-gap'),
+      /* The phone log carries its disclosure INSIDE the box (owner ruling,
+         2026-09-12, issue 324), so the box reserves the control too. */
+      disclosed: list.querySelector('.commit-disclosure') !== null,
       fontPx: parseFloat(getComputedStyle(list).fontSize),
       rows: rows.map((row) => ({
         top: row.getBoundingClientRect().top,
@@ -4158,10 +4167,28 @@ test('the commit log reads as ruled rows at the touch pitch, not text in dead ai
   }
   const reserved = await page.locator('#projects .table-row').count();
   expect(reserved, 'the repositories table drew no rows to pair the reserve against').toBeGreaterThan(0);
-  expect(
-    observed.listHeight,
-    `the ${reserved}-row reservation changed size; it must stay paired with the table beside it`
-  ).toBeCloseTo(reserved * observed.rowToken, 0);
+  if (observed.disclosed) {
+    /* On a phone the table is stacked above the log rather than beside it,
+       and the box reserves what it holds when collapsed (owner ruling,
+       2026-09-12, issue 324): five rows, the control at the touch floor and
+       the gap between them, so a payload's arrival moves nothing. The lane
+       "at 390 the log shows five rows and a control" pins the collapsed
+       reading; this one pins that the reserve is exactly that sum and not a
+       minimum the rows overran. */
+    expect(observed.controlToken, 'the log declares no control target to reserve').toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
+    expect(observed.gapToken, 'the log declares no cell gap to reserve').toBeGreaterThan(0);
+    expect(
+      observed.listHeight,
+      'the collapsed phone log is not exactly five rows, the control and its gap'
+    ).toBeCloseTo(5 * observed.rowToken + observed.controlToken + observed.gapToken, 0);
+  } else {
+    expect(
+      observed.listHeight,
+      `the ${reserved}-row reservation changed size; it must stay paired with the table beside it`
+    ).toBeCloseTo(reserved * observed.rowToken, 0);
+  }
 });
 
 test('the shortest admitted repo slug still clears the touch floor on both axes (issue 157)', async ({
