@@ -65,7 +65,7 @@ tallies at `maxCountValue` — measures **7,988 bytes**, 123,084 under the
 ceiling, pinned the same way by `TestProjectsPayloadFitsTheOwnerBudget`.
 
 Both were captured live on 2026-09-11 as well, which is the other half of the
-measurement: the real documents are 13,311 and 3,870 bytes on disk (pretty
+measurement: the real documents are 13,311 and 3,850 bytes on disk (pretty
 printed), so the structural maxima above are roughly an order of magnitude of
 headroom rather than a number that happens to fit today.
 
