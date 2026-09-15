@@ -7,6 +7,22 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.86] - 2026-09-14
+
+### Changed
+
+- `@playwright/test` advances from 1.62.1 to 1.63.0 and Vite advances from
+  8.2.2 to 8.3.0, retaining the repository's pinned browser test and build
+  commands.
+- The grouped `github/codeql-action/init` and `analyze` roles advance together
+  from 4.37.9 to 4.38.0 at the release's full commit SHA.
+
+### Fixed
+
+- The browser lanes now press already-visible reading-mode controls through
+  direct pointer coordinates, keeping Playwright 1.63.0's actionability scroll
+  out of the product's zero-scroll measurement.
+
 ## [0.1.85] - 2026-09-12
 
 ### Changed
