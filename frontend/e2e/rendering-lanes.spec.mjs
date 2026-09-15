@@ -334,6 +334,28 @@ const openReadingModes = async (page) => {
   await expect(page.locator('#reading-mode-menu')).toBeVisible();
 };
 
+/* These zero-scroll lanes must measure the page, not Playwright's locator
+ * actionability. Playwright 1.63.0 can call scrollIntoView on an already
+ * visible, absolutely positioned swatch before pointerdown; WebKit then
+ * scrolls the document to its maximum and the test attributes the driver's
+ * move to the theme choice. A real pointer has no such pre-action step. Pin
+ * the control inside the viewport first, then press its visible centre. */
+const clickVisibleControl = async (page, control, label) => {
+  const box = await control.boundingBox();
+  expect(box, `${label} has no painted box to press`).not.toBeNull();
+  const viewport = page.viewportSize();
+  expect(viewport, `${label} has no viewport to be visible in`).not.toBeNull();
+  expect(box.x, `${label} starts outside the viewport`).toBeGreaterThanOrEqual(0);
+  expect(box.y, `${label} starts above the viewport`).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width, `${label} ends outside the viewport`).toBeLessThanOrEqual(
+    viewport.width
+  );
+  expect(box.y + box.height, `${label} ends below the viewport`).toBeLessThanOrEqual(
+    viewport.height
+  );
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+};
+
 /* The token panel's display controls are GONE (owner directive, 2026-08-28,
  * reversing the 0.1.52 decision after seeing it live: "remove this entire
  * menu. it doesnt look good and it doesn't provide any value"). The helper
@@ -583,7 +605,7 @@ test('switching the reading mode repaints without moving anything', async ({ pag
     ['Light', 'light'],
   ]) {
     await openReadingModes(page);
-    await page.getByRole('button', { name: label, exact: true }).click();
+    await clickVisibleControl(page, page.getByRole('button', { name: label, exact: true }), label);
     await expect(page.locator('html')).toHaveAttribute('data-theme', id);
     const after = await geometry();
     /* Assert the switch actually happened before asserting nothing moved —
@@ -613,7 +635,11 @@ test('switching the reading mode repaints without moving anything', async ({ pag
      layout effect as stamping, and that the document returns to exactly the
      rendering the visitor arrived on. */
   await openReadingModes(page);
-  await page.getByRole('button', { name: 'Auto', exact: true }).click();
+  await clickVisibleControl(
+    page,
+    page.getByRole('button', { name: 'Auto', exact: true }),
+    'Auto'
+  );
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
   const unstamped = await geometry();
   expect(
@@ -6279,7 +6305,7 @@ test('switching the reading mode repaints the gallery without moving any of it (
     ['Light', 'light'],
   ]) {
     await openReadingModes(page);
-    await page.getByRole('button', { name: label, exact: true }).click();
+    await clickVisibleControl(page, page.getByRole('button', { name: label, exact: true }), label);
     await expect(page.locator('html')).toHaveAttribute('data-theme', id);
     const after = await shape();
     expect(
@@ -6305,7 +6331,11 @@ test('switching the reading mode repaints the gallery without moving any of it (
      fifth palette — so what it has to prove is that un-stamping is as free of
      layout effect as stamping. */
   await openReadingModes(page);
-  await page.getByRole('button', { name: 'Auto', exact: true }).click();
+  await clickVisibleControl(
+    page,
+    page.getByRole('button', { name: 'Auto', exact: true }),
+    'Auto'
+  );
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
   const unstamped = await shape();
   expect(unstamped.grid, 'returning to auto moved the gallery row').toEqual(before.grid);

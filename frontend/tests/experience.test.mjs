@@ -2,17 +2,19 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const [fallback, component, styles, themeRegistry, themeMenu, blocks] = await Promise.all([
-  readFile(new URL('../index.html', import.meta.url), 'utf8'),
-  readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
-  readFile(new URL('../src/styles.css', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/themes.ts', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/ThemeMenu.svelte', import.meta.url), 'utf8'),
-  // The block layer's own type declarations. The status-ink pin below derives
-  // the meter's severity names from the union declared there rather than
-  // restating them, so the two cannot drift.
-  readFile(new URL('../src/lib/blocks.ts', import.meta.url), 'utf8'),
-]);
+const [fallback, component, styles, themeRegistry, themeMenu, blocks, renderingLanes] =
+  await Promise.all([
+    readFile(new URL('../index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
+    readFile(new URL('../src/styles.css', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/themes.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/ThemeMenu.svelte', import.meta.url), 'utf8'),
+    // The block layer's own type declarations. The status-ink pin below derives
+    // the meter's severity names from the union declared there rather than
+    // restating them, so the two cannot drift.
+    readFile(new URL('../src/lib/blocks.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../e2e/rendering-lanes.spec.mjs', import.meta.url), 'utf8'),
+  ]);
 
 /* Every component in the tree, keyed by file name — markup and scoped style
  * together, because the rendering-lane floors below need both halves: which
@@ -968,6 +970,32 @@ test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
   // OS setting.
   assert.match(themeMenu, /2\.75rem/);
   assert.match(themeMenu, /prefers-reduced-motion/);
+});
+
+/* Playwright 1.63.0 may scroll an already-visible absolute swatch during a
+ * locator click's actionability step, before the page receives pointerdown.
+ * That is driver motion, so a zero-scroll assertion after it cannot tell what
+ * the product did. These lanes first prove the control is in the viewport and
+ * then use the mouse directly; this source pin keeps the occasionally quiet
+ * driver regression from making that repair vacuous. */
+test('zero-scroll theme lanes press a visible control without locator actionability scrolling', () => {
+  const helper = renderingLanes.match(
+    /const clickVisibleControl = async \(page, control, label\) => \{[\s\S]*?\n\};/
+  )?.[0];
+  assert.ok(helper, 'the zero-scroll browser lanes lost their visible-control pointer helper');
+  assert.match(helper, /control\.boundingBox\(\)/, 'the helper no longer proves the control is painted');
+  assert.match(helper, /page\.viewportSize\(\)/, 'the helper no longer proves the control is visible');
+  assert.match(
+    helper,
+    /page\.mouse\.click\(box\.x \+ box\.width \/ 2, box\.y \+ box\.height \/ 2\)/,
+    'the helper handed the press back to locator actionability scrolling'
+  );
+  assert.doesNotMatch(helper, /control\.click\(/, 'a locator click can move the page before pointerdown');
+  assert.equal(
+    [...renderingLanes.matchAll(/await clickVisibleControl\(/g)].length,
+    4,
+    'both zero-scroll lanes must use direct pointer presses for their mode loop and Auto return'
+  );
 });
 
 /* ===========================================================================
