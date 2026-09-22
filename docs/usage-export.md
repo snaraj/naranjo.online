@@ -28,6 +28,51 @@ Each stage fails closed. A malformed, replayed, oversized, tampered, or
 wrongly-keyed file never replaces what the origin is already serving: the app
 keeps the last good payload and says so in the envelope `status`.
 
+## Delivery bounds, freshness, and operational logs
+
+The existing single-instance scheduler remains the only producer. A capture
+round can take several minutes, so a one-minute schedule does not guarantee
+one-minute source freshness. Each SSH invocation has a fixed 45-second whole
+deadline, including a receiver that answers keepalives but never finishes its
+forced command. The client also uses a 15-second connection timeout, one
+connection attempt, and a 15-second keepalive interval with two unanswered
+probes. The deadline runner checks monotonic and wall time, retiring an expired
+attempt after workstation sleep. SIGTERM, SIGHUP and SIGINT retire its owned SSH
+process group before exit. Transport output is capped at 32 KiB, accommodating
+the local `ssh -G` self-check, and failures emit a closed reason code rather
+than an SSH diagnostic containing host or key paths. A reply still must match
+the local sealed-file checksum before the push is reported successful.
+
+The transport runner is deliberately outside the producer sandbox: it receives
+only the sealed input stream and must perform the existing SSH operation. Both
+raw-record capture programs still run inside the unchanged no-network,
+no-process-fork sandbox. The new runner never receives raw-record inputs.
+
+A checksum proves delivery to the host, not origin admission or current source
+data. The origin's `token usage sealed data admitted` event is emitted only
+after authentication, validation, durable floor persistence when configured,
+and publication. It reports the sealed-file transport, durability, restart
+recovery, export instant, oldest source capture instant, age and source count.
+It does not identify the sending workstation: the origin observes an
+authenticated sealed file, not an authenticated host identity. Re-reading that
+same accepted file is silent. Refusals keep the closed `reason` vocabulary and
+transition-only logging; no rejected payload, path, key or raw error is logged.
+
+The oldest validated source capture has a fixed fifteen-minute freshness grace,
+allowing two multi-minute capture rounds. After that bound, the origin keeps
+the last good metrics but marks them `stale` and logs `reason=source-expired`.
+The envelope's `generatedAt` remains the oldest source capture; a newer export
+timestamp or a valid unchanged seal cannot refresh that age. Expiration does
+not reset or lower the durable replay floor. A later current capture recovers
+the panel normally.
+
+The GitHub-backed and other live panels log `panel refresh cycle started`,
+`panel refresh completed`, and `panel refresh failed`, with panel identity,
+status, duration, next schedule and bounded counts of actually served records.
+An idle eligibility check reports `attempted=false`; a partial result keeps its
+`stale` status, and retained commit rows are counted separately. These events
+describe publication outcomes, never individual private activity records.
+
 ## Security properties, stage by stage
 
 - **Capture cannot fork and cannot reach a network — enforced by the kernel,

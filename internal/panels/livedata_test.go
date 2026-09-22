@@ -450,7 +450,7 @@ func TestAuthenticatedGitHubCadenceFallsBackBeforeReservation(t *testing.T) {
 			return state.fetch
 		}
 
-		authDoer := newCapturingDoer(activityAnswers(t))
+		authDoer := newCapturingDoer(activityAnswersAt(t, now))
 		authSource := configure(t)
 		for _, at := range []time.Time{now, now.Add(time.Minute)} {
 			if _, _, _, attempted, fresh := authSource.commitSection(t.Context(), authDoer, credential, authSource.specs.vcs.Commits, at); !attempted || !fresh {
@@ -471,7 +471,7 @@ func TestAuthenticatedGitHubCadenceFallsBackBeforeReservation(t *testing.T) {
 
 		// An unset credential asks NOTHING. Both documents are about the
 		// credential's own account, so there is no anonymous half to read.
-		publicDoer := newCapturingDoer(activityAnswers(t))
+		publicDoer := newCapturingDoer(activityAnswersAt(t, now))
 		publicSource := configure(t)
 		rows, days, _, attempted, fresh := publicSource.commitSection(t.Context(), publicDoer, anonymous, publicSource.specs.vcs.Commits, now)
 		if attempted {

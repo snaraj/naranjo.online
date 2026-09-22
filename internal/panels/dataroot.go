@@ -103,7 +103,8 @@ type FloorMarker struct {
 
 // errSeriesUnchanged reports a series file whose capture instant equals the
 // last accepted one — the normal state between pushes. Nothing is wrong and
-// nothing is replaced; the loop must not mark the panel stale over it.
+// nothing is replaced. The loop still checks the accepted source age: an
+// unchanged authenticated file is not proof of current capture or delivery.
 var errSeriesUnchanged = errors.New("data root: series file unchanged")
 
 // THE NARRATIVE SPEAKS A CLOSED VOCABULARY, NEVER THE DOCUMENT (issue #290;
@@ -120,6 +121,7 @@ const (
 	reasonFloorNotPersisted = "floor-not-persisted"
 	reasonSourceMissing     = "source-missing"
 	reasonSourceUnreadable  = "source-unreadable"
+	reasonSourceExpired     = "source-expired"
 	reasonSealRefused       = "seal-refused"
 	reasonDocumentRefused   = "document-refused"
 	reasonReplayRefused     = "replay-refused"
@@ -133,7 +135,7 @@ const (
 // every logged reason is a member and every member is a bare label.
 var dataRootReasons = []string{
 	reasonFloorUnreadable, reasonFloorFuture, reasonFloorNotPersisted,
-	reasonSourceMissing, reasonSourceUnreadable, reasonSealRefused,
+	reasonSourceMissing, reasonSourceUnreadable, reasonSourceExpired, reasonSealRefused,
 	reasonDocumentRefused, reasonReplayRefused, reasonSnapshotMissing, reasonRefused,
 }
 
@@ -350,15 +352,21 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 		case err == nil:
 			floor = accepted
 			acceptedInProcess = true
-			reportRecovery(false)
+			if !usageCaptureFresh(state.current.Load().payload.generatedAt, now()) {
+				reportFailure(refuse(reasonSourceExpired, errors.New("data root: accepted source capture has expired")))
+			} else {
+				reportRecovery(false)
+			}
 		case errors.Is(err, errSeriesUnchanged):
 			// The ordinary state between pushes: the same file, already
-			// published, still there. Nothing is wrong. If a transient
-			// fault marked its last-good envelope stale, the digest match
-			// that produced errSeriesUnchanged is also proof that the exact
-			// accepted source is back, so freshness can recover without
-			// waiting for an unrelated newer push.
-			reportRecovery(true)
+			// published, still there. Its identity does not renew its age.
+			// Only a still-current source may recover after a transient
+			// fault; an expired one stays stale until a fresh capture lands.
+			if !usageCaptureFresh(state.current.Load().payload.generatedAt, now()) {
+				reportFailure(refuse(reasonSourceExpired, errors.New("data root: accepted source capture has expired")))
+			} else {
+				reportRecovery(true)
+			}
 		case errors.Is(err, fs.ErrNotExist):
 			// An absent file means two different things, and conflating them
 			// let a deleted document keep the envelope `ok` forever
@@ -483,10 +491,14 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 	if err != nil {
 		return FloorState{}, refuse(reasonDocumentRefused, err)
 	}
+	status := StatusOK
+	if !usageCaptureFresh(provenance, now()) {
+		status = StatusStale
+	}
 	served, err := state.definition.prepare(loadedPayload{
 		generatedAt: provenance,
 		data:        canonical,
-		status:      StatusOK,
+		status:      status,
 	})
 	if err != nil {
 		return FloorState{}, refuse(reasonDocumentRefused, err)
@@ -502,7 +514,32 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 	}
 	state.current.Store(served)
 	reg.rebuildIndex()
+	// Authentication proves the sealed-file channel, not a sending machine
+	// or person. Only validated, published metadata crosses into this event;
+	// rejected documents still speak exclusively through closed reason codes.
+	captured, _ := time.Parse(time.RFC3339, provenance)
+	reg.logger.LogAttrs(context.Background(), slog.LevelInfo, "token usage sealed data admitted",
+		slog.String("panel", dataRootPanelID),
+		slog.String("transport", "sealed-file"),
+		slog.Bool("authenticated", true),
+		slog.Bool("durable", commit != nil),
+		slog.Bool("recovered", allowEqual && instant.Equal(floor.Instant)),
+		slog.String("status", string(status)),
+		slog.Time("exported_at", instant.UTC()),
+		slog.Time("captured_at", captured.UTC()),
+		slog.Float64("capture_age_seconds", max(0, now().Sub(captured).Seconds())),
+		slog.Int("sources_served", len(merged.Sources)),
+	)
 	return accepted, nil
+}
+
+// usageCaptureFresh evaluates only the oldest validated capture instant.
+// Re-reading, re-sealing or re-exporting identical source data never moves
+// this deadline. The payload remains available after expiry, with stale
+// provenance; the monotonic durable admission floor still advances normally.
+func usageCaptureFresh(provenance string, current time.Time) bool {
+	captured, err := time.Parse(time.RFC3339, provenance)
+	return err == nil && !current.After(captured.Add(dataRootFreshnessGrace))
 }
 
 // sealedDigest identifies one ciphertext. It is what binds a persisted floor

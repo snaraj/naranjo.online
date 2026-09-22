@@ -92,6 +92,10 @@ REQUIRED_SANDBOX_DENIALS = ("(deny process-fork)", "(deny network*)")
 # makes naming every option meaningful.
 REQUIRED_SSH_OPTIONS = (
     "BatchMode=yes",
+    "ConnectTimeout=15",
+    "ConnectionAttempts=1",
+    "ServerAliveInterval=15",
+    "ServerAliveCountMax=2",
     "IdentitiesOnly=yes",
     "IdentityAgent=none",
     "AddKeysToAgent=no",
@@ -316,6 +320,28 @@ class PushTransportHardeningTest(unittest.TestCase):
         self.config.write_text(
             "".join("%s=%s\n" % pair for pair in values.items()), encoding="utf-8")
         self.config.chmod(0o600)
+
+    def test_push_response_budget_is_enforced_by_the_real_pipeline(self):
+        # A matching first checksum used to hide arbitrary trailing output.
+        # This also kills removing the runner from push_ssh: isolated runner
+        # tests alone could stay green while the actual pipeline bypassed it.
+        write_executable(self.stub_dir / "ssh", ssh_stub(
+            HONEST_RESPONSE + "python3 -c \"print('x' * 40000)\"\n"))
+        result = run_script(PUSH, env=self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("reason=response-over-budget", result.stderr)
+        self.assertNotIn("checksum verified", result.stdout)
+
+    def test_failed_push_keeps_private_transport_diagnostics_out_of_scheduler_log(self):
+        write_executable(self.stub_dir / "ssh", ssh_stub(
+            "cat >/dev/null\n"
+            "printf 'PRIVATE-DESTINATION-SENTINEL: Connection reset\\n' >&2\n"
+            "exit 255\n"))
+        result = run_script(PUSH, env=self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("reason=connection-lost", result.stderr)
+        self.assertIn("FAILED stage=push", result.stderr)
+        self.assertNotIn("PRIVATE-DESTINATION-SENTINEL", result.stdout + result.stderr)
 
     def test_the_producer_runs_inside_the_shipped_sandbox_profile(self):
         # Round-3 finding 1: the boundary is at the INVOCATION layer, so what
@@ -761,9 +787,15 @@ class PushTransportHardeningTest(unittest.TestCase):
         self.assertEqual(len(sandbox_lines), 2, sandbox_lines)
         for line in sandbox_lines:
             self.assertIn('-f "$PRODUCER_PROFILE"', line)
-        # Every python3 invocation in the file is one of those sandboxed
-        # lines' continuations — there is no third interpreter start anywhere.
+        # The sole third interpreter is the fixed SSH lifecycle runner. It
+        # receives the already-sealed stream; it never walks raw records.
+        # Name its exact invocation before excluding it, so an arbitrary
+        # unconfined Python start cannot hide behind this transport exception.
         starts = [line.strip() for line in lines if "python3" in line]
+        transport = 'python3 -I -B "$PUSH_WATCHDOG" ssh -F /dev/null \\'
+        self.assertEqual(starts.count(transport), 1, starts)
+        starts.remove(transport)
+        self.assertIn('PUSH_WATCHDOG="$REPO_DIR/scripts/usage-export/bounded-ssh.py"', source)
         self.assertEqual(len(starts), 2, starts)
         for line in starts:
             self.assertIn("-I -B", line)
@@ -873,6 +905,10 @@ class PushTransportHardeningTest(unittest.TestCase):
             ("controlmaster auto", "controlmaster"),
             ("globalknownhostsfile /etc/ssh/ssh_known_hosts", "globalknownhostsfile"),
             ("passwordauthentication yes", "passwordauthentication"),
+            ("connecttimeout none", "connecttimeout"),
+            ("connectionattempts 10", "connectionattempts"),
+            ("serveraliveinterval 0", "serveraliveinterval"),
+            ("serveralivecountmax 99", "serveralivecountmax"),
         ):
             with self.subTest(line=line):
                 env = dict(self.env)
@@ -1397,6 +1433,7 @@ Host *
             'SSH_KNOWN_HOSTS="%s"\n' % self.known_hosts
             + 'SSH_IDENTITY="%s"\n' % self.identity
             + "PUSH_PORT=22\n"
+            + 'PUSH_WATCHDOG="%s"\n' % (SCRIPTS / "bounded-ssh.py")
             + function_source
             + '\npush_ssh -G pusher@resolver.invalid </dev/null\n',
             encoding="utf-8",
