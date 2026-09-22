@@ -2203,19 +2203,6 @@ h1 {
   color: var(--ledger-ink);
 }
 
-/* A licence and an author, each led by its mark (owner design decision,
-   2026-09-11, issue 313). A margin rather than a flex gap for the reason the
-   section head's is: the line is ordinary inline type — two marks and two
-   words in one sentence — and making it a flex row would turn every word into
-   a flex item and break the line wherever the sentence should. */
-.footer-meta {
-  color: var(--ledger-muted);
-}
-
-.footer-meta .icon {
-  margin-inline-end: var(--icon-gap);
-}
-
 /* --- The panel shell, under the ledger ----------------------------------- */
 
 /* --- 01 / the openable ledger rows --------------------------------------- */
