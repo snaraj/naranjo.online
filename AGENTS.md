@@ -515,9 +515,8 @@ merges. No third distinct-context pass is required.
   PR reserves no patch at all), the automatic release consequence is proven, and
   the owner-observed release-control receipt proves immutable releases plus
   strict exact required checks, and the owner's separate bypass check reports
-  no core bypass actor and exactly the owner User's PR-only update exception —
-  the receipt carries no bypass field. Only the coordinator
-  flips Ready. The author and reviewer never do.
+  no core bypass actor — the receipt carries no bypass field. Only the
+  coordinator flips Ready. The author and reviewer never do.
 
 ## Parallel agents in one checkout
 
@@ -617,9 +616,8 @@ The complete delivery loop, each step gated by the sections around it:
    `docs/release-governance.md` AND, separately, that document's standalone
    bypass command — the preflight reads no bypass field under any credential.
    Immutable releases and strict current-base required checks must be exact,
-   and the core bypass-actor list must be empty, before Ready. The separate
-   `Owner-PR-Updates` restriction permits only owner-account PR merges; its
-   exception never applies to the core security checks (see release governance).
+   and the core bypass-actor list must be empty, before Ready. `Protect-Main`
+   is the only active repository-owned branch ruleset (see release governance).
 8. **Owner comments** are handled per the owner review protocol below.
 9. **The owner merges.** Nothing you can do — approval, green checks,
    ready state — substitutes for that.
