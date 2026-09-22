@@ -689,10 +689,7 @@ REQUIRED_CHECKS = (
 
 def settings_receipt() -> dict[str, object]:
     return {
-        "active_main_branch_ruleset_count": 2,
-        "owner_update_ruleset": "Owner-PR-Updates",
-        "owner_update_ref": "~DEFAULT_BRANCH",
-        "owner_update_fetch_and_merge": False,
+        "active_main_branch_ruleset_count": 1,
         "repository": "owner/site",
         "branch": "main",
         "actions_enabled": True,
@@ -845,16 +842,6 @@ def settings_api() -> dict[str, object]:
         },
     }
 
-    owner = {
-        "id": 44, "name": "Owner-PR-Updates", "target": "branch",
-        "source_type": "Repository", "source": "owner/site", "enforcement": "active",
-    }
-    records["repos/owner/site/rulesets"].append(owner)
-    records["repos/owner/site/rulesets/44"] = {
-        **owner,
-        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
-        "rules": [{"type": "update", "parameters": {"update_allows_fetch_and_merge": False}}],
-    }
     return records
 
 
@@ -1317,83 +1304,92 @@ class RawSBOMBindingTests(unittest.TestCase):
 
 
 
-class OwnerMergeRestrictionTests(unittest.TestCase):
-    def test_github_readback_omits_only_the_false_update_parameters(self):
-        exact = settings_api()
-        rule = exact["repos/owner/site/rulesets/44"]["rules"][0]
-        del rule["parameters"]
-        self.assertEqual(SettingsReceiptTests.observe(exact), settings_receipt())
-        for invalid in (None, {}, {"unknown": False},
-                        {"update_allows_fetch_and_merge": True},
-                        {"update_allows_fetch_and_merge": 0}):
-            changed = copy.deepcopy(exact)
-            changed["repos/owner/site/rulesets/44"]["rules"][0]["parameters"] = invalid
-            with self.subTest(parameters=invalid), self.assertRaises(RC.ContractError):
-                SettingsReceiptTests.observe(changed)
+class MainBranchRulesetInventoryTests(unittest.TestCase):
+    """The branch-ruleset inventory after the owner-update retirement.
 
-    def test_owner_restriction_requires_exact_structure_and_scalar_types(self):
+    `Owner-PR-Updates` was one `update` rule whose sole bypass actor was the
+    repository owner in `pull_request` mode, so every merge of a passing pull
+    request went through a bypass instead of through the rules. It was retired
+    on 2026-09-22 by owner directive. What replaces its four receipt fields is
+    a closed inventory: exactly one active repository-owned branch ruleset,
+    the core security one. That is what makes the receipt's existing
+    `restrict_updates: false` a statement about the whole branch-protection
+    surface rather than about one ruleset among several -- a second active
+    branch ruleset is exactly where an `update` rule, and the bypass actor
+    such a rule needs to stay mergeable, used to live unseen.
+    """
+
+    def test_a_second_active_branch_ruleset_is_refused_however_it_arrives(self):
         exact = settings_api()
         self.assertEqual(SettingsReceiptTests.observe(exact), settings_receipt())
-        for path, value in (
-            (("id",), True), (("id",), 45), (("name",), "foreign"),
-            (("target",), "tag"), (("source_type",), "Organization"),
-            (("source",), "foreign/repository"), (("enforcement",), "disabled"),
-            (("conditions", "ref_name", "include"), ["~ALL"]),
-            (("conditions", "ref_name", "exclude"), ["refs/heads/main"]),
-            (("rules",), []),
-            (("rules", 0, "type"), "deletion"),
-            (("rules", 0, "parameters", "update_allows_fetch_and_merge"), True),
-            (("rules", 0, "parameters", "update_allows_fetch_and_merge"), 0),
-        ):
-            with self.subTest(path=path, value=value):
-                changed = copy.deepcopy(exact)
-                target = changed["repos/owner/site/rulesets/44"]
-                for key in path[:-1]: target = target[key]
-                target[path[-1]] = value
-                with self.assertRaises(RC.ContractError):
-                    SettingsReceiptTests.observe(changed)
-        for field in ("id", "conditions", "rules"):
-            changed = copy.deepcopy(exact)
-            del changed["repos/owner/site/rulesets/44"][field]
-            with self.subTest(missing=field), self.assertRaises(RC.ContractError):
-                SettingsReceiptTests.observe(changed)
-
-    def test_both_rulesets_are_required_without_ambiguous_or_foreign_inventory(self):
-        exact = settings_api()
-        summaries = exact["repos/owner/site/rulesets"]
-        for changed_summaries in (
-            [r for r in summaries if r["name"] != "Owner-PR-Updates"],
-            [r for r in summaries if r["name"] == "Owner-PR-Updates"],
-            [*summaries, summaries[-1]],
-            [*summaries, {**summaries[-1], "id": 45, "name": "foreign"}],
-            [*summaries[:-1], {**summaries[-1], "id": 42}],
+        core = exact["repos/owner/site/rulesets"][0]
+        retired = {
+            "id": 44, "name": "Owner-PR-Updates", "target": "branch",
+            "source_type": "Repository", "source": "owner/site",
+            "enforcement": "active",
+        }
+        for inventory in (
+            # The retired restriction itself, back in the inventory.
+            [core, retired],
+            # Any other active repository-owned branch ruleset, named or not:
+            # the receipt cannot describe rules it never reads.
+            [core, {**retired, "name": "Protect-Main-Too"}],
+            [core, {**retired, "name": RC.EXPECTED_MAIN_RULESET, "id": 45}],
+            # A duplicate summary of the core ruleset is ambiguous, not extra.
+            [core, core],
+            # And the core ruleset must actually be there.
+            [retired],
+            [],
         ):
             changed = copy.deepcopy(exact)
-            changed["repos/owner/site/rulesets"] = changed_summaries
-            with self.subTest(inventory=changed_summaries), self.assertRaises(RC.ContractError):
+            changed["repos/owner/site/rulesets"] = copy.deepcopy(inventory)
+            with self.subTest(inventory=inventory), self.assertRaises(RC.ContractError):
                 SettingsReceiptTests.observe(changed)
 
-    def test_receipt_cannot_drop_or_weaken_the_owner_restriction(self):
-        for field in ("active_main_branch_ruleset_count", "owner_update_ruleset",
-                      "owner_update_ref", "owner_update_fetch_and_merge"):
-            for invalid in (None, "foreign", True, 0):
-                changed = settings_receipt()
-                changed[field] = invalid
-                with self.subTest(field=field, value=invalid), self.assertRaises(RC.ContractError):
-                    RC.validate_settings_receipt(changed, "owner/site")
-
-    def test_ci_never_claims_to_observe_hidden_owner_bypass_actors(self):
+    def test_inactive_and_foreign_target_rulesets_stay_out_of_the_count(self):
+        # Retirement is a deletion, but a disabled or evaluate-mode leftover is
+        # not an active rule, and the tag ruleset has its own separate
+        # zero-bypass check. Neither may deny an otherwise exact preflight.
         exact = settings_api()
-        self.assertNotIn("bypass_actors", exact["repos/owner/site/rulesets/44"])
+        core = exact["repos/owner/site/rulesets"][0]
+        for extra in (
+            {"id": 44, "name": "Owner-PR-Updates", "target": "branch",
+             "source_type": "Repository", "source": "owner/site",
+             "enforcement": "disabled"},
+            {"id": 44, "name": "Owner-PR-Updates", "target": "branch",
+             "source_type": "Repository", "source": "owner/site",
+             "enforcement": "evaluate"},
+            {"id": 44, "name": RC.EXPECTED_MAIN_RULESET, "target": "tag",
+             "source_type": "Repository", "source": "owner/site",
+             "enforcement": "active"},
+        ):
+            changed = copy.deepcopy(exact)
+            changed["repos/owner/site/rulesets"] = [core, extra]
+            with self.subTest(extra=(extra["enforcement"], extra["target"])):
+                self.assertEqual(
+                    SettingsReceiptTests.observe(changed), settings_receipt()
+                )
+
+    def test_the_receipt_cannot_claim_another_count_or_a_retired_field(self):
+        for invalid in (None, "1", True, 0, 2):
+            changed = settings_receipt()
+            changed["active_main_branch_ruleset_count"] = invalid
+            with self.subTest(count=invalid), self.assertRaises(RC.ContractError):
+                RC.validate_settings_receipt(changed, "owner/site")
+        # The schema is closed in the other direction too: a receipt carrying
+        # any field of the retired restriction -- including the bypass claim CI
+        # was never able to observe -- is foreign, not merely ignored.
+        for retired, value in (
+            ("owner_update_ruleset", "Owner-PR-Updates"),
+            ("owner_update_ref", "~DEFAULT_BRANCH"),
+            ("owner_update_fetch_and_merge", False),
+            ("owner_update_bypass", "owner-user-pull-request"),
+        ):
+            changed = settings_receipt()
+            changed[retired] = value
+            with self.subTest(retired=retired), self.assertRaises(RC.ContractError):
+                RC.validate_settings_receipt(changed, "owner/site")
         self.assertNotIn("owner_update_bypass", settings_receipt())
-        for value in (None, [], [{"actor_id": 1, "bypass_mode": "always"}], "unobservable"):
-            changed = copy.deepcopy(exact)
-            changed["repos/owner/site/rulesets/44"]["bypass_actors"] = value
-            self.assertEqual(SettingsReceiptTests.observe(changed), settings_receipt())
-        changed = settings_receipt()
-        changed["owner_update_bypass"] = "owner-user-pull-request"
-        with self.assertRaises(RC.ContractError):
-            RC.validate_settings_receipt(changed, "owner/site")
 
 
 class SettingsReceiptTests(unittest.TestCase):
@@ -1426,6 +1422,7 @@ class SettingsReceiptTests(unittest.TestCase):
             '"allow_force_pushes": false',
             '"allow_deletions": false',
             '"restrict_updates": false',
+            '"active_main_branch_ruleset_count": 1',
             '"code_scanning_tools": [',
             '"security_alerts_threshold": "high_or_higher"',
             '"alerts_threshold": "errors"',
@@ -1576,7 +1573,6 @@ class SettingsReceiptTests(unittest.TestCase):
             "repos/owner/site/actions/permissions/workflow",
             "repos/owner/site/rulesets",
             "repos/owner/site/rulesets/42",
-            "repos/owner/site/rulesets/44",
         ]:
             raise AssertionError(f"unexpected settings endpoints: {self_calls}")
         if getter.call_args_list[5].kwargs != {"paginate": True}:
@@ -1862,7 +1858,7 @@ class SettingsReceiptTests(unittest.TestCase):
 
     #: Fields whose pinned value has an equal-valued integer/boolean twin.
     CONFLATABLE_RECEIPT_FIELDS = (
-        "owner_update_fetch_and_merge",
+        "active_main_branch_ruleset_count",
         "actions_can_approve_pull_request_reviews",
         "actions_enabled",
         "actions_sha_pinning_required",
@@ -2278,6 +2274,7 @@ class SettingsReceiptTests(unittest.TestCase):
             '"allow_force_pushes": false',
             '"allow_deletions": false',
             '"restrict_updates": false',
+            '"active_main_branch_ruleset_count": 1',
             "Owner-verified",
             "has write access to the ruleset",
             "--jq '.bypass_actors'",
@@ -2326,6 +2323,10 @@ class SettingsReceiptTests(unittest.TestCase):
             ('"allow_force_pushes": false', '"allow_force_pushes": true'),
             ('"allow_deletions": false', '"allow_deletions": true'),
             ('"restrict_updates": false', '"restrict_updates": true'),
+            (
+                '"active_main_branch_ruleset_count": 1',
+                '"active_main_branch_ruleset_count": 2',
+            ),
             ('"require_signed_commits": true', '"require_signed_commits": false'),
             (
                 '"require_extra_approval_for_unattributed_changes": true',
@@ -6907,7 +6908,6 @@ func main() {
                 "workflow": "repos/owner/site/actions/permissions/workflow",
                 "rulesets": "repos/owner/site/rulesets",
                 "ruleset": "repos/owner/site/rulesets/42",
-                "owner-rule": "repos/owner/site/rulesets/44",
             }
             for name, endpoint in paths.items():
                 (runner / f"{name}.json").write_text(
@@ -6941,7 +6941,6 @@ case "${endpoint}" in
     printf ']'
     ;;
   repos/owner/site/rulesets/42) cat "${SETTINGS_FIXTURES}/ruleset.json" ;;
-  repos/owner/site/rulesets/44) cat "${SETTINGS_FIXTURES}/owner-rule.json" ;;
   *) exit 2 ;;
 esac
 '''
@@ -7463,8 +7462,14 @@ class GovernanceParityTests(unittest.TestCase):
                  "132d86d25ffe1a7cfb0d16c26c17c2768b417ab8e5bb5c2bc4bdd5d41a43306e"),
                 ("- **`requires-review` — the review-readiness signal.**",
                  "340084c93dd72dbd2f93440ccc1f68955f3ad911ff08cf2904be70e0ff5d5694"),
+                # Re-pinned for issue #343: the bullet no longer names the
+                # owner User's PR-only update exception, because the ruleset
+                # that carried it was retired on 2026-09-22. The Ready rule
+                # itself is unchanged — the owner's bypass check must still
+                # report no core bypass actor, and only the coordinator flips
+                # Ready.
                 ("- **Merge readiness.** Draft remains Draft until",
-                 "7d814cc7bcf3711dd190fef76a1d7616b936b40b09b1d252fd049800f356a574"),
+                 "729925b29ad4bda67fd507faa56f18ca334ae437469bb785a91e7e612f7cfd9e"),
                 # Re-pinned for issue #285: step 2 of the list admits the
                 # `xhigh` effort to the branch grammar (owner ruling,
                 # 2026-09-03). The block's Ready sentences — step 1's "Never
@@ -7477,8 +7482,13 @@ class GovernanceParityTests(unittest.TestCase):
                 # and `fable5-high/` coexist. The block's Ready sentences —
                 # step 1's "Never apply or interpret `requires-review` on
                 # the issue" and the later Ready/merge steps — are unchanged.
+                # Re-pinned for issue #343: step 7 drops the retired
+                # `Owner-PR-Updates` sentence and states instead that
+                # `Protect-Main` is the only active repository-owned branch
+                # ruleset. The step's Ready condition — exact immutable and
+                # strict-check state, empty core bypass list — is unchanged.
                 ("1. **Claim the work.** (the delivery-loop numbered list)",
-                 "26d2c80ccac838832cac7c1b914cd585c77bbe3d4844719b6b528f2c8a1ba0ec"),
+                 "e076d6ee1dbde6f37bb75f1975b5642aa8d8a637ad4cb61d5a846684954bb71e"),
                 ("Comments the owner leaves on PRs ARE code reviews",
                  "e8e6f2dd0c82a28a8c280cd1705002f4faf8d2e9aa81195df5466d6db83a871c"),
                 ("The full local gate does not substitute for the server boundary",
