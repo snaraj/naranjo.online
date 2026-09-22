@@ -8592,7 +8592,7 @@ class WorkflowStructureTests(unittest.TestCase):
             "persist-credentials: false",
             "fetch-depth: 0",
             "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
-            "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0",
+            "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1",
             "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2",
             '"repos/${GITHUB_REPOSITORY}/releases/latest"',
             "manifest-record",
