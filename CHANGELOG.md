@@ -7,6 +7,23 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.87] - 2026-09-21
+
+### Fixed
+
+- Sealed usage pushes have a fixed whole-invocation deadline, bounded reply
+  output, explicit SSH connection and keepalive bounds, and safe failure
+  classifications. Interrupting the runner also retires its SSH process.
+- Authenticated usage captures older than fifteen minutes serve as stale;
+  re-reading an unchanged sealed file no longer keeps old metrics marked fresh.
+
+### Changed
+
+- Pod logs report successful sealed-feed admission only after publication,
+  with authenticated-channel, capture-age, source-count and durable-state
+  metadata. Live panel refreshes report lifecycle outcomes and served counts,
+  distinguishing partial or retained results without exposing private content.
+
 ## [0.1.86] - 2026-09-14
 
 ### Changed

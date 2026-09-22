@@ -182,6 +182,8 @@ EXPORT_SCRIPT="$REPO_DIR/scripts/export_usage_series.py"
 [ -f "$EXPORT_SCRIPT" ] || fail "export script not found under REPO_DIR"
 CAPTURE_SCRIPT="$REPO_DIR/scripts/capture_usage_series.py"
 [ -f "$CAPTURE_SCRIPT" ] || fail "capture script not found under REPO_DIR"
+PUSH_WATCHDOG="$REPO_DIR/scripts/usage-export/bounded-ssh.py"
+[ -f "$PUSH_WATCHDOG" ] || fail "bounded ssh runner not found under REPO_DIR"
 # The one-time lifetime baselines are REPO DATA (issue #276): the owner's
 # sanctioned vendor readings, committed where review can reproduce them,
 # never operator configuration. A checkout without the table cannot keep the
@@ -421,8 +423,12 @@ fi
 #    single-file write and answers with the landed file's checksum. Both
 #    halves are stated because either side's configuration can drift.
 push_ssh() {
-    ssh -F /dev/null \
+    python3 -I -B "$PUSH_WATCHDOG" ssh -F /dev/null \
         -o BatchMode=yes \
+        -o ConnectTimeout=15 \
+        -o ConnectionAttempts=1 \
+        -o ServerAliveInterval=15 \
+        -o ServerAliveCountMax=2 \
         -o IdentitiesOnly=yes \
         -o IdentityAgent=none \
         -o AddKeysToAgent=no \
@@ -510,6 +516,10 @@ check_resolved userknownhostsfile "$SSH_KNOWN_HOSTS"
 check_resolved globalknownhostsfile /dev/null
 check_resolved passwordauthentication no
 check_resolved gssapiauthentication no
+check_resolved connecttimeout 15
+check_resolved connectionattempts 1
+check_resolved serveraliveinterval 15
+check_resolved serveralivecountmax 2
 
 begin push
 remote_line=$(push_ssh "$PUSH_HOST" usage-export-receive < "$SEALED") || fail "push refused"

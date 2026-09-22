@@ -1,6 +1,6 @@
 // logging_test proves the refresh narrative: failed cycles WARN with the
 // error chain and the exact next-retry instant, successful cycles log one
-// INFO summary, rate-budget idles say so at DEBUG, per-attempt fetch detail
+// INFO summary, rate-budget idles say so at INFO, per-attempt fetch detail
 // carries host/status/bytes at DEBUG, and per-source usage/commit failures
 // WARN where they degrade. It also pins the privacy floor of every one of
 // those records: hosts and labels only — never a URL, path, credential, or
@@ -183,7 +183,7 @@ func TestRefreshLoopWarnsOnFailureWithNextRetry(t *testing.T) {
 // TestRefreshLoopSummarizesSuccessAndIdle drives one successful cycle and
 // then a budget-idle wake: the success logs one INFO summary with the
 // served status and next-refresh instant, and the idle wake says so at
-// DEBUG instead of pretending anything was refreshed.
+// INFO with attempted=false instead of pretending anything was refreshed.
 func TestRefreshLoopSummarizesSuccessAndIdle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		out := &safeBuffer{}
@@ -216,7 +216,7 @@ func TestRefreshLoopSummarizesSuccessAndIdle(t *testing.T) {
 		synctest.Wait()
 
 		records := refreshLogRecords(t, out.String())
-		success := findRecord(records, "panel refreshed")
+		success := findRecord(records, "panel refresh completed")
 		if success == nil {
 			t.Fatalf("no success INFO in %q", out.String())
 		}
@@ -232,10 +232,30 @@ func TestRefreshLoopSummarizesSuccessAndIdle(t *testing.T) {
 		}
 		idle := findRecord(records, "panel refresh idle: every endpoint inside its rate budget")
 		if idle == nil {
-			t.Fatalf("no idle DEBUG in %q", out.String())
+			t.Fatalf("no idle INFO in %q", out.String())
 		}
-		if idle["level"] != "DEBUG" || idle["panel"] != "boss-log" {
-			t.Errorf("idle record = level %v panel %v, want DEBUG/boss-log", idle["level"], idle["panel"])
+		if idle["level"] != "INFO" || idle["panel"] != "boss-log" || idle["attempted"] != false {
+			t.Errorf("idle record = level %v panel %v, want INFO/boss-log with attempted=false", idle["level"], idle["panel"])
+		}
+		starts, completions, idles := 0, 0, 0
+		for _, record := range records {
+			switch record["msg"] {
+			case "panel refresh cycle started":
+				starts++
+				if record["level"] != "INFO" || record["scope"] != "cycle" {
+					t.Errorf("start event claims more than a cycle: %v", record)
+				}
+			case "panel refresh completed":
+				completions++
+				if record["outcome"] != "complete" || record["rows_served"] != float64(2) {
+					t.Errorf("completion does not count the published rows: %v", record)
+				}
+			case "panel refresh idle: every endpoint inside its rate budget":
+				idles++
+			}
+		}
+		if starts != 2 || completions != 1 || idles != 1 {
+			t.Errorf("cycle narrative starts=%d completed=%d idle=%d, want 2/1/1", starts, completions, idles)
 		}
 		assertNoUpstreamURL(t, out.String())
 	})
@@ -701,4 +721,182 @@ func TestDataRootReasonsAreBareLabels(t *testing.T) {
 	if got := dataRootReason(fmt.Errorf("wrapped: %w", refuse(reasonReplayRefused, errors.New("x")))); got != reasonReplayRefused {
 		t.Errorf("a wrapped tag maps to %q, want %q", got, reasonReplayRefused)
 	}
+}
+
+func TestSealedAdmissionLogFollowsDurablePublication(t *testing.T) {
+	for _, failStore := range []bool{false, true} {
+		t.Run(fmt.Sprintf("store-fails-%t", failStore), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				out := &safeBuffer{}
+				reg, state := usageDataRootRegistry(t, synctestSnapshot)
+				reg.logger = slog.New(slog.NewJSONHandler(out, nil))
+				marker := &fakeMarker{}
+				if failStore {
+					marker.failStoring(errors.New("private-path-and-secret-sentinel"))
+				}
+				instant := time.Now().UTC().Format(time.RFC3339)
+				sealed := sealDocument(t, synctestDocument(instant))
+				ctx, cancel := context.WithCancel(t.Context())
+				reg.startDataRoot(ctx, seriesFS(sealed), productionUnsealer(dataRootTestKeyHex), marker.marker(), time.Now)
+				synctest.Wait()
+				time.Sleep(2 * dataRootTTL)
+				synctest.Wait()
+				cancel()
+				synctest.Wait()
+				records := refreshLogRecords(t, out.String())
+				admitted := findRecord(records, "token usage sealed data admitted")
+				envelope, _ := decodeServedUsage(t, state)
+				if failStore {
+					if admitted != nil || envelope.GeneratedAt == instant {
+						t.Fatalf("failed durable commit was logged or served as admitted: %v, at=%q", admitted, envelope.GeneratedAt)
+					}
+				} else {
+					if admitted == nil || admitted["level"] != "INFO" || admitted["transport"] != "sealed-file" || admitted["authenticated"] != true || admitted["durable"] != true || admitted["recovered"] != false || admitted["status"] != "ok" {
+						t.Fatalf("admission record misstates its proof: %v", admitted)
+					}
+					if admitted["exported_at"] != instant || admitted["captured_at"] != instant || admitted["capture_age_seconds"] != float64(0) || admitted["sources_served"] != float64(2) {
+						t.Fatalf("admission record metadata = %v", admitted)
+					}
+					count := 0
+					for _, record := range records {
+						if record["msg"] == "token usage sealed data admitted" {
+							count++
+						}
+					}
+					if count != 1 || envelope.GeneratedAt != instant {
+						t.Fatalf("unchanged file produced %d admissions; served at=%q", count, envelope.GeneratedAt)
+					}
+					recoveryOut := &safeBuffer{}
+					restarted, restartedState := usageDataRootRegistry(t, synctestSnapshot)
+					restarted.logger = slog.New(slog.NewJSONHandler(recoveryOut, nil))
+					floor, _, err := marker.marker().Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := restarted.refreshFromDataRoot(restartedState, seriesFS(sealed), productionUnsealer(dataRootTestKeyHex), time.Now, floor, true, marker.marker().Store); err != nil {
+						t.Fatalf("restart recovery failed: %v", err)
+					}
+					recovery := findRecord(refreshLogRecords(t, recoveryOut.String()), "token usage sealed data admitted")
+					if recovery == nil || recovery["recovered"] != true || recovery["capture_age_seconds"] != (2*dataRootTTL).Seconds() {
+						t.Fatalf("restart recovery was not distinguished from a new capture: %v", recovery)
+					}
+				}
+				if strings.Contains(out.String(), "private-path-and-secret-sentinel") || strings.Contains(out.String(), "alpha") || strings.Contains(out.String(), "beta") {
+					t.Fatalf("admission narrative exposed source content or internal errors: %s", out.String())
+				}
+				assertNoUpstreamURL(t, out.String())
+			})
+		})
+	}
+}
+
+func TestExpiredCaptureCannotRecoverFromAReadFaultAsFresh(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		out := &safeBuffer{}
+		reg, state := usageDataRootRegistry(t, synctestSnapshot)
+		reg.logger = slog.New(slog.NewJSONHandler(out, nil))
+		sealed := sealDocument(t, synctestDocument(time.Now().UTC().Format(time.RFC3339)))
+		fsys := &lockedFS{inner: seriesFS(sealed)}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		reg.startDataRoot(ctx, fsys, productionUnsealer(dataRootTestKeyHex), nil, time.Now)
+		synctest.Wait()
+		tampered := append([]byte(nil), sealed...)
+		tampered[len(tampered)-1] ^= 1
+		fsys.swap(seriesFS(tampered))
+		time.Sleep(dataRootFreshnessGrace + dataRootTTL)
+		synctest.Wait()
+		fsys.swap(seriesFS(sealed))
+		time.Sleep(3 * dataRootTTL)
+		synctest.Wait()
+		if envelope, _ := decodeServedUsage(t, state); envelope.Status != StatusStale {
+			t.Fatalf("restoring expired ciphertext falsely restored %q", envelope.Status)
+		}
+		expired := 0
+		for _, record := range refreshLogRecords(t, out.String()) {
+			if record["msg"] == "token usage data root recovered" {
+				t.Fatalf("expired source logged a false recovery: %v", record)
+			}
+			if record["reason"] == reasonSourceExpired {
+				expired++
+			}
+		}
+		if expired != 1 {
+			t.Fatalf("capture expiry transitions = %d, want exactly one", expired)
+		}
+	})
+}
+
+func TestRefreshCompletionDistinguishesRetainedCommits(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		out := &safeBuffer{}
+		reg, state := activityFetchRegistry(t, 0)
+		reg.logger = slog.New(slog.NewJSONHandler(out, nil))
+		answers := activityAnswers(t)
+		for key, answer := range answers {
+			answer.body = strings.NewReplacer("2026-08-23", "1999-12-31", "2026-08-22", "1999-12-30", "2026-08-21", "1999-12-29").Replace(answer.body)
+			answers[key] = answer
+		}
+		if err := reg.refreshPanel(t.Context(), state, newRoutingDoer(answers), activityEnv(t)); err != nil {
+			t.Fatalf("seed refresh failed: %v", err)
+		}
+		_, seeded := decodeActivity(t, reg)
+		if len(seeded.RecentCommits) == 0 {
+			t.Fatal("healthy seed must serve real commit rows")
+		}
+		time.Sleep(time.Second)
+		answers["/graphql/contributions"] = cannedAnswer{status: http.StatusBadGateway, contentType: "application/json", body: "{}"}
+		ctx, cancel := context.WithCancel(t.Context())
+		reg.startRefresh(ctx, newRoutingDoer(answers), activityEnv(t))
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+		records := refreshLogRecords(t, out.String())
+		start := findRecord(records, "panel refresh cycle started")
+		completed := findRecord(records, "panel refresh completed")
+		if start == nil || start["scope"] != "cycle" || completed == nil || completed["panel_title"] != "Version-control activity" {
+			t.Fatalf("refresh lifecycle was not narrated: %s", out.String())
+		}
+		if completed["status"] != "stale" || completed["outcome"] != "partial" || completed["commits_served"] != float64(len(seeded.RecentCommits)) || completed["commits_retained"] != float64(len(seeded.RecentCommits)) {
+			t.Fatalf("partial success claimed fresh rows: %v", completed)
+		}
+		if completed["duration_ms"] == nil || completed["next_refresh"] == nil {
+			t.Fatalf("refresh lifecycle omitted timing: %v", completed)
+		}
+		for _, sentinel := range []string{"first-repo", "second-repo", "the newest thing", "fixture-commit-credential"} {
+			if strings.Contains(out.String(), sentinel) {
+				t.Errorf("refresh summary leaked %q", sentinel)
+			}
+		}
+		assertNoUpstreamURL(t, out.String())
+	})
+}
+
+func TestDataRootAdmissionNarratesExpiredSourceImmediately(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		out := &safeBuffer{}
+		reg, state := usageDataRootRegistry(t, synctestSnapshot)
+		reg.logger = slog.New(slog.NewJSONHandler(out, nil))
+		now := time.Now().UTC()
+		oldest := now.Add(-dataRootFreshnessGrace - time.Second)
+		document := synctestDocument(now.Format(time.RFC3339))
+		alphaSection(document)["capturedAt"] = oldest.Format(time.RFC3339)
+		ctx, cancel := context.WithCancel(t.Context())
+		reg.startDataRoot(ctx, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex), nil, time.Now)
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+		records := refreshLogRecords(t, out.String())
+		admitted := findRecord(records, "token usage sealed data admitted")
+		failure := findRecord(records, "failed to fetch token usage")
+		if admitted == nil || admitted["status"] != "stale" || admitted["captured_at"] != oldest.Format(time.RFC3339) || admitted["exported_at"] != now.Format(time.RFC3339) || admitted["capture_age_seconds"] != (dataRootFreshnessGrace+time.Second).Seconds() || admitted["durable"] != false {
+			t.Fatalf("admission confused fresh delivery with fresh capture: %v", admitted)
+		}
+		if failure == nil || failure["reason"] != reasonSourceExpired {
+			t.Fatalf("aged admission did not immediately report the stale source: %s", out.String())
+		}
+		if envelope, _ := decodeServedUsage(t, state); envelope.Status != StatusStale {
+			t.Fatalf("aged admission status = %q", envelope.Status)
+		}
+	})
 }
