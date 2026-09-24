@@ -18,6 +18,8 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   their admission and retention scenarios after the fixed sample dates expire.
 - Authenticated usage captures older than fifteen minutes serve as stale;
   re-reading an unchanged sealed file no longer keeps old metrics marked fresh.
+- A failed refresh of a panel that has never served data no longer claims to
+  retain a last-good payload.
 
 ### Changed
 

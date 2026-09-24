@@ -100,11 +100,14 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 		// attempt anything, did not fail at anything, and must neither climb
 		// the retry ladder nor make the panel look stale.
 		if err != nil && !errors.Is(err, errNothingDue) {
+			// A failure never discards the served payload, but a panel that
+			// cold-started unavailable has no last-good to keep serving, so
+			// retention is read from what is served rather than asserted.
 			attrs := []slog.Attr{
 				slog.String("panel", state.definition.id),
 				slog.String("panel_title", state.definition.title),
 				slog.Any("error", err),
-				slog.Bool("retained", true),
+				slog.Bool("retained", state.current.Load().payload.status != StatusUnavailable),
 				slog.Float64("duration_ms", float64(elapsed)/float64(time.Millisecond)),
 				slog.Time("next_retry", time.Now().Add(backoff)),
 			}

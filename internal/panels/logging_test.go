@@ -896,3 +896,91 @@ func TestDataRootAdmissionNarratesExpiredSourceImmediately(t *testing.T) {
 		}
 	})
 }
+
+// TestServedRefreshSummaryCountsEveryPublishedRowKind pins each per-kind
+// served count the refresh narrative promises (#347 review finding 1). The
+// payloads carry distinct nonzero sentinel lengths, so a count that is
+// zeroed, dropped, or read from the wrong field turns this red.
+func TestServedRefreshSummaryCountsEveryPublishedRowKind(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		kind string
+		data any
+		want map[string]int64
+	}{
+		{KindVCSActivity, VCSActivityData{Weeks: make([][]int, 3), PrivateActivity: make([]VCSPrivateDay, 2), RecentCommits: make([]VCSCommit, 4), CommitsAt: "2026-09-23T00:00:00Z"},
+			map[string]int64{"commits_served": 4, "commits_retained": 0, "calendar_weeks_served": 3, "private_days_served": 2}},
+		{KindCodingProjects, CodingProjectsData{Repos: make([]CodingProject, 5)}, map[string]int64{"repos_served": 5}},
+		{KindBossLog, BossLogData{Bosses: make([]BossLogEntry, 6)}, map[string]int64{"rows_served": 6}},
+		{KindTokenUsageV2, TokenUsageData{Sources: make([]TokenUsageSource, 7)}, map[string]int64{"sources_served": 7}},
+	} {
+		raw, err := json.Marshal(tc.data)
+		if err != nil {
+			t.Fatalf("%s sentinel: %v", tc.kind, err)
+		}
+		state := &panelState{definition: panelDefinition{kind: tc.kind}}
+		state.current.Store(&servedPanel{payload: loadedPayload{data: raw, status: StatusOK}})
+		previous := &servedPanel{payload: loadedPayload{data: json.RawMessage(`{}`)}}
+		got := map[string]int64{}
+		for _, attr := range servedRefreshSummary(state, previous) {
+			if attr.Key == "status" {
+				if attr.Value.String() != string(StatusOK) {
+					t.Errorf("%s summary status = %v, want ok", tc.kind, attr.Value)
+				}
+				continue
+			}
+			got[attr.Key] = attr.Value.Int64()
+		}
+		if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+			t.Errorf("%s summary counts = %v, want exactly %v", tc.kind, got, tc.want)
+		}
+	}
+}
+
+// TestFailedCycleRetainsOnlyWhatItServes pins the failed-cycle retained flag
+// from both sides: a panel with a last-good payload keeps serving it as stale
+// and says retained=true; a cold panel with nothing to serve fails the same
+// way but says retained=false instead of claiming a last-good it never had.
+func TestFailedCycleRetainsOnlyWhatItServes(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		fsys     fstest.MapFS
+		retained bool
+		status   Status
+	}{
+		{"last-good", fstest.MapFS{"snapshots/boss.json": {Data: validSnapshot(t)}}, true, StatusStale},
+		{"cold", fstest.MapFS{}, false, StatusUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				out := &safeBuffer{}
+				source, err := NewFetchSource(SnapshotSource{Name: "snapshots/boss.json"}, validFetchConfig(),
+					panelFetchSpecs{bossLog: &bossLogFetchSpec{Endpoint: "https://api.example.test/scores.json", Account: "fixture", ExcludeActivities: []string{"Fixture Activity"}}})
+				if err != nil {
+					t.Fatalf("NewFetchSource() error = %v", err)
+				}
+				registry := newRegistry(tc.fsys, []panelDefinition{{id: "boss-log", kind: KindBossLog, title: "Boss log", source: source}})
+				registry.logger = slog.New(slog.NewJSONHandler(out, nil))
+				ctx, cancel := context.WithCancel(t.Context())
+				registry.startRefresh(ctx, &scriptedDoer{}, func(string) string { return "" })
+				synctest.Wait()
+				cancel()
+				synctest.Wait()
+				record := findRecord(refreshLogRecords(t, out.String()), "panel refresh failed")
+				if record == nil {
+					t.Fatalf("no failure WARN in %q", out.String())
+				}
+				served := registry.byID["boss-log"].current.Load().payload
+				if served.status != tc.status || record["status"] != string(tc.status) || record["retained"] != tc.retained {
+					t.Fatalf("failed cycle served %q and logged %v, want %q with retained=%v", served.status, record, tc.status, tc.retained)
+				}
+				if tc.retained {
+					var data BossLogData
+					if err := json.Unmarshal(served.data, &data); err != nil || len(data.Bosses) == 0 || record["rows_served"] != float64(len(data.Bosses)) {
+						t.Fatalf("retained rows %d logged as %v (%v)", len(data.Bosses), record["rows_served"], err)
+					}
+				}
+			})
+		})
+	}
+}
