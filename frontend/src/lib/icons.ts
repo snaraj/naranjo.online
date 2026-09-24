@@ -34,7 +34,6 @@ export type IconName =
   | 'chevron-up'
   | 'chevron-right'
   | 'chevron-left'
-  | 'source'
   | 'star'
   | 'pull'
   | 'clock'
@@ -48,7 +47,6 @@ export type IconName =
   | 'location'
   | 'work'
   | 'folder'
-  | 'license'
   | 'sword';
 
 /* One shape of one glyph. The three elements below are every element the
@@ -75,9 +73,6 @@ export const icons: Record<IconName, readonly IconPart[]> = {
   'chevron-up': [{ tag: 'path', attrs: { d: 'M6 15l6-6 6 6' } }],
   'chevron-right': [{ tag: 'path', attrs: { d: 'M9 6l6 6-6 6' } }],
   'chevron-left': [{ tag: 'path', attrs: { d: 'M15 5l-7 7 7 7' } }],
-
-  /* links */
-  'source': [{ tag: 'path', attrs: { d: 'M8 7l-5 5 5 5M16 7l5 5-5 5' } }],
 
   /* projects */
   'star': [
@@ -132,11 +127,6 @@ export const icons: Record<IconName, readonly IconPart[]> = {
     { tag: 'path', attrs: { d: 'M9 7V4h6v3M3 12h18' } }
   ],
   'folder': [{ tag: 'path', attrs: { d: 'M3 5h7l2 2h9v13H3z' } }, { tag: 'path', attrs: { d: 'M3 10h18' } }],
-  'license': [
-    { tag: 'rect', attrs: { x: '3', y: '4', width: '18', height: '16' } },
-    { tag: 'path', attrs: { d: 'M7 9h10M7 12h10M7 15h6' } },
-    { tag: 'rect', attrs: { x: '15', y: '14', width: '3', height: '3' }, solid: true }
-  ],
 
   /* feed */
   'sword': [

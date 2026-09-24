@@ -7,7 +7,6 @@
   import { bandMode, documentPrefersDark, prefersDarkQuery, textureFor } from './lib/textures.ts';
   import { syncThemeColor } from './lib/themes.ts';
   import { sectionOrdinal } from './lib/blocks.ts';
-  import Icon from './lib/components/Icon.svelte';
   import { page } from './page.ts';
 
   /* THE BAND'S STATE LIVES HERE, and that is deliberate: the page opens and
@@ -110,20 +109,8 @@
 
   <TextureBand layers={bandTextures} active={texture.file} />
 
-  <!-- The footer's second line is a licence and an author (owner design
-    decision, 2026-09-11, issue 313). It used to print a host — "MIT ·
-    github.com/snaraj" — and the host was the part carrying no information: it
-    is the same forge every project row on the page already links to, spelled
-    out under a line nobody clicks. The marks say "licence" and "source" and
-    the two WORDS that are facts, MIT and the account, stay as words. No
-    third-party logo is drawn: a forge's mark is its trademark, and the
-    family's own source glyph says the same thing in the site's ink. -->
   <footer class="page-footer">
     <span class="footer-mark">naranjo.online v{__SITE_VERSION__}</span>
-    <span class="footer-meta">
-      <Icon name="license" slot="row" />MIT ·
-      <Icon name="source" slot="row" />snaraj
-    </span>
   </footer>
 
   <!-- The reader's grip on the column (owner directive, 2026-08-24). It sits

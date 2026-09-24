@@ -493,10 +493,11 @@ test('the words the marks replaced are still on the page or in its accessibility
   assert.match(header, /<Icon name="location" slot="chrome" \/>California</, 'the place lost its state');
   assert.doesNotMatch(markup(header), /Irvine/, 'the chrome row names the city again');
 
-  const footer = componentSources['App.svelte'];
-  assert.match(footer, /<Icon name="license" slot="row" \/>MIT ·/, 'the licence lost its word');
-  assert.match(footer, /<Icon name="source" slot="row" \/>snaraj/, 'the author lost their name');
-  assert.doesNotMatch(markup(footer), /github\.com\/snaraj/, 'the footer prints the host again');
+  // The owner removed the footer credits in issue 345; keep the build version.
+  const footer = markup(componentSources['App.svelte']).match(/<footer\b[^>]*>([\s\S]*?)<\/footer>/)?.[1];
+  assert.ok(footer, 'the footer is missing');
+  assert.match(footer, /naranjo\.online v\{__SITE_VERSION__\}/, 'the footer lost its build version');
+  assert.doesNotMatch(footer, /<Icon\b|\bMIT\b|snaraj|github\.com|footer-meta/, 'the footer credits returned');
 
   /* THE NAV LINK'S WORD CAME BACK TO THE PAGE (owner ruling, 2026-09-12, issue
      325), so it is no longer a row of this map at all: a word nobody replaced

@@ -7,6 +7,13 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.90] - 2026-09-23
+
+### Removed
+
+- The website footer no longer displays the MIT license and source-account
+  credits; its build-version marker remains.
+
 ## [0.1.89] - 2026-09-22
 
 ### Fixed
