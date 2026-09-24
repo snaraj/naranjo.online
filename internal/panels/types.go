@@ -2085,6 +2085,12 @@ const (
 	// instead of waiting behind another shared refresh poll.
 	dataRootTTL = 30 * time.Second
 
+	// dataRootFreshnessGrace bounds the age of the oldest captured source,
+	// not the export timestamp. Fifteen minutes accommodates two multi-minute
+	// capture/export rounds while making stopped delivery stale.
+	// This fixed bound is not an admission or replay-policy escape hatch.
+	dataRootFreshnessGrace = 15 * time.Minute
+
 	// maxSealedSeriesBytes caps one sealed series file read, and it is THE
 	// pipeline's single payload ceiling rather than this stage's private
 	// one. Before the 2026-08-24 review five stages disagreed — the exporter

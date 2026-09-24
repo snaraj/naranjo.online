@@ -973,8 +973,20 @@ func activityFetchRegistry(t *testing.T, minutes int) (*Registry, *panelState) {
 	return registry, registry.byID["vcs-activity"]
 }
 
-// activityAnswers scripts a healthy round for both producers.
+// activityFixtureInstant keeps healthy discovery and history documents inside
+// their real admission windows under both wall time and testing/synctest time.
+// Use prior UTC days so a run before the fixture hour never creates future data.
+func activityFixtureInstant(now time.Time, daysAgo, hour int) string {
+	return now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -daysAgo).Add(time.Duration(hour) * time.Hour).Format(time.RFC3339)
+}
+
 func activityAnswers(t *testing.T) map[string]cannedAnswer {
+	t.Helper()
+	return activityAnswersAt(t, time.Now())
+}
+
+// activityAnswersAt scripts a healthy round for both producers at one clock instant.
+func activityAnswersAt(t *testing.T, now time.Time) map[string]cannedAnswer {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "contributions-fragment.html"))
 	if err != nil {
@@ -983,16 +995,16 @@ func activityAnswers(t *testing.T) map[string]cannedAnswer {
 	return map[string]cannedAnswer{
 		"/contributions": {contentType: "text/html; charset=utf-8", body: string(raw)},
 		"/graphql/contributions": {contentType: "application/json; charset=utf-8", body: contributionsAnswer([]fixtureContributionRepo{
-			{id: "R_first", name: "first-repo", days: []fixtureContributionDay{{at: "2026-08-23T07:00:00Z", count: 2}}},
-			{id: "R_second", name: "second-repo", days: []fixtureContributionDay{{at: "2026-08-22T07:00:00Z", count: 1}}},
+			{id: "R_first", name: "first-repo", days: []fixtureContributionDay{{at: activityFixtureInstant(now, 1, 7), count: 2}}},
+			{id: "R_second", name: "second-repo", days: []fixtureContributionDay{{at: activityFixtureInstant(now, 2, 7), count: 1}}},
 		}, nil)},
 		"/graphql/history": {contentType: "application/json; charset=utf-8", body: historyAnswer(
 			fixtureHistoryRepo{name: "first-repo", commits: [][2]string{
-				{"feat(panels): the newest thing", "2026-08-23T09:00:00Z"},
-				{"fix(panels): the older thing", "2026-08-21T09:00:00Z"},
+				{"feat(panels): the newest thing", activityFixtureInstant(now, 1, 9)},
+				{"fix(panels): the older thing", activityFixtureInstant(now, 3, 9)},
 			}},
 			fixtureHistoryRepo{name: "second-repo", shaOffset: 10, commits: [][2]string{
-				{"docs: the middle thing", "2026-08-22T09:00:00Z"},
+				{"docs: the middle thing", activityFixtureInstant(now, 2, 9)},
 			}},
 		)},
 	}
@@ -1039,7 +1051,8 @@ func TestActivityRefreshServesLiveCommits(t *testing.T) {
 		t.Fatalf("cold start already reports commits: %+v", cold)
 	}
 
-	doer := newRoutingDoer(activityAnswers(t))
+	now := time.Now()
+	doer := newRoutingDoer(activityAnswersAt(t, now))
 	if err := registry.refreshPanel(t.Context(), state, doer, env); err != nil {
 		t.Fatalf("refreshPanel() error = %v", err)
 	}
@@ -1051,9 +1064,9 @@ func TestActivityRefreshServesLiveCommits(t *testing.T) {
 	// (see its definition above), so the identities below mirror the fixture
 	// rather than assert something the fixture builder does not produce.
 	want := []VCSCommit{
-		{Repo: "first-repo", SHA: fixtureSHA(1), Message: "feat(panels): the newest thing", At: "2026-08-23T09:00:00Z"},
-		{Repo: "second-repo", SHA: fixtureSHA(11), Message: "docs: the middle thing", At: "2026-08-22T09:00:00Z"},
-		{Repo: "first-repo", SHA: fixtureSHA(2), Message: "fix(panels): the older thing", At: "2026-08-21T09:00:00Z"},
+		{Repo: "first-repo", SHA: fixtureSHA(1), Message: "feat(panels): the newest thing", At: activityFixtureInstant(now, 1, 9)},
+		{Repo: "second-repo", SHA: fixtureSHA(11), Message: "docs: the middle thing", At: activityFixtureInstant(now, 2, 9)},
+		{Repo: "first-repo", SHA: fixtureSHA(2), Message: "fix(panels): the older thing", At: activityFixtureInstant(now, 3, 9)},
 	}
 	if len(payload.RecentCommits) != len(want) {
 		t.Fatalf("served %d commits, want %d: %+v", len(payload.RecentCommits), len(want), payload.RecentCommits)
@@ -1098,10 +1111,10 @@ func TestActivityRefreshServesLiveCommits(t *testing.T) {
 func TestHostileCommitUpstreamsKeepTheLastGoodList(t *testing.T) {
 	t.Parallel()
 	healthyBody := contributionsAnswer([]fixtureContributionRepo{
-		{id: "R_first", name: "first-repo", days: []fixtureContributionDay{{at: "2026-08-23T07:00:00Z", count: 2}}},
+		{id: "R_first", name: "first-repo", days: []fixtureContributionDay{{at: activityFixtureInstant(time.Now(), 1, 7), count: 2}}},
 	}, nil)
 	oversized := contributionsAnswer([]fixtureContributionRepo{
-		{id: "R_first", name: strings.Repeat("a", 300000), days: []fixtureContributionDay{{at: "2026-08-23T07:00:00Z", count: 1}}},
+		{id: "R_first", name: strings.Repeat("a", 300000), days: []fixtureContributionDay{{at: activityFixtureInstant(time.Now(), 1, 7), count: 1}}},
 	}, nil)
 	for name, hostile := range map[string]cannedAnswer{
 		"an error status":                {status: http.StatusInternalServerError, contentType: "application/json", body: "{}"},
@@ -1275,11 +1288,11 @@ func TestTheCalendarDatesThePayloadEvenWhenOnlyCommitsRefresh(t *testing.T) {
 	// makes the advance observable rather than inferred.
 	answers := activityAnswers(t)
 	answers["/graphql/contributions"] = cannedAnswer{contentType: "application/json", body: contributionsAnswer([]fixtureContributionRepo{
-		{id: "R_first", name: "first-repo", days: []fixtureContributionDay{{at: "2026-08-23T07:00:00Z", count: 1}}},
+		{id: "R_first", name: "first-repo", days: []fixtureContributionDay{{at: activityFixtureInstant(time.Now(), 1, 7), count: 1}}},
 	}, nil)}
 	answers["/graphql/history"] = cannedAnswer{contentType: "application/json", body: historyAnswer(
 		fixtureHistoryRepo{name: "first-repo", commits: [][2]string{
-			{"feat(panels): a commit that landed since", "2026-08-23T11:00:00Z"},
+			{"feat(panels): a commit that landed since", activityFixtureInstant(time.Now(), 1, 11)},
 		}},
 	)}
 	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), env); err != nil {
@@ -1564,7 +1577,7 @@ func TestAHistoryAnswerThatLosesARepositoryKeepsTheLastGoodList(t *testing.T) {
 	answers := activityAnswers(t)
 	answers["/graphql/history"] = cannedAnswer{contentType: "application/json", body: historyAnswer(
 		fixtureHistoryRepo{name: "first-repo", commits: [][2]string{
-			{"feat(panels): the newest thing", "2026-08-23T09:00:00Z"},
+			{"feat(panels): the newest thing", activityFixtureInstant(time.Now(), 1, 9)},
 		}},
 	)}
 	if err := registry.refreshPanel(t.Context(), state, newRoutingDoer(answers), env); err != nil {

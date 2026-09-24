@@ -9,6 +9,7 @@ package panels
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"time"
@@ -62,7 +63,7 @@ func (reg *Registry) dataRootOwns(state *panelState) bool {
 // chain and the exact next-retry instant, every successful cycle logs one
 // INFO summary with the served status and the next-refresh instant, and a
 // wake that attempted nothing (every endpoint inside its rate budget) says
-// so at DEBUG instead of pretending it refreshed anything.
+// so at INFO with attempted=false instead of pretending it refreshed anything.
 func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fetchDoer, env func(string) string) {
 	config := state.fetch.config
 	backoff := config.InitialBackoff
@@ -85,6 +86,12 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 			return
 		}
 		attemptStart := time.Now()
+		previous := state.current.Load()
+		reg.logger.LogAttrs(ctx, slog.LevelInfo, "panel refresh cycle started",
+			slog.String("panel", state.definition.id),
+			slog.String("panel_title", state.definition.title),
+			slog.String("scope", "cycle"),
+		)
 		err := reg.refreshPanel(ctx, state, doer, env)
 		elapsed := time.Since(attemptStart)
 		// Nothing due is not a failure. The loop wakes on the shared cadence
@@ -93,12 +100,18 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 		// attempt anything, did not fail at anything, and must neither climb
 		// the retry ladder nor make the panel look stale.
 		if err != nil && !errors.Is(err, errNothingDue) {
-			reg.logger.LogAttrs(ctx, slog.LevelWarn, "panel refresh failed",
+			// A failure never discards the served payload, but a panel that
+			// cold-started unavailable has no last-good to keep serving, so
+			// retention is read from what is served rather than asserted.
+			attrs := []slog.Attr{
 				slog.String("panel", state.definition.id),
+				slog.String("panel_title", state.definition.title),
 				slog.Any("error", err),
+				slog.Bool("retained", state.current.Load().payload.status != StatusUnavailable),
 				slog.Float64("duration_ms", float64(elapsed)/float64(time.Millisecond)),
 				slog.Time("next_retry", time.Now().Add(backoff)),
-			)
+			}
+			reg.logger.LogAttrs(ctx, slog.LevelWarn, "panel refresh failed", append(attrs, servedRefreshSummary(state, previous)...)...)
 			timer.Reset(backoff)
 			backoff *= 2
 			if backoff > config.MaxBackoff {
@@ -108,20 +121,69 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 		}
 		if err == nil {
 			backoff = config.InitialBackoff
-			reg.logger.LogAttrs(ctx, slog.LevelInfo, "panel refreshed",
+			outcome := "complete"
+			if state.current.Load().payload.status != StatusOK {
+				outcome = "partial"
+			}
+			attrs := []slog.Attr{
 				slog.String("panel", state.definition.id),
-				slog.String("status", string(state.current.Load().payload.status)),
+				slog.String("panel_title", state.definition.title),
+				slog.String("outcome", outcome),
 				slog.Float64("duration_ms", float64(elapsed)/float64(time.Millisecond)),
 				slog.Time("next_refresh", time.Now().Add(config.TTL)),
-			)
+			}
+			reg.logger.LogAttrs(ctx, slog.LevelInfo, "panel refresh completed", append(attrs, servedRefreshSummary(state, previous)...)...)
 		} else {
-			reg.logger.LogAttrs(ctx, slog.LevelDebug, "panel refresh idle: every endpoint inside its rate budget",
+			reg.logger.LogAttrs(ctx, slog.LevelInfo, "panel refresh idle: every endpoint inside its rate budget",
 				slog.String("panel", state.definition.id),
+				slog.String("panel_title", state.definition.title),
+				slog.Bool("attempted", false),
 				slog.Time("next_refresh", time.Now().Add(config.TTL)),
 			)
 		}
 		timer.Reset(config.TTL)
 	}
+}
+
+// servedRefreshSummary counts the actually published rows, never upstream
+// names, subjects, values, paths or credentials. Retained commit rows are
+// distinguished from newly read ones even when the calendar half succeeded.
+func servedRefreshSummary(state *panelState, previous *servedPanel) []slog.Attr {
+	current := state.current.Load().payload
+	attrs := []slog.Attr{slog.String("status", string(current.status))}
+	switch state.definition.kind {
+	case KindVCSActivity:
+		var data, before VCSActivityData
+		if json.Unmarshal(current.data, &data) == nil {
+			_ = json.Unmarshal(previous.payload.data, &before)
+			retained := 0
+			if data.CommitsAt != "" && data.CommitsAt == before.CommitsAt {
+				retained = len(data.RecentCommits)
+			}
+			attrs = append(attrs,
+				slog.Int("commits_served", len(data.RecentCommits)),
+				slog.Int("commits_retained", retained),
+				slog.Int("calendar_weeks_served", len(data.Weeks)),
+				slog.Int("private_days_served", len(data.PrivateActivity)),
+			)
+		}
+	case KindCodingProjects:
+		var data CodingProjectsData
+		if json.Unmarshal(current.data, &data) == nil {
+			attrs = append(attrs, slog.Int("repos_served", len(data.Repos)))
+		}
+	case KindBossLog:
+		var data BossLogData
+		if json.Unmarshal(current.data, &data) == nil {
+			attrs = append(attrs, slog.Int("rows_served", len(data.Bosses)))
+		}
+	case KindTokenUsageV2:
+		var data TokenUsageData
+		if json.Unmarshal(current.data, &data) == nil {
+			attrs = append(attrs, slog.Int("sources_served", len(data.Sources)))
+		}
+	}
+	return attrs
 }
 
 // refreshPanel performs one refresh attempt and applies its outcome: fresh

@@ -2477,3 +2477,105 @@ func TestThePerModelClassShapesAreOneContractInFourPlaces(t *testing.T) {
 		run("refuses "+entry.Name, entry.Totals, false)
 	}
 }
+
+// An authenticated file that stops changing is still the last good payload,
+// but its capture cannot remain fresh forever. Equality keeps its identity;
+// the clock independently expires its freshness without rewriting the floor.
+func TestDataRootUnchangedCaptureExpiresAtTheFixedGrace(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		if dataRootFreshnessGrace != 15*time.Minute {
+			t.Fatalf("capture grace = %v, want the fixed fifteen-minute bound", dataRootFreshnessGrace)
+		}
+		reg, state := usageDataRootRegistry(t, synctestSnapshot)
+		marker := &fakeMarker{}
+		firstAt := time.Now().UTC().Format(time.RFC3339)
+		sealed := sealDocument(t, synctestDocument(firstAt))
+		fsys := &lockedFS{inner: seriesFS(sealed)}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		reg.startDataRoot(ctx, fsys, productionUnsealer(dataRootTestKeyHex), marker.marker(), time.Now)
+		synctest.Wait()
+		initial, _ := decodeServedUsage(t, state)
+		if initial.Status != StatusOK {
+			t.Fatalf("new capture status = %q", initial.Status)
+		}
+		time.Sleep(dataRootFreshnessGrace)
+		synctest.Wait()
+		if boundary, _ := decodeServedUsage(t, state); boundary.Status != StatusOK {
+			t.Fatalf("exact grace boundary status = %q, want ok", boundary.Status)
+		}
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		expired, _ := decodeServedUsage(t, state)
+		if expired.Status != StatusStale || expired.GeneratedAt != firstAt || !bytes.Equal(expired.Data, initial.Data) {
+			t.Fatalf("expiry must retain the exact captured data and provenance as stale: status=%q at=%q", expired.Status, expired.GeneratedAt)
+		}
+		marker.mu.Lock()
+		writes, floor := marker.storeCalls, marker.instant
+		marker.mu.Unlock()
+		if writes != 1 || floor.Format(time.RFC3339) != firstAt {
+			t.Fatalf("unchanged polling/expiry rewrote the durable floor: writes=%d at=%v", writes, floor)
+		}
+		freshAt := time.Now().UTC().Format(time.RFC3339)
+		fsys.swap(seriesFS(sealDocument(t, synctestDocument(freshAt))))
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		if fresh, _ := decodeServedUsage(t, state); fresh.Status != StatusOK || fresh.GeneratedAt != freshAt {
+			t.Fatalf("new capture did not recover: status=%q at=%q", fresh.Status, fresh.GeneratedAt)
+		}
+		fsys.swap(seriesFS(sealed))
+		time.Sleep(dataRootTTL)
+		synctest.Wait()
+		if replay, _ := decodeServedUsage(t, state); replay.Status != StatusStale || replay.GeneratedAt != freshAt {
+			t.Fatalf("expired ciphertext rolled back the recovered payload: status=%q at=%q", replay.Status, replay.GeneratedAt)
+		}
+	})
+}
+
+// Delivery time and capture time have different jobs. A new authenticated
+// export advances its durable replay floor while preserving the oldest
+// source's age, even when every other source was captured a moment ago.
+func TestDataRootFreshExportCannotRenewAnExpiredSource(t *testing.T) {
+	t.Parallel()
+	reg, state := usageDataRootRegistry(t, dataRootSnapshot)
+	document := validDocument()
+	document["generatedAt"] = fixedNow().Format(time.RFC3339)
+	alphaSection(document)["capturedAt"] = fixedNow().Format(time.RFC3339)
+	oldest := fixedNow().Add(-dataRootFreshnessGrace - time.Second)
+	betaSection(document)["capturedAt"] = oldest.Format(time.RFC3339)
+	marker := &fakeMarker{}
+	floor, err := reg.refreshFromDataRoot(state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex), fixedNow,
+		FloorState{Instant: reg.embeddedUsageInstant(state)}, false, marker.marker().Store)
+	if err != nil {
+		t.Fatalf("valid aged capture should be admitted as stale: %v", err)
+	}
+	envelope, _ := decodeServedUsage(t, state)
+	if envelope.Status != StatusStale || envelope.GeneratedAt != oldest.Format(time.RFC3339) {
+		t.Fatalf("fresh export relabelled an old source: status=%q at=%q", envelope.Status, envelope.GeneratedAt)
+	}
+	if stored, ok := marker.persisted(); !ok || !stored.Equal(fixedNow()) || !floor.Instant.Equal(stored) {
+		t.Fatalf("the aged capture did not advance the export's durable replay floor: %v %t", stored, ok)
+	}
+	if usageCaptureFresh("invalid capture", fixedNow()) {
+		t.Fatal("an unparsable capture must never be fresh")
+	}
+}
+
+func TestDataRootRestartRecoversExpiredCiphertextAsStale(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		marker := &fakeMarker{}
+		sealed := sealDocument(t, synctestDocument(time.Now().UTC().Format(time.RFC3339)))
+		first, _, stop := runMarkeredLoop(t, synctestSnapshot, seriesFS(sealed), marker.marker())
+		if first.Status != StatusOK {
+			t.Fatalf("fresh admission status = %q", first.Status)
+		}
+		stop()
+		synctest.Wait()
+		time.Sleep(dataRootFreshnessGrace + dataRootTTL)
+		restarted, _, stop := runMarkeredLoop(t, synctestSnapshot, seriesFS(sealed), marker.marker())
+		defer stop()
+		if restarted.Status != StatusStale || restarted.GeneratedAt != first.GeneratedAt || !bytes.Equal(restarted.Data, first.Data) {
+			t.Fatalf("restart renewed expired capture: status=%q at=%q", restarted.Status, restarted.GeneratedAt)
+		}
+	})
+}
