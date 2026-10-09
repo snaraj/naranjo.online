@@ -850,6 +850,16 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   one-asset manifest staging, and terminal immutable Release/manifest/tag
   state are stated under Releases above; an ordinary manual/unmerged
   dispatch, skip flag, or force path cannot publish (requirement 10).
+- **compliance-live.yml** — weekly, manual, and pull requests that change the
+  judge: GETs production and judges what the edge serves against
+  `compliance.json` with `scripts/ci/compliance_manifest.py live` (CSP
+  origins, framing, HSTS, nosniff, Referrer-Policy, no cookie, reporting
+  endpoints, scripts in the served HTML, published legal pages). It holds
+  `contents: read` and no secret. The manifest's schema and the judge's rules
+  run in the PR gate's contract suites; the build's own behaviour runs in
+  `frontend/e2e/compliance.spec.mjs` in the browser lanes. Lift: the
+  `compliance.json` entry each refusal prints, with a written reason;
+  `docs/ci-map.md` records what the three checks prove.
 - **release-audit.yml** — weekly and manual, read-only audit of the latest
   immutable Release. It re-binds the successful run, annotated tag, exact
   manifest bytes, image/chart semantic aliases and digests, signatures,
