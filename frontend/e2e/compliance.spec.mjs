@@ -102,7 +102,7 @@ test('a first visit contacts no undeclared origin, breaks no CSP rule and stores
   ).toEqual({ cookies: [], local: [], session: [], databases: [] });
 });
 
-test('the rendered page meets the WCAG 2.1 floors a browser can measure', async ({ page }) => {
+test('the rendered page meets the WCAG 2.1 floors a browser can measure', async ({ page, browserName }) => {
   await page.goto('/');
   await page.waitForLoadState('networkidle');
 
@@ -153,7 +153,12 @@ test('the rendered page meets the WCAG 2.1 floors a browser can measure', async 
     if (stop === null || stops.some((seen) => seen.key === stop.key)) break;
     stops.push(stop);
   }
-  expect(stops.length, 'the keyboard reaches at least one control').toBeGreaterThan(0);
+  // WebKit keeps Safari's default tab order, which skips links and buttons, so
+  // only the engines that tab to every control are asked to reach one; what
+  // WebKit does reach is still held to the ring below.
+  if (browserName !== 'webkit') {
+    expect(stops.length, 'the keyboard reaches at least one control').toBeGreaterThan(0);
+  }
   expect(
     stops.filter((stop) => !stop.visible).map((stop) => stop.shape),
     'every keyboard stop shows a focus outline or ring',
