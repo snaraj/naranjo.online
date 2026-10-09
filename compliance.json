@@ -1,0 +1,48 @@
+{
+  "schema": "compliance/v1",
+  "liveUrl": "https://naranjo.online/",
+  "dataCollected": [
+    {
+      "what": "Request path, method, status, size, duration and a random request id",
+      "where": "Pod log",
+      "purpose": "Operating the site; no client address and no query string are recorded",
+      "evidence": "internal/server/logging.go"
+    }
+  ],
+  "storage": [
+    {
+      "name": "theme",
+      "kind": "cookie",
+      "writtenWhen": "visitor-action",
+      "purpose": "The reading mode a visitor picked, so the next page renders in it"
+    },
+    {
+      "name": "page-column-width",
+      "kind": "localStorage",
+      "writtenWhen": "visitor-action",
+      "purpose": "The reading-column width a visitor dragged to"
+    }
+  ],
+  "thirdParties": [],
+  "legalPages": [
+    {
+      "id": "privacy",
+      "status": "pending",
+      "decision": "https://github.com/snaraj/naranjo.online/issues/355"
+    }
+  ],
+  "edgeObservations": [
+    {
+      "kind": "injected-inline-script",
+      "marker": "/cdn-cgi/challenge-platform/",
+      "reason": "The edge appends a bot-detection loader to every HTML response; this origin's CSP blocks it, so it never runs. Keeping or disabling it is an owner decision.",
+      "issue": "https://github.com/snaraj/platform/issues/407"
+    },
+    {
+      "kind": "reporting-endpoint",
+      "origin": "https://a.nel.cloudflare.com",
+      "reason": "The edge adds NEL and Report-To headers, so browsers send network-error reports to the edge provider. Naming it in a privacy notice or disabling it is an owner decision.",
+      "issue": "https://github.com/snaraj/platform/issues/407"
+    }
+  ]
+}

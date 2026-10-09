@@ -53,6 +53,42 @@ which selects the engine revisions. The job installs that exact pinned
 `@playwright/test` from the lockfile and restores the engine cache keyed on
 that version.
 
+## What the compliance gate proves, and where it cannot reach
+
+`compliance.json` states what the site stores on a visitor's device and when,
+which third-party origins a page may contact (none today), which legal pages
+exist, and which edge behaviours are known and why (issue #355). Three
+checks hold the site to it, and each answers a different question:
+
+- `scripts/ci/test_compliance_manifest.py`, in the PR gate's contract suites,
+  keeps the manifest valid and current: a closed schema, storage names a
+  frontend file still writes, evidence files that still exist, and the
+  judging rules themselves, each refused on its own.
+- `frontend/e2e/compliance.spec.mjs`, in the browser lanes, drives the shipped
+  binary in every engine: no request to an undeclared origin, no CSP
+  violation, nothing written to the device before the visitor acts, the
+  WCAG 2.1 floors a browser can measure (page language, image `alt`, an
+  accessible name on every visible control, no positive `tabindex`, a visible
+  focus indicator on every keyboard stop), no credential-shaped literal in the
+  served document, scripts or stylesheets, and every published legal page
+  linked and served.
+- `compliance-live.yml`, weekly and on demand, GETs production and judges what
+  the edge serves: CSP fetch directives admit no undeclared origin, wildcard,
+  bare scheme or inline script source; framing is denied; HSTS lasts a year;
+  nosniff and a Referrer-Policy are present; the document sets no cookie; every
+  reporting endpoint and every script, stylesheet or embed in the served HTML
+  is this origin's or declared; every published legal page answers 200. It
+  also runs on a pull request that changes the judge, so the judge is proven
+  against the live site before it merges, but not on one that only edits the
+  manifest, which often declares what the next deployment ships.
+
+A declared entry that no longer occurs is refused as stale, so no exemption
+outlives its case; every refusal prints the entry that would admit it. What
+none of the three can see: what a visitor's device writes after they act, a
+screen reader's actual reading, and anything only a lawyer can judge. The
+manifest's `storage` list is the disclosure for the first, kept honest only
+against the source.
+
 ## The documented GitHub behaviours the release path depends on
 
 GitHub documents that `GITHUB_TOKEN`-created refs suppress recursive workflow
