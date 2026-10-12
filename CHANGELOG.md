@@ -69,7 +69,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   8-second, 120-frame loop and face into the row; a reader who asked for less
   motion fetches one 17 kB still and never the 347 kB sheet (the flying sheet
   was 882 kB). The reading-mode popover drops its swatch gaps so it still fits
-  a 320 px screen; every swatch keeps its 44 px target.
+  a 320 px screen; every swatch keeps its 44 px target. On a phone J stands
+  32 px tall (44 × 32), so the two of him no longer take 33 px from the nav.
+- The tab icon, the home-screen icon and the link-preview card show J at his
+  laptop instead of Rime, from the same render as the chrome row's still.
 - Coverage badges publish after the PR gate in their own workflow: a badge
   push can no longer hold back a release, and an older main commit can no
   longer replace newer badges (#350).
@@ -85,6 +88,8 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - Frontend toolchain: svelte 5.57.1, @sveltejs/vite-plugin-svelte 7.3.1, vite
   8.3.1; CodeQL init and analyze pinned to github/codeql-action v4.38.2; the
   vite pair is one Dependabot group (supersedes #351, #352, #353, #354).
+- CI actions: actions/setup-node v7.1.0 and actions/upload-artifact v7.0.2,
+  each pinned to the commit its release tag names (supersedes #360, #361).
 
 ### Security
 
