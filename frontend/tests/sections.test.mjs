@@ -1956,9 +1956,9 @@ test('J’s typing sheet and its still are exactly the two vendored files, under
     assert.equal(bytes.toString('ascii', 12, 16), 'VP8X', `${file} has no extended header to read its canvas from`);
     return [bytes.readUIntLE(24, 3) + 1, bytes.readUIntLE(27, 3) + 1];
   };
-  const cell = /--j-cell-inline: calc\(var\(--control-target\) \* (\d+) \/ (\d+)\);/.exec(styles);
+  const cell = /--j-cell-inline: calc\(var\(--j-cell-block\) \* (\d+) \/ (\d+)\);/.exec(styles);
   const columns = /--j-sheet-inline: calc\(var\(--j-cell-inline\) \* (\d+)\);/.exec(styles);
-  const rows = /--j-sheet-block: calc\(var\(--control-target\) \* (\d+)\);/.exec(styles);
+  const rows = /--j-sheet-block: calc\(var\(--j-cell-block\) \* (\d+)\);/.exec(styles);
   assert.ok(cell && columns && rows, 'the stylesheet no longer states J’s grid as the three tokens this pin reads');
   const [cellWidth, cellHeight] = [Number(cell[1]), Number(cell[2])];
   assert.deepEqual(

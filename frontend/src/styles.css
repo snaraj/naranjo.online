@@ -795,10 +795,13 @@
      browser font size is not 16px gets a box literal numbers no longer
      divide, and the cell beside the one being shown starts to show inside it.
      Twelve columns by ten rows is the sheet's own layout, so these lines are
-     the one place the grid is stated and the keyframes below read them back. */
-  --j-cell-inline: calc(var(--control-target) * 176 / 128);
+     the one place the grid is stated and the keyframes below read them back.
+     His height is its own token so the phone block can lower it alone; every
+     length below follows, because they are all declared on this same element. */
+  --j-cell-block: var(--control-target);
+  --j-cell-inline: calc(var(--j-cell-block) * 176 / 128);
   --j-sheet-inline: calc(var(--j-cell-inline) * 12);
-  --j-sheet-block: calc(var(--control-target) * 10);
+  --j-sheet-block: calc(var(--j-cell-block) * 10);
 
   /* The board of cards, and the strip under it. The minimum is the height the
      owner's drawing gives a card at 1440px; a row is taller when a card in it
@@ -1627,8 +1630,8 @@ html[data-column-resizing] {
    (requirement 11's rule for media, the same one the gallery's adapter
    follows).
 
-   The box is the row's own 44px height at the render's 176:128 ratio, and it
-   is RESERVED: stated on the element rather than measured from the picture,
+   The box is the row's own 44px height (the drawn mark's 32px on a phone) at
+   the render's 176:128 ratio, and it is RESERVED: stated on the element rather than measured from the picture,
    so the row is the same height before either file has arrived as after, and
    a decode cannot move the page (the zero-CLS floor). flex: none for the same
    reason — the row must not squeeze him when the nav is wide.
@@ -1644,7 +1647,7 @@ html[data-column-resizing] {
 .j-mark {
   flex: none;
   inline-size: var(--j-cell-inline);
-  block-size: var(--control-target);
+  block-size: var(--j-cell-block);
   background-image: url('./assets/images/j/j-typing-still.webp');
   background-repeat: no-repeat;
   background-position: 0 0;
@@ -3396,6 +3399,12 @@ h1 {
      because an earlier declaration at equal specificity loses to it. */
   :root {
     --gallery-columns: 2;
+    /* J at the drawn mark's 32px instead of the touch row's 44px (owner ruling,
+       2026-10-12): two of him at 60.5px took 33px from the nav's window on a
+       390px phone. At 44 x 32 he is exactly as wide as the touch floor, so the
+       home link around him is no wider than any other control, and he still
+       sits centred in the row's own 44px. */
+    --j-cell-block: var(--control-mark);
   }
   .band {
     block-size: var(--band-height-phone);

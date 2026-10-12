@@ -809,8 +809,13 @@ const jSeats = [
   ['.page-mark .j-mark', 'the home link', 'none'],
   ['.page-chrome .j-mark', "the row's end", 'matrix(-1, 0, 0, 1, 0, 0)'],
 ];
-/* The render's own cell, 176 x 128, drawn at the row's control height. */
-const jCellPx = { width: (touchFloorPx * 176) / 128, height: touchFloorPx };
+/* The render's own cell, 176 x 128, drawn at the row's control height — and at
+ * the drawn mark's 32px at phone widths (owner ruling, 2026-10-12), where two
+ * of him at full height took 33px from the nav's window. */
+const jCellPx = (width) => {
+  const height = width <= 720 ? 32 : touchFloorPx;
+  return { width: (height * 176) / 128, height };
+};
 const jSheetPath = /\/j-typing-(?!still-)[^/]*\.webp$/;
 const jStillPath = /\/j-typing-still-[^/]*\.webp$/;
 
@@ -841,11 +846,11 @@ test('J bookends the row from one picture, facing inwards at both ends, typing w
         expect(
           box.width,
           `J at ${seat} is ${box.width}px wide at ${width}px with motion ${motion}`
-        ).toBeCloseTo(jCellPx.width, 0);
+        ).toBeCloseTo(jCellPx(width).width, 0);
         expect(
           box.height,
           `J at ${seat} is ${box.height}px tall at ${width}px with motion ${motion}`
-        ).toBeCloseTo(jCellPx.height, 0);
+        ).toBeCloseTo(jCellPx(width).height, 0);
       }
       /* THE BOX IS RESERVED, so the row he sits in is exactly as tall as the
          row's own stated reserve: the site's hit lane plus the one rule it
@@ -1017,8 +1022,8 @@ test('J bookends the row from one picture, facing inwards at both ends, typing w
         for (const position of frames) {
           const offsets = /^(-?[\d.]+)px (-?[\d.]+)px$/.exec(position);
           expect(offsets, `J at ${seat} computed a position "${position}" this lane cannot read as pixels`).not.toBeNull();
-          const column = -Number(offsets[1]) / jCellPx.width;
-          const row = -Number(offsets[2]) / jCellPx.height;
+          const column = -Number(offsets[1]) / jCellPx(1440).width;
+          const row = -Number(offsets[2]) / jCellPx(1440).height;
           for (const [axis, cells, count] of [
             ['column', column, 12],
             ['row', row, 10],

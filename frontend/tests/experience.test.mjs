@@ -1719,7 +1719,7 @@ test('J is a picture at both ends of the chrome row, reserved, silent, still at 
      zero-CLS floor. It stands the row's own control height, at the render's
      own ratio. */
   assert.equal(resting['inline-size'], 'var(--j-cell-inline)');
-  assert.equal(resting['block-size'], 'var(--control-target)');
+  assert.equal(resting['block-size'], 'var(--j-cell-block)');
   assert.equal(resting.flex, 'none', 'the row may squeeze him');
   /* AT REST HE IS THE STILL — the render's own reduced-motion frame, drawn
      whole into the box — rather than a cancelled animation, and the sheet is
@@ -1734,15 +1734,34 @@ test('J is a picture at both ends of the chrome row, reserved, silent, still at 
      cell starts showing inside the mark. The cell is the render's 176 x 128,
      the sheet is 12 of them across and 10 down. */
   for (const declaration of [
-    '--j-cell-inline: calc(var(--control-target) * 176 / 128);',
+    '--j-cell-block: var(--control-target);',
+    '--j-cell-inline: calc(var(--j-cell-block) * 176 / 128);',
     '--j-sheet-inline: calc(var(--j-cell-inline) * 12);',
-    '--j-sheet-block: calc(var(--control-target) * 10);',
+    '--j-sheet-block: calc(var(--j-cell-block) * 10);',
   ]) {
     assert.ok(
       stylesCode.includes(declaration),
       `${declaration} is gone, so the grid is no longer derived from the mark’s own box`
     );
   }
+  /* ON A PHONE HE STANDS THE DRAWN MARK'S HEIGHT (owner ruling, 2026-10-12):
+     two of him at the touch row's height took 33px from the nav's window at
+     390px. Only the height token is restated, on :root inside the phone block,
+     so the cell, the sheet and the keyframes all follow it from one line. */
+  const phoneRoot = sweptRules.find(
+    (rule) =>
+      rule.selector === ':root' &&
+      rule.enclosing.some((at) => at === '@media (max-width: 45rem)') &&
+      /--j-cell-block/.test(rule.body)
+  );
+  assert.ok(phoneRoot, 'the phone block no longer lowers J, so two of him narrow the nav again');
+  assert.deepEqual(
+    declarationsOf(phoneRoot.body)
+      .filter(({ property }) => property.startsWith('--j-'))
+      .map(({ property, value }) => `${property}: ${value}`),
+    ['--j-cell-block: var(--control-mark)'],
+    'the phone block restates more of J than his height, so the derived grid can disagree with it'
+  );
 
   /* THE LOOP, and only inside no-preference. The sweep below proves no rule
      animates outside that block; this proves the sheet arrives THERE, sized to
