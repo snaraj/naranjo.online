@@ -11876,6 +11876,120 @@ test('the keyboard still walks the chrome row: the home link, the four nav links
   expect(home.text, `the home link prints "${home.text}"; its content is a picture now`).toBe('');
 });
 
+/* A CLOSED DRAWER HOLDS NO STOP (issue 329). The drawer closes by clipping its
+ * contents to zero height, and clipping alone left the employer link a Tab
+ * stop and in the accessibility tree, so Chromium and Firefox walked row,
+ * invisible link, row, invisible link. The closed drawer is `inert`
+ * (LedgerLog.svelte), and this measures what each engine DOES with that at
+ * both layouts: every drawer closed, the walk goes row to row; one drawer
+ * open, its link is the stop between its row and the next; and the open still
+ * grows where motion is welcome and still opens where it is not.
+ *
+ * Two halves, because WebKit cannot answer the walk. Its automation build
+ * leaves plain links out of the tab order (the chrome-row walk above) and the
+ * role rows' buttons with them — a Tab from one row was measured landing on
+ * the projects table, past every row and every link — so a walk there proves
+ * nothing either way. An inert subtree refuses programmatic focus in every
+ * engine, so that half, and the grow, are asserted everywhere; the walks are
+ * asserted wherever the chrome-row walk's own independent probe — one Tab out
+ * of the last row — reaches an anchor. */
+for (const viewport of markViewports) {
+  test(`a closed role drawer holds no keyboard stop and an open one does, at ${viewport.width}px (issue 329)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await visit(page);
+    const entries = page.locator('#work .ledger-entry');
+    const count = await entries.count();
+    expect(count, 'the experience section rendered fewer than two rows to walk').toBeGreaterThan(1);
+    const drawers = () =>
+      entries.evaluateAll((nodes) =>
+        nodes.map((entry) => {
+          const link = entry.querySelector('.ledger-link');
+          link.focus({ preventScroll: true });
+          const focusable = window.document.activeElement === link;
+          link.blur();
+          return [entry.querySelector('.ledger-drawer').inert, focusable];
+        })
+      );
+    const stop = () =>
+      page.evaluate(() => {
+        const active = window.document.activeElement;
+        const at = (selector) => [...window.document.querySelectorAll(selector)].indexOf(active);
+        return { row: at('#work .ledger-row'), link: at('#work .ledger-link') };
+      });
+    const closed = [true, false];
+    const open = [false, true];
+
+    expect(await drawers(), 'a closed drawer is not inert, or still lets its link take focus').toEqual(
+      Array(count).fill(closed)
+    );
+    await entries.last().locator('.ledger-row').focus();
+    await page.keyboard.press('Tab');
+    const engineTabsLinks = await page.evaluate(
+      () => window.document.activeElement?.tagName === 'A'
+    );
+    if (engineTabsLinks) {
+      await entries.first().locator('.ledger-row').focus();
+      for (let index = 1; index < count; index += 1) {
+        await page.keyboard.press('Tab');
+        expect(
+          await stop(),
+          `with every drawer closed, the Tab after row ${index - 1} did not land on row ${index}`
+        ).toEqual({ row: index, link: -1 });
+      }
+    }
+
+    /* Opened where motion is welcome: the drawer leaves inert at once and
+       still GROWS — a running grid-template-rows transition the engine itself
+       reports — and its link is the next stop after its own row. */
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    const first = entries.first();
+    await first.locator('.ledger-row').click();
+    expect(
+      await first
+        .locator('.ledger-drawer')
+        .evaluate((drawer) =>
+          drawer.getAnimations().some((motion) => motion.transitionProperty === 'grid-template-rows')
+        ),
+      'the drawer opened without growing where motion is welcome'
+    ).toBe(true);
+    expect(await drawers(), 'the opened drawer still refuses focus, or another one stopped refusing').toEqual(
+      [open, ...Array(count - 1).fill(closed)]
+    );
+    if (engineTabsLinks) {
+      await first.locator('.ledger-row').focus();
+      await page.keyboard.press('Tab');
+      expect(await stop(), 'the Tab after an opened row did not land on its own link').toEqual({
+        row: -1,
+        link: 0,
+      });
+      await page.keyboard.press('Tab');
+      expect(await stop(), 'the Tab out of an opened drawer did not land on the next row').toEqual({
+        row: 1,
+        link: -1,
+      });
+    }
+
+    /* Opened where it is not: the same two states, applied instantly. */
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await entries.nth(1).locator('.ledger-row').click();
+    expect(
+      await entries
+        .nth(1)
+        .locator('.ledger-drawer')
+        .evaluate((drawer) => drawer.getAnimations().length),
+      'the drawer travels for a reader who asked for less motion'
+    ).toBe(0);
+    expect(await drawers(), 'a drawer opened without motion still refuses focus').toEqual([
+      open,
+      open,
+      ...Array(count - 2).fill(closed),
+    ]);
+    await page.emulateMedia({ reducedMotion: null });
+  });
+}
+
 /* THE TABLE'S HEAD IS MARKS AND ITS NUMERALS ARE A COLUMN (owner directive,
  * 2026-09-11, issue #317).
  *

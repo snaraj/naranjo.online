@@ -960,6 +960,15 @@ test('the experience section carries four complete real entries, newest first', 
   }
   const ledgerMarkup = withoutHtmlComments(ledgerLog);
   assert.match(ledgerMarkup, /<a\s+class="ledger-link"/);
+  /* A CLOSED DRAWER IS INERT (issue 329), bound to the same state the row
+     announces, so its link leaves the tab order and the accessibility tree
+     exactly while the row is closed. What the engines do with it — the Tab
+     walk and the refused focus — is measured in the browser lanes. */
+  assert.match(
+    ledgerMarkup,
+    /<div class="ledger-drawer" data-open=\{open \? 'true' : 'false'\} inert=\{!open\}>/,
+    'the drawer is not inert exactly while its row is closed'
+  );
   /* Drawn on HAVING a link and on nothing else. The markup pins above all
      survive a condition that can never be true — an anchor nobody renders is
      still an anchor in the file — so the condition is read back too: the row
