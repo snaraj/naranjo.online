@@ -265,8 +265,12 @@
        panel stack, which is later in the document and would otherwise paint
        on top of it. */
     z-index: var(--layer-menu, 30);
+    /* No gap between the swatches: each is already a 44px target round an
+       18px glyph, so the glyphs sit 26px apart without one. Four gaps would
+       add 16px, and without them the 230px popover still hangs from its
+       trigger inside a 320px screen with J's wider box closing the row after
+       it — with them it starts 14.5px off the screen's start edge. */
     display: flex;
-    gap: var(--swatch-gap);
     padding: var(--swatch-popover-padding);
     border: 1px solid var(--color-border);
     /* A real design, not the generic floating pill (owner directive, issue

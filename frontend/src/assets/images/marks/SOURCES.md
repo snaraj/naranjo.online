@@ -9,7 +9,7 @@ monograms issue 313 drew. Four files, one per role, ~10 KB for the whole set.
 external image cannot load at all: a mark on this page is a file in this
 repository or it is nothing. These four are a narrow, dated exception to
 requirement 11's general rule in the same sense the gallery's placeholders and
-Rime's flight sheet are — bounded to these four small tiles, reviewed here, and
+J's typing sheet are — bounded to these four small tiles, reviewed here, and
 pinned by `tests/sections.test.mjs`, which allows exactly the files the work
 entries name and nothing else.
 

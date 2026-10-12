@@ -13,12 +13,13 @@
 
   THE ROW IS BOOKENDED BY THE SAME DRAGON (owner ruling, 2026-09-12, issue
   325: "replace this with another dragon facing inwards to match the opposite
-  side"). The start of the row was the "SN." wordmark; it is Rime now, mirrored
-  on the inline axis so he faces into the row rather than out of it. The LINK
-  is unchanged in every way that matters — same class, same 44px box, same
-  anchor to the page's own name — and it is still the row's first stop. What
-  changed is what it draws and where its name comes from: the mark is
-  aria-hidden, and the link is named by the heading it scrolls to
+  side"). The start of the row was the "SN." wordmark; it is J now, typing at
+  his laptop (owner request, 2026-10-12), drawn as rendered because the render
+  already faces into the row — the copy at the END is the mirrored one. The
+  LINK is unchanged in every way that matters — same class, same 44px-tall hit
+  lane, same anchor to the page's own name — and it is still the row's first
+  stop. What changed is what it draws and where its name comes from: the mark
+  is aria-hidden, and the link is named by the heading it scrolls to
   (aria-labelledby), so the page's name is stated once, in the masthead, and a
   screen reader hears "Samuel Naranjo" rather than a literal this component
   spells a second time.
@@ -38,7 +39,7 @@
   two channels say the same thing. The phone rule that hides this whole span is
   untouched.
 
-  Rime closes the row (owner decision, 2026-09-11, issue 314) and closes it
+  J closes the row (owner decision, 2026-09-11, issue 314) and closes it
   LAST on purpose: he is a picture rather than a control, so putting him after
   the reading mode leaves the row's keyboard order exactly as the rendering
   lanes pin it — the home link, the nav, the mode — with nothing new between
@@ -46,16 +47,16 @@
 <script lang="ts">
   import ThemeMenu from '../ThemeMenu.svelte';
   import Icon from './Icon.svelte';
-  import RimeMark from './RimeMark.svelte';
+  import JMark from './JMark.svelte';
   import SectionNav from './SectionNav.svelte';
 </script>
 
 <header class="page-header">
-  <a class="page-mark" href="#page-title" aria-labelledby="page-title"><RimeMark mirrored /></a>
+  <a class="page-mark" href="#page-title" aria-labelledby="page-title"><JMark /></a>
   <SectionNav />
   <div class="page-chrome">
     <span class="page-place"><Icon name="location" slot="chrome" />California</span>
     <ThemeMenu />
-    <RimeMark />
+    <JMark mirrored />
   </div>
 </header>
