@@ -91,6 +91,16 @@ type Unsealer func(sealed []byte) ([]byte, error)
 // A nil FloorMarker (or either field nil) runs the loop with the
 // process-memory floor only — the documented degraded mode for deployments
 // without a writable state root, unchanged by this contract.
+//
+// RETENTION IS AVAILABILITY, NOT ADMISSION (issue #358). A restarted process
+// used to own nothing it had served, so any tick it refused — a clock that
+// came back weeks behind the persisted floor, a missing or garbled push —
+// left it serving the snapshot embedded at RELEASE time, and an online site
+// silently lost every day since that release. Retain keeps the exact
+// ciphertext each acceptance publishes; Retained hands it back at boot, where
+// it is served `stale` only when its digest is the one the authenticated
+// marker recorded. Restoring never writes the floor and never admits a new
+// document, so replay protection is exactly what it was.
 type FloorMarker struct {
 	// Load reads the persisted floor. (zero, false, nil) is the absent
 	// marker of a never-used state directory; a non-nil error is a floor
@@ -99,6 +109,11 @@ type FloorMarker struct {
 	// Store durably records a newly accepted floor. It is the commit point:
 	// its success is what permits publication.
 	Store func(FloorState) error
+	// Retain durably keeps the sealed document an acceptance publishes. It
+	// runs before Store; a failure is logged and never blocks publication.
+	Retain func(sealed []byte) error
+	// Retained returns the kept document, or (nil, nil) when none is kept.
+	Retained func() ([]byte, error)
 }
 
 // errSeriesUnchanged reports a series file whose capture instant equals the
@@ -126,6 +141,12 @@ const (
 	reasonDocumentRefused   = "document-refused"
 	reasonReplayRefused     = "replay-refused"
 	reasonSnapshotMissing   = "snapshot-unavailable"
+	// The retained copy's outcomes (issue #358). None of them refuses a
+	// tick; they say why a restart could not, or can no longer, restore.
+	reasonRetainFailed       = "retain-failed"
+	reasonRetainedUnreadable = "retained-unreadable"
+	reasonRetainedMismatch   = "retained-mismatch"
+	reasonRetainedRefused    = "retained-refused"
 	// reasonRefused is the fallback for an error no stage classified. It
 	// exists so the log can never fall back to the message instead.
 	reasonRefused = "refused"
@@ -136,7 +157,9 @@ const (
 var dataRootReasons = []string{
 	reasonFloorUnreadable, reasonFloorFuture, reasonFloorNotPersisted,
 	reasonSourceMissing, reasonSourceUnreadable, reasonSourceExpired, reasonSealRefused,
-	reasonDocumentRefused, reasonReplayRefused, reasonSnapshotMissing, reasonRefused,
+	reasonDocumentRefused, reasonReplayRefused, reasonSnapshotMissing,
+	reasonRetainFailed, reasonRetainedUnreadable, reasonRetainedMismatch, reasonRetainedRefused,
+	reasonRefused,
 }
 
 // dataRootRefusal binds one closed reason to the error that explains it.
@@ -249,6 +272,31 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 	if durable {
 		commit = marker.Store
 	}
+	// The retained copy is written on every acceptance and read once, at the
+	// first authentic marker load. A failing write is narrated on transition
+	// only — the same rule the refusal narrative follows — and never refuses
+	// publication: losing restorability is a degraded restart, not a reason
+	// to keep a current document off the page.
+	var retain func([]byte)
+	restorePending := durable && marker.Retained != nil
+	if durable && marker.Retain != nil {
+		retainFailing := false
+		retain = func(sealed []byte) {
+			err := marker.Retain(sealed)
+			switch {
+			case err != nil && !retainFailing:
+				reg.logger.LogAttrs(ctx, slog.LevelWarn, "token usage retained copy not written",
+					slog.String("panel", dataRootPanelID),
+					slog.String("reason", reasonRetainFailed),
+				)
+			case err == nil && retainFailing:
+				reg.logger.LogAttrs(ctx, slog.LevelInfo, "token usage retained copy written again",
+					slog.String("panel", dataRootPanelID),
+				)
+			}
+			retainFailing = err != nil
+		}
+	}
 	acceptedInProcess := false
 	// lastFailure is the transition key for the data-root narrative. The same
 	// bad file can sit on disk through hundreds of wakes; one actionable WARN
@@ -312,6 +360,16 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 		}
 		if !floorResolved {
 			persisted, present, err := marker.Load()
+			// Restore BEFORE the future-skew check below, because that check
+			// is exactly what a clock that came back behind the floor trips:
+			// the marker is authentic, the clock is wrong, and the document
+			// the marker names is still the truest thing this process can
+			// serve. Once per process, and only over a floor newer than the
+			// embedded snapshot — an older kept copy would be a downgrade.
+			if restorePending && err == nil && present && persisted.Instant.After(floor.Instant) {
+				restorePending = false
+				reg.restoreRetained(ctx, state, marker.Retained, unseal, now, persisted)
+			}
 			switch {
 			case err != nil:
 				// The deployment asked for a durable floor and the state
@@ -347,7 +405,7 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 			floorResolved = true
 		}
 		allowEqual := floorFromMarker && !acceptedInProcess
-		accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, now, floor, allowEqual, commit)
+		accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, now, floor, allowEqual, commit, retain)
 		switch {
 		case err == nil:
 			floor = accepted
@@ -451,7 +509,11 @@ func (reg *Registry) embeddedUsageInstant(state *panelState) time.Time {
 // process serving an instant no restart can remember, and the next boot
 // re-admits an older authentic file as fresh. A nil commit is the documented
 // process-memory mode, where there is no durable floor to get ahead of.
-func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal Unsealer, now func() time.Time, floor FloorState, allowEqual bool, commit func(FloorState) error) (FloorState, error) {
+//
+// retain, when set, keeps the exact accepted ciphertext for a later restart
+// (issue #358). It runs after every check and before the commit, and it
+// cannot refuse: see FloorMarker.
+func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal Unsealer, now func() time.Time, floor FloorState, allowEqual bool, commit func(FloorState) error, retain func([]byte)) (FloorState, error) {
 	// Each stage tags its refusal with the closed reason the narrative may
 	// speak. An absent file and an unchanged file are the two outcomes the
 	// caller reads by sentinel, so they pass through untagged.
@@ -462,6 +524,53 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 		}
 		return FloorState{}, refuse(reasonSourceUnreadable, err)
 	}
+	return reg.publishSealed(state, sealed, unseal, now, floor, allowEqual, commit, retain, false)
+}
+
+// restoreRetained publishes, as `stale`, the document the persisted floor
+// names (issue #358). The marker is authenticated, so its digest is what
+// binds the kept file: a copy whose digest differs — an older acceptance, a
+// failed write, a swapped file — is refused, and the panel keeps whatever it
+// already serves. The copy then runs the FULL admission pipeline in recovery
+// mode, against a clock that may not be behind its own export instant: a
+// host that came back weeks in the past must not refuse the very document it
+// last published. Nothing is committed and the floor does not move.
+func (reg *Registry) restoreRetained(ctx context.Context, state *panelState, retained func() ([]byte, error), unseal Unsealer, now func() time.Time, floor FloorState) {
+	sealed, err := retained()
+	if sealed == nil && err == nil {
+		// Nothing kept yet: the first boot of a build that retains.
+		return
+	}
+	reason := ""
+	switch {
+	case err != nil:
+		reason = reasonRetainedUnreadable
+	case sealedDigest(sealed) != floor.Digest:
+		reason = reasonRetainedMismatch
+	default:
+		notBehind := func() time.Time {
+			if current := now(); current.After(floor.Instant) {
+				return current
+			}
+			return floor.Instant
+		}
+		if _, err := reg.publishSealed(state, sealed, unseal, notBehind, floor, true, nil, nil, true); err != nil {
+			reason = reasonRetainedRefused
+		}
+	}
+	if reason != "" {
+		reg.logger.LogAttrs(ctx, slog.LevelWarn, "token usage retained copy not restored",
+			slog.String("panel", dataRootPanelID),
+			slog.String("reason", reason),
+		)
+	}
+}
+
+// publishSealed is one complete unseal-validate-merge-commit-swap over sealed
+// bytes already read. restored marks the boot-time restore: the payload is
+// served `stale` whatever its age, because a kept copy proves what was last
+// published and nothing about what the workstation has captured since.
+func (reg *Registry) publishSealed(state *panelState, sealed []byte, unseal Unsealer, now func() time.Time, floor FloorState, allowEqual bool, commit func(FloorState) error, retain func([]byte), restored bool) (FloorState, error) {
 	digest := sealedDigest(sealed)
 	plaintext, err := unseal(sealed)
 	if err != nil {
@@ -492,7 +601,7 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 		return FloorState{}, refuse(reasonDocumentRefused, err)
 	}
 	status := StatusOK
-	if !usageCaptureFresh(provenance, now()) {
+	if restored || !usageCaptureFresh(provenance, now()) {
 		status = StatusStale
 	}
 	served, err := state.definition.prepare(loadedPayload{
@@ -504,6 +613,11 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 		return FloorState{}, refuse(reasonDocumentRefused, err)
 	}
 	accepted := FloorState{Instant: instant, Digest: digest}
+	// Keep the copy BEFORE the floor names it, so a marker never points at a
+	// digest whose document was not even attempted.
+	if retain != nil {
+		retain(sealed)
+	}
 	// Commit the floor, THEN publish. A failed commit publishes nothing: the
 	// caller keeps its floor where it is, the last good payload keeps
 	// serving, and the same file is retried on the next tick.
@@ -518,7 +632,11 @@ func (reg *Registry) refreshFromDataRoot(state *panelState, fsys fs.FS, unseal U
 	// or person. Only validated, published metadata crosses into this event;
 	// rejected documents still speak exclusively through closed reason codes.
 	captured, _ := time.Parse(time.RFC3339, provenance)
-	reg.logger.LogAttrs(context.Background(), slog.LevelInfo, "token usage sealed data admitted",
+	message := "token usage sealed data admitted"
+	if restored {
+		message = "token usage restored from the retained copy"
+	}
+	reg.logger.LogAttrs(context.Background(), slog.LevelInfo, message,
 		slog.String("panel", dataRootPanelID),
 		slog.String("transport", "sealed-file"),
 		slog.Bool("authenticated", true),

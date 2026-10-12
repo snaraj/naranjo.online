@@ -773,7 +773,7 @@ func TestSealedAdmissionLogFollowsDurablePublication(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, err := restarted.refreshFromDataRoot(restartedState, seriesFS(sealed), productionUnsealer(dataRootTestKeyHex), time.Now, floor, true, marker.marker().Store); err != nil {
+					if _, err := restarted.refreshFromDataRoot(restartedState, seriesFS(sealed), productionUnsealer(dataRootTestKeyHex), time.Now, floor, true, marker.marker().Store, nil); err != nil {
 						t.Fatalf("restart recovery failed: %v", err)
 					}
 					recovery := findRecord(refreshLogRecords(t, recoveryOut.String()), "token usage sealed data admitted")

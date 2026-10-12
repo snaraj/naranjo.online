@@ -493,9 +493,24 @@ func (s *FetchSource) log() *slog.Logger {
 // attempt already took, because a reservation an unset config field could
 // switch off would be exactly the silent security toggle this repository
 // bans. Only the WRITING of a new reservation is conditional.
+//
+// A WALL CLOCK THAT STEPS BACKWARDS cannot freeze a role (issue #358). The
+// refresh path stamps payloads in UTC, which carries no monotonic reading, so
+// every instant here is wall time; a host whose clock is stepped back by weeks
+// would otherwise see every gate and attempt "in the future" for that long.
+// An attempt recorded after now, or a gate further out than the longest
+// cooldown this source ever sets, can only mean the clock moved backwards:
+// both are re-anchored to now, so the worst case is one ordinary budget.
 func (s *FetchSource) reserve(role string, now time.Time, interval time.Duration) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if next, ok := s.gates[role]; ok && next.Sub(now) > s.config.MaxBackoff {
+		s.gates[role] = now.Add(s.config.MaxBackoff)
+	}
+	if last, ok := s.attempts[role]; ok && now.Before(last.at) {
+		last.at = now
+		s.attempts[role] = last
+	}
 	if next, ok := s.gates[role]; ok && now.Before(next) {
 		return false
 	}

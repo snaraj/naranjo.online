@@ -1026,6 +1026,41 @@ repository.
    to its embedded as-of-release snapshot, whose envelope says exactly how
    old it is.
 
+## Restarts keep the last accepted document (issue #358)
+
+Every acceptance also writes the exact accepted ciphertext into the state
+directory as `token-usage.accepted.enc`, beside the floor marker that records
+its digest. A restarted origin reads it back at its first authentic marker
+load and serves it as `stale` before it considers any new file, so a restart
+never falls back to the snapshot embedded at release time while a newer
+document exists. That fallback is what the 2026-10 host clock outage
+exposed: the host came back with its clock 39 days behind, every tick refused
+as `floor-future`, and an online site served release-time data for days.
+
+What the copy cannot do is as deliberate as what it does:
+
+- It is served only when its SHA-256 equals the digest the AUTHENTICATED
+  marker names. An older acceptance, a write interrupted before its commit,
+  or a file swapped on the host is refused and logged
+  (`token usage retained copy not restored`, `reason=retained-mismatch`).
+- It never writes or lowers the floor and never admits a new document. A
+  newer push still passes every admission check before the panel returns to
+  `ok`, and a clock that is behind still refuses every newer push until it is
+  repaired. Restoring proves what was last published, not what has been
+  captured since, which is why it is always `stale`.
+- A copy older than the binary's own embedded snapshot is not restored.
+- A failed write of the copy (`reason=retain-failed`, logged on transition)
+  never blocks publication. The cost is only that the next restart cannot
+  restore that document.
+
+The copy is the cluster host's own full-depth record of the series: it is the
+whole sealed window (up to 732 days per source), readable by the key holder
+with `usageseal -mode open -key-file <data.key> < token-usage.accepted.enc`.
+The workstation's history stores and the append-only ledger remain the
+lifelong record; the repository's embedded snapshot is refreshed from the
+same admission path (`PANELS_CAPTURE=token-usage`, see README "Refreshing the
+shipped snapshots").
+
 ## Verifying end to end
 
 ```sh
@@ -1056,11 +1091,14 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | panel `status: stale` | the origin refused the newest file (tamper, replay, wrong key, over-cap, malformed) and kept the last good payload |
 | panel `status: stale` after every push, panel never advances | the document does not cover every shipped source — add the missing `MERGE_SOURCES` entry (see step 4) — or one of its sections is malformed |
 | panel `status: stale`, sealed file gone from the data dir | the runtime document this pod had already served from was deleted or unmounted: the data is retained, the freshness claim is not (2026-08-24 security review, finding 5). Before the FIRST push an absent file is the ordinary cold state and stays `ok` on the embedded snapshot |
-| panel serves embedded snapshot | `panels.data.enabled=false` (an explicit as-of-release decision), or no sealed file has been admitted yet |
+| panel serves embedded snapshot | `panels.data.enabled=false` (an explicit as-of-release decision), or no sealed file has been admitted yet. After a restart the retained copy is served instead whenever the marker names it (see "Restarts keep the last accepted document") |
+| boot log `token usage restored from the retained copy` | a restart served the last accepted document as `stale`; the next admitted push returns the panel to `ok` |
+| boot log `token usage retained copy not restored` | `reason=retained-mismatch`: the kept file is not the document the marker names (expected once after a failed commit or the first boot of a build that retains); `retained-unreadable`: the state directory could not be read; `retained-refused`: the kept document failed admission |
 | panel shows "data through … · last capture …" | the frontend's own staleness reading (issue #276): the envelope says `stale`, or its `generatedAt` has fallen more than two days behind — the one state the origin structurally cannot flag itself, since an unchanged file is its ordinary between-pushes state. Check the workstation's scheduled export first |
 | floor marker absent in the state dir, no `token-usage.floor.init` beside it | a first boot: benign, the floor is the embedded snapshot's, and the first published push writes both files |
 | floor marker absent but `token-usage.floor.init` present | the durable floor was INITIALIZED and its marker is now gone — deleted, or lost with the volume. Durable mode refuses the tick and reports `stale` instead of cold-starting on a floor of zero (2026-08-24 round-3 review, finding 4). The reset ceremony below is the only way out |
-| floor marker present but corrupt, unauthentic, or future-dated | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor. The reset ceremony below is the only way out |
+| floor marker present but corrupt or unauthentic | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor. The reset ceremony below is the only way out |
+| floor marker future-dated (`reason=floor-future`) | almost always the HOST CLOCK, not the marker: a reboot without a working real-time clock can come back weeks behind. The retained copy keeps serving as `stale`; repair the clock and the next tick resolves the floor and admits the newest push with no ceremony. Never run the reset ceremony for this |
 | boot log line `panel=token-usage` describing the floor state | the one operator-facing statement of WHICH state the state directory is in — recovered, rotated, lost, or untrusted. It carries no path, no key, and no payload |
 | floor marker present but sealed under a previous key | the key was rotated without the floor being reset. Durable mode refuses rather than migrating: the marker's key identifier is UNAUTHENTICATED, so honouring it would let anyone who can write the state directory lower the floor by editing a header. The reset ceremony below is the only way out, and it is part of the rotation ceremony for exactly that reason |
 | panel `status: stale` right after a push, state volume full or read-only | the floor could not be persisted, so the payload was not published; free or remount the state directory and the next tick publishes the same file |

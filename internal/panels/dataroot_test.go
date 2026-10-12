@@ -187,7 +187,7 @@ func fixedNow() time.Time {
 func refreshDirect(t *testing.T, reg *Registry, state *panelState, fsys fs.FS, unseal Unsealer) (time.Time, error) {
 	t.Helper()
 	floor := FloorState{Instant: reg.embeddedUsageInstant(state)}
-	accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, floor, false, nil)
+	accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, floor, false, nil, nil)
 	return accepted.Instant, err
 }
 
@@ -1541,14 +1541,14 @@ func TestDataRootTreatsAbsentFileAndUnchangedFileAsBenign(t *testing.T) {
 	sealed := sealDocument(t, validDocument())
 	fsys := seriesFS(sealed)
 	floor := FloorState{Instant: reg.embeddedUsageInstant(state)}
-	accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, floor, false, nil)
+	accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, floor, false, nil, nil)
 	if err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
 	if accepted.Digest == "" {
 		t.Fatal("acceptance recorded no document digest; the unchanged check would be comparing instants alone")
 	}
-	if _, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, accepted, false, nil); !errors.Is(err, errSeriesUnchanged) {
+	if _, err := reg.refreshFromDataRoot(state, fsys, unseal, fixedNow, accepted, false, nil, nil); !errors.Is(err, errSeriesUnchanged) {
 		t.Fatalf("unchanged file: got %v, want errSeriesUnchanged", err)
 	}
 
@@ -1560,7 +1560,7 @@ func TestDataRootTreatsAbsentFileAndUnchangedFileAsBenign(t *testing.T) {
 	// ciphertext differs even though the plaintext does not, which is
 	// exactly the "authentic but not the file we accepted" case.
 	replaced := seriesFS(sealDocument(t, validDocument()))
-	_, err = reg.refreshFromDataRoot(state, replaced, unseal, fixedNow, accepted, false, nil)
+	_, err = reg.refreshFromDataRoot(state, replaced, unseal, fixedNow, accepted, false, nil, nil)
 	if err == nil || errors.Is(err, errSeriesUnchanged) {
 		t.Fatalf("a different ciphertext at the accepted instant returned %v; want a refusal that reaches the envelope as stale", err)
 	}
@@ -1697,9 +1697,38 @@ type fakeMarker struct {
 	loadErr    error
 	storeErr   error
 	storeCalls int
+	// retains opts a marker into the retained-copy capability (issue #358),
+	// so the floor tests above keep pinning exactly the capability they were
+	// written against.
+	retains     bool
+	retained    []byte
+	retainErr   error
+	retainCalls int
 }
 
 func (m *fakeMarker) marker() *FloorMarker {
+	marker := m.floorOnly()
+	if m.retains {
+		marker.Retain = func(sealed []byte) error {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			m.retainCalls++
+			if m.retainErr != nil {
+				return m.retainErr
+			}
+			m.retained = append([]byte(nil), sealed...)
+			return nil
+		}
+		marker.Retained = func() ([]byte, error) {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return m.retained, nil
+		}
+	}
+	return marker
+}
+
+func (m *fakeMarker) floorOnly() *FloorMarker {
 	return &FloorMarker{
 		Load: func() (FloorState, bool, error) {
 			m.mu.Lock()
@@ -2545,7 +2574,7 @@ func TestDataRootFreshExportCannotRenewAnExpiredSource(t *testing.T) {
 	betaSection(document)["capturedAt"] = oldest.Format(time.RFC3339)
 	marker := &fakeMarker{}
 	floor, err := reg.refreshFromDataRoot(state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex), fixedNow,
-		FloorState{Instant: reg.embeddedUsageInstant(state)}, false, marker.marker().Store)
+		FloorState{Instant: reg.embeddedUsageInstant(state)}, false, marker.marker().Store, nil)
 	if err != nil {
 		t.Fatalf("valid aged capture should be admitted as stale: %v", err)
 	}

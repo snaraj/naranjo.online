@@ -13,8 +13,7 @@
 // composed here, and this file never parses a byte of the series itself.
 //
 // The DURABLE REPLAY FLOOR lives here too, and the 2026-08-24 round-3 review
-// rebuilt it. Its state directory holds three files and every one of them is
-// load-bearing:
+// rebuilt it. Its state directory holds four files:
 //
 //	token-usage.floor.enc    the sealed marker: the accepted capture instant
 //	                         at FULL precision plus the SHA-256 of the exact
@@ -26,6 +25,12 @@
 //	token-usage.floor.lock   the advisory lock every store takes, so the
 //	                         load-compare-write-rename sequence is one
 //	                         critical section rather than three racing ones.
+//	token-usage.accepted.enc the exact ciphertext of the last acceptance, kept
+//	                         so a restart serves it rather than the release
+//	                         snapshot (issue #358). It is already sealed, and
+//	                         the marker's digest is what binds it, so storage
+//	                         that rewrites it gains nothing; the first three
+//	                         files carry the floor, this one only availability.
 package server
 
 import (
@@ -76,6 +81,9 @@ const panelsFloorTombstoneName = "token-usage.floor.init"
 // panelsFloorLockName is the advisory lock file guarding one store's
 // load-compare-write-rename sequence (2026-08-24 round-3 review, finding 3).
 const panelsFloorLockName = "token-usage.floor.lock"
+
+// panelsRetainedName holds the last accepted sealed document (issue #358).
+const panelsRetainedName = "token-usage.accepted.enc"
 
 // maxFloorMarkerBytes bounds one marker read. The real sealed marker is
 // under two hundred bytes; anything larger is not a marker.
@@ -305,7 +313,36 @@ func newFloorMarker(state *os.Root, lookupEnv func(string) string) *panels.Floor
 		Store: func(floor panels.FloorState) error {
 			return storeFloorMarker(state, lookupEnv, floor)
 		},
+		Retain: func(sealed []byte) error {
+			return writeFloorFile(state, panelsRetainedName, sealed)
+		},
+		Retained: func() ([]byte, error) {
+			return loadRetained(state)
+		},
 	}
+}
+
+// loadRetained reads the kept document under the sealed-file ceiling. Absent
+// is (nil, nil); everything else that is not a bounded read is an error, and
+// the caller decides what it is worth — authentication and the marker's
+// digest still stand between these bytes and the page.
+func loadRetained(state *os.Root) ([]byte, error) {
+	file, err := state.Open(panelsRetainedName)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, errors.New("panels retained document is unreadable")
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, seal.MaxSealedBytes+1))
+	if err != nil {
+		return nil, errors.New("panels retained document is unreadable")
+	}
+	if len(raw) > seal.MaxSealedBytes {
+		return nil, errors.New("panels retained document exceeds the sealed-file bound")
+	}
+	return raw, nil
 }
 
 // loadFloorMarker reads, identifies, authenticates, and parses the marker.
