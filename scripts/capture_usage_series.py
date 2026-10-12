@@ -595,6 +595,20 @@ CATEGORY_FIELDS = (
 # vocabulary WITHOUT ever spelling one.
 MESSAGE_MODEL_FIELD = "model"
 
+# Where the message shape keeps the usage object every counted record carries.
+MESSAGE_USAGE_KEY = "usage"
+
+# The quoted key tokens a line must spell before it is worth decoding, per
+# shape; `may_carry` states why that test is sound. Each is built from the very
+# name the reader looks up, so the filter and the parser cannot come to read
+# two different keys.
+MESSAGE_KEY_TOKENS = ('"%s"' % MESSAGE_USAGE_KEY,)
+RUNNING_KEY_TOKENS = ('"%s"' % RUNNING_USAGE_KEY, '"%s"' % MESSAGE_MODEL_FIELD)
+
+# How every JSON escape that spells an ASCII character begins: those all sit
+# below U+0080, and an escape carries exactly four hex digits.
+JSON_ASCII_ESCAPE = "\\u00"
+
 # The one file extension either shape is journalled in.
 RECORD_SUFFIX = ".jsonl"
 
@@ -1181,6 +1195,35 @@ def open_record_file(record, counters):
         return None
 
 
+def may_carry(line, tokens):
+    """False only when no key in `tokens` can decode out of this line.
+
+    THE WALK'S COST IS THE DECODE, and most of a journal is records no shape
+    counts — prompts, tool output, file contents. A line whose record has none
+    of the keys a shape reads is discarded by that shape's reader with no
+    counter touched: `reduce_line` returns before its first tally, and the
+    running reader's two lookups both come back empty. Not decoding such a
+    line therefore changes nothing but the time spent. The line has already
+    been read, bounded and tallied by `bounded_lines` before this is asked, so
+    every count the walk reports stays exactly what it was.
+
+    SOUND AGAINST EVERY SPELLING JSON ADMITS. A JSON string spells each
+    character literally or as a `\\uXXXX` escape; the only other escapes yield
+    a quote, a backslash, a solidus or a control character, none of which the
+    keys here contain, and the keys are plain ASCII, whose escapes all begin
+    `\\u00`. So a key can decode out of a line only if the line carries its
+    quoted token literally or carries a `\\u00` somewhere, and either sends
+    the line to the decoder exactly as before. Whitespace between a key and
+    its colon lies outside the token, so it cannot hide one. A token that turns
+    up as a value costs one decode the reader then discards, which is the safe
+    direction to be wrong in.
+    """
+    for token in tokens:
+        if token in line:
+            return True
+    return JSON_ASCII_ESCAPE in line
+
+
 def read_records(root, counters, sessions=None):
     """Yield (day, total, parts, model) rows from every message-shaped record.
 
@@ -1207,6 +1250,8 @@ def read_records(root, counters, sessions=None):
         opened = new_session()
         with handle:
             for line in bounded_lines(handle, counters):
+                if not may_carry(line, MESSAGE_KEY_TOKENS):
+                    continue
                 reduced = reduce_line(line, seen, counters)
                 if reduced is None:
                     continue
@@ -1260,6 +1305,8 @@ def read_running_totals(root, counters, sessions=None):
         opened = new_session()
         with handle:
             for line in bounded_lines(handle, counters):
+                if not may_carry(line, RUNNING_KEY_TOKENS):
+                    continue
                 decoded = decoded_record(line)
                 if decoded is None:
                     continue
@@ -1385,7 +1432,7 @@ def reduce_line(line, seen, counters):
     message = record.get("message")
     if not isinstance(message, dict):
         return None
-    usage = message.get("usage")
+    usage = message.get(MESSAGE_USAGE_KEY)
     if not isinstance(usage, dict):
         return None
     stamp = record.get("timestamp")
