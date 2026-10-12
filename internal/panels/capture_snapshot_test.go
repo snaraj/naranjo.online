@@ -13,6 +13,13 @@ package panels
 //
 //	env GITHUB_PANELS_TOKEN="$(gh auth token)" PANELS_CAPTURE=vcs-activity \
 //	  go test ./internal/panels -run TestCaptureSnapshot -count=1
+//
+// The token-usage snapshot has no upstream to read: its producer is the
+// workstation export. PANELS_CAPTURE=token-usage with PANELS_CAPTURE_SERIES
+// naming a plaintext usage-series/v1 document (the export the sealed push
+// carries) runs that document through the data root's own admission, merge
+// and budget — publishSealed, with an identity unsealer — and writes what the
+// origin would serve (issue #358: the repository's copy of the data).
 
 import (
 	"bytes"
@@ -26,6 +33,10 @@ func TestCaptureSnapshot(t *testing.T) {
 	want := os.Getenv("PANELS_CAPTURE")
 	if want == "" {
 		t.Skip("PANELS_CAPTURE is unset; the capture path never runs in the ordinary suite")
+	}
+	if want == "token-usage" {
+		captureTokenUsageSnapshot(t, os.Getenv("PANELS_CAPTURE_SERIES"))
+		return
 	}
 	document, bounds, err := loadFetchConfig(fetchConfigBytes)
 	if err != nil {
@@ -79,4 +90,41 @@ func TestCaptureSnapshot(t *testing.T) {
 		t.Fatalf("write %s: %v", file, err)
 	}
 	t.Logf("captured %s (%d bytes)", file, len(captured))
+}
+
+// captureTokenUsageSnapshot admits one exported series document exactly as
+// the data root would over the shipped snapshot, and writes the served
+// payload back as that snapshot. The floor is the shipped snapshot's own
+// instant, so a document no newer than the release is refused here too.
+func captureTokenUsageSnapshot(t *testing.T, series string) {
+	if series == "" {
+		t.Fatal("PANELS_CAPTURE=token-usage needs PANELS_CAPTURE_SERIES naming the exported usage-series/v1 document")
+	}
+	document, err := os.ReadFile(series)
+	if err != nil {
+		t.Fatalf("read the exported document: %v", err)
+	}
+	const file = "snapshots/token-usage.json"
+	reg := newRegistry(snapshotFiles, []panelDefinition{{
+		id:     dataRootPanelID,
+		kind:   KindTokenUsageV2,
+		title:  "Token usage",
+		source: SnapshotSource{Name: file},
+	}})
+	state := reg.byID[dataRootPanelID]
+	plain := func(sealed []byte) ([]byte, error) { return sealed, nil }
+	floor := FloorState{Instant: reg.embeddedUsageInstant(state)}
+	if _, err := reg.publishSealed(state, document, plain, time.Now, floor, false, nil, nil, false); err != nil {
+		t.Fatalf("the exported document was refused by the data root's own admission: %v", err)
+	}
+	served := state.current.Load().payload
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, served.data, "  ", "  "); err != nil {
+		t.Fatalf("indent payload: %v", err)
+	}
+	captured := "{\n  \"generatedAt\": \"" + served.generatedAt + "\",\n  \"data\": " + pretty.String() + "\n}\n"
+	if err := os.WriteFile(file, []byte(captured), 0o644); err != nil {
+		t.Fatalf("write %s: %v", file, err)
+	}
+	t.Logf("captured %s (%d bytes, data through the capture at %s)", file, len(captured), served.generatedAt)
 }

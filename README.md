@@ -357,6 +357,21 @@ unset the capture path is skipped, so the ordinary suite never egresses. The
 credential is read from the environment by the producer itself, exactly as it
 is in a cluster — no test ever sees its value.
 
+The token-usage snapshot is refreshed the same way from the workstation's own
+export, so the repository carries the full series the origin last served
+rather than a hand splice of one source (issue #358):
+
+```sh
+env PANELS_CAPTURE=token-usage PANELS_CAPTURE_SERIES=<exported usage-series/v1 document> \
+  go test ./internal/panels -run TestCaptureSnapshot -count=1
+```
+
+The document passes the data root's own admission, merge and response budget
+over the shipped snapshot, and the served payload is written back as the
+snapshot; a document no newer than the shipped one is refused. Refresh it in
+every release that touches the panel, so the oldest data a fresh install can
+show is the newest release, never an older one.
+
 One clause of one captured description is trimmed by hand and it is the only
 hand edit in either file: the owner's own repository text names the
 deployment's edge provider, and requirement 6 admits a provider name nowhere

@@ -462,6 +462,10 @@ type visitorTokenUsageSource struct {
 	ModelStats []visitorTokenUsageModelStat `json:"modelStats"`
 	Series     *visitorTokenUsageSeries     `json:"series"`
 	Insights   []visitorTokenUsageInsight   `json:"insights"`
+	// CapturedAt is this source's own capture instant: the data root stamps
+	// it on every merged source, and the shipped snapshot is now written by
+	// that same path (issue #358).
+	CapturedAt string `json:"capturedAt"`
 }
 
 type visitorTokenUsageModelStat struct {
@@ -589,6 +593,11 @@ func TestVisitorChecksTokenUsage(t *testing.T) {
 				t.Errorf("source labels must be distinct non-empty data, got %q twice or empty", source.Label)
 			}
 			seen[source.Label] = true
+			if source.CapturedAt != "" {
+				if _, err := time.Parse(time.RFC3339, source.CapturedAt); err != nil {
+					t.Errorf("source %q capturedAt = %q: %v", source.Label, source.CapturedAt, err)
+				}
+			}
 			// Sections are optional and absence is honest: the shipped
 			// snapshot carries the figures that were actually recorded and
 			// leaves the rest empty rather than inventing numbers. What a
