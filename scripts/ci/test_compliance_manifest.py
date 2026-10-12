@@ -8,6 +8,9 @@ passing baseline proves the refusal is not the gate's default answer.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import http.client
 import http.server
 import io
 import json
@@ -44,13 +47,15 @@ def manifest() -> dict:
     }
 
 
+INJECTED_BODY = f"(function(){{var s='{MARKER}main.js'}})();"
+INJECTED = f"<script>{INJECTED_BODY}</script>"
 HTML = (
     "<!doctype html><html lang=en><head>"
     '<script type="module" src="/assets/index.js"></script>'
     '<link rel="stylesheet" href="/assets/index.css">'
     '<link rel="icon" href="/favicon.svg">'
     "</head><body><main><a href=\"https://elsewhere.example/\">a link is not a load</a></main>"
-    f"<script>(function(){{var s='{MARKER}main.js'}})();</script>"
+    f"{INJECTED}"
     "</body></html>"
 )
 
@@ -141,8 +146,45 @@ class JudgeTests(unittest.TestCase):
         # Inline style is not script: the gate leaves it to the CSP tests that own it.
         csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
         self.assertEqual(gate.judge(manifest(), document(Content_Security_Policy=csp), {}).refusals, [])
+        # A hash names bytes, not a place, so it admits no origin. With no
+        # exempted script on the page there is nothing it could let run.
+        quiet = manifest()
+        quiet["edgeObservations"] = quiet["edgeObservations"][1:]
+        html = HTML.replace(INJECTED, "")
         csp = "default-src 'self'; script-src 'self' 'sha256-abc='; frame-ancestors 'none'"
-        self.assertEqual(gate.judge(manifest(), document(Content_Security_Policy=csp), {}).refusals, [])
+        self.assertEqual(gate.judge(quiet, document(html=html, Content_Security_Policy=csp), {}).refusals, [])
+
+    def test_a_declared_injected_script_passes_only_while_every_inline_script_is_blocked(self) -> None:
+        # The exemption's stated reason is that the CSP blocks the script. A
+        # policy that can admit inline code -- a nonce, a hash, or
+        # 'unsafe-inline' in the directive that governs <script> elements --
+        # no longer proves that, whether or not it names this script's bytes.
+        digest = base64.b64encode(hashlib.sha256(INJECTED_BODY.encode()).digest()).decode()
+        probe = f'<script nonce="bm9uY2U=">/* {MARKER} */ window.reviewProbe=1;</script>'
+        for csp, html in (
+            ("default-src 'self'; script-src 'self' 'nonce-bm9uY2U='; frame-ancestors 'none'", HTML.replace("</body>", probe + "</body>")),
+            ("default-src 'self'; script-src 'self' 'nonce-bm9uY2U='; frame-ancestors 'none'", HTML),
+            (f"default-src 'self'; script-src 'self' 'sha256-{digest}'; frame-ancestors 'none'", HTML),
+            (f"default-src 'self'; script-src-elem 'self' 'sha384-abc='; frame-ancestors 'none'", HTML),
+            ("default-src 'self' 'nonce-bm9uY2U='; frame-ancestors 'none'", HTML),
+            ("default-src 'self'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'", HTML),
+            # An engine without script-src-elem reads script-src.
+            ("default-src 'self'; script-src-elem 'self'; script-src 'self' 'nonce-bm9uY2U='; frame-ancestors 'none'", HTML),
+            # No directive governs scripts at all, so nothing blocks them.
+            ("frame-ancestors 'none'; object-src 'none'", HTML),
+        ):
+            with self.subTest(csp=csp, probe=probe in html):
+                verdict = gate.judge(manifest(), document(html=html, Content_Security_Policy=csp), {})
+                self.assertRefused(verdict, f"declared injected script marked {MARKER!r}, which this CSP can let run")
+        # Every enforced policy must admit a script for it to run, so one
+        # policy that blocks all inline code is enough to keep it inert.
+        nonce = "default-src 'self'; script-src 'self' 'nonce-bm9uY2U='; frame-ancestors 'none'"
+        both = [("Content-Security-Policy", nonce), *headers()]
+        self.assertEqual(gate.judge(manifest(), gate.Fetched(SITE, 200, both, HTML.encode()), {}).refusals, [])
+        # script-src-elem governs <script> elements, so a nonce confined to
+        # attribute handlers leaves the element blocked.
+        attr = "default-src 'self'; script-src-attr 'nonce-bm9uY2U='; frame-ancestors 'none'"
+        self.assertEqual(gate.judge(manifest(), document(Content_Security_Policy=attr), {}).refusals, [])
 
     def test_framing_must_be_denied_somewhere(self) -> None:
         csp = "default-src 'self'"
@@ -210,7 +252,14 @@ class ValidateTests(unittest.TestCase):
         (self.repo / "evidence.go").write_text("package x\n")
         self.source = self.repo / "frontend" / "src"
         self.source.mkdir(parents=True)
-        (self.source / "theme.ts").write_text("document.cookie = 'theme=' + id;\nstore.setItem(\"width\", v);\n")
+        # The repository's own shapes: a cookie assigned by literal name, and
+        # a storage key bound to a constant and written through a store seam.
+        (self.source / "theme.ts").write_text(
+            "document.cookie = 'theme=' + id;\n"
+            "export const widthKey = 'width';\n"
+            "const store = window.localStorage;\n"
+            "store.setItem(widthKey, v);\n"
+        )
 
     def refusals(self, value: object) -> list[str]:
         return gate.validate(value, source_root=self.source, repo_root=self.repo)
@@ -244,6 +293,103 @@ class ValidateTests(unittest.TestCase):
         self.assertTrue(any("'renamed', which no file" in r for r in self.refusals(stale)))
         (self.source / "theme.ts").write_text("document.cookie = 'theme=' + id;\n")
         self.assertTrue(any("'width', which no file" in r for r in self.refusals(manifest())))
+
+    def test_every_present_section_is_a_list_and_null_is_not_absent(self) -> None:
+        for section in gate.ENTRY_KEYS:
+            for value in (None, {}, "none"):
+                with self.subTest(section=section, value=value):
+                    changed = manifest()
+                    changed[section] = value
+                    self.assertIn(f"{section} must be a list", self.refusals(changed))
+
+    def test_the_schema_version_is_pinned(self) -> None:
+        changed = manifest()
+        changed["schema"] = "compliance/v2"
+        self.assertIn("compliance.json schema must be 'compliance/v1'", self.refusals(changed))
+
+    def test_every_entry_is_an_object(self) -> None:
+        changed = manifest()
+        changed["storage"] = ["theme", *changed["storage"]]
+        self.assertIn("storage[0] must be an object", self.refusals(changed))
+
+    def test_every_required_field_is_present(self) -> None:
+        valid = {
+            "dataCollected": manifest()["dataCollected"][0],
+            "storage": manifest()["storage"][0],
+            "thirdParties": {"origin": "https://cdn.example", "purpose": "p", "consent": "not-required", "reason": "r"},
+            "legalPages": manifest()["legalPages"][0],
+            "edgeObservations": manifest()["edgeObservations"][0],
+        }
+        for section, (required, _) in gate.ENTRY_KEYS.items():
+            for key in sorted(required):
+                with self.subTest(section=section, key=key):
+                    entry = dict(valid[section])
+                    del entry[key]
+                    changed = manifest()
+                    changed[section] = [entry]
+                    self.assertIn(f"{section}[0] lacks {key!r}", self.refusals(changed))
+
+    def test_the_storage_kind_is_closed(self) -> None:
+        changed = manifest()
+        changed["storage"][1]["kind"] = "indexedDB"
+        self.assertIn("storage[1].kind must be one of ['cookie', 'localStorage', 'sessionStorage']", self.refusals(changed))
+
+    def test_only_a_write_of_the_declared_kind_keeps_a_storage_entry_alive(self) -> None:
+        for source in (
+            # A bare literal and a read: the reproduction from the review.
+            'const a = "theme"; localStorage.getItem("width");',
+            # Reads of both stores.
+            "if (document.cookie === 'theme=dark') {}\nconst w = window.localStorage.getItem('width');\n",
+            # Writes that survive only as comments.
+            "// document.cookie = 'theme=' + id;\n/* window.localStorage.setItem('width', v) */\n",
+            "<!-- document.cookie = 'theme=1'; window.localStorage.setItem('width', v) -->\n",
+            # Each name written, but to the other kind of storage.
+            "window.localStorage.setItem('theme', v);\ndocument.cookie = 'width=' + v;\n",
+            "window.sessionStorage.setItem('width', v);\n",
+            # The write's own receiver decides, not another store the file names.
+            "window.sessionStorage.setItem('width', v);\nwindow.localStorage.getItem('width');\n",
+        ):
+            with self.subTest(source=source):
+                (self.source / "theme.ts").write_text(source)
+                refusals = self.refusals(manifest())
+                self.assertTrue(any("cookie 'theme', which no file under frontend/src writes" in r for r in refusals), refusals)
+                self.assertTrue(any("localStorage 'width', which no file under frontend/src writes" in r for r in refusals), refusals)
+
+    def test_a_write_only_a_test_file_makes_keeps_nothing_alive(self) -> None:
+        (self.source / "theme.test.ts").write_text((self.source / "theme.ts").read_text())
+        (self.source / "theme.ts").write_text("export {};\n")
+        refusals = self.refusals(manifest())
+        self.assertTrue(any("'theme', which no file" in r for r in refusals), refusals)
+        self.assertTrue(any("'width', which no file" in r for r in refusals), refusals)
+
+    def test_a_write_by_literal_or_through_a_bound_name_counts(self) -> None:
+        for source in (
+            "document.cookie = `theme=${id}`;\nwindow.localStorage.setItem('width', v);\n",
+            'document.cookie = "theme=" + id; // not \'width\'\nconst key: string = "width";\n'
+            "const s = localStorage;\ns.setItem(key, v);\n",
+        ):
+            with self.subTest(source=source):
+                (self.source / "theme.ts").write_text(source)
+                self.assertEqual(self.refusals(manifest()), [])
+
+    def test_an_undeclared_write_is_refused_with_its_lift(self) -> None:
+        with (self.source / "theme.ts").open("a") as source:
+            source.write("window.sessionStorage.setItem('draft', v);\ndocument.cookie = 'seen=1';\n")
+        refusals = self.refusals(manifest())
+        self.assertTrue(any("theme.ts writes sessionStorage 'draft', which compliance.json does not declare" in r for r in refusals), refusals)
+        self.assertTrue(any("theme.ts writes cookie 'seen', which compliance.json does not declare" in r for r in refusals), refusals)
+        self.assertTrue(any('{"name": "draft", "kind": "sessionStorage"' in r for r in refusals), refusals)
+
+    def test_a_write_whose_key_or_store_cannot_be_read_is_refused(self) -> None:
+        with (self.source / "theme.ts").open("a") as source:
+            source.write("function put(key, v) { window.localStorage.setItem(key, v); }\n")
+        self.assertTrue(any("whose key this gate cannot read" in r for r in self.refusals(manifest())), self.refusals(manifest()))
+        # A store named only in a sentence or a string is not named by code.
+        (self.source / "theme.ts").write_text(
+            "document.cookie = 'theme=1';\nconst note = 'kept in localStorage'; // or localStorage\n"
+            "export function put(s, v) { s.setItem('width', v); }\n"
+        )
+        self.assertTrue(any("whose storage this gate cannot name" in r for r in self.refusals(manifest())), self.refusals(manifest()))
 
     def test_collection_evidence_must_exist(self) -> None:
         (self.repo / "evidence.go").unlink()
@@ -314,14 +460,24 @@ class ShippedManifestTests(unittest.TestCase):
         self.assertIn("decision=fail", output.getvalue())
 
 
+# Past the byte cap, the review's reproduction: the compliant page padded to
+# exactly the cap, then an undeclared inline script only a complete read sees.
+PAST_CAP = HTML.encode().ljust(gate.BODY_CAP_BYTES) + b"<script>window.reviewProbe=1</script>"
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - the stdlib names it
         status = 404 if self.path == "/missing" else 200
-        body = HTML.encode()
+        body = {
+            "/at-cap": HTML.encode().ljust(gate.BODY_CAP_BYTES),
+            "/past-cap": PAST_CAP,
+        }.get(self.path, HTML.encode())
+        # "/cut-short" promises more bytes than it sends, then closes.
+        promised = len(body) + (100 if self.path == "/cut-short" else 0)
         self.send_response(status)
         for key, value in headers():
             self.send_header(key, value)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(promised))
         self.end_headers()
         self.wfile.write(body)
 
@@ -372,13 +528,55 @@ class LiveModeTests(unittest.TestCase):
             self.assertIn("decision=fail refusals=2", output.getvalue())
 
     def test_live_mode_fails_closed_when_the_site_cannot_be_read(self) -> None:
-        def unreachable(url: str) -> gate.Fetched:
-            raise OSError("connection refused")
+        for error in (OSError("connection refused"), http.client.IncompleteRead(b"", 100)):
+            with self.subTest(error=type(error).__name__):
 
-        output = io.StringIO()
-        with redirect_stdout(output):
-            self.assertEqual(gate.run_live(gate.MANIFEST, fetcher=unreachable), 1)
-        self.assertIn("could not be read", output.getvalue())
+                def unreachable(url: str) -> gate.Fetched:
+                    raise error
+
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(gate.run_live(gate.MANIFEST, fetcher=unreachable), 1)
+                self.assertIn("could not be read", output.getvalue())
+
+    def live(self, path: str) -> tuple[int, str]:
+        """`live` against the compliant manifest, with the site served at `path`."""
+        base = self.base
+
+        def fetcher(url: str) -> gate.Fetched:
+            answer = gate.fetch(base + path)
+            return gate.Fetched(url, answer.status, answer.headers, answer.body)
+
+        with tempfile.TemporaryDirectory() as scratch:
+            manifest_path = Path(scratch) / "compliance.json"
+            value = json.loads(gate.MANIFEST.read_text(encoding="utf-8"))
+            value["liveUrl"] = SITE
+            value["edgeObservations"] = manifest()["edgeObservations"]
+            manifest_path.write_text(json.dumps(value))
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = gate.run_live(manifest_path, fetcher=fetcher)
+        return code, output.getvalue()
+
+    def test_an_answer_past_the_byte_cap_is_refused_not_judged_by_its_prefix(self) -> None:
+        # Judged whole, the answer is refused for the script past the cap.
+        whole = gate.judge(manifest(), gate.Fetched(SITE, 200, headers(), PAST_CAP), {})
+        self.assertTrue(any("inline script this repository did not build" in r for r in whole.refusals), whole.refusals)
+        with self.assertRaisesRegex(ValueError, f"larger than the {gate.BODY_CAP_BYTES}-byte cap"):
+            gate.fetch(self.base + "/past-cap")
+        code, output = self.live("/past-cap")
+        self.assertEqual(code, 1, output)
+        self.assertIn("could not be read", output)
+        # The cap itself is still a complete answer.
+        self.assertEqual(len(gate.fetch(self.base + "/at-cap").body), gate.BODY_CAP_BYTES)
+        self.assertEqual(self.live("/at-cap")[0], 0)
+
+    def test_an_answer_shorter_than_its_content_length_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "declared [0-9]+ bytes and delivered [0-9]+"):
+            gate.fetch(self.base + "/cut-short")
+        code, output = self.live("/cut-short")
+        self.assertEqual(code, 1, output)
+        self.assertIn("could not be read", output)
 
 
 if __name__ == "__main__":

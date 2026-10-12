@@ -14,13 +14,19 @@ exist -- written down in one place a gate could hold the site to.
 subcommands, and the browser lanes (`frontend/e2e/compliance.spec.mjs`) read
 the same manifest:
 
-  check  validate the manifest's closed schema, and refuse a declaration that
-         has gone stale in the source: a storage name no frontend file writes,
-         or a data-collection entry whose evidence file is gone.
+  check  validate the manifest's closed schema, and hold its storage list to
+         the source in both directions: a declared cookie or storage key that
+         no frontend file WRITES as that kind is stale, and a write the
+         manifest does not declare is refused (`storage_writes` states the
+         write grammar). A data-collection entry whose evidence file is gone
+         is stale too.
   live   GET the production URL and judge what the edge actually serves: the
-         CSP must admit no origin the manifest does not declare (and none at
-         all through a wildcard or a bare scheme), script directives must not
-         admit inline or eval'd code, framing must be denied, HSTS must last a
+         answer must be complete (never a prefix past the byte cap, never
+         short of its Content-Length), the CSP must admit no origin the
+         manifest does not declare (and none at all through a wildcard or a
+         bare scheme), script directives must not admit 'unsafe-inline' or
+         eval'd code, a declared injected script passes only while a policy
+         blocks every inline script, framing must be denied, HSTS must last a
          year, nosniff and a Referrer-Policy must be present, the document must
          set no cookie, every reporting endpoint and every script, stylesheet
          or embedded resource in the served HTML must be this origin's or
@@ -33,11 +39,14 @@ headers" or "these are all the scripts". Each rule refuses one construct that
 changes what a visitor is exposed to, and a legitimate addition either passes
 untouched or needs one declared line.
 
-LIFT. Every refusal prints the exact `compliance.json` entry that would admit
-it, and every entry needs a written reason (and, for an edge observation, the
-issue that holds the decision). Adding a declared third party is a normal,
-reviewed one-line change; it is also exactly the line a privacy notice has to
-mention, which is the point.
+LIFT. A refusal a manifest line can admit prints that exact line, and every
+entry needs a written reason (and, for an edge observation, the issue that
+holds the decision). Adding a declared third party is a normal, reviewed
+one-line change; it is also exactly the line a privacy notice has to mention,
+which is the point. The rest print no line because none exists: a missing CSP,
+allowed framing, short HSTS, a missing header, a cookie on the document, a
+write on load, an injected script the CSP can let run, or an incomplete answer
+needs a code, policy or owner decision, never a declaration.
 
 Logging follows the repository's failure-visibility rule: one START line with
 the budget, one line per refusal, one SUMMARY with the decision and duration.
@@ -47,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import html.parser
+import http.client
 import json
 import re
 import sys
@@ -120,6 +130,19 @@ SCHEME_SOURCES = {
     "data:": {"img-src", "font-src", "media-src"},
     "blob:": {"img-src", "media-src", "worker-src"},
 }
+# The storage-write grammar `check` reads. Comments go first, string literals
+# stay, so a write that survives only in a comment is no write.
+SOURCE_SUFFIXES = {".ts", ".js", ".mjs", ".svelte"}
+TEST_FILE = re.compile(r"\.(?:test|spec)\.")
+COMMENT_OR_STRING = re.compile(
+    r"""("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`)|//[^\n]*|/\*.*?\*/|<!--.*?-->""", re.DOTALL
+)
+COOKIE_WRITE = re.compile(r"""\bdocument\.cookie\s*=(?!=)\s*["'`]([^"'`=;\s]+)=""")
+STORE_NAME = re.compile(r"\b(localStorage|sessionStorage)\b")
+STORE_WRITE = re.compile(
+    r"""(?:\b(localStorage|sessionStorage)\s*)?\.\s*setItem\(\s*(?:(["'`])([^"'`]+)\2|([A-Za-z_$][\w$]*))\s*,"""
+)
+BOUND_CONSTANT = r"""\b(?:const|let|var)\s+{}\s*(?::[^=;]+)?=\s*(["'`])([^"'`]+)\1"""
 HSTS_FLOOR_SECONDS = 31_536_000
 REFERRER_POLICIES = {"no-referrer", "same-origin", "strict-origin", "strict-origin-when-cross-origin"}
 FETCH_TIMEOUT_SECONDS = 20
@@ -195,9 +218,11 @@ def validate(manifest: object, source_root: Path = SOURCE_ROOT, repo_root: Path 
         refusals.append("liveUrl must be the site's https:// URL")
 
     for section, (required, optional) in ENTRY_KEYS.items():
-        entries = manifest.get(section)
-        if entries is None:
+        # An absent section is refused above; a present one, null included,
+        # must be a list, or `_entries` would read it as an empty disclosure.
+        if section not in manifest:
             continue
+        entries = manifest[section]
         if not isinstance(entries, list):
             refusals.append(f"{section} must be a list")
             continue
@@ -214,26 +239,36 @@ def validate(manifest: object, source_root: Path = SOURCE_ROOT, repo_root: Path 
                 if not _text(entry[key]):
                     refusals.append(f"{where}.{key} must be a non-empty string")
 
-    sources = _source_text(source_root)
     for index, entry in enumerate(_entries(manifest, "dataCollected")):
         evidence = entry.get("evidence")
         if _text(evidence) and not (repo_root / evidence).exists():
             refusals.append(f"dataCollected[{index}].evidence {evidence!r} no longer exists: the entry is stale")
 
+    writes, unread = storage_writes(source_root)
+    declared: set[tuple[str, str]] = set()
     for index, entry in enumerate(_entries(manifest, "storage")):
         where = f"storage[{index}]"
-        if entry.get("kind") not in STORAGE_KINDS:
+        kind, name = entry.get("kind"), entry.get("name")
+        if kind not in STORAGE_KINDS:
             refusals.append(f"{where}.kind must be one of {sorted(STORAGE_KINDS)}")
         if entry.get("writtenWhen") not in WRITTEN_WHEN:
             refusals.append(
                 f"{where}.writtenWhen must be one of {sorted(WRITTEN_WHEN)}: a write on load needs consent, "
                 "and consent needs a mechanism this site does not have"
             )
-        name = entry.get("name")
         if _text(name):
-            literal = re.compile("[\"'`]" + re.escape(name) + "[\"'`=]")
-            if not literal.search(sources):
-                refusals.append(f"{where} declares {name!r}, which no file under frontend/src writes: the entry is stale")
+            declared.add((kind, name))
+            if (kind, name) not in writes:
+                refusals.append(
+                    f"{where} declares {kind} {name!r}, which no file under frontend/src writes: the entry is stale"
+                )
+    for (kind, name), where in sorted(writes.items()):
+        if (kind, name) not in declared:
+            refusals.append(
+                f"frontend/src/{where} writes {kind} {name!r}, which compliance.json does not declare (lift: add to "
+                f'storage {{"name": "{name}", "kind": "{kind}", "writtenWhen": "visitor-action", "purpose": "..."}})'
+            )
+    refusals.extend(unread)
 
     for index, entry in enumerate(_entries(manifest, "thirdParties")):
         where = f"thirdParties[{index}]"
@@ -282,14 +317,43 @@ def _entries(manifest: dict, section: str) -> list[dict]:
     return [entry for entry in value if isinstance(entry, dict)]
 
 
-def _source_text(source_root: Path) -> str:
+def storage_writes(source_root: Path) -> tuple[dict[tuple[str, str], str], list[str]]:
+    """Every (kind, name) the frontend source WRITES, with the file that writes it,
+    and a refusal for every write this grammar sees but cannot attribute.
+
+    A write is `document.cookie = '<name>=...'`, or `.setItem(<key>, ...)` whose
+    key is a string literal or a constant the same file binds to one, in a
+    file whose code names the store. Reads, bare literals, comments and test
+    files are not writes, so none of them keeps a declaration alive.
+    """
+    writes: dict[tuple[str, str], str] = {}
+    unread: list[str] = []
     if not source_root.is_dir():
-        return ""
-    chunks = []
+        return writes, unread
     for path in sorted(source_root.rglob("*")):
-        if path.is_file() and path.suffix in {".ts", ".js", ".mjs", ".svelte"}:
-            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
-    return "\n".join(chunks)
+        if not path.is_file() or path.suffix not in SOURCE_SUFFIXES or TEST_FILE.search(path.name):
+            continue
+        where = path.relative_to(source_root).as_posix()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        code = COMMENT_OR_STRING.sub(lambda match: match.group(1) or " ", text)
+        for match in COOKIE_WRITE.finditer(code):
+            writes.setdefault(("cookie", match.group(1)), where)
+        # A store is named by code, not by a sentence or a string about it.
+        stores = set(STORE_NAME.findall(COMMENT_OR_STRING.sub(" ", text)))
+        for match in STORE_WRITE.finditer(code):
+            receiver, literal, identifier = match.group(1), match.group(3), match.group(4)
+            if literal is None:
+                bound = re.search(BOUND_CONSTANT.format(re.escape(identifier)), code)
+                literal = bound.group(2) if bound else None
+            kinds = {receiver} if receiver else stores
+            if literal is None or not kinds:
+                missing = "key this gate cannot read" if literal is None else "storage this gate cannot name"
+                unread.append(f"frontend/src/{where} makes a storage write whose {missing} ({match.group(0)!r}); "
+                              "write it with a literal key, or a constant bound to one, on a named store")
+                continue
+            for kind in kinds:
+                writes.setdefault((kind, literal), where)
+    return writes, unread
 
 
 # ----------------------------------------------------------------- live mode
@@ -346,6 +410,31 @@ class _Resources(html.parser.HTMLParser):
             if body.strip():
                 self.inline_scripts.append(body)
             self._inline = None
+
+
+def inline_scripts_blocked(policies: list[str]) -> bool:
+    """Whether one enforced policy refuses every inline <script> element.
+
+    A script runs only if every policy admits it, so one blocking policy is
+    enough. A policy blocks inline elements when the list governing them --
+    `script-src-elem`, else `script-src`, else `default-src` -- exists and
+    carries no 'unsafe-inline', nonce or hash: whether a nonce or hash matches
+    THIS script is not asked, because it only has to be able to. The
+    `script-src` list is read too, for engines without `script-src-elem`.
+    """
+    for raw in policies:
+        policy = parse_csp(raw)
+        governing = [
+            next((policy[name] for name in chain if name in policy), None)
+            for chain in (("script-src-elem", "script-src", "default-src"), ("script-src", "default-src"))
+        ]
+        if all(
+            sources is not None
+            and not any(source.lower() == "'unsafe-inline'" or HASH_OR_NONCE.match(source) for source in sources)
+            for sources in governing
+        ):
+            return True
+    return False
 
 
 def reporting_origins(document: Fetched) -> set[str]:
@@ -480,6 +569,7 @@ def judge(manifest: dict, document: Fetched, pages: dict[str, Fetched]) -> Verdi
                 f'add to compliance.json thirdParties {{"origin": "{origin}", "purpose": "...", '
                 '"consent": "not-required", "reason": "..."}',
             )
+    blocked = inline_scripts_blocked(policies)
     for body in resources.inline_scripts:
         hit = next((marker for marker in markers if marker in body), None)
         if hit is None:
@@ -489,9 +579,17 @@ def judge(manifest: dict, document: Fetched, pages: dict[str, Fetched]) -> Verdi
                 'add to compliance.json edgeObservations {"kind": "injected-inline-script", "marker": "<text unique '
                 'to that script>", "reason": "...", "issue": "<issue URL>"}',
             )
-        else:
-            markers[hit] = True
+            continue
+        markers[hit] = True
+        if blocked:
             verdict.notes.append(f"declared injected script seen: {hit}")
+        else:
+            # The declaration's reason is that the CSP blocks the script, so
+            # no manifest line lifts this: the decision goes back to its issue.
+            verdict.refuse(
+                f"the served HTML carries the declared injected script marked {hit!r}, which this CSP can let "
+                "run: no enforced policy blocks every inline script, and the declaration rests on that block"
+            )
 
     for marker, seen in sorted(markers.items()):
         if not seen:
@@ -519,14 +617,26 @@ def judge(manifest: dict, document: Fetched, pages: dict[str, Fetched]) -> Verdi
     return verdict
 
 
+def _whole(answer) -> bytes:
+    """The complete body, or ValueError: judging a prefix as the page is a false pass."""
+    body = answer.read(BODY_CAP_BYTES + 1)
+    if len(body) > BODY_CAP_BYTES:
+        raise ValueError(f"the answer is larger than the {BODY_CAP_BYTES}-byte cap, and a prefix is not the page")
+    # read() returns short, without raising, when the connection closes early.
+    declared = answer.headers.get("Content-Length")
+    if declared is not None and declared.strip() != str(len(body)):
+        raise ValueError(f"the answer declared {declared.strip()} bytes and delivered {len(body)}, and a part is not the page")
+    return body
+
+
 def fetch(url: str) -> Fetched:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"}, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
-            return Fetched(response.geturl(), response.status, list(response.headers.items()), response.read(BODY_CAP_BYTES))
+            return Fetched(response.geturl(), response.status, list(response.headers.items()), _whole(response))
     except urllib.error.HTTPError as error:
         with error:
-            return Fetched(url, error.code, list(error.headers.items()), error.read(BODY_CAP_BYTES))
+            return Fetched(url, error.code, list(error.headers.items()), _whole(error))
 
 
 def _log(line: str) -> None:
@@ -573,8 +683,8 @@ def run_live(manifest_path: Path, fetcher=fetch) -> int:
             for entry in _entries(manifest, "legalPages")
             if entry.get("status") == "published"
         }
-    except (OSError, ValueError) as error:
-        _log(f"REFUSE the live site could not be read: {error}")
+    except (OSError, ValueError, http.client.HTTPException) as error:
+        _log(f"REFUSE the live site could not be read: {error!r}")
         _log(f"SUMMARY mode=live decision=fail refusals=1 duration_ms={int((time.monotonic() - started) * 1000)}")
         return 1
     verdict = judge(manifest, document, pages)

@@ -10,9 +10,10 @@
  * untouched unless it contacts an undeclared origin, breaks the CSP, writes
  * to the visitor's device before they act, or drops a floor below.
  *
- * Lift: a refusal names the `compliance.json` entry that would admit it, and
- * every entry carries a written reason. That entry is also, deliberately, the
- * line a privacy notice has to mention.
+ * Lift: an undeclared origin names the `compliance.json` entry that would
+ * admit it, and every entry carries a written reason. That entry is also,
+ * deliberately, the line a privacy notice has to mention. A write on load, a
+ * CSP violation or a missed floor has no manifest lift: it is a code change.
  */
 import { readFileSync } from 'node:fs';
 
@@ -36,6 +37,38 @@ const credentialShapes = [
   ['private key block', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
   ['signed token', /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/],
 ];
+
+/* The focused element, and whether its focus indicator PAINTS: an outline
+ * with a style, a width and a colour that is not transparent, or a box-shadow
+ * layer with a colour that is not transparent and some extent. That is what is
+ * measured; contrast against the page behind it is not. Runs in the page, so it
+ * closes over nothing. A colour this cannot read counts as transparent, which
+ * fails the floor loudly instead of passing it. */
+function focusStop() {
+  const element = document.activeElement;
+  if (!element || element === document.body) return null;
+  const alpha = (color) => {
+    const args = /\(([^)]*)\)/.exec(color)?.[1];
+    if (args === undefined) return 0;
+    const commas = args.split(',');
+    const last = args.includes('/') ? args.split('/').pop() : commas.length === 4 ? commas[3] : '1';
+    return last.trim().endsWith('%') ? parseFloat(last) / 100 : parseFloat(last);
+  };
+  const style = getComputedStyle(element);
+  const outlined =
+    !['none', 'hidden'].includes(style.outlineStyle) && parseFloat(style.outlineWidth) > 0 && alpha(style.outlineColor) > 0;
+  const ringed = (style.boxShadow === 'none' ? [] : style.boxShadow.split(/,(?![^(]*\))/)).some((layer) => {
+    const color = /[a-z-]+\([^)]*\)/i.exec(layer)?.[0] ?? '';
+    const extent = (layer.replace(color, ' ').match(/-?[\d.]+px/g) ?? []).some((length) => parseFloat(length) !== 0);
+    return alpha(color) > 0 && extent;
+  });
+  const box = element.getBoundingClientRect();
+  return {
+    key: `${element.tagName}:${box.x}:${box.y + window.scrollY}`,
+    shape: element.outerHTML.slice(0, 80),
+    visible: outlined || ringed,
+  };
+}
 
 /* One first visit: load, then walk to the end of the page so every lazy
  * image and late fetch has fired, recording every request, every same-origin
@@ -135,21 +168,11 @@ test('the rendered page meets the WCAG 2.1 floors a browser can measure', async 
   }
   expect(named, 'the page offers at least one control, so the sweep above measured something').toBeGreaterThan(0);
 
-  // 2.4.7 Focus Visible: whatever the keyboard reaches shows where it is.
+  // 2.4.7 Focus Visible: whatever the keyboard reaches paints where it is.
   const stops = [];
   for (let step = 0; step < 40; step += 1) {
     await page.keyboard.press('Tab');
-    const stop = await page.evaluate(() => {
-      const element = document.activeElement;
-      if (!element || element === document.body) return null;
-      const style = getComputedStyle(element);
-      const outlined = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
-      return {
-        key: `${element.tagName}:${element.getBoundingClientRect().x}:${element.getBoundingClientRect().y + window.scrollY}`,
-        shape: element.outerHTML.slice(0, 80),
-        visible: outlined || style.boxShadow !== 'none',
-      };
-    });
+    const stop = await page.evaluate(focusStop);
     if (stop === null || stops.some((seen) => seen.key === stop.key)) break;
     stops.push(stop);
   }
@@ -161,8 +184,31 @@ test('the rendered page meets the WCAG 2.1 floors a browser can measure', async 
   }
   expect(
     stops.filter((stop) => !stop.visible).map((stop) => stop.shape),
-    'every keyboard stop shows a focus outline or ring',
+    'every keyboard stop paints a focus outline or ring that is not transparent',
   ).toEqual([]);
+});
+
+/* The focus floor above can only fail if focusStop can say "not visible", so
+ * the indicators that paint nothing are proven refused in every engine, beside
+ * the two that do paint. */
+test('the focus check refuses an indicator that paints nothing', async ({ page }) => {
+  for (const [css, visible] of [
+    ['outline: 2px solid rgb(200, 0, 0); box-shadow: none', true],
+    ['outline: none; box-shadow: 0 0 0 2px rgb(200, 0, 0)', true],
+    ['outline: none; box-shadow: none', false],
+    ['outline: 2px solid transparent; box-shadow: none', false],
+    ['outline: 2px solid rgb(200 0 0 / 0); box-shadow: none', false],
+    ['outline: 0px solid rgb(200, 0, 0); box-shadow: none', false],
+    ['outline: none; box-shadow: 0 0 0 0 transparent', false],
+    ['outline: none; box-shadow: 0 0 0 0 rgb(200, 0, 0)', false],
+    ['outline: none; box-shadow: 0 0 0 2px transparent', false],
+  ]) {
+    // A focusable span, not a button: WebKit paints no box-shadow on a
+    // native-appearance button, and reports none, which is the truth there.
+    await page.setContent(`<span tabindex="0" style="${css}">probe</span>`);
+    await page.focus('span');
+    expect((await page.evaluate(focusStop))?.visible, css).toBe(visible);
+  }
 });
 
 test('no credential-shaped literal ships in the document, a script or a stylesheet', async ({ page }) => {

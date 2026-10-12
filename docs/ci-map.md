@@ -61,33 +61,50 @@ exist, and which edge behaviours are known and why (issue #355). Three
 checks hold the site to it, and each answers a different question:
 
 - `scripts/ci/test_compliance_manifest.py`, in the PR gate's contract suites,
-  keeps the manifest valid and current: a closed schema, storage names a
-  frontend file still writes, evidence files that still exist, and the
-  judging rules themselves, each refused on its own.
+  keeps the manifest valid and current: a closed schema (a present section,
+  `null` included, must be a list); a storage entry only while a frontend file
+  still WRITES that name as that kind, and no write the manifest leaves
+  undeclared; evidence files that still exist; and the judging rules
+  themselves, each refused on its own. A write is what
+  `compliance_manifest.py`'s `storage_writes` grammar reads -- a
+  `document.cookie` assignment by literal name, or a `setItem` whose key is a
+  literal or a bound constant on a named store -- so a read, a bare string, a
+  comment or a test file keeps nothing alive, and a write the grammar cannot
+  attribute is refused rather than ignored.
 - `frontend/e2e/compliance.spec.mjs`, in the browser lanes, drives the shipped
   binary in every engine: no request to an undeclared origin, no CSP
   violation, nothing written to the device before the visitor acts, the
   WCAG 2.1 floors a browser can measure (page language, image `alt`, an
-  accessible name on every visible control, no positive `tabindex`, a visible
-  focus indicator on every keyboard stop), no credential-shaped literal in the
-  served document, scripts or stylesheets, and every published legal page
-  linked and served.
+  accessible name on every visible control, no positive `tabindex`, and on
+  every keyboard stop a focus indicator that PAINTS -- an outline or a
+  box-shadow whose colour is not transparent and whose width or extent is not
+  zero; its contrast against the page is not measured), no credential-shaped
+  literal in the served document, scripts or stylesheets, and every published
+  legal page linked and served. The focus measurement is itself proven able
+  to refuse, in every engine, against indicators that paint nothing.
 - `compliance-live.yml`, weekly and on demand, GETs production and judges what
-  the edge serves: CSP fetch directives admit no undeclared origin, wildcard,
-  bare scheme or inline script source; framing is denied; HSTS lasts a year;
-  nosniff and a Referrer-Policy are present; the document sets no cookie; every
-  reporting endpoint and every script, stylesheet or embed in the served HTML
-  is this origin's or declared; every published legal page answers 200. It
-  also runs on a pull request that changes the judge, so the judge is proven
-  against the live site before it merges, but not on one that only edits the
+  the edge serves: the answer read whole (a body past 2 MiB, or short of its
+  `Content-Length`, fails rather than being judged by its prefix); CSP fetch
+  directives admit no undeclared origin, wildcard, bare scheme or
+  `'unsafe-inline'` script source; a declared injected script passes only
+  while some enforced policy blocks every inline script, because that block is
+  the declaration's reason; framing is denied; HSTS lasts a year; nosniff and
+  a Referrer-Policy are present; the document sets no cookie; every reporting
+  endpoint and every script, stylesheet or embed in the served HTML is this
+  origin's or declared; every published legal page answers 200. It also runs
+  on a pull request that changes the judge, so the judge is proven against
+  the live site before it merges, but not on one that only edits the
   manifest, which often declares what the next deployment ships.
 
 A declared entry that no longer occurs is refused as stale, so no exemption
-outlives its case; every refusal prints the entry that would admit it. What
-none of the three can see: what a visitor's device writes after they act, a
-screen reader's actual reading, and anything only a lawyer can judge. The
-manifest's `storage` list is the disclosure for the first, kept honest only
-against the source.
+outlives its case. A refusal a manifest line can lift prints that line; the
+rest -- a missing header, a cookie on the document, a write on load, an
+injected script the CSP can let run, an incomplete answer -- print none,
+because they need a code, policy or owner decision. What none of the three
+can see: what a visitor's device writes after they act, a screen reader's
+actual reading, and anything only a lawyer can judge. The manifest's
+`storage` list is the disclosure for the first, kept honest against the
+writes the source makes, in both directions.
 
 ## The documented GitHub behaviours the release path depends on
 
