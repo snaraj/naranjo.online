@@ -8205,6 +8205,70 @@ class GovernanceParityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.require_manifest_scan_audit_docs(**changed)
 
+    # Issue #272: AGENTS.md hands whole topics to files under docs/ by naming
+    # them in backticks, and nothing checked that a named file exists — the
+    # PR #270 review deleted one and the suite stayed green. Existence only:
+    # what a target says stays review's job. Names are compared entry by
+    # entry, so a case-only rename fails on a case-insensitive filesystem
+    # exactly as it does on CI's.
+    AGENTS_DOCS_POINTER = re.compile(r"`(docs/[^`\s]+\.md)`")
+
+    @staticmethod
+    def require_agents_docs_pointers_exist(agents: str, root: Path) -> list[str]:
+        pointers = sorted(set(GovernanceParityTests.AGENTS_DOCS_POINTER.findall(agents)))
+        if not pointers:
+            raise ValueError("AGENTS.md names no `docs/<name>.md` pointer; the walk proves nothing")
+
+        def exists(pointer: str) -> bool:
+            current = root
+            for part in pointer.split("/"):
+                try:
+                    names = {entry.name for entry in os.scandir(current)}
+                except OSError:
+                    return False
+                if part not in names:
+                    return False
+                current = current / part
+            return current.is_file()
+
+        missing = [pointer for pointer in pointers if not exists(pointer)]
+        if missing:
+            raise ValueError("AGENTS.md points at missing docs file(s): " + ", ".join(missing))
+        return pointers
+
+    def test_every_agents_docs_pointer_names_an_existing_file(self):
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        pointers = self.require_agents_docs_pointers_exist(agents, ROOT)
+        with self.assertRaises(ValueError):
+            self.require_agents_docs_pointers_exist(agents.replace("`docs/", "`doc/"), ROOT)
+        with tempfile.TemporaryDirectory() as tmp:
+            copy_root = Path(tmp)
+            shutil.copytree(ROOT / "docs", copy_root / "docs")
+            self.require_agents_docs_pointers_exist(agents, copy_root)
+            for pointer in pointers:
+                target = copy_root / pointer
+                for mutation, moved in (
+                    ("deleted", None),
+                    ("renamed", target.with_name("relocated-" + target.name)),
+                    ("case-renamed", target.with_name(target.name.upper())),
+                    ("made-a-directory", target),
+                ):
+                    target.unlink()
+                    if moved == target:
+                        target.mkdir()
+                    elif moved is not None:
+                        shutil.copyfile(ROOT / pointer, moved)
+                    with self.subTest(pointer=pointer, mutation=mutation):
+                        with self.assertRaises(ValueError) as caught:
+                            self.require_agents_docs_pointers_exist(agents, copy_root)
+                        self.assertIn(pointer, str(caught.exception))
+                    if moved == target:
+                        target.rmdir()
+                    elif moved is not None:
+                        moved.unlink()
+                    shutil.copyfile(ROOT / pointer, target)
+                    self.require_agents_docs_pointers_exist(agents, copy_root)
+
 
 class TrivyDevelopmentDependencyShellPathTests(unittest.TestCase):
     STEP = "Reject high or critical source dependency vulnerabilities"
