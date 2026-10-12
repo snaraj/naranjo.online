@@ -1,0 +1,65 @@
+name: Coverage badges
+
+# Publishes the PR gate's own coverage numbers to the generated single-commit
+# `badges` branch, AFTER a successful protected-main gate run and outside it
+# (issue #350). The release publisher authorizes against pr-gate.yml's exact
+# job inventory and release-after-main.yml follows only the PR gate, so
+# nothing here can hold back or admit a release: a badge failure is a red run
+# of this workflow and nothing else.
+#
+# The numbers are the ones the gate's `application` job enforced (Go) and
+# reported (frontend), handed over as that exact run's `coverage-totals`
+# artifact and bound to its commit and run ID; nothing is rebuilt or
+# re-measured. scripts/ci/coverage_badges.py states the recency rule (an older
+# main commit never replaces newer badges) and the leased, bounded push.
+# Force-updating the generated branch remains the documented exception to the
+# no-force-push rule; the lease is what keeps it from clobbering a newer write.
+on:
+  workflow_run:
+    workflows: [PR gate]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out the exact completed main SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Download the gate's measured totals
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          GATE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          event_sha="$(python3 -I -B scripts/ci/release_contract.py workflow-run \
+            --event "${GITHUB_EVENT_PATH}" --repository "${GITHUB_REPOSITORY}")"
+          test "${event_sha}" = "${SOURCE_SHA}"
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          [[ "${GATE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          gh run download "${GATE_RUN_ID}" --repo "${GITHUB_REPOSITORY}" \
+            --name coverage-totals --dir "${RUNNER_TEMP}/coverage-totals"
+      - name: Publish the gate's numbers unless newer badges stand
+        env:
+          BADGE_REMOTE: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          GATE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          python3 -I -B scripts/ci/coverage_badges.py \
+            --totals "${RUNNER_TEMP}/coverage-totals/coverage.json" \
+            --source-sha "${SOURCE_SHA}" --run-id "${GATE_RUN_ID}" --repository .

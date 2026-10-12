@@ -806,7 +806,8 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   `dependency-review` (PRs only; fails on high severity), `application`
   (toolchain pinned AND verified — Node 24.19.0, npm 11.17.0,
   Go 1.26.6; frontend check/test/build; gofmt/vet/tests/race; the
-  coverage floor), `chart` (the four chart pin scripts; helm lint + render
+  coverage floor; on main pushes, the measured totals handed over as the
+  `coverage-totals` artifact), `chart` (the four chart pin scripts; helm lint + render
   at `--kube-version v1.36.0`; the numeric VERSION ↔ numeric chart
   `version` ↔ numeric `appVersion` ↔ plain-v chart `image.tag` four-way
   lock, plus a render assertion that the emitted reference still carries a
@@ -814,16 +815,21 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   production architectures built, never published). `container` remains a
   REQUIRED pull-request check; `EXPECTED_MAIN_JOBS` in
   `scripts/ci/release_contract.py` expects `container` and
-  `dependency-review` `skipped` on a main push and the other four
+  `dependency-review` `skipped` on a main push and the other three
   successful, exact in both directions. What each chart pin proves, and why
   the two PR-only jobs carry no main trigger, is in `docs/ci-map.md`.
-- **coverage-badges** — `main` pushes only: waits for `application` to
-  succeed and publishes its numeric coverage outputs from the same run,
-  without rebuilding or repeating tests. It force-updates the generated
-  single-commit `badges` branch. Badge numbers are CI-computed, never
-  hand-edited; the badge publishes the identical number the gate
-  enforced for Go and reported for frontend. A badge is a coverage report;
-  the release publisher separately requires every main gate job to pass.
+- **coverage-badges.yml** — success-only `workflow_run` of a protected-main
+  PR gate run (issue #350): publishes that exact run's `coverage-totals`,
+  bound to its commit and run ID, to the generated single-commit `badges`
+  branch, without rebuilding or repeating tests. Badge numbers are
+  CI-computed, never hand-edited; the badge publishes the identical number
+  the gate enforced for Go and reported for frontend. It is NOT a release
+  input: it sits outside `pr-gate.yml`'s job inventory and the orchestrator
+  follows only the PR gate, so a badge failure is a red run of this workflow
+  and nothing else. An older main commit never replaces newer badges: the
+  push proceeds only when the commit the current badges record is an
+  ancestor of, or equal to, the one being published, under a lease on the
+  badge head it read (`scripts/ci/coverage_badges.py`; `docs/ci-map.md`).
 - **browser-lanes.yml** — pull requests and manual dispatch (no `main` push
   trigger): the rendering-lane smoke matrix (issue #26 stage 2), five
   projects against the real Go binary on localhost. It holds `contents:

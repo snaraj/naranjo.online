@@ -53,6 +53,32 @@ which selects the engine revisions. The job installs that exact pinned
 `@playwright/test` from the lockfile and restores the engine cache keyed on
 that version.
 
+## Why coverage badges publish outside the PR gate
+
+Until issue #350 the badge push was a `coverage-badges` job inside
+`pr-gate.yml`, and two facts made that wrong. The release publisher authorizes
+against that workflow's exact job inventory, so a transport failure on a
+generated branch held back a release whose tests, chart and scans had all
+passed. And main pushes share no gate concurrency group, so two runs could
+finish out of order and the older one force-push its numbers over the newer.
+
+Now the gate's `application` job hands its two measured totals, with its
+commit and run ID, to the `coverage-totals` artifact on main pushes, after
+both measurement steps passed, and `coverage-badges.yml` publishes them after
+a successful protected-main gate run. Nothing is re-measured, and no release
+input reads the outcome: `EXPECTED_MAIN_JOBS` has no badge job (one carried
+back into the gate is refused as foreign), and `release-after-main.yml`
+follows the PR gate alone. `scripts/ci/coverage_badges.py` refuses totals
+bound to another commit or run, and orders publications by history: the
+badge commit's subject (`coverage badges for <sha>`) and `source.json` record
+the measured commit, a newer or equal commit replaces the badges, an older one
+stands down successfully, and a badge head it cannot place fails. The push is
+leased on the badge head the decision read and bounded at five attempts; a
+lost answer is recognised as published. Deleting the `badges` branch is the
+recovery from a head nobody can place. `scripts/ci/test_coverage_badges.py`
+proves each of those against real git, including two runs completing in
+reverse order and a race lost to a newer publisher.
+
 ## What the compliance gate proves, and where it cannot reach
 
 `compliance.json` states what the site stores on a visitor's device and when,
