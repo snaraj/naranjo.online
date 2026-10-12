@@ -2152,6 +2152,9 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertEqual(result.stdout.count("usage-export: FIXTURE second-generation"), 1)
         self.assertEqual(self.summary_revision(result), self.second[:12])
         self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
+        # The checkout is shared: what the merge rewrites keeps the ordinary
+        # mode rather than the run's private umask.
+        self.assertEqual((self.checkout / "NOTE").stat().st_mode & 0o777, 0o644)
         self.assertRegex((self.history / "repo-update.stamp").read_text(encoding="utf-8"), r"^\d+\n$")
         self.assertNotIn("DRIFT", result.stderr)
 

@@ -277,7 +277,9 @@ update_checkout() {
         reason=diverged
     else
         old=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD)
-        if git -C "$REPO_DIR" merge --ff-only --quiet refs/remotes/origin/main </dev/null >/dev/null 2>&1; then
+        # The checkout is shared, so the files the merge writes take the
+        # repository's ordinary modes, not this run's private umask.
+        if (umask 022 && git -C "$REPO_DIR" merge --ff-only --quiet refs/remotes/origin/main </dev/null >/dev/null 2>&1); then
             echo "usage-export: UPDATED exporter $old->$(git -C "$REPO_DIR" rev-parse --short=12 HEAD)"
             export NARANJO_USAGE_EXPORT_REEXEC=1
             exec /bin/sh "$0"
