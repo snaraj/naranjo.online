@@ -238,6 +238,11 @@ MAX_NAME_LENGTH = 120
 # it has none. Bounded so a line cannot carry a paragraph.
 MAX_EXPORTER_LENGTH = 64
 
+# valid_instant's remembered verdicts, by instant string. Emptied whenever it
+# fills, so a file of distinct instants costs parses rather than memory.
+INSTANT_VERDICTS = {}
+MAX_INSTANT_VERDICTS = 1 << 16
+
 # Directory and file modes. The record is machine-local and private: it holds
 # the whole measured history of this workstation's work.
 DIR_MODE = 0o700
@@ -273,18 +278,30 @@ def valid_name(value, bound=MAX_NAME_LENGTH):
         return False
     if value != value.strip():
         return False
-    return all(character.isprintable() for character in value)
+    return value.isprintable()
 
 
 def valid_instant(value):
-    """True for the one instant form this record writes: RFC 3339, UTC."""
+    """True for the one instant form this record writes: RFC 3339, UTC.
+
+    The verdict is a pure function of the string, and every run re-admits
+    every row its year files hold, in which the same capture and session
+    instants recur thousands of times. So each distinct string is parsed once
+    and its verdict remembered; the parse, not the memory, decides.
+    """
     if not isinstance(value, str):
         return False
-    try:
-        datetime.datetime.strptime(value, INSTANT_FORMAT)
-    except ValueError:
-        return False
-    return True
+    verdict = INSTANT_VERDICTS.get(value)
+    if verdict is None:
+        try:
+            datetime.datetime.strptime(value, INSTANT_FORMAT)
+            verdict = True
+        except ValueError:
+            verdict = False
+        if len(INSTANT_VERDICTS) >= MAX_INSTANT_VERDICTS:
+            INSTANT_VERDICTS.clear()
+        INSTANT_VERDICTS[value] = verdict
+    return verdict
 
 
 def valid_count(value):

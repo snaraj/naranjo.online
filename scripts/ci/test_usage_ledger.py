@@ -369,6 +369,71 @@ class MalformedLineTest(LedgerTestCase):
             self.append(row(value=-5))
 
 
+class AdmissionVerdictTest(unittest.TestCase):
+    """The admission checks every run repeats over every stored row, made
+    cheap without moving a single verdict (issue #358)."""
+
+    def setUp(self):
+        ledger.INSTANT_VERDICTS.clear()
+        self.addCleanup(ledger.INSTANT_VERDICTS.clear)
+
+    @staticmethod
+    def parses(value):
+        try:
+            datetime.datetime.strptime(value, ledger.INSTANT_FORMAT)
+        except ValueError:
+            return False
+        return True
+
+    def test_a_remembered_instant_verdict_is_the_parse_verdict(self):
+        # Asked twice, so the second answer comes from memory: a memory that
+        # ever answered differently from the parse would admit or refuse a
+        # row the parse decides the other way.
+        for value in (
+            STAMP,
+            "2026-09-11 07:39:08",
+            "2026-99-99T99:99:99Z",
+            "2026-02-30T00:00:00Z",
+            "2026-9-1T7:3:8Z",
+            STAMP + " ",
+            "",
+        ):
+            for attempt in ("parsed", "remembered"):
+                with self.subTest(value=value, attempt=attempt):
+                    self.assertIs(ledger.valid_instant(value), self.parses(value))
+        self.assertTrue(ledger.INSTANT_VERDICTS)
+
+    def test_a_value_that_is_not_a_string_is_refused_and_not_remembered(self):
+        # Refused BEFORE the memory is asked: a list or a dict is not
+        # hashable, and a lookup first would crash the run on a malformed row
+        # instead of refusing it by name.
+        for value in (None, 17, ["2026-09-11T07:39:08Z"], {"at": STAMP}):
+            with self.subTest(value=value):
+                self.assertFalse(ledger.valid_instant(value))
+        self.assertEqual(ledger.INSTANT_VERDICTS, {})
+
+    def test_the_memory_is_bounded(self):
+        bound = ledger.MAX_INSTANT_VERDICTS
+        ledger.MAX_INSTANT_VERDICTS = 4
+        self.addCleanup(setattr, ledger, "MAX_INSTANT_VERDICTS", bound)
+        for second in range(10):
+            value = "2026-09-11T07:39:%02dZ" % second
+            self.assertTrue(ledger.valid_instant(value))
+            self.assertLessEqual(len(ledger.INSTANT_VERDICTS), 4)
+
+    def test_a_name_is_printable_exactly_when_every_character_is(self):
+        # The whole-string test against the per-character definition it
+        # replaced, over every code point below U+3000: the controls, the
+        # separators, and the scripts a name could plausibly carry.
+        for code in range(0x3000):
+            name = "a%sb" % chr(code)
+            with self.subTest(code=code):
+                self.assertIs(
+                    ledger.valid_name(name),
+                    all(character.isprintable() for character in name),
+                )
+
+
 class ResolutionTest(LedgerTestCase):
     """One rule, in one place, for every consumer."""
 
