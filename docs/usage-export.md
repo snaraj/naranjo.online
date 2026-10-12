@@ -73,6 +73,86 @@ An idle eligibility check reports `attempted=false`; a partial result keeps its
 `stale` status, and retained commit rows are counted separately. These events
 describe publication outcomes, never individual private activity records.
 
+### What the workstation's log can see (issue #358)
+
+A verified checksum once sat beside a page serving something else: the cluster
+host rebooted with its clock weeks behind, the origin served its embedded
+release snapshot for days, and every run still logged a verified push. Four
+mechanisms make the job's own log say what the page serves and keep the job
+current.
+
+**Served verification.** With `SITE_URL` and `HISTORY_DIR` configured, every
+verified push records `$HISTORY_DIR/push-state.json` (0600): the document's
+export instant, its OLDEST source capture instant — what the origin serves as
+the envelope's `generatedAt` once it has admitted the document — the sealed
+checksum and the push time. At the START of the next run, so no run waits on
+the origin's next re-read, `scripts/usage-export/served-check.py` reads the
+public `/api/panels/token-usage` envelope once, OUTSIDE the producer sandbox,
+with the nightly snapshot's own fetch (https only, the resolved host equal to
+the site's, no redirect, one 20-second timeout, one bounded read) under a
+30-second whole-check deadline. It logs one line:
+
+```
+usage-export: SERVED status=ok lag=<seconds since that push>s
+usage-export: WARN NOT-SERVED status=<status> served_at=<envelope generatedAt> expected_at>=<recorded> since_push=<s>s
+```
+
+SERVED means the envelope is `ok` and at least as new as the recorded capture.
+The first NOT-SERVED instant is kept, and a push does not restart it. Once
+NOT-SERVED has lasted more than fifteen minutes, ONE macOS notification with a
+fixed, payload-free text is raised (skipped where `osascript` does not exist),
+never repeated until a SERVED run clears it; that run also logs
+`usage-export: RECOVERED served after <s>s`. A check that cannot be evaluated
+logs `usage-export: WARN served-check unavailable reason=<code>` and nothing
+else happens: the check never fails, delays or skips the push. Instants, one
+status word and closed codes only; no payload content and no upstream text.
+
+**Log hygiene and rotation.** The push runs ssh at `LogLevel=ERROR`, because
+OpenSSH prints the receiving host's pre-auth banner at INFO and above — about
+nine lines on every run. Errors still print. One class does not: a connection
+closed, reset or timed out after the identification exchange is reported at
+INFO, so ssh exits 255 with no text, and the runner names that exactly what
+the INFO text mapped to, `connection-lost` (measured against a loopback peer).
+The separate `pushed <n> sealed bytes; checksum verified` line is gone: it
+repeated the SUMMARY, which is printed only after the checksum matched. launchd
+never rotates its two log files, so the installed agent names their directory
+in its environment (`NARANJO_USAGE_EXPORT_LOG_DIR`, the installer's decision
+and never the configuration's), and before writing a line the run RENAMES each
+file past 5 MiB to `<file>.1` — one kept generation, never a truncation — and
+reopens its own stream on the fresh path. A run started any other way rotates
+nothing.
+
+**Checkout drift.** The job runs whatever commit `REPO_DIR` has checked out,
+and three times it ran a tree behind `origin/main`. With `REPO_UPDATE=ff-only`
+(the default) a checkout on `main` tracking `origin/main` is fetched at most
+once an hour — `scripts/usage-export/bounded-fetch.py`, the push runner's
+lifecycle with a 30-second deadline, stamped in `$HISTORY_DIR/repo-update.stamp`
+(a stamp ahead of the clock is due) — and, when strictly behind,
+fast-forwarded, after which the script re-executes once; a guard variable
+makes a second update in the same run impossible. Everything else is reported
+and left exactly as it is:
+
+```
+usage-export: UPDATED exporter <old12>-><new12>
+usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<off|detached|not-main|diverged|merge-refused>
+```
+
+Nothing stashes, resets, rebases, forces, switches a branch, or touches an
+untracked or modified file: `merge-refused` is git declining a fast-forward
+that would overwrite a local edit. `REPO_UPDATE=off` neither fetches nor
+moves; it only reports. The SUMMARY keeps naming the tree the run exported
+from.
+
+**The nightly snapshot.** A 5xx or a timed-out transport is retried inside the
+night's one run after fixed 30- and 120-second pauses (three attempts at most),
+each retry logged with its reason; a redirect, another host, a 4xx or an
+answer that is not the envelope is never retried. After the reading the job
+rebuilds the ledger's SQLite and CSV views (below).
+
+`scripts/usage-export/install-launchd.sh --check` changes nothing and prints,
+per agent, whether its installed plist runs the configuration's `REPO_DIR` and
+what its last exit status was, exiting 1 unless both are good.
+
 ## Security properties, stage by stage
 
 - **Capture cannot fork and cannot reach a network — enforced by the kernel,
@@ -565,7 +645,7 @@ osrs/<YYYY>.ndjson
 raw/usage/<day>/<key>.T<HHMMSS>Z.json.gz   the capture document a reading came from, kept 30 days
 raw/usage/<day>/<key>.last.json.gz         the day's latest, kept forever
 raw/<stream>/<day>.json.gz                 the panel envelope a reading came from
-exports/                                   derived SQLite and CSV, regenerated on demand
+exports/                                   derived SQLite and CSV, rebuilt nightly and on demand
 ```
 
 **One row is one reading**:
@@ -642,7 +722,10 @@ night and records what they said. It runs OUTSIDE `producer.sb`, deliberately
 and unlike every other job here: it needs a network the profile denies, and it
 reads nothing private. Its bounds are the fetch's: https only, the resolved
 host must equal the configured site's, no redirect is followed, one 20-second
-timeout, one 512 KiB read. A panel whose envelope status is not `ok` is
+timeout, one 512 KiB read. A 5xx or a timed-out transport is retried twice
+inside the run, after 30 and 120 seconds, each retry logged as
+`ledger snapshot retry <panel> attempt=<n>/3 reason=<code> wait=<s>s`; nothing
+else is retried. A panel whose envelope status is not `ok` is
 skipped with no rows at all — the status is the origin's own statement that
 the payload is stale, and a stale reading recorded as today's is a lie the
 record would keep forever.
@@ -660,7 +743,11 @@ is safe to run again.
 rebuilds `exports/ledger.sqlite` (one table per stream, plus the resolved
 `<stream>_current` tables) and one long-format CSV per stream, from scratch,
 into a temporary file that is renamed into place. The lines are the record;
-a derived view that drifted from them is repaired by deleting it.
+a derived view that drifted from them is repaired by deleting it. The nightly
+snapshot runs the same rebuild after every reading (issue #358), so the views
+are never older than a day; a failed rebuild is logged as
+`ledger snapshot export failed: …`, keeps every row, and fails that night's
+exit status.
 
 **What is and is not recoverable.** The ledger starts the day it is switched
 on. It cannot reconstruct a day whose evidence is already gone — the GitHub
@@ -719,7 +806,18 @@ window has since dropped and the days a vendor surface later disagrees with.
    # MERGE_CAPTURES=other-label=running-totals=$HOME/<other-tool-records>
    # HISTORY_DIR=$HOME/.config/naranjo-usage-export/history
    # LEDGER_DIR=$HOME/.config/naranjo-usage-export/history/ledger
+   # SITE_URL=https://<site>
+   # REPO_UPDATE=ff-only
    ```
+
+   `SITE_URL` is the site's bare https origin, and setting it (with
+   `HISTORY_DIR`) turns on the served verification described under
+   "What the workstation's log can see": each run says whether the page
+   serves the last push. It is operator configuration only; the repository
+   names no host. `REPO_UPDATE` is `ff-only` when unset — a checkout on
+   `main` that is strictly behind `origin/main` is fast-forwarded, fetching
+   at most hourly, which needs `HISTORY_DIR` for its stamp — or `off`, which
+   only reports the drift; any other value refuses the run.
 
    **`PUSH_HOST` is a real `user@host`, not an `~/.ssh/config` alias, and
    `SSH_KNOWN_HOSTS` is required** (2026-08-24 round-3 review, finding 8).
@@ -867,8 +965,14 @@ window has since dropped and the days a vendor surface later disagrees with.
 
    Every minute plus at load; launchd keeps a single instance of the labeled
    job, so a capture that runs long does not overlap itself. Logs live under
-   `~/Library/Logs/naranjo-online-usage-export/`. One manual run first is good
-   practice: `scripts/usage-export/push-usage-series.sh`.
+   `~/Library/Logs/naranjo-online-usage-export/`; the agent passes that
+   directory to the push as `NARANJO_USAGE_EXPORT_LOG_DIR`, which rotates
+   each file past 5 MiB to one `.1` generation. One manual run first is good
+   practice: `scripts/usage-export/push-usage-series.sh`. Re-running the
+   installer is safe and is how an agent is updated: each one is booted out
+   before it is bootstrapped again. `install-launchd.sh --check` reports,
+   without changing anything, whether each installed agent runs the
+   configured `REPO_DIR` and whether its last exit status was 0.
 
    The installer lands TWO agents when `LEDGER_DIR` (or `HISTORY_DIR`) is
    configured, and says so on the last line of its output. The second is
@@ -887,12 +991,14 @@ window has since dropped and the days a vendor surface later disagrees with.
    stage that never ends is a START with no SUMMARY; the export's own
    `coverage <key>=<first>..<last>` line naming the newest day each source
    reaches; on failure the reason, then `FAILED stage=<stage>
-   elapsed=<s>s`; on success the `pushed <n> sealed bytes; checksum
-   verified` line, then one `SUMMARY` line with the sealed size, the
+   elapsed=<s>s`; on success one `SUMMARY` line, printed only once the
+   host's checksum matched, with the sealed size, the
    checksum prefix, the exporter's checkout revision — the fault class where
    a scheduled job ran a tree nine commits behind what the origin admits
-   (issue #288) — the total elapsed time, and every stage's duration. Stage
-   names and counts only, never payload content or a path.
+   (issue #288) — the total elapsed time, and every stage's duration. Before
+   the first START, a run with `SITE_URL` set logs its one served line, and
+   a run that found its checkout behind logs `UPDATED` or `DRIFT` (issue
+   #358). Stage names and counts only, never payload content or a path.
 
    The installed job is anchored to the PRIMARY checkout
    (`~/code/naranjo.online` by default; override with
@@ -1066,7 +1172,13 @@ shipped snapshots").
 ```sh
 # On the workstation: one manual push.
 scripts/usage-export/push-usage-series.sh
-# -> usage-export: pushed <N> sealed bytes; checksum verified
+# -> usage-export: SUMMARY pushed=<N>B sha256=<prefix> exporter=<rev> ...
+# With SITE_URL set, the NEXT run first says what the page serves:
+# -> usage-export: SERVED status=ok lag=<s>s
+
+# The installed agents, read without changing anything.
+scripts/usage-export/install-launchd.sh --check
+# -> check com.naranjo-online.usage-export installed=yes repo=match last-exit=0
 
 # Against the cluster: the panel now reports the pushed instant.
 kubectl -n <namespace> port-forward deploy/naranjo-online 8080:8080 &
@@ -1084,8 +1196,19 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `ledger repaired a partial line in …` | the tolerated fault: an interrupted append left a line with no newline. It was truncated back and the run continued |
 | `ledger snapshot skipped <stream>` | that panel's envelope did not report `ok`, so the night has no reading for it. The next night takes one |
 | `a panel request was redirected` / `came from a different host` | the snapshot refuses both rather than following them; check the configured site |
+| `ledger snapshot retry <panel> attempt=<n>/3 reason=<code> wait=<s>s` | a 5xx (`http-<status>`) or a timed-out transport (`timeout`); the run waits and asks again, three attempts at most |
+| `ledger snapshot export failed: …` | the night's readings are recorded; only the derived SQLite/CSV views could not be rebuilt, and the night exits 1 |
+| `usage-export: WARN NOT-SERVED status=<status> served_at=<t> expected_at>=<t> since_push=<s>s` | the page does not serve the last verified push. `status=stale`: the origin refused or aged the newest file — read its admission log. `status=ok` with an older `served_at`: it serves an older document, such as its embedded release snapshot — check the host's clock and the origin's log. Past fifteen minutes, one desktop notification |
+| `usage-export: RECOVERED served after <s>s` | the page serves the pushed data again; the next outage notifies afresh |
+| `usage-export: WARN served-check unavailable reason=<code>` | the check could not judge, and the push went on regardless: `no-push-state` (no verified push recorded yet, or no `HISTORY_DIR`), `state-unreadable`, `bad-site` (`SITE_URL` is not a bare https origin), `unreachable`, `timeout`, `http-<status>`, `redirected`, `host-mismatch`, `over-budget`, `malformed-envelope`, `deadline-exceeded`, `state-unwritable`, `helper-failed` |
+| `usage-export: WARN push-state unrecorded reason=<code>` | the push landed, but what it delivered could not be recorded, so the next check compares against the previous push |
+| `usage-export: UPDATED exporter <old>-><new>` | the checkout was strictly behind `origin/main` and was fast-forwarded; the run re-executed the new script once |
+| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<code>` | the checkout is behind `origin/main` and was left exactly as it is: `off` (`REPO_UPDATE=off`), `detached`, `not-main`, `diverged` (local commits), `merge-refused` (a local edit the fast-forward would overwrite). Resolve it by hand |
+| `usage-export: WARN repo-update fetch-failed reason=<code>` | the hourly fetch failed or hit its 30-second deadline; the run continued on the tree it had |
+| `REPO_UPDATE must be ff-only or off` | the configuration names another update mode; nothing ran |
+| `install-launchd.sh --check` exits 1 | an agent is missing, runs a different checkout than `REPO_DIR` (`repo=MISMATCH`), is not loaded, or last exited non-zero |
 | `sealing refused` / key-file refusal | key file missing, malformed, or group/world-readable |
-| `push refused` | ssh transport failed; nothing landed |
+| `push refused` | ssh transport failed; nothing landed. `reason=connection-lost` includes ssh's silent exit 255, which is how a connection closed after the identification exchange reports at `LogLevel=ERROR` |
 | `checksum mismatch after push` | landed bytes differ from sealed bytes — investigate before trusting the panel |
 | origin WARN `failed to fetch token usage` | the sealed data-root tick failed; the structured `error` field names the cause and `next_retry` names the next thirty-second attempt. An unchanged cause logs once, and recovery writes one `token usage data root recovered` transition |
 | panel `status: stale` | the origin refused the newest file (tamper, replay, wrong key, over-cap, malformed) and kept the last good payload |

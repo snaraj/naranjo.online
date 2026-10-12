@@ -886,6 +886,19 @@ class ExportTest(LedgerTestCase):
         self.assertEqual(json.loads(categories), {"input": 500})
         self.assertEqual(json.loads(models), ["member-one"])
 
+    @unittest.skipIf(os.geteuid() == 0, "a superuser writes through any directory mode")
+    def test_a_database_fault_is_the_records_own_refusal(self):
+        # The nightly snapshot now rebuilds these views unattended (issue
+        # #358): a database that cannot be built is reported as a refusal it
+        # can log, never as a traceback out of a scheduled job.
+        out = self.ledger / "exports"
+        out.mkdir()
+        out.chmod(0o500)
+        self.addCleanup(out.chmod, 0o700)
+        with self.assertRaises(ledger.LedgerError) as caught:
+            ledger.export_ledger(self.ledger, out)
+        self.assertIn("could not be built", str(caught.exception))
+
 
 class ExporterHookTest(LedgerTestCase):
     """The exporter writes the record beside the dataset, or not at all."""
@@ -973,8 +986,10 @@ class ImportSurfaceTest(unittest.TestCase):
             # `http` is the standard-library status table (`http.HTTPStatus`),
             # so a refused panel is named by the standard phrase and never by
             # the upstream's own reason text (issue #320); it opens nothing.
+            # `time` is the fixed pause before a transient refusal is retried
+            # (issue #358); it opens nothing and starts nothing.
             "__future__", "argparse", "datetime", "http", "json", "pathlib",
-            "sys", "urllib", "usage_ledger",
+            "sys", "time", "urllib", "usage_ledger",
         },
         "ledger_backfill_github": {
             "__future__", "argparse", "datetime", "json", "pathlib", "re",

@@ -91,6 +91,24 @@
 #                   figure per day and forget how it was measured; the record
 #                   keeps every reading, with its method and the instant it
 #                   was taken, and never rewrites one.
+#   SITE_URL        the site's bare https origin (issue #358). A verified
+#                   checksum proves delivery to the host, never what the PAGE
+#                   serves; when this is set, each run first asks the site's
+#                   public token-usage envelope whether it serves the last
+#                   push (served-check.py) and logs SERVED or NOT-SERVED. It
+#                   compares against "$HISTORY_DIR/push-state.json", so it
+#                   needs HISTORY_DIR. It never fails or delays the push.
+#   REPO_UPDATE     ff-only (the default) or off; anything else refuses the
+#                   run (issue #358). The job runs whatever REPO_DIR has
+#                   checked out, so with ff-only a checkout on main that is
+#                   strictly behind origin/main is fast-forwarded (fetching at
+#                   most hourly, which needs HISTORY_DIR) and this script
+#                   re-executes once. off only reports the drift. Nothing
+#                   here stashes, resets, rebases, or switches a branch.
+#
+# The launchd agent also names its log directory in the environment as
+# NARANJO_USAGE_EXPORT_LOG_DIR (install-launchd.sh decides it, never this
+# configuration); a run started any other way rotates no log.
 #
 # Exit status is nonzero on any failure; diagnostics never include payload
 # content. Stage names and byte counts only.
@@ -130,6 +148,24 @@ finish() {
     timings="$timings $stage=$(( $(/bin/date +%s) - stage_started ))s"
 }
 
+# Log rotation, before this run writes a line (issue #358): launchd appends to
+# its two log files forever. Each is RENAMED to one kept generation, never
+# truncated, and this run's stream is reopened on the fresh path, so a reader
+# that counts lines sees a shorter file rather than a hole.
+MAX_LOG_BYTES=5242880
+if [ -n "${NARANJO_USAGE_EXPORT_LOG_DIR:-}" ]; then
+    for log in usage-export.log usage-export.err.log; do
+        log="$NARANJO_USAGE_EXPORT_LOG_DIR/$log"
+        if [ -f "$log" ] && [ "$(wc -c < "$log" | tr -d ' ')" -gt "$MAX_LOG_BYTES" ]; then
+            mv -f "$log" "$log.1" || { echo "usage-export: WARN log-rotation failed" >&2; continue; }
+            case "$log" in
+                *.err.log) exec 2>>"$log" ;;
+                *) exec >>"$log" ;;
+            esac
+        fi
+    done
+fi
+
 CONFIG="${NARANJO_USAGE_EXPORT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/naranjo-usage-export/config}"
 [ -f "$CONFIG" ] || fail "no configuration at the expected location"
 # The configuration names key-material paths and the push destination;
@@ -166,6 +202,12 @@ if [ -z "$LEDGER_DIR" ] && [ -n "$HISTORY_DIR" ]; then
     LEDGER_DIR="$HISTORY_DIR/ledger"
 fi
 PUSH_PORT="${PUSH_PORT:-22}"
+SITE_URL="${SITE_URL:-}"
+REPO_UPDATE="${REPO_UPDATE:-ff-only}"
+case "$REPO_UPDATE" in
+    ff-only|off) ;;
+    *) fail "REPO_UPDATE must be ff-only or off" ;;
+esac
 
 # The destination must carry its own user, because -F /dev/null means no
 # config file supplies one and ssh would otherwise fall back to the LOCAL
@@ -177,6 +219,76 @@ case "$PUSH_HOST" in
 esac
 [ -f "$SSH_KNOWN_HOSTS" ] || fail "SSH_KNOWN_HOSTS does not name a file; the host key must be pinned before anything is pushed"
 [ -f "$SSH_IDENTITY" ] || fail "SSH_IDENTITY does not name a file; ssh SILENTLY ignores a missing -i path and falls back to the default keys"
+
+# Everything this run writes is private from here on.
+umask 077
+
+# The history stores must have somewhere to live BEFORE any producer runs —
+# a store whose directory is missing would make every capture refuse — and
+# creating the directory here, under the umask above, keeps the stores as
+# private as the configuration that names them. Unlike the scratch, it is
+# never wiped: surviving runs is its entire purpose.
+if [ -n "$HISTORY_DIR" ]; then
+    mkdir -p "$HISTORY_DIR" || fail "the history directory cannot be created"
+fi
+
+# Checkout drift (issue #358). The job runs whatever commit REPO_DIR has
+# checked out, and three times it has run a tree behind what the origin
+# admits. A checkout on main tracking origin/main is moved by fast-forward
+# ONLY; a local edit the merge would touch, a diverged history, a detached
+# head or another branch is reported and left exactly as it is. A run that
+# moved the tree re-executes the (possibly new) script ONCE: the guard
+# variable skips this whole step in the re-executed run, so it cannot loop.
+# Runs before the scratch exists, because exec does not run the EXIT trap.
+REPO_FETCH="$REPO_DIR/scripts/usage-export/bounded-fetch.py"
+FETCH_INTERVAL_SECONDS=3600
+update_checkout() {
+    git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+    branch=$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    upstream=$(git -C "$REPO_DIR" rev-parse --abbrev-ref 'main@{upstream}' 2>/dev/null || true)
+    tracking=no
+    if [ "$branch" = main ] && [ "$upstream" = origin/main ]; then
+        tracking=yes
+    fi
+    # At most one bounded fetch an hour, and only where a fast-forward could
+    # follow it. A stamp AHEAD of the clock means this clock moved back — the
+    # fault issue #358 met on the cluster host — so it is due, not deferred.
+    if [ "$tracking" = yes ] && [ "$REPO_UPDATE" = ff-only ] && [ -n "$HISTORY_DIR" ] && [ -f "$REPO_FETCH" ]; then
+        stamp="$HISTORY_DIR/repo-update.stamp"
+        last=$(cat "$stamp" 2>/dev/null || true)
+        case "$last" in ''|*[!0-9]*) last=0 ;; esac
+        now=$(/bin/date +%s)
+        if [ $((now - last)) -ge "$FETCH_INTERVAL_SECONDS" ] || [ "$now" -lt "$last" ]; then
+            { echo "$now" > "$stamp"; } 2>/dev/null || true
+            GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true
+        fi
+    fi
+    git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' >/dev/null 2>&1 || return 0
+    behind=$(git -C "$REPO_DIR" rev-list --count HEAD..refs/remotes/origin/main 2>/dev/null || echo 0)
+    [ "$behind" -gt 0 ] || return 0
+    ahead=$(git -C "$REPO_DIR" rev-list --count refs/remotes/origin/main..HEAD 2>/dev/null || echo 0)
+    if [ "$REPO_UPDATE" = off ]; then
+        reason=off
+    elif [ -z "$branch" ]; then
+        reason=detached
+    elif [ "$tracking" = no ]; then
+        reason=not-main
+    elif [ "$ahead" -gt 0 ]; then
+        reason=diverged
+    else
+        old=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD)
+        if git -C "$REPO_DIR" merge --ff-only --quiet refs/remotes/origin/main </dev/null >/dev/null 2>&1; then
+            echo "usage-export: UPDATED exporter $old->$(git -C "$REPO_DIR" rev-parse --short=12 HEAD)"
+            export NARANJO_USAGE_EXPORT_REEXEC=1
+            exec /bin/sh "$0"
+        fi
+        reason=merge-refused
+    fi
+    echo "usage-export: WARN DRIFT behind=$behind ahead=$ahead action=none reason=$reason" >&2
+}
+if [ -z "${NARANJO_USAGE_EXPORT_REEXEC:-}" ]; then
+    update_checkout
+fi
 
 EXPORT_SCRIPT="$REPO_DIR/scripts/export_usage_series.py"
 [ -f "$EXPORT_SCRIPT" ] || fail "export script not found under REPO_DIR"
@@ -201,6 +313,20 @@ BASELINES_FILE="$REPO_DIR/scripts/usage-export/lifetime-baselines.json"
 # is not a checkout at all.
 exporter_revision=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 
+# Served verification (issue #358). The checksum below proves delivery to the
+# host and nothing about what the PAGE serves: the origin once served its
+# release snapshot for days while every run logged a verified push. So each
+# run first asks the site's public token-usage envelope whether it serves the
+# LAST push, at the start rather than after this push, so no run ever waits
+# for the origin's next re-read. One bounded request, OUTSIDE the producer
+# sandbox like the transport, and never a reason to fail or skip the push.
+SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"
+[ -f "$SERVED_CHECK" ] || fail "served-check helper not found under REPO_DIR"
+if [ -n "$SITE_URL" ]; then
+    python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state "${HISTORY_DIR:+$HISTORY_DIR/push-state.json}" --exporter "$exporter_revision" </dev/null \
+        || echo "usage-export: WARN served-check unavailable reason=helper-failed" >&2
+fi
+
 # The producer's capability boundary, and the reason it lives HERE rather than
 # inside the producer (2026-08-24 security review, round 3, finding 1). The
 # owner's ruling is that the step walking raw transcripts must be structurally
@@ -223,18 +349,8 @@ command -v sandbox-exec >/dev/null 2>&1 \
     || fail "the producer sandbox is unavailable; raw records are never walked unconfined"
 
 # Private scratch, wiped on every exit path.
-umask 077
 SCRATCH=$(mktemp -d) || fail "cannot create scratch directory"
 trap 'rm -rf "$SCRATCH"' EXIT INT TERM
-
-# The history stores must have somewhere to live BEFORE any producer runs —
-# a store whose directory is missing would make every capture refuse — and
-# creating the directory here, under the umask above, keeps the stores as
-# private as the configuration that names them. Unlike the scratch, it is
-# never wiped: surviving runs is its entire purpose.
-if [ -n "$HISTORY_DIR" ]; then
-    mkdir -p "$HISTORY_DIR" || fail "the history directory cannot be created"
-fi
 
 PLAIN="$SCRATCH/usage.json"
 SEALED="$SCRATCH/usage.enc"
@@ -417,6 +533,11 @@ fi
 #      KbdInteractiveAuthentication=no  than falling back to something the
 #      GSSAPIAuthentication=no    scheduler cannot answer anyway
 #      NumberOfPasswordPrompts=0
+#      LogLevel=ERROR           OpenSSH prints the receiving host's pre-auth
+#                               banner at INFO and above, which put ~9 lines
+#                               of it into the scheduler's log on every run
+#                               (issue #358). Errors still print, and the
+#                               runner reduces them to a closed reason.
 #
 #    The receiving account's authorized_keys entry is `restrict` + a forced
 #    command, so whatever is requested here, the host runs exactly its own
@@ -452,6 +573,7 @@ push_ssh() {
         -o KbdInteractiveAuthentication=no \
         -o GSSAPIAuthentication=no \
         -o NumberOfPasswordPrompts=0 \
+        -o LogLevel=ERROR \
         -o Port="$PUSH_PORT" \
         -i "$SSH_IDENTITY" \
         "$@"
@@ -520,6 +642,7 @@ check_resolved connecttimeout 15
 check_resolved connectionattempts 1
 check_resolved serveraliveinterval 15
 check_resolved serveralivecountmax 2
+check_resolved loglevel ERROR
 
 begin push
 remote_line=$(push_ssh "$PUSH_HOST" usage-export-receive < "$SEALED") || fail "push refused"
@@ -528,5 +651,14 @@ remote_sum=$(echo "$remote_line" | head -n 1 | cut -d' ' -f1)
 [ "$remote_sum" = "$local_sum" ] || fail "checksum mismatch after push"
 finish
 
-echo "usage-export: pushed $sealed_bytes sealed bytes; checksum verified"
+# What the NEXT run's served check compares against (issue #358): this
+# document's export instant, its oldest source capture — the instant the
+# origin serves as the envelope's generatedAt — the sealed checksum, and the
+# push time. Instants and a digest only, private, beside the stores.
+if [ -n "$HISTORY_DIR" ]; then
+    python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" --document "$PLAIN" --sha256 "$local_sum" </dev/null \
+        || echo "usage-export: WARN push-state unrecorded reason=helper-failed" >&2
+fi
+
+# One line per healthy run, printed only once the host's checksum matched.
 echo "usage-export: SUMMARY pushed=${sealed_bytes}B sha256=$(echo "$local_sum" | cut -c1-12) exporter=$exporter_revision elapsed=$(elapsed)s stages:$timings"

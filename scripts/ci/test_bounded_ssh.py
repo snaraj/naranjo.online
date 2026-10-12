@@ -3,10 +3,13 @@
 import importlib.util
 import pathlib
 import os
+import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -41,6 +44,47 @@ class BoundedSSHTest(unittest.TestCase):
                          (7, b"", "ssh-refused"))
         self.assertEqual(runner.bounded_command(["/nonexistent/synthetic-sentinel"]),
                          (1, b"", "runner-unavailable"))
+
+    def test_a_silent_ssh_failure_is_a_lost_connection(self):
+        # At LogLevel=ERROR (issue #358) ssh reports a connection closed,
+        # reset or timed out after the identification exchange at INFO only,
+        # so it exits with its own status and prints nothing.
+        self.assertEqual(self.run_child("import sys; sys.exit(255)"), (255, b"", "connection-lost"))
+        # Only ssh's own status: a forced command failing quietly is not one,
+        # and text outside the vocabulary stays the catch-all.
+        self.assertEqual(self.run_child("import sys; sys.exit(1)"), (1, b"", "ssh-refused"))
+        self.assertEqual(
+            self.run_child("import sys; sys.stderr.write('PRIVATE-SENTINEL'); sys.exit(255)"),
+            (255, b"", "ssh-refused"),
+        )
+
+    @unittest.skipIf(shutil.which("ssh") is None, "no ssh client on this host")
+    def test_a_real_peer_closing_after_identification_reads_the_same_at_both_levels(self):
+        # Measured, not assumed: a loopback peer that answers the
+        # identification line and hangs up. At INFO ssh says "Connection
+        # closed"; at ERROR it says nothing. Both must name the same reason.
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(2)
+        self.addCleanup(listener.close)
+
+        def serve():
+            for _ in range(2):
+                connection, _ = listener.accept()
+                with connection:
+                    connection.sendall(b"SSH-2.0-Fixture\r\n")
+                    connection.recv(256)
+
+        server = threading.Thread(target=serve, daemon=True)
+        server.start()
+        for level in ("INFO", "ERROR"):
+            with self.subTest(level=level):
+                argv = ["ssh", "-F", "/dev/null", "-o", "BatchMode=yes", "-o", "LogLevel=" + level,
+                        "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=/dev/null",
+                        "-p", str(listener.getsockname()[1]), "fixture@127.0.0.1", "true"]
+                with open(os.devnull, "rb") as devnull, mock.patch.object(runner.sys, "stdin", devnull):
+                    self.assertEqual(runner.bounded_command(argv, timeout=10), (255, b"", "connection-lost"))
+        server.join(timeout=5)
 
     def test_stalled_peer_retires_before_another_scheduler_round(self):
         started = time.monotonic()

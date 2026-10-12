@@ -29,23 +29,36 @@ The 2026-08-24 round-3 review added one more, and it is the reason
   EXECUTES the boundary — a spawn attempt and a connect attempt must fail
   inside it and succeed outside it, so the pin is behavior, not belief.
 
+Issue #358 (a page serving release data for days beside a log of verified
+pushes) added the classes at the end: the served check, log rotation, the
+checkout's fast-forward-only update against throwaway repositories, and the
+installer's read-only --check.
+
 The scripts are POSIX sh driven by /bin/sh, and every stub is hermetic: no
-network, no launchd, no real ssh, no real sandbox except in the one Darwin
-test that is explicitly about the real sandbox.
+network beyond a refused loopback port, no launchd, no real ssh, no real
+sandbox except in the one Darwin test that is explicitly about the real
+sandbox.
 """
 
 from __future__ import annotations
 
+import contextlib
 import datetime
+import importlib.util
+import io
 import json
 import os
 import pathlib
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
+import urllib.error
+from unittest import mock
 
 import sys
 
@@ -118,6 +131,9 @@ REQUIRED_SSH_OPTIONS = (
     "KbdInteractiveAuthentication=no",
     "GSSAPIAuthentication=no",
     "NumberOfPasswordPrompts=0",
+    # Issue #358: the receiving host's pre-auth banner is printed at INFO and
+    # above, and it filled the scheduler's error log on every run.
+    "LogLevel=ERROR",
 )
 
 # The remnants the runtime self-check refuses. Each is a way for a
@@ -246,8 +262,9 @@ fi
 """ + response
 
 
-class PushTransportHardeningTest(unittest.TestCase):
-    """M5: the ssh invocation, observed rather than assumed."""
+class PushFixture:
+    """The hermetic pipeline every push test drives: stub ssh, sandbox and
+    sealer on PATH, one transcript fixture, one private configuration."""
 
     def setUp(self):
         self.scratch = pathlib.Path(tempfile.mkdtemp())
@@ -304,6 +321,10 @@ class PushTransportHardeningTest(unittest.TestCase):
             "PUSH_HOST": "pusher@stub-push-host",
             "SOURCE_LABEL": "alpha",
             "TRANSCRIPTS": str(transcripts),
+            # REPO_DIR is the checkout running this suite: it is never fetched
+            # or fast-forwarded by a test. RepoUpdateTest drives the update
+            # against throwaway repositories instead.
+            "REPO_UPDATE": "off",
         }
         self.write_config()
         self.env = {
@@ -321,6 +342,10 @@ class PushTransportHardeningTest(unittest.TestCase):
             "".join("%s=%s\n" % pair for pair in values.items()), encoding="utf-8")
         self.config.chmod(0o600)
 
+
+class PushTransportHardeningTest(PushFixture, unittest.TestCase):
+    """M5: the ssh invocation, observed rather than assumed."""
+
     def test_push_response_budget_is_enforced_by_the_real_pipeline(self):
         # A matching first checksum used to hide arbitrary trailing output.
         # This also kills removing the runner from push_ssh: isolated runner
@@ -330,7 +355,7 @@ class PushTransportHardeningTest(unittest.TestCase):
         result = run_script(PUSH, env=self.env)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("reason=response-over-budget", result.stderr)
-        self.assertNotIn("checksum verified", result.stdout)
+        self.assertNotIn("SUMMARY", result.stdout)
 
     def test_failed_push_keeps_private_transport_diagnostics_out_of_scheduler_log(self):
         write_executable(self.stub_dir / "ssh", ssh_stub(
@@ -388,7 +413,7 @@ class PushTransportHardeningTest(unittest.TestCase):
         self.assertEqual(key, "beta")
         self.assertTrue(path.endswith("/beta.json"), path)
         self.assertNotIn(str(second), path)
-        self.assertIn("checksum verified", result.stdout)
+        self.assertIn("usage-export: SUMMARY pushed=", result.stdout)
 
     def test_the_activity_cache_reaches_the_producer_when_one_is_configured(self):
         # The cache is what carries the series back past the first tool's own
@@ -633,7 +658,11 @@ class PushTransportHardeningTest(unittest.TestCase):
             r"^usage-export: SUMMARY pushed=\d+B sha256=[0-9a-f]{12} exporter=%s elapsed=\d+s "
             r"stages: recapture-beta=\d+s export=\d+s seal=\d+s push=\d+s$" % re.escape(expected),
         )
-        self.assertEqual(lines[-2], "usage-export: pushed %s sealed bytes; checksum verified" % lines[-1].split("pushed=")[1].split("B")[0])
+        # The SUMMARY is the one success line (issue #358): the separate
+        # "pushed ... checksum verified" line said the same thing again, and
+        # the SUMMARY is printed only after the host's checksum matched.
+        self.assertEqual(lines[-2], "usage-export: START push")
+        self.assertEqual(len(lines), 5, lines)
         self.assertNotIn(str(self.scratch), result.stdout + result.stderr)
 
     def test_a_failure_names_its_stage_and_the_elapsed_time(self):
@@ -787,15 +816,28 @@ class PushTransportHardeningTest(unittest.TestCase):
         self.assertEqual(len(sandbox_lines), 2, sandbox_lines)
         for line in sandbox_lines:
             self.assertIn('-f "$PRODUCER_PROFILE"', line)
-        # The sole third interpreter is the fixed SSH lifecycle runner. It
-        # receives the already-sealed stream; it never walks raw records.
-        # Name its exact invocation before excluding it, so an arbitrary
-        # unconfined Python start cannot hide behind this transport exception.
+        # Every other interpreter is a fixed helper that never walks raw
+        # records: the SSH lifecycle runner (the already-sealed stream), the
+        # checkout's bounded fetch, and the served check, which reads one
+        # public envelope and records instants (issue #358). Each exact
+        # invocation, and the file it runs, is named before it is excluded,
+        # so an arbitrary unconfined Python start cannot hide behind them.
         starts = [line.strip() for line in lines if "python3" in line]
-        transport = 'python3 -I -B "$PUSH_WATCHDOG" ssh -F /dev/null \\'
-        self.assertEqual(starts.count(transport), 1, starts)
-        starts.remove(transport)
-        self.assertIn('PUSH_WATCHDOG="$REPO_DIR/scripts/usage-export/bounded-ssh.py"', source)
+        for helper, assignment in (
+            ('python3 -I -B "$PUSH_WATCHDOG" ssh -F /dev/null \\',
+             'PUSH_WATCHDOG="$REPO_DIR/scripts/usage-export/bounded-ssh.py"'),
+            ('GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true',
+             'REPO_FETCH="$REPO_DIR/scripts/usage-export/bounded-fetch.py"'),
+            ('python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state '
+             '"${HISTORY_DIR:+$HISTORY_DIR/push-state.json}" --exporter "$exporter_revision" </dev/null \\',
+             'SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"'),
+            ('python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" '
+             '--document "$PLAIN" --sha256 "$local_sum" </dev/null \\',
+             'SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"'),
+        ):
+            self.assertEqual(starts.count(helper), 1, starts)
+            starts.remove(helper)
+            self.assertIn(assignment, source)
         self.assertEqual(len(starts), 2, starts)
         for line in starts:
             self.assertIn("-I -B", line)
@@ -803,7 +845,7 @@ class PushTransportHardeningTest(unittest.TestCase):
     def test_the_push_carries_every_hardening_option(self):
         result = run_script(PUSH, env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("checksum verified", result.stdout)
+        self.assertIn("usage-export: SUMMARY pushed=", result.stdout)
         argv = self.args_file.read_text(encoding="utf-8").splitlines()
         options = [
             argv[index + 1]
@@ -909,6 +951,8 @@ class PushTransportHardeningTest(unittest.TestCase):
             ("connectionattempts 10", "connectionattempts"),
             ("serveraliveinterval 0", "serveraliveinterval"),
             ("serveralivecountmax 99", "serveralivecountmax"),
+            ("loglevel INFO", "loglevel"),
+            ("loglevel VERBOSE", "loglevel"),
         ):
             with self.subTest(line=line):
                 env = dict(self.env)
@@ -1044,7 +1088,7 @@ class PushTransportHardeningTest(unittest.TestCase):
         )
         result = run_script(PUSH, env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("pushed %d sealed bytes" % cap, result.stdout)
+        self.assertIn("usage-export: SUMMARY pushed=%dB " % cap, result.stdout)
 
 
 class ProducerSandboxTest(unittest.TestCase):
@@ -1184,6 +1228,22 @@ class InstallAnchorTest(unittest.TestCase):
             result.stdout,
             "the rendered agent must wake the single launchd job each minute",
         )
+
+    def test_the_agent_tells_the_push_where_its_logs_are(self):
+        # Issue #358: launchd never rotates its log files, so the push does,
+        # and the directory it rotates in is the installer's decision — the
+        # same one the agent's StandardOutPath and StandardErrorPath use.
+        result = run_script(INSTALL, ["--render-only"], env=self.env())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        logs = self.home / "Library" / "Logs" / "naranjo-online-usage-export"
+        self.assertIn(
+            "<key>EnvironmentVariables</key>\n    <dict>\n"
+            "        <key>NARANJO_USAGE_EXPORT_LOG_DIR</key>\n"
+            "        <string>%s</string>\n    </dict>" % logs,
+            result.stdout,
+        )
+        self.assertIn("<string>%s/usage-export.log</string>" % logs, result.stdout)
+        self.assertIn("<string>%s/usage-export.err.log</string>" % logs, result.stdout)
 
     def test_an_installer_run_from_a_worktree_still_anchors_the_primary_checkout(self):
         # The exact reviewed hazard: the installer itself lives in a
@@ -1485,6 +1545,7 @@ Host *
             ("globalknownhostsfile", "/dev/null"),
             ("passwordauthentication", "no"),
             ("gssapiauthentication", "no"),
+            ("loglevel", "ERROR"),
         ):
             with self.subTest(option=key):
                 self.assertEqual(resolved.get(key), [expected])
@@ -1516,6 +1577,863 @@ Host *
             "remotecommand", resolved,
             "the staged config contributed no unnamed parameter; the control proves nothing",
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #358: the installed job made reliable, observable, self-maintaining.
+# ---------------------------------------------------------------------------
+
+
+def load_helper(name, filename):
+    """A hyphen-named helper under scripts/usage-export, loaded as a module."""
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / filename)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+served = load_helper("served_check", "served-check.py")
+fetcher = load_helper("bounded_fetch", "bounded-fetch.py")
+
+MAX_LOG_BYTES = 5 * 1024 * 1024
+
+
+class LogRotationTest(PushFixture, unittest.TestCase):
+    """launchd appends to its two log files forever; the run rotates them."""
+
+    def launchd_run(self, logs):
+        """Run the push as the agent does: the log directory named in the
+        environment, and stdout/stderr opened, appending, on the files."""
+        env = {"HOME": os.environ.get("HOME", "/tmp")}
+        env.update(self.env)
+        env["NARANJO_USAGE_EXPORT_LOG_DIR"] = str(logs)
+        with open(logs / "usage-export.log", "ab") as out, open(logs / "usage-export.err.log", "ab") as err:
+            return subprocess.run(
+                ["/bin/sh", str(PUSH)], stdout=out, stderr=err, env=env, stdin=subprocess.DEVNULL
+            ).returncode
+
+    def logs(self, out, err):
+        logs = self.scratch / "logs"
+        logs.mkdir()
+        (logs / "usage-export.log").write_bytes(out)
+        (logs / "usage-export.err.log").write_bytes(err)
+        return logs
+
+    def test_a_log_past_the_bound_is_renamed_and_the_run_writes_a_fresh_one(self):
+        old_out = b"o" * (MAX_LOG_BYTES + 1)
+        old_err = b"e" * MAX_LOG_BYTES
+        logs = self.logs(old_out, old_err)
+        (logs / "usage-export.log.1").write_bytes(b"the generation before\n")
+        inode = (logs / "usage-export.log").stat().st_ino
+        self.assertEqual(self.launchd_run(logs), 0)
+        # Renamed, never truncated: the kept generation IS the old file (the
+        # inode a held descriptor points at), whole, in place of the previous
+        # one, and none of this run's lines landed in it — the run reopened
+        # its stream on the fresh path.
+        self.assertEqual((logs / "usage-export.log.1").stat().st_ino, inode)
+        self.assertEqual((logs / "usage-export.log.1").read_bytes(), old_out)
+        fresh = (logs / "usage-export.log").read_text(encoding="utf-8")
+        self.assertTrue(fresh.startswith("usage-export: START export\n"), fresh[:80])
+        self.assertIn("usage-export: SUMMARY pushed=", fresh)
+        # Exactly at the bound is not past it.
+        self.assertFalse((logs / "usage-export.err.log.1").exists())
+        self.assertTrue((logs / "usage-export.err.log").read_bytes().startswith(old_err))
+
+    def test_the_error_log_rotates_on_its_own(self):
+        old_err = b"e" * (MAX_LOG_BYTES + 1)
+        logs = self.logs(b"small\n", old_err)
+        self.assertEqual(self.launchd_run(logs), 0)
+        self.assertEqual((logs / "usage-export.err.log.1").read_bytes(), old_err)
+        self.assertIn("coverage alpha=", (logs / "usage-export.err.log").read_text(encoding="utf-8"))
+        self.assertFalse((logs / "usage-export.log.1").exists())
+        self.assertTrue((logs / "usage-export.log").read_text(encoding="utf-8").startswith("small\n"))
+
+    def test_a_run_without_the_agents_environment_rotates_nothing(self):
+        big = b"o" * (MAX_LOG_BYTES + 1)
+        logs = self.logs(big, big)
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(path.name for path in logs.iterdir()),
+                         ["usage-export.err.log", "usage-export.log"])
+        self.assertEqual((logs / "usage-export.log").read_bytes(), big)
+
+
+SITE = "https://panels.example"
+PANEL_URL = SITE + "/api/panels/token-usage"
+CHECK_NOW = datetime.datetime(2026, 10, 12, 12, 0, 0, tzinfo=datetime.timezone.utc)
+PUSHED_CAPTURE = "2026-10-12T11:58:00Z"
+RELEASE_INSTANT = "2026-09-11T17:20:26Z"
+
+
+def at(moment):
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class EnvelopeResponse:
+    """What the bounded read sees: a body, and the URL it came from."""
+
+    def __init__(self, document, url=PANEL_URL):
+        self.body = json.dumps(document).encode("utf-8")
+        self.url = url
+
+    def read(self, size):
+        return self.body[:size]
+
+    def geturl(self):
+        return self.url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *unused):
+        return False
+
+
+class EnvelopeOpener:
+    """An opener that answers once with what a test staged."""
+
+    def __init__(self, answer, delay=0):
+        self.answer = answer
+        self.delay = delay
+        self.requests = []
+        self.timeouts = []
+
+    def open(self, request, timeout=None):
+        self.requests.append(request)
+        self.timeouts.append(timeout)
+        if self.delay:
+            time.sleep(self.delay)
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+class ServedCheckTest(unittest.TestCase):
+    """SERVED or NOT-SERVED, from one public envelope and the recorded push."""
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.state = self.scratch / "push-state.json"
+        self.notified = []
+        self.write_state()
+
+    def write_state(self, **overrides):
+        state = {
+            "schema": "push-state/v1",
+            "generatedAt": "2026-10-12T11:58:30Z",
+            "oldestCapturedAt": PUSHED_CAPTURE,
+            "sha256": "a" * 64,
+            "pushedAt": "2026-10-12T11:59:00Z",
+            "notServedSince": None,
+            "notified": False,
+        }
+        state.update(overrides)
+        self.state.write_text(json.dumps(state), encoding="utf-8")
+
+    def read_state(self):
+        return json.loads(self.state.read_text(encoding="utf-8"))
+
+    def answer(self, status="ok", generated=PUSHED_CAPTURE, panel="token-usage", url=PANEL_URL):
+        return EnvelopeResponse(
+            {
+                "schema": "panel/v1",
+                "id": panel,
+                "kind": "token-usage/v1",
+                "title": "sentinel",
+                "generatedAt": generated,
+                "status": status,
+                "data": {},
+            },
+            url,
+        )
+
+    def check(self, answer, now=CHECK_NOW, site=SITE):
+        self.opener = EnvelopeOpener(answer)
+        return served.check(
+            str(self.state), site, "abc123def456", now, self.opener, lambda: self.notified.append(now)
+        )
+
+    def http_error(self, code):
+        error = urllib.error.HTTPError(PANEL_URL, code, "upstream prose", {}, io.BytesIO(b""))
+        self.addCleanup(error.close)
+        return error
+
+    def test_an_ok_envelope_at_least_as_new_as_the_push_is_served(self):
+        before = self.state.read_bytes()
+        for generated in (PUSHED_CAPTURE, "2026-10-12T11:59:30Z"):
+            with self.subTest(generated=generated):
+                out, err = self.check(self.answer(generated=generated))
+                self.assertEqual(out, ["usage-export: SERVED status=ok lag=60s"])
+                self.assertEqual(err, [])
+        # A quiet SERVED rewrites nothing.
+        self.assertEqual(self.state.read_bytes(), before)
+        # One request, the snapshot's own bounds, named as this job.
+        self.assertEqual(len(self.opener.requests), 1)
+        self.assertEqual(self.opener.requests[0].full_url, PANEL_URL)
+        self.assertEqual(self.opener.timeouts, [served.snapshot.REQUEST_TIMEOUT_SECONDS])
+        self.assertEqual(
+            self.opener.requests[0].get_header("User-agent"), "naranjo-online-usage-export/abc123def456"
+        )
+
+    def test_a_stale_envelope_is_not_served(self):
+        out, err = self.check(self.answer(status="stale"))
+        self.assertEqual(out, [])
+        self.assertEqual(
+            err,
+            [
+                "usage-export: WARN NOT-SERVED status=stale served_at=%s expected_at>=%s since_push=60s"
+                % (PUSHED_CAPTURE, PUSHED_CAPTURE)
+            ],
+        )
+        self.assertEqual(self.read_state()["notServedSince"], at(CHECK_NOW))
+        self.assertEqual(self.notified, [])
+
+    def test_an_ok_envelope_older_than_the_push_is_not_served(self):
+        # The incident: the origin served its release snapshot, `ok`, while
+        # every push was delivered and verified.
+        out, err = self.check(self.answer(generated=RELEASE_INSTANT))
+        self.assertEqual(out, [])
+        self.assertEqual(
+            err,
+            [
+                "usage-export: WARN NOT-SERVED status=ok served_at=%s expected_at>=%s since_push=60s"
+                % (RELEASE_INSTANT, PUSHED_CAPTURE)
+            ],
+        )
+        # One second older than the recorded capture is already not served.
+        out, err = self.check(self.answer(generated="2026-10-12T11:57:59Z"))
+        self.assertEqual(out, [])
+        self.assertEqual(len(err), 1)
+
+    def test_one_notification_after_fifteen_minutes_and_never_again(self):
+        stale = lambda: self.answer(generated=RELEASE_INSTANT)  # noqa: E731
+        minute = datetime.timedelta(minutes=1)
+        self.check(stale())
+        self.check(stale(), CHECK_NOW + 15 * minute)
+        self.assertEqual(self.notified, [], "fifteen minutes is not longer than fifteen minutes")
+        later = CHECK_NOW + 15 * minute + datetime.timedelta(seconds=1)
+        self.check(stale(), later)
+        self.assertEqual(self.notified, [later])
+        self.assertTrue(self.read_state()["notified"])
+        for step in (16, 30, 600):
+            self.check(stale(), CHECK_NOW + step * minute)
+        self.assertEqual(self.notified, [later], "a notification repeated without a SERVED between")
+        self.assertEqual(self.read_state()["notServedSince"], at(CHECK_NOW))
+
+    def test_a_push_does_not_restart_the_not_served_clock(self):
+        # A push lands every minute; if recording it reset the clock, fifteen
+        # minutes of NOT-SERVED could never accumulate and nothing would ever
+        # be raised — the incident exactly.
+        self.write_state(notServedSince=at(CHECK_NOW), notified=True)
+        document = self.scratch / "usage.json"
+        document.write_text(
+            json.dumps(
+                {
+                    "schema": "usage-series/v1",
+                    "generatedAt": "2026-10-12T12:05:00Z",
+                    "sources": {
+                        "alpha": {"capturedAt": "2026-10-12T12:05:00Z"},
+                        "beta": {"capturedAt": "2026-10-12T12:03:10Z"},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        pushed = CHECK_NOW + datetime.timedelta(minutes=6)
+        served.record(str(self.state), str(document), "b" * 64, pushed)
+        state = self.read_state()
+        self.assertEqual(
+            state,
+            {
+                "schema": "push-state/v1",
+                "generatedAt": "2026-10-12T12:05:00Z",
+                "oldestCapturedAt": "2026-10-12T12:03:10Z",
+                "sha256": "b" * 64,
+                "pushedAt": at(pushed),
+                "notServedSince": at(CHECK_NOW),
+                "notified": True,
+            },
+        )
+        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o600)
+
+    def test_served_again_logs_recovered_and_rearms_the_notification(self):
+        self.write_state(notServedSince=at(CHECK_NOW - datetime.timedelta(minutes=20)), notified=True)
+        out, err = self.check(self.answer())
+        self.assertEqual(
+            out,
+            ["usage-export: SERVED status=ok lag=60s", "usage-export: RECOVERED served after 1200s"],
+        )
+        self.assertEqual(err, [])
+        state = self.read_state()
+        self.assertIsNone(state["notServedSince"])
+        self.assertFalse(state["notified"])
+        # A later outage is a new transition, and it is announced again.
+        self.check(self.answer(status="stale"), CHECK_NOW + datetime.timedelta(minutes=1))
+        self.check(self.answer(status="stale"), CHECK_NOW + datetime.timedelta(minutes=17))
+        self.assertEqual(len(self.notified), 1)
+        # And a SERVED with nothing outstanding recovers nothing.
+        self.write_state()
+        out, _ = self.check(self.answer())
+        self.assertEqual(out, ["usage-export: SERVED status=ok lag=60s"])
+
+    def test_a_failed_fetch_is_one_warning_and_one_attempt(self):
+        before = self.state.read_bytes()
+        for answer, reason in (
+            (urllib.error.URLError(ConnectionRefusedError("private-looking detail")), "unreachable"),
+            (urllib.error.URLError(TimeoutError("private-looking detail")), "timeout"),
+            (self.http_error(503), "http-503"),
+            (self.http_error(530), "http-530"),
+            (self.http_error(404), "http-404"),
+        ):
+            with self.subTest(reason=reason):
+                out, err = self.check(answer)
+                self.assertEqual(out, [])
+                self.assertEqual(err, ["usage-export: WARN served-check unavailable reason=%s" % reason])
+                # No retry: the check runs at the start of a run every minute.
+                self.assertEqual(len(self.opener.requests), 1)
+        self.assertEqual(self.state.read_bytes(), before)
+
+    def test_a_redirect_another_host_or_a_bad_site_is_refused(self):
+        for answer, site, reason, requests in (
+            (self.http_error(302), SITE, "redirected", 1),
+            (self.answer(url="https://elsewhere.example/api/panels/token-usage"), SITE, "host-mismatch", 1),
+            (self.answer(), "http://panels.example", "bad-site", 0),
+            (self.answer(), "https://panels.example/somewhere", "bad-site", 0),
+        ):
+            with self.subTest(reason=reason, site=site):
+                out, err = self.check(answer, site=site)
+                self.assertEqual((out, err), ([], ["usage-export: WARN served-check unavailable reason=%s" % reason]))
+                self.assertEqual(len(self.opener.requests), requests)
+
+    def test_nothing_recorded_is_reported_and_nothing_is_fetched(self):
+        self.state.unlink()
+        out, err = self.check(self.answer())
+        self.assertEqual(err, ["usage-export: WARN served-check unavailable reason=no-push-state"])
+        self.assertEqual(self.opener.requests, [])
+        out, err = served.check("", SITE, "x", CHECK_NOW, self.opener, self.notified.append)
+        self.assertEqual(err, ["usage-export: WARN served-check unavailable reason=no-push-state"])
+        self.assertEqual(self.opener.requests, [])
+
+    def test_a_malformed_state_or_envelope_is_reported_not_judged(self):
+        self.state.write_text("{not json", encoding="utf-8")
+        _, err = self.check(self.answer())
+        self.assertEqual(err, ["usage-export: WARN served-check unavailable reason=state-unreadable"])
+        self.write_state(oldestCapturedAt="yesterday")
+        _, err = self.check(self.answer())
+        self.assertEqual(err, ["usage-export: WARN served-check unavailable reason=state-unreadable"])
+        self.write_state()
+        for answer in (
+            self.answer(panel="vcs-activity"),
+            self.answer(generated="not an instant"),
+            EnvelopeResponse({"schema": "panel/v2"}),
+            EnvelopeResponse([1, 2]),
+        ):
+            with self.subTest(body=answer.body[:40]):
+                out, err = self.check(answer)
+                self.assertEqual((out, err), ([], ["usage-export: WARN served-check unavailable reason=malformed-envelope"]))
+
+    def test_the_status_word_never_carries_upstream_text(self):
+        _, err = self.check(self.answer(status="stale\nusage-export: SUMMARY pushed=1B"))
+        self.assertEqual(len(err), 1)
+        self.assertIn(" status=unrecognised ", err[0])
+        self.assertNotIn("SUMMARY", err[0])
+
+    def test_a_clock_behind_the_recorded_outage_restarts_it_rather_than_notifying(self):
+        self.write_state(notServedSince=at(CHECK_NOW + datetime.timedelta(days=30)))
+        self.check(self.answer(status="stale"))
+        self.assertEqual(self.read_state()["notServedSince"], at(CHECK_NOW))
+        self.assertEqual(self.notified, [])
+
+    def test_main_never_fails_and_bounds_the_whole_check(self):
+        # A dripping answer is bounded only per socket read by the fetch's own
+        # timeout; the check holds one whole-run deadline over it.
+        slow = EnvelopeOpener(self.answer(), delay=5)
+        started = time.monotonic()
+        with (
+            mock.patch.object(served, "DEADLINE_SECONDS", 1),
+            mock.patch.object(served.snapshot, "build_opener", lambda: slow),
+            contextlib.redirect_stdout(io.StringIO()) as out,
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
+            status = served.main(
+                ["check", "--state", str(self.state), "--site", SITE, "--exporter", "abc1234"]
+            )
+        self.assertEqual(status, 0)
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(err.getvalue(), "usage-export: WARN served-check unavailable reason=deadline-exceeded\n")
+        # record's faults are warnings with exit status 0 as well.
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            status = served.main(
+                ["record", "--state", str(self.state), "--document", str(self.scratch / "absent"),
+                 "--sha256", "c" * 64]
+            )
+        self.assertEqual(status, 0)
+        self.assertEqual(err.getvalue(), "usage-export: WARN push-state unrecorded reason=document-unreadable\n")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            served.main(["record", "--state", str(self.state), "--document", str(self.state),
+                         "--sha256", "NOT-A-DIGEST"])
+        self.assertIn("reason=checksum-malformed", err.getvalue())
+
+    def test_the_notification_is_fixed_text_and_an_absent_facility_is_silent(self):
+        empty = self.scratch / "empty-path"
+        empty.mkdir()
+        with mock.patch.dict(os.environ, {"PATH": str(empty)}):
+            self.assertIsNone(served.notify_desktop())
+        stubs = self.scratch / "stubs"
+        stubs.mkdir()
+        calls = self.scratch / "osascript-calls"
+        write_executable(
+            stubs / "osascript",
+            "#!/bin/sh\nfor arg in \"$@\"; do printf '%%s\\n' \"$arg\"; done > %s\n" % calls,
+        )
+        with mock.patch.dict(os.environ, {"PATH": str(stubs)}):
+            served.notify_desktop()
+        self.assertEqual(calls.read_text(encoding="utf-8"), "-e\n%s\n" % served.NOTIFICATION)
+        # Payload-free: no instant, no digest, no status from the wire.
+        self.assertNotRegex(served.NOTIFICATION, r"\d{4}-\d{2}-\d{2}|[0-9a-f]{12}")
+
+
+class ServedCheckPipelineTest(PushFixture, unittest.TestCase):
+    """The push records what it delivered, and the next run checks it."""
+
+    def test_a_push_records_its_state_and_the_next_run_checks_without_failing(self):
+        history = self.scratch / "history"
+        # Loopback port 1 refuses at once: the check fails exactly as an
+        # unreachable site does, with no host beyond this machine involved.
+        self.write_config(HISTORY_DIR=str(history), SITE_URL="https://127.0.0.1:1")
+        first = run_script(PUSH, env=self.env)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn("usage-export: WARN served-check unavailable reason=no-push-state", first.stderr)
+        state_file = history / "push-state.json"
+        self.assertEqual(stat.S_IMODE(state_file.stat().st_mode), 0o600)
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        summary = first.stdout.splitlines()[-1]
+        self.assertTrue(summary.startswith("usage-export: SUMMARY pushed="), summary)
+        self.assertEqual(state["sha256"][:12], summary.split("sha256=")[1].split()[0])
+        self.assertLessEqual(state["oldestCapturedAt"], state["generatedAt"])
+        self.assertEqual((state["notServedSince"], state["notified"]), (None, False))
+        second = run_script(PUSH, env=self.env)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("usage-export: WARN served-check unavailable reason=unreachable", second.stderr)
+        # The check happens first, and the push still happens after it.
+        self.assertTrue(second.stdout.splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
+
+    def test_no_configured_site_runs_no_check_but_still_records(self):
+        history = self.scratch / "history"
+        self.write_config(HISTORY_DIR=str(history))
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("served-check", result.stdout + result.stderr)
+        self.assertNotIn("SERVED", result.stdout + result.stderr)
+        self.assertTrue((history / "push-state.json").is_file())
+
+    def test_no_history_directory_records_nothing(self):
+        self.write_config(SITE_URL="https://127.0.0.1:1")
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("reason=no-push-state", result.stderr)
+
+    def test_a_broken_helper_is_a_warning_and_never_the_push(self):
+        # The helper never exits non-zero by design; the push script does not
+        # rely on that. A checkout whose helper cannot even start still pushes.
+        checkout = self.scratch / "checkout"
+        shutil.copytree(
+            REPO_ROOT / "scripts", checkout / "scripts",
+            ignore=shutil.ignore_patterns("ci", "__pycache__"),
+        )
+        shutil.copytree(REPO_ROOT / "internal/panels/config", checkout / "internal/panels/config")
+        (checkout / "scripts/usage-export/served-check.py").write_text(
+            "raise SystemExit(3)\n", encoding="utf-8"
+        )
+        history = self.scratch / "history"
+        self.write_config(REPO_DIR=str(checkout), HISTORY_DIR=str(history), SITE_URL="https://127.0.0.1:1")
+        result = run_script(PUSH, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage-export: WARN served-check unavailable reason=helper-failed", result.stderr)
+        self.assertIn("usage-export: WARN push-state unrecorded reason=helper-failed", result.stderr)
+        self.assertTrue(result.stdout.splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
+
+
+# A pinned, private git for the throwaway repositories: no user or system
+# configuration (signing, hooks, aliases) reaches them.
+FIXTURE_GIT_ENV = {
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_AUTHOR_NAME": "Fixture",
+    "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+    "GIT_COMMITTER_NAME": "Fixture",
+    "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+}
+
+
+@unittest.skipIf(shutil.which("git") is None, "no git on this host")
+class RepoUpdateTest(PushFixture, unittest.TestCase):
+    """Checkout drift, detected and repaired by fast-forward only."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.update(FIXTURE_GIT_ENV)
+        self.origin = self.scratch / "origin.git"
+        seed = self.scratch / "seed"
+        self.checkout = self.scratch / "checkout"
+        self.git(self.scratch, "init", "--quiet", "--bare", "--initial-branch=main", str(self.origin))
+        # A checkout that can run the whole pipeline: the scripts and the
+        # vocabulary files the producers read.
+        shutil.copytree(
+            REPO_ROOT / "scripts", seed / "scripts",
+            ignore=shutil.ignore_patterns("ci", "__pycache__"),
+        )
+        shutil.copytree(REPO_ROOT / "internal/panels/config", seed / "internal/panels/config")
+        (seed / "NOTE").write_text("one\n", encoding="utf-8")
+        self.git(seed, "init", "--quiet", "--initial-branch=main")
+        self.git(seed, "add", "-A")
+        self.git(seed, "commit", "--quiet", "-m", "first")
+        self.git(seed, "remote", "add", "origin", str(self.origin))
+        self.git(seed, "push", "--quiet", "origin", "main")
+        self.git(self.scratch, "clone", "--quiet", str(self.origin), str(self.checkout))
+        self.first = self.head()
+        # The commit the checkout falls behind: a changed NOTE, and a push
+        # script that announces itself, so the re-executed run is visible.
+        script = seed / "scripts/usage-export/push-usage-series.sh"
+        script.write_text(
+            script.read_text(encoding="utf-8").replace(
+                "set -eu\n", "set -eu\necho 'usage-export: FIXTURE second-generation'\n", 1
+            ),
+            encoding="utf-8",
+        )
+        (seed / "NOTE").write_text("two\n", encoding="utf-8")
+        self.git(seed, "commit", "--quiet", "-am", "second")
+        self.git(seed, "push", "--quiet", "origin", "main")
+        self.second = self.git(seed, "rev-parse", "HEAD")
+        self.history = self.scratch / "history"
+        self.write_config(REPO_DIR=str(self.checkout), HISTORY_DIR=str(self.history), REPO_UPDATE=None)
+
+    def write_config(self, **overrides):
+        values = dict(self.config_lines)
+        values.update(overrides)
+        self.config.write_text(
+            "".join("%s=%s\n" % pair for pair in values.items() if pair[1] is not None),
+            encoding="utf-8",
+        )
+        self.config.chmod(0o600)
+
+    def git(self, cwd, *args):
+        result = subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", *args],
+            cwd=cwd, capture_output=True, text=True,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **FIXTURE_GIT_ENV},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def head(self):
+        return self.git(self.checkout, "rev-parse", "HEAD")
+
+    def push(self, **extra):
+        env = dict(self.env)
+        env.update(extra)
+        return run_script(self.checkout / "scripts/usage-export/push-usage-series.sh", env=env)
+
+    def summary_revision(self, result):
+        return result.stdout.splitlines()[-1].split("exporter=")[1].split()[0]
+
+    def test_a_checkout_strictly_behind_is_fast_forwarded_and_re_executed_once(self):
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.head(), self.second)
+        self.assertEqual(
+            [line for line in result.stdout.splitlines() if "UPDATED" in line],
+            ["usage-export: UPDATED exporter %s->%s" % (self.first[:12], self.second[:12])],
+        )
+        # The NEW script ran, exactly once, and the run it finished reports
+        # the new tree.
+        self.assertEqual(result.stdout.count("usage-export: FIXTURE second-generation"), 1)
+        self.assertEqual(self.summary_revision(result), self.second[:12])
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
+        self.assertRegex((self.history / "repo-update.stamp").read_text(encoding="utf-8"), r"^\d+\n$")
+        self.assertNotIn("DRIFT", result.stderr)
+
+    def test_the_re_executed_run_never_updates_again(self):
+        # The guard the re-exec sets: with it present the whole step is
+        # skipped, so a second fast-forward — and so a loop — is impossible.
+        result = self.push(NARANJO_USAGE_EXPORT_REEXEC="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.head(), self.first)
+        self.assertNotIn("UPDATED", result.stdout)
+        self.assertNotIn("DRIFT", result.stderr)
+        self.assertFalse((self.history / "repo-update.stamp").exists())
+
+    def test_a_local_edit_the_merge_would_touch_is_left_exactly_as_it_is(self):
+        (self.checkout / "NOTE").write_text("a local edit\n", encoding="utf-8")
+        (self.checkout / "untracked-notes").write_text("mine\n", encoding="utf-8")
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=merge-refused", result.stderr
+        )
+        self.assertEqual(self.head(), self.first)
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "a local edit\n")
+        self.assertEqual((self.checkout / "untracked-notes").read_text(encoding="utf-8"), "mine\n")
+        self.assertEqual(self.git(self.checkout, "stash", "list"), "")
+        self.assertNotIn("UPDATED", result.stdout)
+        # The run went on, on the tree it had.
+        self.assertEqual(self.summary_revision(result), self.first[:12])
+
+    def test_off_reports_drift_and_neither_fetches_nor_moves(self):
+        self.write_config(REPO_DIR=str(self.checkout), HISTORY_DIR=str(self.history), REPO_UPDATE="off")
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # No fetch under off: origin/main is still the tree it was cloned at.
+        self.assertFalse((self.history / "repo-update.stamp").exists())
+        self.assertNotIn("DRIFT", result.stderr)
+        self.git(self.checkout, "fetch", "--quiet", "origin")
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=off", result.stderr)
+        self.assertEqual(self.head(), self.first)
+        self.assertNotIn("UPDATED", result.stdout)
+
+    def test_an_unknown_update_mode_refuses_the_run(self):
+        for value in ("rebase", "on", "ff_only", "FF-ONLY"):
+            with self.subTest(value=value):
+                self.write_config(REPO_DIR=str(self.checkout), HISTORY_DIR=str(self.history), REPO_UPDATE=value)
+                self.args_file.unlink(missing_ok=True)
+                result = self.push()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("REPO_UPDATE must be ff-only or off", result.stderr)
+                self.assertRegex(result.stderr, r"usage-export: FAILED stage=configure elapsed=\d+s")
+                self.assertFalse(self.args_file.exists())
+                self.assertEqual(self.head(), self.first)
+
+    def test_a_diverged_detached_or_other_branch_checkout_is_reported_and_kept(self):
+        self.git(self.checkout, "fetch", "--quiet", "origin")
+        (self.checkout / "LOCAL").write_text("local\n", encoding="utf-8")
+        self.git(self.checkout, "add", "LOCAL")
+        self.git(self.checkout, "commit", "--quiet", "-m", "local")
+        local = self.head()
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=1 action=none reason=diverged", result.stderr)
+        self.assertEqual(self.head(), local)
+        self.git(self.checkout, "checkout", "--quiet", "--detach", self.first)
+        result = self.push()
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=detached", result.stderr)
+        self.assertEqual(self.head(), self.first)
+        self.git(self.checkout, "checkout", "--quiet", "-b", "other")
+        result = self.push()
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=not-main", result.stderr)
+        self.assertEqual(self.head(), self.first)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "--abbrev-ref", "HEAD"), "other")
+
+    def test_the_fetch_runs_at_most_hourly_and_a_stamp_ahead_of_the_clock_is_due(self):
+        self.history.mkdir()
+        stamp = self.history / "repo-update.stamp"
+        recent = "%d\n" % (int(time.time()) - 60)
+        stamp.write_text(recent, encoding="utf-8")
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Fetched a minute ago: no fetch now, so nothing is known to be behind.
+        self.assertEqual(self.head(), self.first)
+        self.assertNotIn("UPDATED", result.stdout)
+        self.assertEqual(stamp.read_text(encoding="utf-8"), recent)
+        # A stamp a month AHEAD of the clock is a clock that moved back.
+        stamp.write_text("%d\n" % (int(time.time()) + 30 * 86400), encoding="utf-8")
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.head(), self.second)
+        self.assertIn("UPDATED", result.stdout)
+
+    def test_a_failed_fetch_is_a_warning_and_the_run_goes_on(self):
+        shutil.rmtree(self.origin)
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stderr, r"usage-export: WARN repo-update fetch-failed reason=[a-z-]+\n")
+        self.assertEqual(self.head(), self.first)
+        self.assertNotIn(str(self.origin), result.stdout + result.stderr)
+        self.assertTrue(result.stdout.splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
+
+
+class BoundedFetchTest(unittest.TestCase):
+    """The hourly fetch is bounded the way the push's ssh is."""
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            self.addCleanup(signal.signal, signum, signal.getsignal(signum))
+        self.calls = self.scratch / "git-calls"
+
+    def fake_git(self, body):
+        stubs = self.scratch / "stubs"
+        stubs.mkdir(exist_ok=True)
+        write_executable(
+            stubs / "git",
+            "#!/bin/sh\nfor arg in \"$@\"; do printf '%%s\\n' \"$arg\"; done > %s\n%s" % (self.calls, body),
+        )
+        return mock.patch.dict(os.environ, {"PATH": str(stubs)})
+
+    def run_main(self, argv):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            code = fetcher.main(argv)
+        return code, err.getvalue()
+
+    def test_exactly_one_command_with_a_fixed_deadline(self):
+        self.assertEqual(fetcher.DEADLINE_SECONDS, 30)
+        with self.fake_git("exit 0\n"):
+            self.assertEqual(self.run_main(["/some/checkout"]), (0, ""))
+        self.assertEqual(
+            self.calls.read_text(encoding="utf-8").splitlines(),
+            ["-C", "/some/checkout", "fetch", "--quiet", "origin", "main"],
+        )
+        for argv in ([], ["a", "b"]):
+            self.assertEqual(
+                self.run_main(argv),
+                (1, "usage-export: WARN repo-update fetch-failed reason=invalid-invocation\n"),
+            )
+
+    def test_a_stalled_fetch_retires_at_the_deadline(self):
+        started = time.monotonic()
+        with self.fake_git("exec /bin/sleep 30\n"), mock.patch.object(fetcher, "DEADLINE_SECONDS", 0.3):
+            code, err = self.run_main([str(self.scratch)])
+        self.assertEqual(code, 124)
+        self.assertEqual(err, "usage-export: WARN repo-update fetch-failed reason=deadline-exceeded\n")
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_a_refused_fetch_names_a_closed_reason_and_no_text(self):
+        with self.fake_git("echo 'fatal: PRIVATE-REMOTE-SENTINEL went wrong' >&2\nexit 128\n"):
+            code, err = self.run_main([str(self.scratch)])
+        self.assertEqual(code, 128)
+        self.assertEqual(err, "usage-export: WARN repo-update fetch-failed reason=fetch-refused\n")
+        with self.fake_git("echo 'fatal: Could not resolve host: PRIVATE' >&2\nexit 128\n"):
+            code, err = self.run_main([str(self.scratch)])
+        self.assertEqual(err, "usage-export: WARN repo-update fetch-failed reason=name-resolution\n")
+
+
+LAUNCHCTL_STUB = """#!/bin/sh
+printf '%s\\n' "$*" >> "$LAUNCHCTL_CALLS"
+[ "$1" = print ] || exit 64
+label=${2##*/}
+[ -f "$LAUNCHCTL_STATE/$label" ] || exit 113
+printf '%s = {\\n\\tstate = not running\\n\\tlast exit code = %s\\n}\\n' "$2" "$(cat "$LAUNCHCTL_STATE/$label")"
+"""
+
+EXPORT_LABEL = "com.naranjo-online.usage-export"
+SNAPSHOT_LABEL = "com.naranjo-online.ledger-snapshot"
+
+
+class InstallCheckTest(unittest.TestCase):
+    """--check reports drift and failure, and changes nothing."""
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.home = self.scratch / "home"
+        self.agents = self.home / "Library" / "LaunchAgents"
+        self.agents.mkdir(parents=True)
+        self.checkout = self.scratch / "checkout"
+        stubs = self.scratch / "stubs"
+        stubs.mkdir()
+        write_executable(stubs / "launchctl", LAUNCHCTL_STUB)
+        self.state = self.scratch / "launchd"
+        self.state.mkdir()
+        self.calls = self.scratch / "launchctl-calls"
+        self.env = {
+            "HOME": str(self.home),
+            "PATH": "%s:%s" % (stubs, os.environ.get("PATH", "/usr/bin:/bin")),
+            "NARANJO_USAGE_EXPORT_CONFIG": str(self.scratch / "config"),
+            "LAUNCHCTL_CALLS": str(self.calls),
+            "LAUNCHCTL_STATE": str(self.state),
+        }
+        self.configure(HISTORY_DIR=str(self.scratch / "history"))
+        self.install(EXPORT_LABEL, self.checkout / "scripts/usage-export/push-usage-series.sh", "0")
+        self.install(SNAPSHOT_LABEL, self.checkout / "scripts/ledger_snapshot.py", "0")
+
+    def configure(self, **values):
+        config = self.scratch / "config"
+        values = dict({"REPO_DIR": str(self.checkout)}, **values)
+        config.write_text("".join("%s=%s\n" % pair for pair in values.items()), encoding="utf-8")
+        config.chmod(0o600)
+
+    def install(self, label, program, last_exit):
+        (self.agents / ("%s.plist" % label)).write_text(
+            "<plist><dict><key>Label</key><string>%s</string><key>ProgramArguments</key>"
+            "<array><string>/usr/bin/env</string><string>%s</string></array></dict></plist>\n"
+            % (label, program),
+            encoding="utf-8",
+        )
+        if last_exit is not None:
+            (self.state / label).write_text(last_exit, encoding="utf-8")
+
+    def check(self):
+        before = {path.name: path.read_bytes() for path in self.agents.iterdir()}
+        result = run_script(INSTALL, ["--check"], env=self.env)
+        # Nothing changed: the same agents byte for byte, no log directory,
+        # and launchd was only ever asked to print.
+        self.assertEqual({path.name: path.read_bytes() for path in self.agents.iterdir()}, before)
+        self.assertFalse((self.home / "Library" / "Logs").exists())
+        if self.calls.exists():
+            for call in self.calls.read_text(encoding="utf-8").splitlines():
+                self.assertTrue(call.startswith("print gui/"), call)
+        self.assertNotIn(str(self.scratch), result.stdout + result.stderr)
+        return result
+
+    def test_a_current_install_passes(self):
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                "check %s installed=yes repo=match last-exit=0" % EXPORT_LABEL,
+                "check %s installed=yes repo=match last-exit=0" % SNAPSHOT_LABEL,
+            ],
+        )
+
+    def test_an_agent_running_another_checkout_fails(self):
+        self.install(EXPORT_LABEL, self.scratch / "elsewhere/scripts/usage-export/push-usage-series.sh", "0")
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("check %s installed=yes repo=MISMATCH last-exit=0" % EXPORT_LABEL, result.stdout)
+
+    def test_a_failed_last_run_fails(self):
+        for code, shown in (("1", "1"), ("78: EX_CONFIG", "78")):
+            with self.subTest(code=code):
+                self.install(SNAPSHOT_LABEL, self.checkout / "scripts/ledger_snapshot.py", code)
+                result = self.check()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("check %s installed=yes repo=match last-exit=%s" % (SNAPSHOT_LABEL, shown), result.stdout)
+
+    def test_a_job_that_never_exited_passes_and_one_launchd_lacks_fails(self):
+        self.install(EXPORT_LABEL, self.checkout / "scripts/usage-export/push-usage-series.sh", "(never exited)")
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("last-exit=never", result.stdout)
+        (self.state / EXPORT_LABEL).unlink()
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("check %s installed=yes repo=match last-exit=not-loaded" % EXPORT_LABEL, result.stdout)
+
+    def test_the_snapshot_agent_is_required_only_with_a_record(self):
+        (self.agents / ("%s.plist" % SNAPSHOT_LABEL)).unlink()
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("check %s installed=no" % SNAPSHOT_LABEL, result.stdout)
+        self.configure()
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("check %s installed=no" % SNAPSHOT_LABEL, result.stdout)
+        (self.agents / ("%s.plist" % EXPORT_LABEL)).unlink()
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+
+    def test_a_configuration_without_a_checkout_cannot_pass(self):
+        config = self.scratch / "config"
+        config.write_text("HISTORY_DIR=%s\n" % (self.scratch / "history"), encoding="utf-8")
+        config.chmod(0o600)
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("repo=unknown", result.stdout)
 
 
 if __name__ == "__main__":

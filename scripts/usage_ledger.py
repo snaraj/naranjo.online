@@ -1209,6 +1209,10 @@ def prune_raw(ledger_dir, today):
 
 SQLITE_NAME = "ledger.sqlite"
 
+# Where the derived views land inside the ledger directory unless told
+# otherwise: the export command and the nightly snapshot both write here.
+EXPORTS_DIR = "exports"
+
 # The row columns every stream table carries, in the record's own field order.
 TABLE_COLUMNS = (
     "day",
@@ -1251,8 +1255,9 @@ def export_ledger(ledger_dir, out_dir):
     temporary = out_dir / (SQLITE_NAME + ".tmp")
     if temporary.exists():
         temporary.unlink()
-    connection = sqlite3.connect(temporary)
+    connection = None
     try:
+        connection = sqlite3.connect(temporary)
         written = {}
         for stream in sorted(STREAM_KINDS):
             columns = TABLE_COLUMNS + (
@@ -1268,8 +1273,12 @@ def export_ledger(ledger_dir, out_dir):
                 out_dir / ("%s.csv" % stream), columns, [row for _, row in current]
             )
         connection.commit()
+    except sqlite3.Error:
+        # The record's own refusal, never a traceback out of a scheduled job.
+        raise LedgerError("the ledger database could not be built")
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
     os.chmod(temporary, FILE_MODE)
     os.replace(temporary, database)
     return written
@@ -1329,7 +1338,7 @@ def main(argv=None):
     out_dir = (
         pathlib.Path(arguments.out).expanduser()
         if arguments.out is not None
-        else ledger_dir / "exports"
+        else ledger_dir / EXPORTS_DIR
     )
     try:
         written = export_ledger(ledger_dir, out_dir)
