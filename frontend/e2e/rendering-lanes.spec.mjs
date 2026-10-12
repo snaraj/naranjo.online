@@ -1052,6 +1052,50 @@ test('J bookends the row from one picture, facing inwards at both ends, typing w
       motion === 'reduce' ? /j-typing-still-[^/]*\.webp/ : /j-typing-(?!still-)[^/]*\.webp/
     );
 
+    /* AND THE ENGINE CAN DECODE IT (review of #359, F4). Every check above
+       reads a name, a header, a request or a computed position, and all of
+       them stay green on a file whose pixels are gone: the review zeroed each
+       WebP's image payload, kept every header, chunk and byte count, and this
+       whole test passed. So the picture the seats resolved is decoded here
+       and held to its intrinsic size — the sheet's 12 x 10 cells of 176 x 128,
+       the still's one cell at 2x — and the same bytes with their image chunk
+       zeroed are decoded too and must be REFUSED, which is what proves this
+       decode tells a picture from a corpse in this engine rather than
+       passing whatever it is handed. createImageBitmap reads a Blob directly,
+       so the page's image policy is not what decides it. */
+    const decoded = await page.evaluate(async (css) => {
+      const url = /url\("?([^")]+)"?\)/.exec(css)[1];
+      const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+      const decode = async (data) => {
+        try {
+          const bitmap = await createImageBitmap(new Blob([data], { type: 'image/webp' }));
+          const size = [bitmap.width, bitmap.height];
+          bitmap.close();
+          return size;
+        } catch {
+          return null;
+        }
+      };
+      const corrupt = bytes.slice();
+      const view = new DataView(corrupt.buffer);
+      let zeroed = 0;
+      for (let at = 12; at + 8 <= corrupt.length; ) {
+        const fourcc = String.fromCharCode(...corrupt.subarray(at, at + 4));
+        const size = view.getUint32(at + 4, true);
+        if (fourcc === 'VP8 ' || fourcc === 'VP8L') {
+          corrupt.fill(0, at + 8, at + 8 + size);
+          zeroed += size;
+        }
+        at += 8 + size + (size % 2);
+      }
+      return { size: await decode(bytes), corrupt: await decode(corrupt), zeroed };
+    }, seatImages[0]);
+    expect(decoded.size, `the ${drawn} does not decode in this engine`).toEqual(
+      motion === 'reduce' ? [352, 256] : [176 * 12, 128 * 10]
+    );
+    expect(decoded.zeroed, `no image chunk was found in the ${drawn} to corrupt`).toBeGreaterThan(0);
+    expect(decoded.corrupt, `the ${drawn} with its image chunk zeroed still decoded, so this check proves nothing`).toBeNull();
+
     /* THE KEYBOARD ORDER IS UNCHANGED: one of him sits INSIDE the row's first
        stop, and a picture that became focusable there would put a nameless
        stop in front of every keyboard reader on arrival. Asked of the row's
