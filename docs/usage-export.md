@@ -674,13 +674,23 @@ one.
 
 1. A run builds an index of the LAST value written per identity by reading the
    year files for the days it touches. Reading a whole year file each run is
-   the deliberate trade: a year of this pipeline's rows is a few megabytes, and
-   any index beside the file would be a second source of truth that can
-   disagree with the lines it indexes.
+   the deliberate trade: any index beside the file would be a second source of
+   truth that can disagree with the lines it indexes. It holds only while the
+   files grow with information, which rule 2 is what guarantees, and every
+   file is bounded at 256 MiB.
 2. Only rows whose value DIFFERS from that last one are appended. A run that
    changes nothing appends nothing and rewrites nothing — the file grows with
    information rather than with runs. A session row also compares its end and
    its running total, because either can move while the duration does not.
+   Two session rules keep that true (issue #358). Record files that began in
+   the same second share one identity, so their entries are merged into one
+   reading (the latest end, the summed total and classes, the members in a
+   stable order); as separate rows each "changed" the other on every run, and
+   34 such identities wrote 94% of a 117 MiB sessions file in a month. And a
+   session still running, one that ended within fifteen minutes of the
+   capture, is recorded at most once per fifteen minutes; a settled session is
+   always recorded, so the figure it finished on lands at the first run after
+   it stops. Replayed over that month, the two rules write 3.1% of its rows.
 3. The write is `O_WRONLY|O_CREAT|O_APPEND` at mode 0600, one `os.write` of
    every line, one `os.fsync`. Directories are 0700, including every one the
    record creates on its way to them.

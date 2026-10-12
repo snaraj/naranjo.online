@@ -198,6 +198,110 @@ class AppendRuleTest(LedgerTestCase):
         moved = dict(session, total=900)
         self.assertEqual(self.append(moved, stream="sessions"), (1, 0))
 
+    def running_session(self, captured, ended, total):
+        return {
+            "schema": "ledger/v1",
+            "day": YESTERDAY,
+            "stream": "sessions",
+            "source": SOURCE,
+            "kind": "session",
+            "key": "2026-09-10T09:00:00Z",
+            "value": int(
+                (ledger.parse_instant(ended) - ledger.parse_instant("2026-09-10T09:00:00Z")).total_seconds()
+            ),
+            "unit": "seconds",
+            "capturedAt": captured,
+            "method": "capture",
+            "exporter": EXPORTER,
+            "startedAt": "2026-09-10T09:00:00Z",
+            "endedAt": ended,
+            "total": total,
+            "categories": {"input": total},
+            "models": ["member-one"],
+        }
+
+    def test_a_running_session_is_recorded_at_most_once_per_window(self):
+        # Issue #358: a run every few minutes re-read every running session
+        # and wrote a superseded row for each, megabytes a day. Inside the
+        # window a running session's changed reading waits; once the window
+        # since its last RECORDED reading has passed, the next one lands.
+        first = self.running_session("2026-09-10T10:00:00Z", "2026-09-10T09:59:30Z", 100)
+        self.assertEqual(self.append(first, stream="sessions"), (1, 0))
+        for minute, total in ((3, 200), (6, 300), (14, 400)):
+            captured = "2026-09-10T10:%02d:00Z" % minute
+            reading = self.running_session(captured, "2026-09-10T10:%02d:30Z" % (minute - 1), total)
+            self.assertEqual(self.append(reading, stream="sessions"), (0, 1), captured)
+        late = self.running_session("2026-09-10T10:15:00Z", "2026-09-10T10:14:30Z", 500)
+        self.assertEqual(self.append(late, stream="sessions"), (1, 0))
+        written = (self.ledger / "sessions" / "2026.ndjson").read_text(encoding="utf-8").splitlines()
+        self.assertEqual([json.loads(line)["total"] for line in written], [100, 500])
+
+    def test_a_settled_session_always_records_the_figure_it_finished_on(self):
+        # The guarantee the throttle rests on: once a session has been idle a
+        # whole window, its final reading is written at the next run however
+        # recently the last one was, so no final figure is ever lost.
+        running = self.running_session("2026-09-10T10:00:00Z", "2026-09-10T09:59:30Z", 100)
+        self.append(running, stream="sessions")
+        stopped = self.running_session("2026-09-10T10:04:00Z", "2026-09-10T10:01:00Z", 150)
+        self.assertEqual(self.append(stopped, stream="sessions"), (0, 1))
+        settled = self.running_session("2026-09-10T10:16:00Z", "2026-09-10T10:01:00Z", 150)
+        self.assertEqual(self.append(settled, stream="sessions"), (1, 0))
+        self.assertEqual(ledger.resolve(self.ledger, "sessions")[
+            (YESTERDAY, SOURCE, "session", "2026-09-10T09:00:00Z")]["total"], 150)
+        # And nothing more once it has been written.
+        later = self.running_session("2026-09-10T10:30:00Z", "2026-09-10T10:01:00Z", 150)
+        self.assertEqual(self.append(later, stream="sessions"), (0, 1))
+
+    def collided(self):
+        # Two record files that began in the same second, as the walk reports
+        # them: one identity, two different readings.
+        return [
+            {"startedAt": "2026-09-10T09:00:00Z", "endedAt": "2026-09-10T09:30:00Z",
+             "total": 300, "categories": {"input": 100, "output": 200}, "models": ["member-two"]},
+            {"startedAt": "2026-09-10T09:00:00Z", "endedAt": "2026-09-10T10:00:00Z",
+             "total": 500, "categories": {"input": 500}, "models": ["member-one", "member-two"]},
+        ]
+
+    def session_block_rows(self, entries):
+        return ledger.session_rows(SOURCE, entries, STAMP, EXPORTER, None)
+
+    def test_sessions_sharing_a_start_are_one_reading_and_stop_re_appending(self):
+        # Issue #358: two files sharing a start instant were two rows under one
+        # identity, so EVERY run appended both again (each "changed" the one
+        # before it) — 94% of a 117 MiB stream in a month. They are one
+        # reading now, and an unchanged walk appends nothing.
+        rows = self.session_block_rows(self.collided())
+        self.assertEqual(len(rows), 1)
+        merged = rows[0]
+        self.assertEqual(merged["endedAt"], "2026-09-10T10:00:00Z")
+        self.assertEqual(merged["value"], 3600)
+        self.assertEqual(merged["total"], 800)
+        self.assertEqual(merged["categories"], {"input": 600, "output": 200})
+        self.assertEqual(self.append(*rows, stream="sessions"), (1, 0))
+        for _ in range(3):
+            again = self.session_block_rows(self.collided())
+            self.assertEqual(self.append(*again, stream="sessions"), (0, 1))
+
+    def test_the_merged_reading_does_not_depend_on_walk_order(self):
+        forward = self.session_block_rows(self.collided())
+        backward = self.session_block_rows(list(reversed(self.collided())))
+        self.assertEqual(forward, backward)
+
+    def test_a_malformed_session_is_refused_before_anything_is_merged(self):
+        for field, bad in (("total", "300"), ("total", True), ("categories", []),
+                           ("models", "member-one"), ("endedAt", 7)):
+            entries = self.collided()
+            entries[0][field] = bad
+            with self.subTest(field=field, bad=bad), self.assertRaises(ledger.LedgerError):
+                self.session_block_rows(entries)
+
+    def test_the_window_is_the_sessions_stream_alone(self):
+        # A day's running usage figure is not a session and is never deferred.
+        first = row(capturedAt="2026-09-10T10:00:00Z", value=10)
+        moved = row(capturedAt="2026-09-10T10:01:00Z", value=20)
+        self.assertEqual(self.append(first), (1, 0))
+        self.assertEqual(self.append(moved), (1, 0))
+
 
 class FileMechanicsTest(LedgerTestCase):
     """The syscalls, proven rather than assumed."""

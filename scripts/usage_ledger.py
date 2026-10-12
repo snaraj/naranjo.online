@@ -249,11 +249,21 @@ DIR_MODE = 0o700
 FILE_MODE = 0o600
 
 # A year file is read WHOLE on every run that touches its year, to build the
-# last-value index. That is a deliberate trade: a year of this pipeline's rows
-# measures a few megabytes, and reading it costs milliseconds, while any index
-# beside the file would be a second source of truth that can disagree with the
-# lines it indexes.
+# last-value index, because any index beside the file would be a second source
+# of truth that can disagree with the lines it indexes. The size that trade
+# was made for did not hold for sessions: re-recording every running session on
+# every run grew that stream by megabytes a day and would have refused the
+# whole export at this bound within weeks (issue #358). SESSION_SETTLE_SECONDS
+# below is what keeps it inside the bound.
 MAX_STREAM_FILE_BYTES = 256 << 20
+
+# How long a RUNNING session's reading may wait behind its last recorded one,
+# and how long a session must have been idle to count as settled. A session
+# is re-read on every run while it moves, and each of those readings is
+# superseded by the next (sessions resolve to their latest reading), so a
+# running session is recorded at most once per window, and a settled one is
+# always recorded: its final figure lands at the first run after it stops.
+SESSION_SETTLE_SECONDS = 15 * 60
 
 # The raw capture archive. A fresh capture document per source per run is kept
 # so a figure can be re-derived from the bytes it came from; the day's LATEST
@@ -610,6 +620,29 @@ def unchanged(previous, row):
     return True
 
 
+def deferred(previous, row):
+    """True when a changed reading of a still-running session can wait.
+
+    Only a session can wait, and only while it is RUNNING — it ended within
+    SESSION_SETTLE_SECONDS of this reading's capture — and only when its last
+    recorded reading is younger than that window. A settled session is never
+    deferred, so the figure it finished on is always written, at the first run
+    after it stops; nothing that run sees is lost, only the readings a later
+    one in the same window supersedes (issue #358).
+    """
+    if row["stream"] != STREAM_SESSIONS:
+        return False
+    captured = parse_instant(row["capturedAt"])
+    if (captured - parse_instant(row["endedAt"])).total_seconds() >= SESSION_SETTLE_SECONDS:
+        return False
+    return (captured - parse_instant(previous["capturedAt"])).total_seconds() < SESSION_SETTLE_SECONDS
+
+
+def parse_instant(value):
+    """An admitted RFC 3339 UTC instant as an aware datetime."""
+    return datetime.datetime.strptime(value, INSTANT_FORMAT).replace(tzinfo=datetime.timezone.utc)
+
+
 def append_rows(ledger_dir, stream, rows):
     """Append only what is new. Returns (appended, unchanged).
 
@@ -630,7 +663,7 @@ def append_rows(ledger_dir, stream, rows):
         lines = []
         for row in by_year[year]:
             previous = index.get(reading(row))
-            if previous is not None and unchanged(previous, row):
+            if previous is not None and (unchanged(previous, row) or deferred(previous, row)):
                 kept += 1
                 continue
             index[reading(row)] = row
@@ -1035,12 +1068,75 @@ def model_category_rows(key, members, stamp, exporter, digest):
     return rows
 
 
+def merge_sessions(entries):
+    """One entry per start instant, whatever order the walk produced them in.
+
+    A session's identity is the instant it began, and two record files can
+    begin in the same second. Recorded as separate rows they shared one
+    identity, so every run appended each of them again — each "changed" the
+    reading the other had just written — and 34 such identities wrote 94% of
+    a 117 MiB stream in a month (issue #358). Entries sharing a start are one
+    reading: the latest end, the summed total and classes, and the members
+    in a stable order, so unchanged inputs yield an identical row and nothing
+    is appended. Every other entry passes through unchanged.
+    """
+    groups = {}
+    for entry in entries:
+        groups.setdefault(entry["startedAt"], []).append(entry)
+    merged = []
+    for started, group in groups.items():
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+        group = sorted(group, key=lambda entry: json.dumps(entry, sort_keys=True))
+        categories = {}
+        models = []
+        for entry in group:
+            for name, count in entry["categories"].items():
+                categories[name] = categories.get(name, 0) + count
+            for model in entry["models"]:
+                if model not in models:
+                    models.append(model)
+        merged.append(
+            {
+                "startedAt": started,
+                "endedAt": max(entry["endedAt"] for entry in group),
+                "total": sum(entry["total"] for entry in group),
+                "categories": categories,
+                "models": models,
+            }
+        )
+    return merged
+
+
 def session_rows(key, entries, stamp, exporter, digest):
     """One row per session, identified by the instant it began."""
     if not isinstance(entries, list):
         raise LedgerError("a capture ledger block carries a malformed session list")
-    rows = []
     for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {
+            "startedAt",
+            "endedAt",
+            "total",
+            "categories",
+            "models",
+        }:
+            raise LedgerError("a capture ledger block carries a malformed session")
+        # Merging adds totals and orders instants, so the types it touches are
+        # held before it runs; bounds and vocabularies are admit_row's, after.
+        if (
+            not isinstance(entry["startedAt"], str)
+            or not isinstance(entry["endedAt"], str)
+            or not isinstance(entry["models"], list)
+            or not all(isinstance(model, str) for model in entry["models"])
+            or not isinstance(entry["categories"], dict)
+            or not all(
+                type(count) is int for count in [entry["total"], *entry["categories"].values()]
+            )
+        ):
+            raise LedgerError("a capture ledger block carries a malformed session")
+    rows = []
+    for entry in merge_sessions(entries):
         if not isinstance(entry, dict) or set(entry) != {
             "startedAt",
             "endedAt",
