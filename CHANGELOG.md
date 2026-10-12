@@ -7,6 +7,91 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.91] - 2026-10-12
+
+### Fixed
+
+- A restarted origin no longer falls back to the token-usage snapshot shipped
+  at release time. Every accepted sealed document is kept beside the replay
+  floor and served, as `stale`, at the next boot when the authenticated
+  marker names its digest — including when the host's clock came back behind
+  the floor, which refused every tick and showed a month-old panel on an
+  online site (#358). Restoring never moves the floor or admits a new file.
+- Live-refresh rate budgets survive a backwards wall-clock step: an attempt or
+  cooldown found ahead of the clock is re-anchored to it, so a step costs one
+  ordinary budget instead of its whole size (#358).
+- A collapsed role drawer is `inert`, so its employer link is no longer an
+  invisible Tab stop or present in the accessibility tree (#329).
+- `docs/media-manifest.md` states that media is enabled by default (#271).
+- The nightly ledger snapshot retries a 5xx or timed-out panel read (three
+  attempts, fixed 30 s and 120 s pauses) instead of losing the night, and
+  rebuilds the ledger's SQLite and CSV exports after every reading (#358).
+- The workstation ledger no longer re-records the same sessions on every run.
+  Record files that began in the same second shared one identity and were
+  appended again each run — 94% of a 117 MiB sessions file in a month, on
+  course to refuse every export at the 256 MiB bound by the end of October.
+  They are merged into one reading, and a still-running session is recorded
+  at most once per fifteen minutes while its final figure always lands;
+  replayed, the month writes 3.1% of its rows (#358).
+
+### Added
+
+- The usage push checks, at the start of each run, whether the site's
+  token-usage panel serves the last verified push (`SITE_URL`), logs
+  `SERVED`, `NOT-SERVED` or `RECOVERED`, and raises one desktop notification
+  once the panel has not served it for fifteen minutes (#358).
+- `REPO_UPDATE` (default `ff-only`): a push checkout strictly behind
+  `origin/main` is fast-forwarded, fetching at most hourly under a bounded
+  deadline, and the run re-executes once; drift it will not repair is logged
+  as `DRIFT` (#358). `install-launchd.sh --check` reports, read-only, whether
+  each installed agent runs the configured checkout and exited cleanly.
+- `PANELS_CAPTURE=token-usage` refreshes the shipped token-usage snapshot from
+  an exported document through the data root's own admission; the snapshot
+  now carries both sources through 2026-10-12 (#358).
+- `scripts/ops/watermark.py`, the gallery's credit-mark tool, is tracked and
+  tested: pixel-identical output, a private scratch removed on every path, an
+  atomic replace, the credit read from operator configuration, and a receipt
+  the staging step can check (#358).
+- `compliance.json` states what the site stores on a visitor's device, which
+  third-party origins a page may contact, which legal pages exist and which
+  edge behaviours are known and why; the PR gate holds the storage list to the
+  writes the frontend makes, the browser lanes refuse undeclared origins, CSP
+  breaks, writes before consent, missed measurable WCAG 2.1 floors (including
+  a focus indicator that paints nothing) and credential-shaped literals, and a
+  weekly read-only workflow judges the live site against the manifest (Refs
+  #355; supersedes PR #357, with its five review findings repaired).
+- The CI contract suite fails when an `AGENTS.md` `docs/<name>.md` pointer
+  names a file that does not exist (#272).
+
+### Changed
+
+- The chrome row's dragon is J typing at his laptop: both bookends play one
+  8-second, 120-frame loop and face into the row; a reader who asked for less
+  motion fetches one 17 kB still and never the 347 kB sheet (the flying sheet
+  was 882 kB). The reading-mode popover drops its swatch gaps so it still fits
+  a 320 px screen; every swatch keeps its 44 px target.
+- Coverage badges publish after the PR gate in their own workflow: a badge
+  push can no longer hold back a release, and an older main commit can no
+  longer replace newer badges (#350).
+- The usage producer skips decoding transcript lines that carry none of the
+  keys either record shape reads (sound against whitespace and `\u`-escaped
+  key spellings), and the ledger remembers each distinct instant's validity
+  within a run: output is byte-identical on the real record (all 4,082 output
+  files), and the two capture stages run about 37% faster under the scheduler.
+- The usage push runs ssh at `LogLevel=ERROR`, so the receiving host's banner
+  no longer fills the error log (a silent exit 255 is `connection-lost`), and
+  rotates its launchd logs past 5 MiB, renaming one generation and never
+  truncating (#358).
+- Frontend toolchain: svelte 5.57.1, @sveltejs/vite-plugin-svelte 7.3.1, vite
+  8.3.1; CodeQL init and analyze pinned to github/codeql-action v4.38.2; the
+  vite pair is one Dependabot group (supersedes #351, #352, #353, #354).
+
+### Security
+
+- devalue 5.9.0 → 5.9.4 (supersedes #356) and source-map-js 1.2.1 → 1.2.2
+  (GHSA-68fv-2mgg-jv7q): `npm audit`, development dependencies included, goes
+  from two high findings to none.
+
 ## [0.1.90] - 2026-09-23
 
 ### Removed
