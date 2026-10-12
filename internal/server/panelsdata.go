@@ -45,6 +45,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/snaraj/naranjo.online/internal/panels"
@@ -327,7 +328,7 @@ func newFloorMarker(state *os.Root, lookupEnv func(string) string) *panels.Floor
 // the caller decides what it is worth — authentication and the marker's
 // digest still stand between these bytes and the page.
 func loadRetained(state *os.Root) ([]byte, error) {
-	file, err := state.Open(panelsRetainedName)
+	file, err := openStateFile(state, panelsRetainedName)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
@@ -345,9 +346,30 @@ func loadRetained(state *os.Root) ([]byte, error) {
 	return raw, nil
 }
 
+// openStateFile opens a state file for reading by a call that must never
+// wait on it. O_NONBLOCK returns the open of a FIFO at once instead of
+// holding it until some writer appears, and anything that is not a regular
+// file is refused before a byte is read. The data root reads these files
+// synchronously ahead of fresh admission, so a special file in the state
+// directory — storage gone wrong, or another writer's hand — would otherwise
+// stall every refresh behind one open() (review of #359, F3). Absent stays
+// fs.ErrNotExist for the caller to classify.
+func openStateFile(state *os.Root, name string) (*os.File, error) {
+	file, err := state.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		return nil, errors.New("not a regular file")
+	}
+	return file, nil
+}
+
 // loadFloorMarker reads, identifies, authenticates, and parses the marker.
 func loadFloorMarker(state *os.Root, lookupEnv func(string) string) (panels.FloorState, bool, error) {
-	file, err := state.Open(panelsFloorMarkerName)
+	file, err := openStateFile(state, panelsFloorMarkerName)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			// Absent — but absent from WHERE? A never-used state directory
