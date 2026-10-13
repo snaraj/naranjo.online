@@ -8,8 +8,10 @@ the measurements and history behind those numbers. It adds no rule.
 ## The panels payload budgets
 
 `MaxPanelResponseBytes` is 131072, raised from 32768 by the owner on
-2026-08-24. Full-depth token-usage history structurally reaches 113,304 bytes
-served — re-measured 2026-09-11 against the thirteen-member model vocabulary
+2026-08-24. A large full-depth token-usage document served at 113,304 bytes
+when re-measured on 2026-09-11 (105,091 at 0.1.93, once each source carried
+only its own vendor's models; fixture measurements, not proven maxima) against
+the thirteen-member model vocabulary
 over its fifty-six-day window; issue #170 measured 104,508 against the five-member
 one, and the 115,981 figure recorded before that was a projection — and the old
 gate, chosen before any real content existed, would have refused exactly the
@@ -20,11 +22,12 @@ no longer hides a smaller ceiling than the transport steps. It does NOT mean
 one ceiling governs both, and reading it that way was a finding of the
 2026-08-25 round-4 review. The two bound different bytes: the sealed FILE
 versus the finished ENVELOPE, which also carries the embedded snapshot,
-measured at +1,625 bytes for the maximal admissible document. A file at exactly
-the transport ceiling is refused at serve time, and the refusal — never a
-truncation — is what the guarantee actually rests on.
+measured at +1,247 bytes for the Go suite's large admissible document at 0.1.93
+(103,844 sealed, 105,091 served; the figure moves with the fixture). A file at
+exactly the transport ceiling is refused at serve time, and the refusal — never
+a truncation — is what the guarantee actually rests on.
 
-That +1,625 measures the sections the snapshot also ships. A pushed section a
+That overhead measures the sections the snapshot also ships. A pushed section a
 source's snapshot ships none of is transported and then discarded, so it adds
 to the sealed file and nothing to the envelope — which is why the producer-side
 measurement in `docs/usage-export.md` is the larger of the two and the one the

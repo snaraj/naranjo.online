@@ -47,12 +47,15 @@ const (
 	// envelope, and this is the canonical record of it — handler_test and
 	// dataroot_test point here rather than restating it.
 	//
-	// Raised from 32 KiB to 128 KiB by the owner on 2026-08-24. Full-depth
-	// token-usage history structurally maxes at 113,304 bytes SERVED,
-	// re-measured 2026-09-11 with the thirteen-member vocabulary over its
-	// fifty-six-day window by TestTheMaximalDocumentFitsTheRaisedBudget; the
-	// 32 KiB gate, chosen before any real content existed, would have refused
-	// exactly the documents the sealed-data pipeline exists to deliver.
+	// Raised from 32 KiB to 128 KiB by the owner on 2026-08-24. A large
+	// full-depth token-usage document served at 113,304 bytes when
+	// TestTheMaximalDocumentFitsTheRaisedBudget re-measured it on 2026-09-11
+	// with the thirteen-member vocabulary over its fifty-six-day window, and
+	// at 105,091 at 0.1.93, once each source carried only its own vendor's
+	// models (issue #369). Those are fixture measurements, not proven maxima.
+	// The 32 KiB gate, chosen before any real content existed, would have
+	// refused exactly the documents the sealed-data pipeline exists to
+	// deliver.
 	//
 	// It is the same VALUE as seal.MaxSealedBytes, so the serve step no longer
 	// hides a smaller ceiling than the transport steps. That is NOT the
@@ -60,10 +63,11 @@ const (
 	// the 2026-08-25 round-4 review found stated here and false: the two bound
 	// different bytes — this one the finished envelope, seal.MaxSealedBytes
 	// the sealed FILE — and the envelope adds the embedded snapshot and its
-	// own scaffolding on top. Measured at +1,625 bytes for the maximal
-	// admissible document (111,679 sealed, 113,304 served), and unbounded
-	// above that as the snapshot grows, so a file sealed at exactly 131,072
-	// bytes serves OVER budget and is refused.
+	// own scaffolding on top. Measured at +1,247 bytes for the suite's large
+	// admissible document at 0.1.93 (103,844 sealed, 105,091 served; +1,625
+	// on the 2026-09-11 fixture), and unbounded above that as the snapshot
+	// grows, so a file sealed at exactly 131,072 bytes serves OVER budget and
+	// is refused.
 	//
 	// That delta measures the sections the SNAPSHOT also ships. A pushed
 	// section the snapshot ships none of — a per-model lifetime split on a

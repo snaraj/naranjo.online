@@ -527,7 +527,7 @@ DAY, so it is a fixed cost the window does not bound. That is why it fits at
 all — and why the window, not the split, is what moved to pay for it.
 
 These figures are no longer transcribed into a test assertion. `CapParityTest`
-BUILDS the maximum document from the shipped snapshot's own labels and the
+BUILDS its capacity fixture from the shipped snapshot's own labels and the
 producer's own vocabulary and measures it, so the drift that made the previous
 paragraph wrong cannot recur silently — but the prose above is still hand-kept
 and is checked by reading, so treat a disagreement between it and the suite as
@@ -545,17 +545,18 @@ this ceiling, and equal values are easy to misread as one ceiling. They are
 not (2026-08-25 round-4 review, finding 7). The two bound different bytes:
 this one bounds the sealed FILE, the response budget bounds the finished
 ENVELOPE — the payload merged onto the embedded snapshot, plus the envelope
-around it — so the served bytes always exceed the transported ones. The
-maximal document the origin admits measures the gap at +1,625 bytes (111,679
-sealed, 113,304 served; `TestTheServedEnvelopeExceedsTheFileItCameFrom` in
-`internal/panels/dataroot_test.go` logs both), and a larger snapshot widens
-it. A file sealed at exactly 131,072 bytes is therefore refused at serve
+around it — so the served bytes always exceed the transported ones. The Go
+suite's large admissible document measures the gap at +1,247 bytes at 0.1.93
+(103,844 sealed, 105,091 served;
+`TestTheServedEnvelopeExceedsTheFileItCameFrom` in
+`internal/panels/dataroot_test.go` logs both, and the figure moves with the
+fixture), and a larger snapshot widens it. A file sealed at exactly 131,072 bytes is therefore refused at serve
 time. What equality buys is only that the last step no longer hides a
 SMALLER ceiling than the four before it; what makes an over-budget document
 safe is the refusal itself, which keeps the last good response serving.
 
 That pair is measured over the sections the SNAPSHOT also ships, which is why
-it is smaller than the producer-side maximum above. A pushed section a
+it is smaller than the producer-side capacity fixture above. A pushed section a
 source's snapshot ships none of — a per-model lifetime split on a source that
 shows no such surface — is transported, validated, and then discarded, so it
 adds to the sealed file and nothing at all to the envelope. The transport
