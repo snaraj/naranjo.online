@@ -248,6 +248,7 @@ FETCH_INTERVAL_SECONDS=3600
 update_checkout() {
     action=none
     interrupted=
+    acknowledged=yes
     git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
     branch=$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
     upstream=$(git -C "$REPO_DIR" rev-parse --abbrev-ref 'main@{upstream}' 2>/dev/null || true)
@@ -290,11 +291,17 @@ update_checkout() {
     fi
     if [ -n "$interrupted" ]; then
         echo "usage-export: WARN repo-update interrupted signal=$interrupted" >&2
-        exit 1
     fi
     if [ "$action" = incomplete ]; then
         stage=repo-update
         fail "the checkout update stopped part-way; nothing was exported"
+    fi
+    if [ "$acknowledged" = no ]; then
+        stage=repo-update
+        fail "main moved without git acknowledging the update; the checkout agrees with it, and nothing was exported"
+    fi
+    if [ -n "$interrupted" ]; then
+        exit 1
     fi
     if [ "$reason" = updated ]; then
         export NARANJO_USAGE_EXPORT_REEXEC=1
@@ -316,15 +323,29 @@ update_checkout() {
 # copied into it and git updates it in place (git locks index.lock.lock and
 # renames that over it, so the lock path never disappears). After the ref
 # commits, one rename installs that index and releases the lock together.
-# Every way out leaves ref, index and worktree in agreement, or stops the run
-# with action=incomplete and keeps what recovery needs:
+#
+# A child's exit status never decides what state the checkout is in; a re-read
+# does (review F1 r3). A git killed after it finished, or a ref transaction
+# whose acknowledgement was lost after it committed, both report failure. So
+# after a failed checkout the lock's tree is read again, and after the ref
+# transaction main and HEAD are. Where the re-read proves a state, ref, index
+# and worktree are brought into agreement; where it cannot, the lock is kept
+# and the run stops:
 #   merge-refused         nothing written; the run goes on as it was
-#   ref-moved             the worktree was put back to OLD; the run goes on
+#   ref-moved             main is still OLD, so the worktree was put back; the
+#                         run goes on
+#   updated               main is NEW and the index is installed; when git never
+#                         acknowledged that, the run stops without exporting
 #   checkout-partial      git wrote some files before refusing; ref and index
 #                         are OLD, so git status shows them; the run stops
-#   rollback-failed       the ref did not move and the worktree could not be put
-#                         back; the lock keeps the NEW index; the run stops
-#   index-install-failed  the ref moved and the index could not be installed;
+#   checkout-uncertain    the checkout failed, yet the lock no longer holds the
+#                         index it held before; the lock is kept; the run stops
+#   ref-uncertain         after the ref transaction, main is neither OLD nor NEW
+#                         or HEAD no longer names it; the lock (the NEW index)
+#                         is kept; the run stops
+#   rollback-failed       main is OLD and the worktree could not be put back;
+#                         the lock keeps the NEW index; the run stops
+#   index-install-failed  main is NEW and the index could not be installed;
 #                         the lock keeps the NEW index; the run stops
 # A kept lock is git's own recovery state: every git command names it as stale.
 fast_forward_main() {
@@ -360,6 +381,10 @@ fast_forward_main() {
     # paths is git's own partial write.
     elif ! touched_paths_clean "$old" "$new"; then
         reason=merge-refused
+    # The tree the lock holds now, so that a failed checkout can be told from
+    # one that finished: writing tree objects to the object store is harmless.
+    elif ! before=$(lock_tree) || [ -z "$before" ]; then
+        reason=merge-refused
     else
         # From the checkout until the index is installed or rolled back, a
         # signal is recorded, never acted on: the run ends only once ref,
@@ -368,33 +393,53 @@ fast_forward_main() {
         trap 'interrupted=HUP' HUP
         trap 'interrupted=INT' INT
         trap 'interrupted=TERM' TERM
-        if ! (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$old" "$new") >/dev/null 2>&1; then
-            # read-tree replaces the lock only on success, so it still holds
-            # the OLD index to compare the worktree against.
-            if touched_paths_clean "$old" "$new"; then
-                reason=merge-refused
-            else
-                reason=checkout-partial action=incomplete
-            fi
-        elif ! advance_main_ref "$old" "$new"; then
-            if (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then
-                reason=ref-moved
-            else
-                reason=rollback-failed action=incomplete drop_lock=no
-            fi
-        # git's own lockfile commit: the rename that installs the new index is
-        # the rename that releases the lock, after which that path is no
-        # longer the job's to remove.
-        elif mv -f "$lock" "$gitdir/index"; then
-            reason=updated drop_lock=no
+        if (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$old" "$new") >/dev/null 2>&1; then
+            settle_ref_transaction
+        elif [ "$(lock_tree || true)" != "$before" ]; then
+            reason=checkout-uncertain action=incomplete drop_lock=no
+        elif touched_paths_clean "$old" "$new"; then
+            reason=merge-refused
         else
-            reason=index-install-failed action=incomplete drop_lock=no
+            reason=checkout-partial action=incomplete
         fi
     fi
     if [ "$drop_lock" = yes ]; then
         rm -f "$lock"
     fi
     trap - EXIT HUP INT TERM
+}
+
+# The tree the lock index describes, or nothing when it cannot be written.
+lock_tree() {
+    (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" write-tree 2>/dev/null)
+}
+
+# The ref transaction, then the state it left, read back rather than inferred
+# from its acknowledgement: main NEW (with HEAD naming it) installs the index,
+# main OLD rolls the worktree back, anything else keeps the lock and stops.
+settle_ref_transaction() {
+    if ! advance_main_ref "$old" "$new"; then
+        acknowledged=no
+    fi
+    head=$(git -C "$REPO_DIR" symbolic-ref --quiet HEAD 2>/dev/null || true)
+    main=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/heads/main^{commit}' 2>/dev/null || true)
+    if [ "$head" != refs/heads/main ] || { [ "$main" != "$new" ] && [ "$main" != "$old" ]; }; then
+        reason=ref-uncertain action=incomplete drop_lock=no acknowledged=yes
+    elif [ "$main" = "$old" ]; then
+        acknowledged=yes
+        if (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then
+            reason=ref-moved
+        else
+            reason=rollback-failed action=incomplete drop_lock=no
+        fi
+    # git's own lockfile commit: the rename that installs the new index is the
+    # rename that releases the lock, after which that path is no longer the
+    # job's to remove.
+    elif mv -f "$lock" "$gitdir/index"; then
+        reason=updated drop_lock=no
+    else
+        reason=index-install-failed action=incomplete drop_lock=no
+    fi
 }
 
 # True when every path the update touches is in the worktree as the job's

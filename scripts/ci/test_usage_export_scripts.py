@@ -2292,9 +2292,11 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
     def git_shim(self, mode, target=""):
         """A `git` ahead of the real one on the job's PATH. Its one act is on
         `update-ref`: `too-old` answers as a git without the transaction
-        protocol; the others first act as another actor would, just before
-        the job takes the index lock (`diverge`, `catch-up`) or while it holds
-        that lock and is about to move the ref (`retarget-head`, `move-main`)."""
+        protocol; `refuse` and `refuse-and-edit` fail the job's transaction
+        without moving a ref (the second also editing NOTE first); the others
+        act as another actor would, just before the job takes the index lock
+        (`diverge`, `catch-up`) or while it holds that lock and is about to
+        move the ref (`retarget-head`, `move-main`)."""
         write_executable(
             self.stub_dir / "git",
             "#!/bin/sh\n"
@@ -2316,8 +2318,10 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
             '    catch-up-no) "$REAL_GIT" -C "$2" merge --ff-only --quiet refs/remotes/origin/main ;;\n'
             '    retarget-head-yes) "$REAL_GIT" -C "$2" symbolic-ref HEAD refs/heads/concurrent-owner-branch ;;\n'
             '    move-main-yes) "$REAL_GIT" -C "$2" update-ref refs/heads/main "$SHIM_TARGET" ;;\n'
-            '    retarget-and-edit-yes) "$REAL_GIT" -C "$2" symbolic-ref HEAD refs/heads/concurrent-owner-branch\n'
-            '      echo edited > "$2/NOTE" ;;\n'
+            '    move-main-elsewhere-yes) "$REAL_GIT" -C "$2" update-ref refs/heads/main'
+            ' "$("$REAL_GIT" -C "$2" commit-tree -p HEAD -m elsewhere "HEAD^{tree}")" ;;\n'
+            "    refuse-yes) exit 128 ;;\n"
+            '    refuse-and-edit-yes) echo edited > "$2/NOTE"; exit 128 ;;\n'
             "  esac\n"
             "fi\n"
             'exec "$REAL_GIT" "$@"\n',
@@ -2472,35 +2476,76 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
         self.assertFalse((self.checkout / ".git/index.job").exists())
 
-    def test_a_ref_moved_inside_the_lock_rolls_the_worktree_back(self):
-        # Plumbing takes no index lock, so it can still move HEAD or main
-        # while the job holds that lock. The ref transaction refuses, and the
-        # worktree the job had already advanced goes back to what it was.
+    def assert_kept_lock_holds(self, commit):
+        """The kept lock is a whole index of `commit`: recovery material."""
+        lock = self.checkout / ".git/index.lock"
+        self.assertTrue(lock.is_file())
+        self.git(self.checkout, "diff-index", "--cached", "--quiet", commit, index=lock)
+
+    def test_a_refused_ref_update_rolls_the_worktree_back(self):
+        # The transaction fails and a re-read finds main still at OLD and HEAD
+        # still naming it: the worktree the job had advanced goes back, and the
+        # run goes on from the tree it had.
+        self.git_shim("refuse")
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=ref-moved", result.stderr)
+        self.assertNotIn("UPDATED", result.stdout)
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
+        self.assert_agreement(self.first)
+        self.assertEqual(self.summary_revision(result), self.first[:12])
+
+    def test_head_retargeted_inside_the_lock_keeps_the_new_index_and_stops(self):
+        # Plumbing takes no index lock, so it can still retarget HEAD while the
+        # job holds that lock. Nothing is advanced, and with HEAD no longer
+        # naming main no rollback is proven right: the lock keeps the NEW index
+        # and the run stops.
         self.git(self.checkout, "branch", "concurrent-owner-branch")
-        for mode, main_after in (("retarget-head", self.first), ("move-main", self.second)):
-            with self.subTest(mode=mode):
-                self.git(self.checkout, "symbolic-ref", "HEAD", "refs/heads/main")
-                self.git(self.checkout, "update-ref", "refs/heads/main", self.first)
-                (self.history / "repo-update.stamp").unlink(missing_ok=True)
-                self.git_shim(mode, self.second)
-                result = self.push()
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=ref-moved", result.stderr)
-                self.assertNotIn("UPDATED", result.stdout)
-                self.assertEqual(self.git(self.checkout, "rev-parse", "concurrent-owner-branch"), self.first)
-                self.assertEqual(self.git(self.checkout, "rev-parse", "main"), main_after)
-                self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
-                # The index is the job's untouched original, not its copy.
-                self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"),
-                                 self.git(self.checkout, "rev-parse", self.first + ":NOTE"))
-                self.assert_no_residue()
+        self.git_shim("retarget-head")
+        result = self.push()
+        self.assertIn(
+            "usage-export: WARN DRIFT behind=1 ahead=0 action=incomplete reason=ref-uncertain", result.stderr
+        )
+        self.assert_stopped_before_export(result)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "concurrent-owner-branch"), self.first)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+        self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"), self.git(self.checkout, "rev-parse", self.first + ":NOTE"))
+        self.assert_kept_lock_holds(self.second)
+
+    def test_main_moved_elsewhere_inside_the_lock_keeps_the_new_index_and_stops(self):
+        # main ends neither OLD nor NEW: no state is proven, so nothing is
+        # rolled back or installed over it.
+        self.git_shim("move-main-elsewhere")
+        result = self.push()
+        self.assertIn(
+            "usage-export: WARN DRIFT behind=1 ahead=0 action=incomplete reason=ref-uncertain", result.stderr
+        )
+        self.assert_stopped_before_export(result)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main^"), self.first)
+        self.assertNotIn(self.git(self.checkout, "rev-parse", "main"), (self.first, self.second))
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
+        self.assert_kept_lock_holds(self.second)
+
+    def test_main_already_at_the_new_commit_is_taken_as_done_and_stops(self):
+        # Another actor moved main to NEW by plumbing, so the job's own
+        # transaction fails. The re-read finds main at NEW: the index is
+        # installed and ref, index and worktree agree. The update was not
+        # acknowledged, so this run exports nothing.
+        self.git_shim("move-main", self.second)
+        result = self.push()
+        self.assertIn(
+            "usage-export: UPDATED exporter %s->%s" % (self.first[:12], self.second[:12]), result.stdout
+        )
+        self.assert_stopped_before_export(result)
+        self.assertIn("without git acknowledging", result.stderr)
+        self.assertNotIn("FIXTURE second-generation", result.stdout)
+        self.assert_agreement(self.second)
 
     def test_a_rollback_that_cannot_run_keeps_its_recovery_index_and_stops(self):
-        # An edit made in that same window cannot be rolled back over. It is
-        # kept, the lock keeps the NEW index it guards (git reports the stale
-        # lock until someone decides), and nothing is exported.
-        self.git(self.checkout, "branch", "concurrent-owner-branch")
-        self.git_shim("retarget-and-edit", self.second)
+        # An edit made in that window cannot be rolled back over. It is kept,
+        # the lock keeps the NEW index it guards (git reports the stale lock
+        # until someone decides), and nothing is exported.
+        self.git_shim("refuse-and-edit")
         result = self.push()
         self.assertIn(
             "usage-export: WARN DRIFT behind=1 ahead=0 action=incomplete reason=rollback-failed", result.stderr
@@ -2509,9 +2554,90 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
         self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "edited\n")
         self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"), self.git(self.checkout, "rev-parse", self.first + ":NOTE"))
-        lock = self.checkout / ".git/index.lock"
-        self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE", index=lock),
-                         self.git(self.checkout, "rev-parse", self.second + ":NOTE"))
+        self.assert_kept_lock_holds(self.second)
+
+    def transaction_barrier(self, phase):
+        """A reference-transaction hook (the review's probe) that holds the
+        job's ref transaction at `phase` until released, and names the git
+        process it runs under."""
+        ready, release = self.scratch / "hook-ready", self.scratch / "hook-release"
+        write_executable(
+            self.checkout / ".git/hooks/reference-transaction",
+            "#!/bin/sh\n"
+            'if [ "$1" = %s ] && [ -f "%s" ]; then\n'
+            '  echo "$PPID" > "%s.part" && mv "%s.part" "%s"\n'
+            "  n=0\n"
+            '  while [ ! -f "%s" ] && [ "$n" -lt 1000 ]; do sleep 0.02; n=$((n + 1)); done\n'
+            "fi\n"
+            "exit 0\n"
+            % (phase, self.checkout / ".git/index.lock", ready, ready, ready, release),
+        )
+        return ready, release
+
+    def run_to(self, marker):
+        run = self.start_push()
+        self.addCleanup(self.end_group, run)
+        deadline = time.monotonic() + 60
+        while not marker.exists():
+            self.assertLess(time.monotonic(), deadline, "the barrier was never reached")
+            self.assertIsNone(run.poll(), "the run ended before the barrier")
+            time.sleep(0.02)
+        return run
+
+    def end_group(self, run):
+        if run.poll() is None:
+            os.killpg(run.pid, signal.SIGKILL)
+            run.communicate()
+
+    def test_a_ref_update_stopped_before_it_commits_rolls_back(self):
+        # The review's negative control: the whole group is stopped while the
+        # transaction is prepared. main never moved, so the rollback is proven.
+        ready, release = self.transaction_barrier("prepared")
+        run = self.run_to(ready)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+        os.killpg(run.pid, signal.SIGTERM)
+        release.touch()
+        out, err = run.communicate(timeout=120)
+        self.assertEqual(run.returncode, 1, err)
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=ref-moved", err)
+        self.assertIn("usage-export: WARN repo-update interrupted signal=TERM", err)
+        self.assertNotIn("SUMMARY", out)
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
+        self.assert_agreement(self.first)
+
+    def stop_after_the_commit(self, target):
+        # Review F1 r3: once the transaction has committed, a failed
+        # acknowledgement is no proof that main did not move. The re-read finds
+        # main at NEW and installs the index, and the run, whose update git
+        # never acknowledged, exports nothing.
+        ready, release = self.transaction_barrier("committed")
+        run = self.run_to(ready)
+        child = int(ready.read_text(encoding="utf-8"))
+        self.assertEqual(os.getpgid(child), run.pid)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.second)
+        if target == "group":
+            os.killpg(run.pid, signal.SIGTERM)
+        else:
+            os.kill(child, signal.SIGTERM)
+        release.touch()
+        out, err = run.communicate(timeout=120)
+        self.assertNotEqual(run.returncode, 0, err)
+        self.assertIn("usage-export: UPDATED exporter %s->%s" % (self.first[:12], self.second[:12]), out)
+        self.assertIn("without git acknowledging", err)
+        self.assertNotIn("SUMMARY", out)
+        self.assertNotIn("FIXTURE second-generation", out)
+        self.assertFalse(self.args_file.exists())
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
+        self.assert_agreement(self.second)
+        return err
+
+    def test_a_ref_update_whose_group_is_stopped_after_it_commits_installs_its_index(self):
+        err = self.stop_after_the_commit("group")
+        self.assertIn("usage-export: WARN repo-update interrupted signal=TERM", err)
+
+    def test_a_ref_update_whose_git_is_stopped_after_it_commits_installs_its_index(self):
+        err = self.stop_after_the_commit("child")
+        self.assertNotIn("interrupted", err)
 
     def test_a_failed_index_install_keeps_the_new_index_as_the_lock(self):
         # Review F1 r2: the ref had moved and the index install failed; the
@@ -2534,11 +2660,13 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assert_agreement(self.second)
 
     def start_push(self):
+        """The run in a process group of its own, so a test can stop it whole."""
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/tmp")}
         env.update(self.env)
         return subprocess.Popen(
             ["/bin/sh", str(self.checkout / "scripts/usage-export/push-usage-series.sh")],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+            start_new_session=True,
         )
 
     def test_a_signal_after_the_checkout_waits_for_agreement(self):
@@ -2547,13 +2675,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         # held until ref, index and worktree agree, then ends the run.
         barrier = self.scratch / "barrier"
         self.git_shim("barrier", str(barrier))
-        run = self.start_push()
-        self.addCleanup(run.kill)
-        deadline = time.monotonic() + 60
-        while not barrier.with_suffix(".reached").exists():
-            self.assertLess(time.monotonic(), deadline, "the checkout never ran")
-            self.assertIsNone(run.poll(), "the run ended before the checkout")
-            time.sleep(0.05)
+        run = self.run_to(barrier.with_suffix(".reached"))
         run.send_signal(signal.SIGTERM)
         barrier.with_suffix(".release").touch()
         out, err = run.communicate(timeout=120)
@@ -2564,6 +2686,28 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertNotIn("SUMMARY", out)
         self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
         self.assert_agreement(self.second)
+
+    def test_a_checkout_whose_group_is_stopped_after_it_wrote_keeps_its_index(self):
+        # Review F1 r3: the whole group stopped after a real read-tree had
+        # finished. A failed exit status does not say the lock still holds
+        # OLD; the job reads the lock's tree, finds it moved, keeps the lock
+        # (the NEW index) and stops.
+        barrier = self.scratch / "barrier"
+        self.git_shim("barrier", str(barrier))
+        run = self.run_to(barrier.with_suffix(".reached"))
+        os.killpg(run.pid, signal.SIGTERM)
+        barrier.with_suffix(".release").touch()
+        out, err = run.communicate(timeout=120)
+        result = subprocess.CompletedProcess(run.args, run.returncode, out, err)
+        self.assertIn(
+            "usage-export: WARN DRIFT behind=1 ahead=0 action=incomplete reason=checkout-uncertain", err
+        )
+        self.assertIn("usage-export: WARN repo-update interrupted signal=TERM", err)
+        self.assert_stopped_before_export(result)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+        self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"), self.git(self.checkout, "rev-parse", self.first + ":NOTE"))
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
+        self.assert_kept_lock_holds(self.second)
 
     @unittest.skipIf(os.geteuid() == 0, "root writes through a read-only directory")
     def test_a_checkout_refused_part_way_stops_the_run(self):
@@ -2608,6 +2752,40 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
         self.assertEqual((self.checkout / "ADDED").read_text(encoding="utf-8"), "added\n")
         self.assertEqual(self.git(self.checkout, "status", "--porcelain", "--untracked-files=no"), "")
+        self.assert_no_residue()
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes through a read-only directory")
+    def test_a_path_spelled_like_pathspec_magic_is_matched_literally(self):
+        # Review F1 r3: a tracked file named `:(exclude)*` read as a pathspec
+        # excludes every path, so its partial update went unseen and the run
+        # exported. It sorts before the read-only `zzdir`, so it is written.
+        clone = self.scratch / "literal-clone"
+        self.git(self.scratch, "clone", "--quiet", str(self.origin), str(clone))
+        magic = ":(exclude)*"
+        (clone / magic).write_text("one\n", encoding="utf-8")
+        (clone / "zzdir").mkdir()
+        (clone / "zzdir/data").write_text("one\n", encoding="utf-8")
+        self.git(clone, "add", "-A")
+        self.git(clone, "commit", "--quiet", "-m", "literal")
+        self.git(clone, "push", "--quiet", "origin", "main")
+        self.git(self.checkout, "fetch", "--quiet", "origin")
+        self.git(self.checkout, "merge", "--ff-only", "--quiet", "origin/main")
+        base = self.head()
+        (clone / magic).write_text("two\n", encoding="utf-8")
+        (clone / "zzdir/data").write_text("two\n", encoding="utf-8")
+        self.git(clone, "commit", "--quiet", "-am", "literal two")
+        self.git(clone, "push", "--quiet", "origin", "main")
+        directory = self.checkout / "zzdir"
+        directory.chmod(0o555)
+        self.addCleanup(directory.chmod, 0o755)
+        result = self.push()
+        self.assertIn(
+            "usage-export: WARN DRIFT behind=1 ahead=0 action=incomplete reason=checkout-partial", result.stderr
+        )
+        self.assert_stopped_before_export(result)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), base)
+        self.assertEqual((self.checkout / magic).read_text(encoding="utf-8"), "two\n")
+        self.assertEqual((self.checkout / "zzdir/data").read_text(encoding="utf-8"), "one\n")
         self.assert_no_residue()
 
     def test_main_moved_before_the_lock_is_judged_inside_it(self):
