@@ -43,7 +43,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   read no longer keeps a stale declaration alive, and a `setItem` whose key
   is built at run time is refused. A file whose writes depend on whether a
   `/` divides or opens a regular expression is refused until it is written
-  unambiguously (Refs #355).
+  unambiguously, and so is one that spells a name with a Unicode escape,
+  which could disguise `localStorage`, `setItem`, `cookie` or a label
+  (Refs #355).
 - The watermark tool refuses a NaN or infinite `--size`, `--row` or `--gap`.
 
 ### Added
@@ -60,9 +62,11 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   is. The new index is installed while git's prepared ref transaction still
   locks HEAD and `main`, and the ref commits only after, so neither can move
   between the check and the commit. What an interrupted or failed update did
-  is decided by re-reading, never by a child's exit status: a proven state is
-  brought into agreement; an unproven one keeps its recovery material (the
-  lock's index, or the installed index and a logged one-line repair); and any
+  is decided by re-reading, never by a child's exit status (whether the
+  index was installed, by where the lock file's inode now is): a proven state
+  is brought into agreement; an unproven one keeps its recovery material (the
+  lock's index, or the installed index and a logged repair, which names a
+  compare-and-swap `update-ref` only when `main` could be read); and any
   update that stops part-way, is uncertain, was never acknowledged or met a
   moved ref ends the run before anything is exported. A signal waits until
   the checkout is settled. It fetches at most hourly under a bounded deadline
