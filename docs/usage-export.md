@@ -876,7 +876,8 @@ window has since dropped and the days a vendor surface later disagrees with.
    `SITE_URL` is the site's bare https origin, and setting it (with
    `HISTORY_DIR`) turns on the served verification described under
    "What the workstation's log can see": each run says whether the page
-   serves the last push. It is operator configuration only; the repository
+   serves, for every source, data at least as new as the last push. It is
+   operator configuration only; the repository
    names no host. `REPO_UPDATE` is `ff-only` when unset — a checkout on
    `main` that is strictly behind `origin/main` is fast-forwarded, fetching
    at most hourly, which needs `HISTORY_DIR` for its stamp — or `off`, which

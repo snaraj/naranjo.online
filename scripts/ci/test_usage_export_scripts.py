@@ -1879,6 +1879,27 @@ class ServedCheckTest(unittest.TestCase):
         )
         self.assertEqual(err, [])
 
+    def test_a_served_source_without_its_capture_is_behind(self):
+        # Review F2 r2: a source that keeps its label but carries no capture
+        # instant is not served, however fresh the envelope's own instant;
+        # nothing stands in for the instant it does not carry.
+        outage = at(CHECK_NOW - datetime.timedelta(minutes=20))
+        self.write_state(notServedSince=outage, notified=True)
+        envelope = json.loads(self.answer().body)
+        del envelope["data"]["sources"][0]["capturedAt"]
+        self.assertEqual(envelope["generatedAt"], PUSHED_CAPTURE)
+        out, err = self.check(EnvelopeResponse(envelope))
+        self.assertEqual(out, [])
+        self.assertEqual(
+            err,
+            [
+                "usage-export: WARN NOT-SERVED status=ok served_at=%s expected_at>=%s sources_behind=1"
+                " since_push=60s" % (PUSHED_CAPTURE, PUSHED_CAPTURE)
+            ],
+        )
+        state = self.read_state()
+        self.assertEqual((state["notServedSince"], state["notified"]), (outage, True))
+
     def test_one_notification_after_fifteen_minutes_and_never_again(self):
         stale = lambda: self.answer(generated=RELEASE_INSTANT)  # noqa: E731
         minute = datetime.timedelta(minutes=1)
