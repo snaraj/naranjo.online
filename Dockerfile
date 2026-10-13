@@ -29,7 +29,7 @@ RUN npm run check && npm test && npm run build
 
 # Test and compile one static binary for CI amd64 and Pi arm64; any future media
 # remains a runtime read-only mount and never becomes part of this Go embed.
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.6-trixie@sha256:b75d466dd608587fd66cca705a307ba65b889827d06ad61d6a75f0482b51b7c7 AS backend
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.9-trixie@sha256:f06b7122f888680048afb247c4e5f49c0069eb6c4c1ccae0f3f4834527a8d22c AS backend
 ARG TARGETOS
 ARG TARGETARCH
 ENV CGO_ENABLED=0 \
