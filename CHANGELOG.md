@@ -41,7 +41,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - The compliance gate counts storage writes in code only: write-shaped text
   in a string, template or regular expression, Svelte markup, or a `getItem`
   read no longer keeps a stale declaration alive, and a `setItem` whose key
-  is built at run time is refused (Refs #355).
+  is built at run time is refused. A file whose writes depend on whether a
+  `/` divides or opens a regular expression is refused until it is written
+  unambiguously (Refs #355).
 - The watermark tool refuses a NaN or infinite `--size`, `--row` or `--gap`.
 
 ### Added
@@ -55,9 +57,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   `origin/main` is fast-forwarded inside git's own index lock, moving `main`
   only and only while the checkout still names it; another git operation in
   progress, another branch or a moved ref is logged as `DRIFT` and left as it
-  is. It fetches at most hourly under a bounded deadline and the run
+  is. Ref, index and worktree agree on every exit: an update that stops
+  part-way is logged `action=incomplete`, keeps what recovery needs and ends
+  the run before anything is exported, and a signal waits until the checkout
+  agrees. It fetches at most hourly under a bounded deadline and the run
   re-executes once (#358). `install-launchd.sh --check` reports, read-only,
-  whether each installed agent's program arguments run the configured
+  whether each installed agent's program and arguments run the configured
   checkout and whether it exited cleanly.
 - `PANELS_CAPTURE=token-usage` refreshes the shipped token-usage snapshot from
   an exported document through the data root's own admission; the snapshot
