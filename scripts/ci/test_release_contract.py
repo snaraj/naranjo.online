@@ -8526,6 +8526,109 @@ go() {
             self.assertEqual(coverage_badges.read_totals(path, "a" * 40, 4242), ("96.3", "100"))
 
 
+class CoverageBadgeWorkflowShellPathTests(SyntheticRepo, unittest.TestCase):
+    """coverage-badges.yml's two run blocks, executed as the runner executes them.
+
+    The workflow runs only after a protected-main gate run, so no pull request
+    ever exercises it. Each block runs here with GitHub's default Linux shell,
+    `bash --noprofile --norc -eo pipefail {0}`, in a one-commit checkout, with
+    `gh` and the publisher replaced by stand-ins that record their argv. A
+    block that stops calling either, or swallows its exit status, goes red.
+    """
+
+    DOWNLOAD = "Download the gate's measured totals"
+    PUBLISH = "Publish the gate's numbers unless newer badges stand"
+    RUN_ID = "4242"
+    STAND_IN = (
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "with open(os.environ['STAND_IN_LOG'], 'a', encoding='utf-8') as log:\n"
+        "    log.write(json.dumps([os.path.basename(sys.argv[0]), *sys.argv[1:]]) + '\\n')\n"
+        "sys.exit(int(os.environ['STAND_IN_STATUS']))\n"
+    )
+
+    def execute(
+        self, step: str, *, real_publisher: bool = False, status: int = 0,
+        event_sha: str | None = None, totals: dict[str, object] | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], list[list[str]], str, str]:
+        """Run one step; return its result, the stand-in calls, the SHA and RUNNER_TEMP."""
+        block = workflow_run_block("coverage-badges.yml", step)
+        with tempfile.TemporaryDirectory(prefix="coverage-badge-workflow-") as temporary:
+            root = Path(temporary)
+            (root / "checkout").mkdir()
+            checkout = self.main_repo(str(root / "checkout"))
+            publisher = (HERE / "coverage_badges.py").read_text(encoding="utf-8") if real_publisher else self.STAND_IN
+            sha = self.paths_commit(
+                checkout,
+                {
+                    "scripts/ci/release_contract.py": (HERE / "release_contract.py").read_text(encoding="utf-8"),
+                    "scripts/ci/coverage_badges.py": publisher,
+                },
+                "one measured commit",
+            )
+            stand_ins = root / "bin"
+            stand_ins.mkdir()
+            (stand_ins / "python3").symlink_to(sys.executable)
+            (stand_ins / "gh").write_text(self.STAND_IN, encoding="utf-8")
+            (stand_ins / "gh").chmod(0o755)
+            runner = ExistingImageShellPathTests.bash_path(str(root / "runner"))
+            (root / "runner" / "coverage-totals").mkdir(parents=True)
+            record = {"schema": "coverage-totals/v1", "sourceSha": sha, "runId": int(self.RUN_ID),
+                      "go": "96.3", "frontend": "100", **(totals or {})}
+            (root / "runner" / "coverage-totals" / "coverage.json").write_text(json.dumps(record), encoding="utf-8")
+            (root / "event.json").write_text(json.dumps(event(event_sha or sha)), encoding="utf-8")
+            (root / "step.sh").write_text(block, encoding="utf-8")
+            environment = {
+                **os.environ,
+                "PATH": f"{stand_ins}{os.pathsep}{os.environ.get('PATH', '')}",
+                "BASH_ENV": "",
+                "GITHUB_EVENT_PATH": str(root / "event.json"),
+                "GITHUB_REPOSITORY": "owner/site",
+                "GH_TOKEN": "fixture-token",
+                "BADGE_REMOTE": str(root / "absent.git"),
+                "SOURCE_SHA": sha,
+                "GATE_RUN_ID": self.RUN_ID,
+                "RUNNER_TEMP": runner,
+                "STAND_IN_LOG": str(root / "calls.log"),
+                "STAND_IN_STATUS": str(status),
+            }
+            result = subprocess.run(
+                [ExistingImageShellPathTests.bash_executable(), "--noprofile", "--norc", "-eo", "pipefail",
+                 str(root / "step.sh")],
+                cwd=checkout, env=environment, check=False, capture_output=True, text=True, timeout=60,
+            )
+            log = root / "calls.log"
+            calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+            return result, calls, sha, runner
+
+    def test_the_download_step_fetches_this_runs_totals_and_propagates_a_failure(self):
+        result, calls, _, runner = self.execute(self.DOWNLOAD)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(calls, [["gh", "run", "download", self.RUN_ID, "--repo", "owner/site",
+                                  "--name", "coverage-totals", "--dir", f"{runner}/coverage-totals"]])
+        failed, calls, _, _ = self.execute(self.DOWNLOAD, status=42)
+        self.assertEqual(failed.returncode, 42, failed.stdout + failed.stderr)
+        self.assertEqual(len(calls), 1)
+        # Control: an event naming another commit stops the step before gh.
+        refused, calls, _, _ = self.execute(self.DOWNLOAD, event_sha="b" * 40)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(calls, [])
+
+    def test_the_publish_step_runs_the_publisher_on_this_run_and_propagates_a_failure(self):
+        result, calls, sha, runner = self.execute(self.PUBLISH)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(calls, [["coverage_badges.py", "--totals", f"{runner}/coverage-totals/coverage.json",
+                                  "--source-sha", sha, "--run-id", self.RUN_ID, "--repository", "."]])
+        failed, calls, _, _ = self.execute(self.PUBLISH, status=42)
+        self.assertEqual(failed.returncode, 42, failed.stdout + failed.stderr)
+        self.assertEqual(len(calls), 1)
+
+    def test_malformed_totals_make_the_real_publisher_and_the_step_fail(self):
+        result, _, _, _ = self.execute(self.PUBLISH, real_publisher=True, totals={"go": "NaN"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("coverage-badges: REFUSE the go coverage total is not a percentage", result.stdout)
+
+
 class NoArtifactWiringTests(unittest.TestCase):
     """The verdict artifact and orchestrator classification stay fail closed."""
 
