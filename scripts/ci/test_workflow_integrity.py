@@ -251,8 +251,12 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shlex
+import shutil
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1513,6 +1517,23 @@ def lift_instruction(workflow: str, rule: str, where: str) -> str:
 def workflow_paths(workflows: Path = WORKFLOWS) -> list[Path]:
     """Return every workflow extension GitHub accepts."""
     return sorted((*workflows.glob("*.yml"), *workflows.glob("*.yaml")))
+
+
+def run_blocks(text: str) -> list[tuple[int, int, str]]:
+    """Every `run: |` literal block: the line of its key, its length, and its dedented shell."""
+    lines = text.splitlines()
+    blocks = []
+    for index, line in enumerate(lines):
+        key = re.match(r"^(\s*)(?:- )?run:\s*\|[-+]?\s*$", line)
+        if not key:
+            continue
+        body = []
+        for following in lines[index + 1:]:
+            if following.strip() and len(following) - len(following.lstrip()) <= len(key[1]):
+                break
+            body.append(following)
+        blocks.append((index + 1, len(body), textwrap.dedent("\n".join(body)) + "\n"))
+    return blocks
 
 
 def resolve_uses(value: str, path: Path, lineno: int) -> str:
@@ -2846,6 +2867,106 @@ class WorkflowIntegrityTests(unittest.TestCase):
             f"step."
             + lift_instruction(workflow.name, "custom-shell", where)
         )
+
+    def test_the_go_toolchain_check_refuses_an_older_installed_compiler(self):
+        """The toolchain check must fail on the compiler the Go steps would use.
+
+        go.mod's `toolchain` line makes the default auto mode fetch that
+        release for `go env GOVERSION` alone, so a check in auto mode passes
+        while every `GOTOOLCHAIN: local` step builds and tests with an older
+        installed compiler (#367 review). Text cannot show that a check
+        enforces anything: a commented-out or `|| true` assertion reads the
+        same. So every `run:` block that reads GOVERSION is executed as the
+        runner executes a step with no `shell:`, `bash -e {0}`, against a
+        stand-in `go` that reports the installed compiler in local mode and
+        go.mod's toolchain in auto mode. A step, job or workflow shell is
+        refused rather than imitated. The block must pass with exactly that
+        toolchain installed and fail with every other release of its train
+        below it, the next patch and minor, the bare minor, and go1.0; and
+        pr-gate.yml, which the release publisher authorizes against, must keep
+        one.
+        """
+        declared = re.search(r"^toolchain go(\d+)\.(\d+)\.(\d+)$", (ROOT / "go.mod").read_text(), re.M)
+        if declared is None:
+            self.fail("go.mod names no toolchain of the form goX.Y.Z")
+        major, minor, patch = map(int, declared.groups())
+        toolchain = f"go{major}.{minor}.{patch}"
+        others = [f"go{major}.{minor}.{earlier}" for earlier in range(patch)] + [
+            f"go{major}.{minor}.{patch + 1}", f"go{major}.{minor + 1}.0", f"go{major}.{minor}", "go1.0",
+        ]
+        checks: dict[str, int] = {}
+        for path in workflow_paths():
+            text = path.read_text()
+            workflow = read_workflow(path)
+            covered: set[int] = set()
+            for lineno, length, block in run_blocks(text):
+                covered.update(range(lineno, lineno + length + 1))
+                if "GOVERSION" not in block:
+                    continue
+                where = f"{path.relative_to(ROOT)}:{lineno}"
+                shell = self._declared_shell(workflow, lineno)
+                if shell is not None:
+                    self.fail(f"{where}: the step runs under `shell: {shell}`; this test executes only the "
+                              f"runner default, `bash -e {{0}}`")
+                self.assertEqual(
+                    self._run_toolchain_check(block, toolchain, toolchain), 0,
+                    f"{where}: the toolchain check fails with go.mod's toolchain ({toolchain}) installed",
+                )
+                accepted = [other for other in others if self._run_toolchain_check(block, other, toolchain) == 0]
+                self.assertEqual(
+                    accepted, [],
+                    f"{where}: the toolchain check passes with {', '.join(accepted)} installed; it must "
+                    f"accept exactly {toolchain}, read with GOTOOLCHAIN=local in an assertion that runs "
+                    f"and fails the step",
+                )
+                checks[path.name] = checks.get(path.name, 0) + 1
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if "GOVERSION" in line and lineno not in covered:
+                    self.fail(f"{path.relative_to(ROOT)}:{lineno}: GOVERSION is read outside a "
+                              f"`run: |` block this test can execute")
+        self.assertTrue(
+            checks.get("pr-gate.yml"),
+            ".github/workflows/pr-gate.yml no longer checks the installed Go toolchain",
+        )
+
+    @staticmethod
+    def _declared_shell(workflow: Workflow, lineno: int) -> str | None:
+        """The shell the step holding line `lineno` runs under, when anything sets one."""
+        holder = None
+        for job in workflow.jobs.values():
+            for step in job.steps:
+                if step.line <= lineno and (holder is None or step.line > holder[1].line):
+                    holder = (job, step)
+        if holder is None:
+            return None
+        job, step = holder
+        for declared in (step.shell, job.default_shell, workflow.default_shell):
+            if declared is not None:
+                return declared[0]
+        return None
+
+    def _run_toolchain_check(self, block: str, installed: str, module: str) -> int:
+        """Run one `run:` block as the runner runs a step with no `shell:`, with stand-in node, npm and go."""
+        expected = dict(re.findall(r'\$\((node|npm) --version\)" = "([^"]+)"', block))
+        with tempfile.TemporaryDirectory() as scratch:
+            stubs = {
+                "go": f'[ "$*" = "env GOVERSION" ] || exit 97\n'
+                      f'if [ "${{GOTOOLCHAIN:-auto}}" = local ]; then echo {shlex.quote(installed)}; '
+                      f'else echo {shlex.quote(module)}; fi\n',
+                "node": f"echo {shlex.quote(expected.get('node', ''))}\n",
+                "npm": f"echo {shlex.quote(expected.get('npm', ''))}\n",
+            }
+            for name, body in stubs.items():
+                stub = Path(scratch) / name
+                stub.write_text("#!/bin/sh\n" + body)
+                stub.chmod(0o755)
+            script = Path(scratch) / "run.sh"
+            script.write_text(block)
+            return subprocess.run(
+                [shutil.which("bash") or "/bin/bash", "-e", str(script)],
+                env={"PATH": f"{scratch}:/usr/bin:/bin", "HOME": scratch},
+                capture_output=True,
+            ).returncode
 
     # -- allowlist hygiene ---------------------------------------------------
 

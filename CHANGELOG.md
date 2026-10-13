@@ -7,6 +7,22 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.92] - 2026-10-12
+
+### Security
+
+- The server is built with Go 1.26.9, which fixes three high-severity
+  denial-of-service vulnerabilities in Go 1.26.6's standard library:
+  crafted HTTP Range headers (CVE-2026-78667), excessive HTTP/2 SETTINGS
+  frames (CVE-2026-78669) and repeated TLS ECH outer extension references
+  (CVE-2026-97031). The release publisher's final-image scan refused to
+  publish 0.1.91 on them, so 0.1.91 was tagged but never published, and this
+  release carries its changes (#366).
+- CI's Go toolchain check reads the compiler setup-go installed
+  (`GOTOOLCHAIN=local`), the one every Go step builds and tests with. In the
+  default auto mode, go.mod's `toolchain` line fetched that release for the
+  check alone, so an older installed compiler passed it.
+
 ## [0.1.91] - 2026-10-12
 
 ### Fixed
