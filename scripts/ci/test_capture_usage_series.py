@@ -826,8 +826,10 @@ class RunningTotalsAttributionTest(unittest.TestCase):
     one that advance is billed to.
     """
 
-    MEMBER = capture_usage_series.MODEL_KEYS[6]
-    OTHER_MEMBER = capture_usage_series.MODEL_KEYS[7]
+    # The first two members the vocabulary attributes by an EXACT identifier,
+    # chosen by that property rather than by position: a member appended to an
+    # earlier group shifts every later index (issue #369).
+    MEMBER, OTHER_MEMBER = list(dict.fromkeys(capture_usage_series.MODEL_IDS.values()))[:2]
 
     def walk(self, lines):
         counters = capture_usage_series.new_counters()
@@ -1431,7 +1433,7 @@ class NoPlaceholderRowsTest(unittest.TestCase):
         capture_usage_series.assert_partition(totals, capture_usage_series.carrying(rows), 0)
 
     def test_a_walk_that_names_its_model_emits_a_section_with_no_hollow_row(self):
-        member = capture_usage_series.MODEL_KEYS[6]
+        member = RunningTotalsAttributionTest.MEMBER
         document = json.loads(
             (pathlib.Path(__file__).resolve().parents[2] / "internal/panels/config/models.json")
             .read_text(encoding="utf-8")

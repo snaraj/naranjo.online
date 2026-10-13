@@ -334,8 +334,8 @@
   /* The token-usage ENTITY set: identity colors for the per-day breakdowns.
      The five accounting classes take slots 1..5 (input, output, cache read,
      cache write, reasoning) and the model vocabulary's members take a slot
-     within their own vendor group, which is why the set runs to seven
-     chromatic hues (issue 302: the larger group declares seven named
+     within their own vendor group, which is why the set runs to nine
+     chromatic hues (issue 369: the larger group declares nine named
      members). A slot is fixed per KEY so a color follows its entity across
      every payload, and slot 0 is the neutral the residual and any key
      outside a vocabulary draw. Reuse ACROSS groups is deliberate — a colour
@@ -351,6 +351,21 @@
      that keeps its ADJACENT pairs apart: worst adjacent separation across
      the three chromatic modes is 19.8 to normal vision and 13.8 under
      deuteranopia and protanopia, against floors of 15 and 8.
+
+     Slots 8 and 9 (issue 369) are an orchid and a cyan, the two hue gaps
+     the first seven leave, chosen by the same validator against the same
+     raised surfaces: every new hue inside its mode's lightness band, the
+     lowest chroma 0.110 and the lowest contrast 3.17:1, and the two pairs
+     the new slots make in the vocabulary's own order (7 with 8, 8 with 9)
+     at worst 20.8 to normal vision and 9.7 under deuteranopia and
+     protanopia. Re-run today, that validator does NOT reproduce the figures
+     above for slots 6 and 7: slot 7's chroma measures 0.095 to 0.097
+     against its 0.10 floor, and in the larger group's order the 5-6 pair
+     measures 10.1 to normal vision and the 6-7 pair 0.8 under deuteranopia
+     at their worst. Those two colours are left where they are, because
+     repainting a slot moves a member's colour, and the gap is recorded here
+     rather than restated as a pass. The bars on the board paint one ink
+     rather than these slots, so no reader is shown either colour today.
 
      The true dark mode is the DELIBERATE exception, exactly as its grid
      ramp is: the mode's whole design is that the brand mark stays its only
@@ -368,6 +383,8 @@
   --palette-light-cat-5: #a3315e;
   --palette-light-cat-6: #cc5145;
   --palette-light-cat-7: #698240;
+  --palette-light-cat-8: #86318a;
+  --palette-light-cat-9: #048aad;
 
   --palette-dark-cat-0: #565656;
   --palette-dark-cat-1: #6f6f6f;
@@ -377,6 +394,8 @@
   --palette-dark-cat-5: #dadada;
   --palette-dark-cat-6: #949494;
   --palette-dark-cat-7: #f2f2f2;
+  --palette-dark-cat-8: #7a7a7a;
+  --palette-dark-cat-9: #cccccc;
 
   --palette-slate-cat-0: #5a657e;
   --palette-slate-cat-1: #3f81d9;
@@ -386,6 +405,8 @@
   --palette-slate-cat-5: #cf5585;
   --palette-slate-cat-6: #b46852;
   --palette-slate-cat-7: #678546;
+  --palette-slate-cat-8: #8e5793;
+  --palette-slate-cat-9: #01a2c5;
 
   --palette-sepia-cat-0: #77685a;
   --palette-sepia-cat-1: #5c88d8;
@@ -395,6 +416,8 @@
   --palette-sepia-cat-5: #d15a88;
   --palette-sepia-cat-6: #b56754;
   --palette-sepia-cat-7: #6d8a4b;
+  --palette-sepia-cat-8: #985a96;
+  --palette-sepia-cat-9: #0fa3bf;
 
   /* Stacking order, as tokens rather than magic numbers. Two things sit over
      the document and they must be told apart. The reading-mode popover hangs
@@ -975,6 +998,8 @@
   --usage-cat-5: var(--color-cat-5);
   --usage-cat-6: var(--color-cat-6);
   --usage-cat-7: var(--color-cat-7);
+  --usage-cat-8: var(--color-cat-8);
+  --usage-cat-9: var(--color-cat-9);
   /* The hover-detail token layer. The detail that hangs off a tile is one
      primitive (lib/components/DetailTip.svelte), so like the card above it
      every dimension it has is a token declared once here — including the two
@@ -1035,6 +1060,8 @@
   --color-cat-5: var(--palette-light-cat-5);
   --color-cat-6: var(--palette-light-cat-6);
   --color-cat-7: var(--palette-light-cat-7);
+  --color-cat-8: var(--palette-light-cat-8);
+  --color-cat-9: var(--palette-light-cat-9);
   /* The page's one font stack, as a token: a card's type ramp reads it rather
      than restating it, so the family is chosen in exactly one place. The face
      is the self-hosted JetBrains Mono declared at the top of this file (owner
@@ -1157,6 +1184,8 @@
     --color-cat-5: var(--palette-dark-cat-5);
     --color-cat-6: var(--palette-dark-cat-6);
     --color-cat-7: var(--palette-dark-cat-7);
+    --color-cat-8: var(--palette-dark-cat-8);
+    --color-cat-9: var(--palette-dark-cat-9);
     --gallery-stage-ground: var(--palette-projection-ground);
   }
 }
@@ -1189,6 +1218,8 @@
   --color-cat-5: var(--palette-dark-cat-5);
   --color-cat-6: var(--palette-dark-cat-6);
   --color-cat-7: var(--palette-dark-cat-7);
+  --color-cat-8: var(--palette-dark-cat-8);
+  --color-cat-9: var(--palette-dark-cat-9);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 
@@ -1226,6 +1257,8 @@
   --color-cat-5: var(--palette-slate-cat-5);
   --color-cat-6: var(--palette-slate-cat-6);
   --color-cat-7: var(--palette-slate-cat-7);
+  --color-cat-8: var(--palette-slate-cat-8);
+  --color-cat-9: var(--palette-slate-cat-9);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 
@@ -1257,6 +1290,8 @@
   --color-cat-5: var(--palette-sepia-cat-5);
   --color-cat-6: var(--palette-sepia-cat-6);
   --color-cat-7: var(--palette-sepia-cat-7);
+  --color-cat-8: var(--palette-sepia-cat-8);
+  --color-cat-9: var(--palette-sepia-cat-9);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 

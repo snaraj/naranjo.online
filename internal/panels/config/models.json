@@ -44,6 +44,34 @@
           "slot": 5,
           "ids": [],
           "prefixStrip": true
+        },
+        {
+          "key": "opus-5-5",
+          "label": "Opus 5.5",
+          "slot": 6,
+          "ids": [],
+          "prefixStrip": true
+        },
+        {
+          "key": "mythos-5-1",
+          "label": "Mythos 5.1",
+          "slot": 7,
+          "ids": [],
+          "prefixStrip": true
+        },
+        {
+          "key": "haiku-5-5",
+          "label": "Haiku 5.5",
+          "slot": 8,
+          "ids": [],
+          "prefixStrip": true
+        },
+        {
+          "key": "sonnet-5-5",
+          "label": "Sonnet 5.5",
+          "slot": 9,
+          "ids": [],
+          "prefixStrip": true
         }
       ]
     },
