@@ -1552,19 +1552,41 @@ function modelReadings(source: TokenUsageSource): ModelReading[] {
   return realMembers(shares.map((share) => ({ key: share.key, total: share.total })));
 }
 
+/* A CARD DRAWS AT MOST THE FIVE LARGEST, AND ITS BOX DECIDES WHETHER IT SHOWS
+ * FOUR OR FIVE (owner ruling, 2026-10-13, issue #369): "just show the top 4-5
+ * but make it responsive, that decision is more of a responsiveness/UX
+ * decision. it should fit nicely in the box and change as needs change."
+ *
+ * The vocabulary grew to nine named members on one source, and a card drawing
+ * all nine set the height of its whole grid row. Every member stays recorded
+ * in the payload; this is only what the card draws. The cut is taken from the
+ * usage order, so what goes is always the tail. Five is the most the ruling
+ * allows; the stylesheet (.board-models) then draws only the rows that fit
+ * WHOLE in the space the card has, so the same five become four in a smaller
+ * box without this adapter knowing the box at all. */
+const MAX_DRAWN_MODELS = 5;
+
 /* Cards five and six, and one per later source that carries a split: the SAME
  * shape as each other, headed by the source whose numbers they are. A source
  * with nothing to split renders no card at all rather than an empty one — the
  * board is the cards the payload can fill. */
 function modelCard(source: TokenUsageSource): LedgerCard | undefined {
-  const readings = modelReadings(source);
+  const readings = modelReadings(source).slice(0, MAX_DRAWN_MODELS);
   if (readings.length === 0) {
     return undefined;
   }
   const name = sourceName(source.label);
-  const measured = source.modelStats !== undefined && source.modelStats.length > 0;
+  const stats = source.modelStats;
+  const measured = stats !== undefined && stats.length > 0;
   const largest = Math.max(...readings.map((reading) => reading.total));
-  const grand = readings.reduce((sum, reading) => sum + reading.total, 0);
+  /* A SHARE IS OF EVERYTHING THE SOURCE SPENT, never of the rows that happen
+     to be drawn (issue #369). The residual and every member past the cut are
+     still part of the lifetime, so the whole is summed over EVERY entry the
+     source carries. Dividing by the drawn rows made every share too large
+     whenever the residual held tokens, and with the cut it would do the same
+     for every member left off the card: five rows that summed to 100% of a
+     lifetime they were only part of. */
+  const whole = measured ? stats.reduce((sum, entry) => sum + classTotal(entry.totals), 0) : 0;
   const models: LedgerBar[] = readings.map((reading) => ({
     key: reading.key,
     label: modelLabel(reading.key),
@@ -1574,7 +1596,7 @@ function modelCard(source: TokenUsageSource): LedgerCard | undefined {
        what says how much of the whole it was. */
     fillPct: (reading.total / largest) * 100,
     reading: measured
-      ? formatShare((reading.total / grand) * 100)
+      ? formatShare((reading.total / whole) * 100)
       : formatTokenCount(reading.total),
     detail: reading.detail
   }));

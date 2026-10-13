@@ -1564,8 +1564,16 @@ async function stageUsagePayload(page, edit) {
  * drawing lays out three by two.
  *
  * Every key comes from the vocabulary files rather than from a list typed
- * here, so the staged payload is one the origin could actually serve. */
-async function stageSixCards(page) {
+ * here, so the staged payload is one the origin could actually serve.
+ *
+ * `fullSplit` gives the lead source's lifetime split EVERY member of its own
+ * vendor group, each with a full accounting line, which is the shape the owner
+ * ruled on (2026-10-13, issue #369): more members than a card draws. Usage
+ * rises through the vocabulary's order, so the rows the card keeps are the
+ * group's LAST members and a cut taken before the sort would draw the wrong
+ * ones. What it staged is returned, filled in when the page fetches. */
+async function stageSixCards(page, { fullSplit = false } = {}) {
+  const staged = {};
   await stageUsagePayload(page, (envelope) => {
     const sources = envelope?.data?.sources ?? [];
     expect(
@@ -1585,6 +1593,20 @@ async function stageSixCards(page) {
       { key: first, totals: { input: 2, output: 3, 'cache-read': 60, 'cache-write': 5 } },
       { key: second, totals: { input: 1, output: 1, 'cache-read': 26, 'cache-write': 2 } },
     ];
+    if (fullSplit) {
+      const members = ownGroup(lead.label).members.map((member) => member.key);
+      lead.modelStats = members.map((key, index) => ({
+        key,
+        totals: {
+          input: (index + 1) * 1_200_000,
+          output: (index + 1) * 45_000,
+          'cache-read': (index + 1) * 96_000_000,
+          'cache-write': (index + 1) * 3_100_000,
+        },
+      }));
+      staged.splitName = sourceName(lead.label);
+      staged.splitMembers = members.length;
+    }
     follower.windows = [{ period: 'week', inputTokens: 3_300_000_000, outputTokens: 4_300_000 }];
     /* The SAME start as the lead's own series, so the two overlap and the
        total card has a combined line to draw: the intersection rule is proven
@@ -1600,6 +1622,7 @@ async function stageSixCards(page) {
       ],
     };
   });
+  return staged;
 }
 
 /* A synthetic daily series of `days` days, ending today. Values ramp so the
@@ -1896,96 +1919,278 @@ test('every model row the card draws is a real member with a real rule', async (
   }
 });
 
-/* A CARD THAT HIDES A ROW IS A CARD THAT LIES (owner directive,
-/* A SQUARE THAT HIDES A MODEL IS A SQUARE THAT LIES (owner directive,
- * 2026-09-03, issue 287).
+/* A CARD THAT HIDES A ROW IS A CARD THAT LIES (owner directive, 2026-09-03,
+ * issue 287), FOR EVERYTHING BUT ITS MODEL ROWS (owner ruling, 2026-10-13,
+ * issue #369).
  *
- * Each board square is a fixed box with `overflow: hidden`, which is what lets
- * the flip animate cleanly and what makes a sizing mistake SILENT: content
- * that does not fit is not clipped visibly at an edge a reader would notice,
- * it simply is not there. Measured during this redesign: the model square's
+ * Each board square was a fixed box with `overflow: hidden`, which is what let
+ * the flip animate cleanly and what made a sizing mistake SILENT: content
+ * that did not fit was not clipped visibly at an edge a reader would notice,
+ * it simply was not there. Measured during that redesign: the model square's
  * bars auto-flowed their reading onto a third row, which made each bar 43px in
  * a box with room for about 2.7 of them, and two of the four models were
  * absent from a square that gave no sign of it.
  *
  * THE FIXED BOX IS GONE (owner directive, 2026-09-11): a card's height follows
  * its content over a shared minimum, and the inversion is a token remap rather
- * than a second face rotated into the same box. Both halves of the silence
- * this lane was written for are therefore structurally harder to reach — and
- * both are still measured, because "harder to reach" is not "impossible" and a
- * clipping regression would be exactly as silent as it was. What the lane
- * measures now is what the box actually SHOWS, at a phone width and a desktop
- * one: the card's scroll height against its own, and every row and fact inside
- * it against the card's visible rectangle.
+ * than a second face rotated into the same box. What the lane measures is what
+ * the box actually SHOWS, at a phone width and a desktop one: the card's
+ * scroll height against its own, and every fact inside it against the card's
+ * visible rectangle. ONE PASS, because there is no second state to walk into
+ * (owner directive, 2026-09-11, issue 316).
  *
- * ONE PASS, because there is no longer a second state to walk into (owner
- * directive, 2026-09-11, issue 316). The lane used to press every card and
- * measure again; the press is gone, and clicking six cards to observe the
- * identical geometry twice would be a lane measuring its own no-op.
+ * THE MODEL ROWS ARE SUPERSEDED, AND ONLY THEY ARE (owner ruling, 2026-10-13,
+ * issue #369): "just show the top 4-5 but make it responsive, that decision is
+ * more of a responsiveness/UX decision. it should fit nicely in the box and
+ * change as needs change." The vocabulary grew to nine named members on one
+ * source, and a card that drew all nine set the height of its whole grid row.
+ * The adapter now hands a card its five largest members, and the list draws
+ * only the rows that fit WHOLE in the box the grid gave the card. So this lane
+ * no longer asks a models card to show every row. It asks what the ruling
+ * promises instead, and each part fails on its own:
+ *
+ *   - a row that is painted at all is painted WHOLE, inside its card, and
+ *     across the list's full width. A row cut through its name or its rule,
+ *     or one spilling past the card's edge, is the silent clipping this lane
+ *     was written for. "Painted" is the row's box cut by every ancestor that
+ *     clips, read off the engine's own computed overflow, so a list that
+ *     stopped clipping its spare column shows here as rows painted outside
+ *     their card, and rows shrunk to their text show as rows sitting side by
+ *     side;
+ *   - the rows that show are spread evenly through the list: the same space
+ *     above the first and below the last, and that space plus the gap token
+ *     between each pair, so a card's slack is never a band at its foot;
+ *   - the rows left off come only from the TAIL. The DOM is in usage order,
+ *     so once one row is out every later row is out, and a hole in the middle
+ *     of the ranking is a card showing the wrong members;
+ *   - the source staged with every member of its group reaches the page as
+ *     five rows and draws at least four and at most five of them, and every
+ *     other card shows at least four rows, or all it has;
+ *   - the models card does not set its grid row's height. Every card in the
+ *     row is measured at its own natural height (aligned to the row's start
+ *     for the read, then put back), and the row is no taller than the
+ *     minimum or the tallest card in it that has no model list.
+ *
+ * Facts and every other region are unchanged: every fact is shown, and no
+ * card holds more content than its box.
  */
-test('every board card shows all of its own content (owner 2026-09-11)', async ({
+test('every board card shows its content whole, and a models card the rows its box fits (owner 2026-09-11, 2026-10-13)', async ({
   page,
 }) => {
-  await stageSixCards(page);
+  /* The ruling's bounds, typed here rather than read off the adapter, so a
+     cut moved in the source cannot move its own expectation with it. */
+  const drawnAtMost = 5;
+  const drawnAtLeast = 4;
+  const staged = await stageSixCards(page, { fullSplit: true });
   await visit(page);
+  expect(
+    staged.splitMembers,
+    'the staged split has no more members than a card draws; the cut is not on the page'
+  ).toBeGreaterThan(drawnAtMost);
   const readCards = () =>
     page.evaluate(() =>
       [...window.document.querySelectorAll('.board-card')].map((card) => {
         const box = card.getBoundingClientRect();
         const rows = [...card.querySelectorAll('.board-model')];
         const facts = [...card.querySelectorAll('.board-fact')];
+        const lane = card.querySelector('.board-models')?.clientWidth ?? 0;
         const inside = (node) => {
           const seat = node.getBoundingClientRect();
           return seat.bottom <= box.bottom + 1 && seat.right <= box.right + 1;
         };
+        /* What of a row the engine can paint: its box cut by every ancestor
+           whose computed overflow clips, up to the root. And whether the row
+           spans its list, because a rule is read against the card's width
+           and a row shrunk to its own text would let a spare row sit BESIDE
+           it rather than leave the card. */
+        const visible = (node) => {
+          const seat = node.getBoundingClientRect();
+          let clip = { top: seat.top, bottom: seat.bottom, left: seat.left, right: seat.right };
+          for (let up = node.parentElement; up !== null; up = up.parentElement) {
+            const style = getComputedStyle(up);
+            if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+            const frame = up.getBoundingClientRect();
+            clip = {
+              top: Math.max(clip.top, frame.top),
+              bottom: Math.min(clip.bottom, frame.bottom),
+              left: Math.max(clip.left, frame.left),
+              right: Math.min(clip.right, frame.right),
+            };
+          }
+          const painted = clip.bottom - clip.top > 1 && clip.right - clip.left > 1;
+          return {
+            painted,
+            whole:
+              painted &&
+              clip.top <= seat.top + 1 &&
+              clip.bottom >= seat.bottom - 1 &&
+              clip.left <= seat.left + 1 &&
+              clip.right >= seat.right - 1,
+            inCard:
+              seat.top >= box.top - 1 &&
+              seat.bottom <= box.bottom + 1 &&
+              seat.left >= box.left - 1 &&
+              seat.right <= box.right + 1,
+            ownWhole: node.scrollHeight <= node.clientHeight + 1,
+            spans: seat.width >= lane - 1,
+          };
+        };
+        const seats = rows.map(visible);
+        /* How the shown rows sit in their list: the space above the first,
+           below the last, and between each pair. */
+        const list = card.querySelector('.board-models');
+        const shown = rows
+          .filter((_, index) => seats[index].painted)
+          .map((node) => node.getBoundingClientRect());
+        const frame = list?.getBoundingClientRect();
         return {
           label: card.querySelector('.board-label')?.textContent.trim() ?? '',
           paint: getComputedStyle(card).backgroundColor,
           ink: getComputedStyle(card).color,
           scrollHeight: card.scrollHeight,
           clientHeight: card.clientHeight,
-          rows: rows.length,
-          rowsShown: rows.filter(inside).length,
-          rowsWhole: rows.filter((node) => node.scrollHeight <= node.clientHeight + 1).length,
+          rows: seats,
+          spread:
+            shown.length === 0
+              ? null
+              : {
+                  gap: Number.parseFloat(getComputedStyle(list).rowGap),
+                  top: shown[0].top - frame.top,
+                  bottom: frame.bottom - shown[shown.length - 1].bottom,
+                  between: shown.slice(1).map((seat, index) => seat.top - shown[index].bottom),
+                },
           facts: facts.length,
           factsShown: facts.filter(inside).length,
         };
       })
     );
+  /* THE ROW THE FULL SPLIT SITS IN, at each card's own natural height. The
+     cards are aligned to the row's start only for the read, because a grid
+     row stretches every card to its own height and would otherwise report
+     the answer it is being asked about; the minimum is read off a probe of
+     the same token the grid's rows are sized by. */
+  const readRow = (name) =>
+    page.evaluate((splitName) => {
+      const cards = [...window.document.querySelectorAll('.board-card')];
+      const split = cards.find(
+        (card) =>
+          card.querySelector('.board-models') !== null &&
+          (card.querySelector('.board-label')?.textContent ?? '').endsWith(splitName)
+      );
+      if (split === undefined) return null;
+      const top = Math.round(split.getBoundingClientRect().top);
+      const band = cards.filter((card) => Math.round(card.getBoundingClientRect().top) === top);
+      const probe = window.document.createElement('div');
+      probe.style.cssText =
+        'position:absolute;visibility:hidden;block-size:var(--board-card-min)';
+      window.document.body.append(probe);
+      const minimum = probe.getBoundingClientRect().height;
+      probe.remove();
+      const row = split.getBoundingClientRect().height;
+      for (const card of band) card.style.alignSelf = 'start';
+      const natural = band.map((card) => ({
+        models: card.querySelector('.board-models') !== null,
+        height: card.getBoundingClientRect().height,
+      }));
+      for (const card of band) card.style.removeProperty('align-self');
+      const restored = split.getBoundingClientRect().height;
+      return {
+        row,
+        restored,
+        minimum,
+        cards: band.length,
+        others: Math.max(0, ...natural.filter((card) => !card.models).map((card) => card.height)),
+        split: natural[band.indexOf(split)].height,
+      };
+    }, name);
 
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await settled(page);
     const observed = await readCards();
-    expect(observed.length, `the board drew no cards at ${width}px`).toBeGreaterThan(1);
+    const at = `at ${width}px`;
+    expect(observed.length, `the board drew no cards ${at}`).toBeGreaterThan(1);
     for (const card of observed) {
-      const at = `at ${width}px`;
       expect(
         card.scrollHeight,
         `"${card.label}" holds ${card.scrollHeight}px of content in a ${card.clientHeight}px card ${at}; the rest is hidden with no sign of it`
       ).toBeLessThanOrEqual(card.clientHeight + 1);
       expect(
-        card.rowsShown,
-        `"${card.label}" draws ${card.rows} model rows ${at} and shows ${card.rowsShown}`
-      ).toBe(card.rows);
-      expect(
-        card.rowsWhole,
-        `${card.rows - card.rowsWhole} of ${card.rows} rows clip their own name or groove ${at}`
-      ).toBe(card.rows);
-      expect(
         card.factsShown,
         `"${card.label}" draws ${card.facts} facts ${at} and shows ${card.factsShown}`
       ).toBe(card.facts);
+      const painted = card.rows.map((row) => row.painted);
+      card.rows.forEach((row, index) => {
+        if (!row.painted) return;
+        expect(row.whole, `"${card.label}" paints row ${index + 1} cut off ${at}`).toBe(true);
+        expect(row.inCard, `"${card.label}" paints row ${index + 1} outside its own card ${at}`).toBe(
+          true
+        );
+        expect(
+          row.ownWhole,
+          `"${card.label}" row ${index + 1} clips its own name or groove ${at}`
+        ).toBe(true);
+        expect(row.spans, `"${card.label}" row ${index + 1} does not span its list ${at}`).toBe(true);
+      });
+      const shown = painted.filter(Boolean).length;
+      expect(
+        painted,
+        `"${card.label}" leaves out a row from the middle of its ranking ${at}; only the tail may go`
+      ).toEqual(painted.map((_, index) => index < shown));
+      expect(
+        shown,
+        `"${card.label}" shows ${shown} of its ${card.rows.length} model rows ${at}`
+      ).toBeGreaterThanOrEqual(Math.min(card.rows.length, drawnAtLeast));
+      if (card.spread !== null) {
+        const { top, bottom, between, gap } = card.spread;
+        expect(
+          Math.abs(top - bottom),
+          `"${card.label}" seats its rows ${top}px below the list's top and ${bottom}px above its foot ${at}; they are not spread evenly`
+        ).toBeLessThanOrEqual(1);
+        for (const space of between) {
+          expect(
+            Math.abs(space - gap - top),
+            `"${card.label}" spaces two rows ${space}px apart (gap ${gap}px) against ${top}px at its ends ${at}; they are not spread evenly`
+          ).toBeLessThanOrEqual(1);
+        }
+      }
+    }
+    /* THE FULL SPLIT: five rows reach the page, and the box shows four or
+       five of them. */
+    const split = observed.find(
+      (card) => card.rows.length > 0 && card.label.endsWith(staged.splitName)
+    );
+    expect(split, `no models card is headed by "${staged.splitName}" ${at}`).toBeTruthy();
+    expect(
+      split.rows.length,
+      `the ${staged.splitMembers}-member split reached the page as ${split.rows.length} rows ${at}`
+    ).toBe(drawnAtMost);
+    const shown = split.rows.filter((row) => row.painted).length;
+    expect(shown, `the full split shows ${shown} rows ${at}`).toBeGreaterThanOrEqual(drawnAtLeast);
+    expect(shown, `the full split shows ${shown} rows ${at}`).toBeLessThanOrEqual(drawnAtMost);
+    /* AND IT DOES NOT SET ITS ROW'S HEIGHT. */
+    const row = await readRow(staged.splitName);
+    expect(row, `the full split's card is not on the page ${at}`).not.toBeNull();
+    expect(row.restored, `the row did not return to its own height after the read ${at}`).toBeCloseTo(
+      row.row,
+      1
+    );
+    expect(
+      row.row,
+      `the full split's row is ${row.row}px ${at} against a ${row.minimum}px minimum and a ${row.others}px tallest other card (the split alone wants ${row.split}px); the model list is setting the row`
+    ).toBeLessThanOrEqual(Math.max(row.minimum, row.others) + 1);
+    if (width === 1440) {
+      expect(row.cards, `the full split shares its row with no other card ${at}`).toBeGreaterThan(1);
     }
     /* Non-vacuity: a board whose cards all held a single short figure would
        satisfy everything above without exercising the shapes that clipped. */
     expect(
-      Math.max(...observed.map((card) => card.rows)),
-      `no card draws model rows at ${width}px; the shape that clipped is not on the page`
+      Math.max(...observed.map((card) => card.rows.length)),
+      `no card draws model rows ${at}; the shape that clipped is not on the page`
     ).toBeGreaterThan(1);
     expect(
       Math.max(...observed.map((card) => card.facts)),
-      `no card draws a fact ladder at ${width}px`
+      `no card draws a fact ladder ${at}`
     ).toBeGreaterThan(1);
     /* AND EVERY CARD WEARS ONE PAINT (owner directive, 2026-09-12, issue 323:
        "there is no reason for Codex to be black while the rest are not,
@@ -1996,7 +2201,7 @@ test('every board card shows all of its own content (owner 2026-09-11)', async (
     const paints = new Set(observed.map((card) => `${card.paint} on ${card.ink}`));
     expect(
       [...paints],
-      `the board draws ${paints.size} different paints at ${width}px; every card must wear one`
+      `the board draws ${paints.size} different paints ${at}; every card must wear one`
     ).toHaveLength(1);
   }
   await page.unrouteAll({ behavior: 'ignoreErrors' });

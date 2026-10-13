@@ -3142,18 +3142,38 @@ h1 {
    runs under both, and the accounting line under that where the source
    reports one — four cells of one small grid, placed rather than auto-flowed
    so the reading stays beside its name instead of being pushed under the
-   rule it belongs to. */
+   rule it belongs to.
+
+   THE LIST NEVER SETS THE CARD'S HEIGHT, AND IT DRAWS ONLY WHOLE ROWS (owner
+   ruling, 2026-10-13, issue 369: "just show the top 4-5 but make it
+   responsive ... it should fit nicely in the box and change as needs
+   change"). The adapter hands over at most five rows and the box decides how
+   many of them show. `contain: size` makes the rows count for nothing when
+   the grid sizes the row, so the card's height comes from its grid row and
+   --board-card-min, never from the list; the list then grows into whatever
+   height the card has left. Inside that height the rows run down a column
+   that WRAPS, spread evenly through it: a row that does not fit moves, whole,
+   into a second column past the list's right edge, and `overflow: hidden`
+   keeps that column unpainted. A row is therefore drawn complete or not drawn
+   at all, never cut through its name or its rule, and because the rows
+   arrive by usage, what is left off is always the tail. */
 .board-models {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: wrap;
+  justify-content: space-evenly;
+  align-content: flex-start;
   gap: var(--board-model-gap);
   flex: 1 1 auto;
-  align-content: space-evenly;
+  contain: size;
+  overflow: hidden;
 }
 
 .board-model {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.1875rem 0.5rem;
+  inline-size: 100%;
   font-family: var(--font-mono);
   font-size: var(--board-fact-size);
 }

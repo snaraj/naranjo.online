@@ -1866,6 +1866,92 @@ describe('the models card is one card per source', () => {
     assert.deepEqual(both[0].models.map((row) => row.label), [modelLabel(big)]);
   });
 
+  it('draws the five largest members and leaves the tail recorded but undrawn (owner ruling, 2026-10-13)', () => {
+    /* "just show the top 4-5 but make it responsive" (owner ruling,
+       2026-10-13, issue #369). The adapter's half of that is a cut at FIVE,
+       taken from the usage order so that what goes is always the tail;
+       whether the box then shows four or five of them is the stylesheet's
+       half, measured in the browser lanes.
+
+       Usage RISES through the vocabulary's order here, so the five largest are
+       the LAST five the file names. A card that cut before it sorted would
+       draw the first five and fail, and one that did not cut at all would
+       draw every member. Both paths take the cut: the lifetime accounting and
+       the window partition. */
+    const [group] = vocabulary.groups;
+    const keys = keysOf(group);
+    assert.ok(
+      keys.length > 5,
+      `the ${group.key} group names ${keys.length} members; this fixture cannot exercise the cut`
+    );
+    const amount = (index) => (index + 1) * 10;
+    const largestFive = [...keys].reverse().slice(0, 5);
+    const [lifetime] = modelCards({
+      sources: [
+        {
+          label: ownLabel,
+          windows: [],
+          modelStats: keys.map((key, index) => ({ key, totals: { input: amount(index) } }))
+        }
+      ]
+    });
+    assert.deepEqual(
+      lifetime.models.map((row) => row.label),
+      largestFive.map(modelLabel),
+      'the lifetime card did not draw exactly the five largest members, largest first'
+    );
+    /* The longest DRAWN row still runs the card's full width. */
+    assert.equal(lifetime.models[0].fillPct, 100);
+    assert.equal(lifetime.models[4].fillPct, (amount(keys.length - 5) / amount(keys.length - 1)) * 100);
+    const [windowed] = modelCards(weighted(keys.map((key, index) => [key, amount(index)])));
+    assert.deepEqual(
+      windowed.models.map((row) => [row.label, row.reading]),
+      largestFive.map((key) => [modelLabel(key), formatTokenCount(amount(keys.indexOf(key)))]),
+      'the window card did not draw exactly the five largest members, each at its own count'
+    );
+  });
+
+  it('reads every share against the whole lifetime, the residual and the undrawn tail included (issue #369)', () => {
+    /* THE #369 OVERSTATEMENT. The shares used to be taken against the sum of
+       the rows the card DREW, and the residual is never drawn — so a source
+       whose unnamed identifiers carried half its lifetime printed named shares
+       that summed to 100% of it. The whole is every entry the source carries;
+       the rules are still read against the largest drawn row. */
+    const [group] = vocabulary.groups;
+    const keys = keysOf(group);
+    const [big, small] = keys;
+    const stat = (key, input) => ({ key, totals: { input } });
+    const lifetimeCard = (modelStats) =>
+      modelCards({ sources: [{ label: ownLabel, windows: [], modelStats }] })[0];
+    const halved = lifetimeCard([
+      stat(vocabulary.residual.key, 100),
+      stat(big, 60),
+      stat(small, 40)
+    ]);
+    assert.deepEqual(
+      halved.models.map((row) => [row.key, row.reading, row.fillPct]),
+      [
+        [big, formatShare(30), 100],
+        [small, formatShare(20), (40 / 60) * 100]
+      ],
+      'a named share was taken against the drawn rows rather than the whole lifetime'
+    );
+    const printed = (card) =>
+      card.models.reduce((sum, row) => sum + Number.parseFloat(row.reading), 0);
+    assert.equal(printed(halved), 50, 'the drawn shares of a half-residual lifetime must sum to half');
+    /* AND THE TAIL PAST THE CUT IS PART OF THE WHOLE TOO: every member alike,
+       so the five drawn rows are five of the group's shares and say so. */
+    const even = lifetimeCard(keys.map((key) => stat(key, 10)));
+    assert.equal(even.models.length, 5);
+    for (const row of even.models) {
+      assert.equal(row.reading, formatShare(100 / keys.length), row.label);
+    }
+    assert.ok(
+      printed(even) < 100 - 1,
+      `five drawn rows of ${keys.length} printed ${printed(even)}% between them`
+    );
+  });
+
   it('drops the residual and every member that carried nothing', () => {
     /* The residual is not an entity: it is the fold of every identifier the
        vocabulary does not name, and a rule beside named models would read as
@@ -2007,6 +2093,18 @@ describe('the models card is one card per source', () => {
        channel. */
     assert.match(component, /class="board-model-name">\{row\.label\}/);
     assert.match(component, /class="board-reading">\{row\.reading\}/);
+  });
+
+  it('lets the box, not the list, decide how many rows show (owner ruling, 2026-10-13)', () => {
+    /* The stylesheet half of the ruling, pinned where it is decided; the
+       browser lanes measure what each engine does with it. The list counts
+       for nothing when the grid sizes the card's row, and it draws only whole
+       rows: a column that wraps, each row spanning the list, and the spare
+       column never painted. */
+    assert.match(sheet, /\.board-models \{[^}]*contain: size;/, 'the model list sizes its card again');
+    assert.match(sheet, /\.board-models \{[^}]*flex-wrap: wrap;/, 'a row that does not fit is cut, not moved');
+    assert.match(sheet, /\.board-models \{[^}]*overflow: hidden;/, 'the spare column of rows is painted');
+    assert.match(sheet, /\.board-model \{[^}]*inline-size: 100%;/, 'a spare row can sit beside a shown one');
   });
 });
 
