@@ -2847,6 +2847,34 @@ class WorkflowIntegrityTests(unittest.TestCase):
             + lift_instruction(workflow.name, "custom-shell", where)
         )
 
+    def test_the_go_toolchain_check_reads_the_installed_compiler(self):
+        """A toolchain check in auto mode can pass on a compiler no step uses.
+
+        go.mod's `toolchain` line makes the default auto mode fetch that
+        release for `go env GOVERSION` alone, so a setup-go pin reverted to an
+        older release still reads the new version there, while every
+        `GOTOOLCHAIN: local` step builds and tests with the older one (#367
+        review). Every such read therefore spells `GOTOOLCHAIN=local` inline,
+        and the release-authorizing gate keeps at least one, so deleting the
+        check is red as well.
+        """
+        reads: dict[str, int] = {}
+        for path in workflow_paths():
+            for lineno, line in enumerate(path.read_text().splitlines(), 1):
+                for read in re.finditer(r"go env GOVERSION", line):
+                    if not line[: read.start()].endswith("GOTOOLCHAIN=local "):
+                        self.fail(
+                            f"{path.relative_to(ROOT)}:{lineno}: `go env GOVERSION` is read "
+                            f"without `GOTOOLCHAIN=local` in front of it; in auto mode it "
+                            f"reports the go.mod toolchain, not the compiler setup-go "
+                            f"installed and the Go steps run"
+                        )
+                    reads[path.name] = reads.get(path.name, 0) + 1
+        self.assertGreater(
+            reads.get("pr-gate.yml", 0), 0,
+            ".github/workflows/pr-gate.yml no longer checks the installed Go toolchain",
+        )
+
     # -- allowlist hygiene ---------------------------------------------------
 
     def test_a_malformed_allowlist_entry_is_refused(self):

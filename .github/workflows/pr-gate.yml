@@ -169,10 +169,13 @@ jobs:
           check-latest: false
           cache: false
       - name: Verify application toolchain
+        # GOTOOLCHAIN=local reads the compiler setup-go installed: in the
+        # default auto mode go.mod's `toolchain` line would fetch that release
+        # for this check alone and pass while the installed compiler is older.
         run: |
           test "$(node --version)" = "v24.19.0"
           test "$(npm --version)" = "11.17.0"
-          test "$(go env GOVERSION)" = "go1.26.9"
+          test "$(GOTOOLCHAIN=local go env GOVERSION)" = "go1.26.9"
       - name: Build and check Svelte
         working-directory: frontend
         run: |
