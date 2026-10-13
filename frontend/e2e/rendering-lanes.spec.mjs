@@ -2832,8 +2832,13 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
     sources[0].label = hostile;
     sources[0].account = hostileAccount;
     /* A WELL-FORMED series beside the hostile labels: this half is about what
-       a rendered string does, so the payload has to be one the panel renders. */
+       a rendered string does, so the payload has to be one the panel renders.
+       The served lifetime split goes too: a label no source file declares
+       belongs to no vendor group, so it may carry no named model (issue
+       #369), and a split naming one would refuse the whole payload before a
+       label was ever drawn. */
     sources[0].series = { startDate: '2026-08-10', totals: [1, 2, 3], recorded: true };
+    delete sources[0].modelStats;
   });
   await visit(page);
   /* THE LABEL NOW REACHES TWO SURFACES, AND BOTH ARE MEASURED (owner
