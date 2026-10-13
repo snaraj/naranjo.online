@@ -249,6 +249,7 @@ update_checkout() {
     action=none
     interrupted=
     acknowledged=yes
+    repair=
     git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
     branch=$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
     upstream=$(git -C "$REPO_DIR" rev-parse --abbrev-ref 'main@{upstream}' 2>/dev/null || true)
@@ -289,6 +290,9 @@ update_checkout() {
     else
         echo "usage-export: WARN DRIFT behind=$behind ahead=$ahead action=$action reason=$reason" >&2
     fi
+    if [ -n "$repair" ]; then
+        echo "usage-export: WARN repo-update repair: $repair" >&2
+    fi
     if [ -n "$interrupted" ]; then
         echo "usage-export: WARN repo-update interrupted signal=$interrupted" >&2
     fi
@@ -321,32 +325,34 @@ update_checkout() {
 #
 # The lock file IS the job's working index (review F1 r2): the real index is
 # copied into it and git updates it in place (git locks index.lock.lock and
-# renames that over it, so the lock path never disappears). After the ref
-# commits, one rename installs that index and releases the lock together.
+# renames that over it, so the lock path never disappears). One rename
+# installs that index and releases the lock together, and it happens while
+# the prepared ref transaction holds HEAD's and main's locks (advance_main).
 #
-# A child's exit status never decides what state the checkout is in; a re-read
-# does (review F1 r3). A git killed after it finished, or a ref transaction
-# whose acknowledgement was lost after it committed, both report failure. So
-# after a failed checkout the lock's tree is read again, and after the ref
-# transaction main and HEAD are. Where the re-read proves a state, ref, index
-# and worktree are brought into agreement; where it cannot, the lock is kept
-# and the run stops:
+# A child's exit status never decides what state the checkout is in (review
+# F1 r3): a git killed after it finished reports failure too. After a failed
+# checkout the lock's tree is read again; after a commit git never
+# acknowledged, main is. Where a state is proven, ref, index and worktree are
+# brought into agreement; where it is not, recovery material is kept and the
+# run stops:
 #   merge-refused         nothing written; the run goes on as it was
-#   ref-moved             main is still OLD, so the worktree was put back; the
-#                         run goes on
-#   updated               main is NEW and the index is installed; when git never
-#                         acknowledged that, the run stops without exporting
+#   ref-moved             nothing was prepared or HEAD no longer named main, so
+#                         the transaction was aborted and the worktree put back
+#                         to OLD; the run goes on
+#   updated               committed with the index installed; when git never
+#                         acknowledged the commit, the run stops unexported
 #   checkout-partial      git wrote some files before refusing; ref and index
 #                         are OLD, so git status shows them; the run stops
 #   checkout-uncertain    the checkout failed, yet the lock no longer holds the
 #                         index it held before; the lock is kept; the run stops
-#   ref-uncertain         after the ref transaction, main is neither OLD nor NEW
-#                         or HEAD no longer names it; the lock (the NEW index)
-#                         is kept; the run stops
-#   rollback-failed       main is OLD and the worktree could not be put back;
-#                         the lock keeps the NEW index; the run stops
-#   index-install-failed  main is NEW and the index could not be installed;
-#                         the lock keeps the NEW index; the run stops
+#   ref-uncertain         the NEW index was installed but the commit was never
+#                         acknowledged and main is not NEW; the one-line repair
+#                         is logged; the run stops
+#   rollback-failed       nothing was prepared and the worktree could not be
+#                         put back; the lock keeps the NEW index; the run stops
+#   index-install-failed  prepared, but the index could not be installed; the
+#                         transaction was aborted, main is OLD, the lock keeps
+#                         the NEW index; the run stops
 # A kept lock is git's own recovery state: every git command names it as stale.
 fast_forward_main() {
     # The ref transaction protocol (start/prepare/commit) is what makes the
@@ -394,7 +400,7 @@ fast_forward_main() {
         trap 'interrupted=INT' INT
         trap 'interrupted=TERM' TERM
         if (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$old" "$new") >/dev/null 2>&1; then
-            settle_ref_transaction
+            advance_main
         elif [ "$(lock_tree || true)" != "$before" ]; then
             reason=checkout-uncertain action=incomplete drop_lock=no
         elif touched_paths_clean "$old" "$new"; then
@@ -412,34 +418,6 @@ fast_forward_main() {
 # The tree the lock index describes, or nothing when it cannot be written.
 lock_tree() {
     (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" write-tree 2>/dev/null)
-}
-
-# The ref transaction, then the state it left, read back rather than inferred
-# from its acknowledgement: main NEW (with HEAD naming it) installs the index,
-# main OLD rolls the worktree back, anything else keeps the lock and stops.
-settle_ref_transaction() {
-    if ! advance_main_ref "$old" "$new"; then
-        acknowledged=no
-    fi
-    head=$(git -C "$REPO_DIR" symbolic-ref --quiet HEAD 2>/dev/null || true)
-    main=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/heads/main^{commit}' 2>/dev/null || true)
-    if [ "$head" != refs/heads/main ] || { [ "$main" != "$new" ] && [ "$main" != "$old" ]; }; then
-        reason=ref-uncertain action=incomplete drop_lock=no acknowledged=yes
-    elif [ "$main" = "$old" ]; then
-        acknowledged=yes
-        if (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then
-            reason=ref-moved
-        else
-            reason=rollback-failed action=incomplete drop_lock=no
-        fi
-    # git's own lockfile commit: the rename that installs the new index is the
-    # rename that releases the lock, after which that path is no longer the
-    # job's to remove.
-    elif mv -f "$lock" "$gitdir/index"; then
-        reason=updated drop_lock=no
-    else
-        reason=index-install-failed action=incomplete drop_lock=no
-    fi
 }
 
 # True when every path the update touches is in the worktree as the job's
@@ -462,37 +440,74 @@ touched_paths_clean() {
     [ "$clean" = yes ]
 }
 
-# Moves main from $1 to $2 in one ref transaction that commits only while HEAD
-# provably still names main. `symref-verify HEAD refs/heads/main` cannot share
-# a transaction with an update of HEAD's own branch — git refuses "multiple
-# updates for 'HEAD'" — so the update is made THROUGH HEAD instead: prepare
-# then holds HEAD's lock and the lock of the branch HEAD names, nothing can
-# retarget HEAD until commit or abort, and HEAD is read in between. The old
-# value refuses a branch that moved since it was read.
-advance_main_ref() (
+# The ref transaction, with the index installed INSIDE it (review F1 r4).
+# `update HEAD NEW OLD` is made through HEAD: `symref-verify HEAD
+# refs/heads/main` cannot share a transaction with an update of HEAD's own
+# branch (git refuses "multiple updates for 'HEAD'"). Once prepare answers,
+# git holds HEAD's lock and the lock of the branch HEAD names, so no
+# update-ref, symbolic-ref, checkout or commit can move either until commit
+# or abort. Inside that window HEAD is verified to name main and the index is
+# installed by the one rename (git's own lockfile commit, which also releases
+# the index lock); only then is the commit sent. A state re-read after the
+# commit would be a snapshot plumbing could change before the install.
+#   commit acknowledged       updated: nothing could move the refs between the
+#                             verify, the install and the commit
+#   installed, no answer      main re-read: NEW is updated but unacknowledged;
+#                             anything else is ref-uncertain, the installed NEW
+#                             index is kept and the one-line repair is logged
+#   prepared, install failed  aborted: index-install-failed, the lock kept
+#   nothing prepared          aborted: the worktree is rolled back to OLD
+advance_main() {
+    verified=no installed=no committed=no
     trap '' PIPE
-    channel=$(mktemp -d) || exit 1
-    trap 'rm -rf "$channel"' EXIT
-    trap 'exit 1' HUP INT TERM
-    mkfifo "$channel/in" "$channel/out" || exit 1
-    git -C "$REPO_DIR" update-ref -m 'usage-export: fast-forward' --stdin \
-        <"$channel/in" >"$channel/out" 2>/dev/null &
-    transaction=$!
-    exec 3>"$channel/in" 4<"$channel/out"
-    printf 'start\nupdate HEAD %s %s\nprepare\n' "$2" "$1" >&3
-    answer=abort
-    if read -r line <&4 && [ "$line" = 'start: ok' ] \
-        && read -r line <&4 && [ "$line" = 'prepare: ok' ] \
-        && [ "$(git -C "$REPO_DIR" symbolic-ref --quiet HEAD 2>/dev/null || true)" = refs/heads/main ]; then
-        answer=commit
+    channel=$(mktemp -d) || channel=
+    if [ -n "$channel" ] && mkfifo "$channel/in" "$channel/out"; then
+        git -C "$REPO_DIR" update-ref -m 'usage-export: fast-forward' --stdin \
+            <"$channel/in" >"$channel/out" 2>/dev/null &
+        transaction=$!
+        exec 3>"$channel/in" 4<"$channel/out"
+        printf 'start\nupdate HEAD %s %s\nprepare\n' "$new" "$old" >&3 2>/dev/null || true
+        if read -r line <&4 && [ "$line" = 'start: ok' ] \
+            && read -r line <&4 && [ "$line" = 'prepare: ok' ] \
+            && [ "$(git -C "$REPO_DIR" symbolic-ref --quiet HEAD 2>/dev/null || true)" = refs/heads/main ]; then
+            verified=yes
+            if mv -f "$lock" "$gitdir/index"; then
+                installed=yes
+                printf 'commit\n' >&3 2>/dev/null || true
+                if read -r line <&4 && [ "$line" = 'commit: ok' ]; then
+                    committed=yes
+                fi
+            fi
+        fi
+        if [ "$installed" = no ]; then
+            printf 'abort\n' >&3 2>/dev/null || true
+        fi
+        exec 3>&- 4<&-
+        wait "$transaction" || true
     fi
-    printf '%s\n' "$answer" >&3 2>/dev/null || true
-    exec 3>&-
-    line=
-    read -r line <&4 || true
-    wait "$transaction" || true
-    [ "$answer" = commit ] && [ "$line" = 'commit: ok' ]
-)
+    if [ -n "$channel" ]; then
+        rm -rf "$channel"
+    fi
+    trap - PIPE
+    if [ "$committed" = yes ]; then
+        reason=updated drop_lock=no
+    elif [ "$installed" = yes ]; then
+        drop_lock=no
+        main=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/heads/main^{commit}' 2>/dev/null || true)
+        if [ "$main" = "$new" ]; then
+            reason=updated acknowledged=no
+        else
+            reason=ref-uncertain action=incomplete
+            repair="git update-ref refs/heads/main $new${main:+ $main}"
+        fi
+    elif [ "$verified" = yes ]; then
+        reason=index-install-failed action=incomplete drop_lock=no
+    elif (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then
+        reason=ref-moved
+    else
+        reason=rollback-failed action=incomplete drop_lock=no
+    fi
+}
 
 if [ -z "${NARANJO_USAGE_EXPORT_REEXEC:-}" ]; then
     update_checkout
