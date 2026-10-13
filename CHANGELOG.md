@@ -36,6 +36,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   the true dark mode), in every reading mode, because the Anthropic group now
   declares nine members. The slots are tokens the vocabulary rule requires;
   the model bars still paint one ink (#369).
+- Frontend toolchain: svelte 5.57.2, vite 8.3.4, @playwright/test 1.64.0;
+  CodeQL init and analyze pinned to github/codeql-action v4.38.3 (supersedes
+  #362, #363, #364, #365).
 
 ## [0.1.92] - 2026-10-12
 
