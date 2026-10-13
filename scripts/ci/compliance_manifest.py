@@ -130,19 +130,36 @@ SCHEME_SOURCES = {
     "data:": {"img-src", "font-src", "media-src"},
     "blob:": {"img-src", "media-src", "worker-src"},
 }
-# The storage-write grammar `check` reads. Comments go first, string literals
-# stay, so a write that survives only in a comment is no write.
+# The storage-write grammar `check` reads. It runs on the source as code
+# alone (`code_only`): a write that exists only in a comment, or only as the
+# text of a string, template or regular-expression literal, never executes,
+# so it is no write. The patterns below match that code; a key or cookie name
+# is then read from the source at the same offset, because the code keeps
+# only a literal's delimiters.
 SOURCE_SUFFIXES = {".ts", ".js", ".mjs", ".svelte"}
 TEST_FILE = re.compile(r"\.(?:test|spec)\.")
-COMMENT_OR_STRING = re.compile(
-    r"""("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`)|//[^\n]*|/\*.*?\*/|<!--.*?-->""", re.DOTALL
-)
-COOKIE_WRITE = re.compile(r"""\bdocument\.cookie\s*=(?!=)\s*["'`]([^"'`=;\s]+)=""")
+COOKIE_WRITE = re.compile(r"""\bdocument\.cookie\s*=(?!=)\s*["'`]""")
+COOKIE_NAME = re.compile(r"""([^"'`=;\s]+)=""")
 STORE_NAME = re.compile(r"\b(localStorage|sessionStorage)\b")
+# Every `.setItem(` call; a first argument that is neither a literal nor a
+# name, each followed by the comma, leaves both groups empty and is refused.
 STORE_WRITE = re.compile(
-    r"""(?:\b(localStorage|sessionStorage)\s*)?\.\s*setItem\(\s*(?:(["'`])([^"'`]+)\2|([A-Za-z_$][\w$]*))\s*,"""
+    r"""(?:\b(localStorage|sessionStorage)\s*)?\.\s*setItem\s*\(\s*(?:(?:((["'`])[^"'`]*\3)|([A-Za-z_$][\w$]*))\s*,)?"""
 )
-BOUND_CONSTANT = r"""\b(?:const|let|var)\s+{}\s*(?::[^=;]+)?=\s*(["'`])([^"'`]+)\1"""
+BOUND_CONSTANT = r"""\b(?:const|let|var)\s+{}\s*(?::[^=;]+)?=\s*((["'`])[^"'`]*\2)"""
+CODE_STOPS = re.compile(r"""[/'"`{}<]""")
+MARKUP_STOPS = re.compile(r"[{<]")
+TEMPLATE_STOPS = re.compile(r"[\\`$]")
+QUOTED = {
+    "'": re.compile(r"""'(?:\\.|[^'\\\n])*'""", re.DOTALL),
+    '"': re.compile(r'''"(?:\\.|[^"\\\n])*"''', re.DOTALL),
+}
+REGEX_LITERAL = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n\[])+/")
+# A `/` starts a regular expression where an operand may begin: after one of
+# these characters, after one of these words, or at the very start.
+REGEX_AFTER = frozenset("(,=:[!&|?{};+-*%<>~^")
+REGEX_AFTER_WORDS = frozenset("return typeof case do else in of new delete void throw instanceof yield await".split())
+SVELTE_ELEMENT = re.compile(r"<(script|style)\b[^>]*>", re.IGNORECASE)
 HSTS_FLOOR_SECONDS = 31_536_000
 REFERRER_POLICIES = {"no-referrer", "same-origin", "strict-origin", "strict-origin-when-cross-origin"}
 FETCH_TIMEOUT_SECONDS = 20
@@ -321,10 +338,12 @@ def storage_writes(source_root: Path) -> tuple[dict[tuple[str, str], str], list[
     """Every (kind, name) the frontend source WRITES, with the file that writes it,
     and a refusal for every write this grammar sees but cannot attribute.
 
-    A write is `document.cookie = '<name>=...'`, or `.setItem(<key>, ...)` whose
-    key is a string literal or a constant the same file binds to one, in a
-    file whose code names the store. Reads, bare literals, comments and test
-    files are not writes, so none of them keeps a declaration alive.
+    A write is `document.cookie = '<name>=...'`, or a `.setItem(<key>, ...)`
+    call whose key is a string literal or a constant the same file binds to
+    one, in a file whose code names the store; a call whose key is anything
+    else is refused. Only code counts (`code_only`): reads, literals however
+    write-shaped, comments, markup and test files are not writes, so none of
+    them keeps a declaration alive.
     """
     writes: dict[tuple[str, str], str] = {}
     unread: list[str] = []
@@ -335,25 +354,154 @@ def storage_writes(source_root: Path) -> tuple[dict[tuple[str, str], str], list[
             continue
         where = path.relative_to(source_root).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
-        code = COMMENT_OR_STRING.sub(lambda match: match.group(1) or " ", text)
+        code = code_only(text, svelte=path.suffix == ".svelte")
         for match in COOKIE_WRITE.finditer(code):
-            writes.setdefault(("cookie", match.group(1)), where)
+            name = COOKIE_NAME.match(text, match.end())
+            if name:
+                writes.setdefault(("cookie", name.group(1)), where)
         # A store is named by code, not by a sentence or a string about it.
-        stores = set(STORE_NAME.findall(COMMENT_OR_STRING.sub(" ", text)))
+        stores = set(STORE_NAME.findall(code))
         for match in STORE_WRITE.finditer(code):
-            receiver, literal, identifier = match.group(1), match.group(3), match.group(4)
-            if literal is None:
+            receiver, literal, identifier = match.group(1), match.group(2), match.group(4)
+            if literal is not None:
+                literal = text[match.start(2) + 1 : match.end(2) - 1]
+            elif identifier is not None:
                 bound = re.search(BOUND_CONSTANT.format(re.escape(identifier)), code)
-                literal = bound.group(2) if bound else None
+                literal = text[bound.start(1) + 1 : bound.end(1) - 1] if bound else None
+            if not literal or "${" in literal:
+                literal = None
             kinds = {receiver} if receiver else stores
             if literal is None or not kinds:
                 missing = "key this gate cannot read" if literal is None else "storage this gate cannot name"
-                unread.append(f"frontend/src/{where} makes a storage write whose {missing} ({match.group(0)!r}); "
+                unread.append(f"frontend/src/{where} makes a storage write whose {missing} "
+                              f"({text[match.start() : match.end()]!r}); "
                               "write it with a literal key, or a constant bound to one, on a named store")
                 continue
             for kind in kinds:
                 writes.setdefault((kind, literal), where)
     return writes, unread
+
+
+def code_only(text: str, svelte: bool = False) -> str:
+    """`text` with every comment, and the contents of every string, template
+    and regular-expression literal, blanked to spaces.
+
+    Delimiters, newlines and the code inside a template's `${...}` are kept, so
+    an offset here is the same offset in `text`. In a Svelte component only
+    `<script>` bodies and `{...}` expressions are code; markup, `<style>` and
+    HTML comments are blanked whole, so an apostrophe in a sentence cannot
+    open a string that hides the code after it.
+    """
+    out = list(text)
+
+    def blank(start: int, end: int) -> None:
+        for at in range(start, end):
+            if out[at] != "\n":
+                out[at] = " "
+
+    def comment(at: int, end: int, closer: str) -> int:
+        close = text.find(closer, at + 2, end)
+        close = end if close < 0 else close + len(closer)
+        blank(at, close)
+        return close
+
+    def regex_or_division(at: int, end: int) -> int:
+        before = at - 1
+        while before >= 0 and out[before].isspace():
+            before -= 1
+        word = before
+        while word >= 0 and (out[word].isalnum() or out[word] in "_$"):
+            word -= 1
+        previous = "".join(out[word + 1 : before + 1]) or (out[before] if before >= 0 else "")
+        if previous and previous not in REGEX_AFTER and previous not in REGEX_AFTER_WORDS:
+            return at + 1  # division
+        literal = REGEX_LITERAL.match(text, at, end)
+        if literal is None:
+            return at + 1
+        blank(at + 1, literal.end() - 1)
+        return literal.end()
+
+    def template(at: int, end: int) -> int:
+        while at < end:
+            stop = TEMPLATE_STOPS.search(text, at, end)
+            if stop is None:
+                break
+            blank(at, stop.start())
+            at = stop.start()
+            if text[at] == "`":
+                return at + 1
+            if text.startswith("${", at):
+                at = scan(at + 2, end, nested=True) + 1
+            else:  # an escape, or a `$` that opens nothing
+                step = 2 if text[at] == "\\" else 1
+                blank(at, min(at + step, end))
+                at += step
+        blank(at, end)
+        return end
+
+    def scan(at: int, end: int, nested: bool) -> int:
+        """Code from `at`; a nested scan returns at the `}` that closes it."""
+        depth = 0
+        while True:
+            stop = CODE_STOPS.search(text, at, end)
+            if stop is None:
+                return end
+            at = stop.start()
+            character = text[at]
+            if text.startswith("//", at):
+                at = comment(at, end, "\n")
+            elif text.startswith("/*", at):
+                at = comment(at, end, "*/")
+            elif text.startswith("<!--", at):
+                at = comment(at, end, "-->")
+            elif character == "/":
+                at = regex_or_division(at, end)
+            elif character in QUOTED:
+                quoted = QUOTED[character].match(text, at, end)
+                if quoted:
+                    blank(at + 1, quoted.end() - 1)
+                at = quoted.end() if quoted else at + 1
+            elif character == "`":
+                at = template(at + 1, end)
+            elif character == "}" and nested and depth == 0:
+                return at
+            else:
+                depth += {"{": 1, "}": -1}.get(character, 0)
+                at += 1
+
+    def markup(at: int, end: int) -> None:
+        while at < end:
+            stop = MARKUP_STOPS.search(text, at, end)
+            if stop is None:
+                break
+            blank(at, stop.start())
+            at = stop.start()
+            element = SVELTE_ELEMENT.match(text, at, end)
+            if text.startswith("<!--", at):
+                at = comment(at, end, "-->")
+            elif element:
+                closing = re.compile(rf"</{element.group(1)}\s*>", re.IGNORECASE).search(text, element.end(), end)
+                body_end, after = (closing.start(), closing.end()) if closing else (end, end)
+                blank(at, element.end())
+                if element.group(1).lower() == "script":
+                    scan(element.end(), body_end, nested=False)
+                else:
+                    blank(element.end(), body_end)
+                blank(body_end, after)
+                at = after
+            elif text[at] == "{":
+                # `{/if}` closes a block; its slash starts no expression.
+                at = scan(at + (2 if text.startswith("{/", at) else 1), end, nested=True) + 1
+            else:
+                blank(at, at + 1)
+                at += 1
+        blank(at, end)
+
+    if svelte:
+        markup(0, len(text))
+    else:
+        scan(0, len(text), nested=False)
+    return "".join(out)
 
 
 # ----------------------------------------------------------------- live mode

@@ -94,9 +94,11 @@ checks hold the site to it, and each answers a different question:
   themselves, each refused on its own. A write is what
   `compliance_manifest.py`'s `storage_writes` grammar reads -- a
   `document.cookie` assignment by literal name, or a `setItem` whose key is a
-  literal or a bound constant on a named store -- so a read, a bare string, a
-  comment or a test file keeps nothing alive, and a write the grammar cannot
-  attribute is refused rather than ignored.
+  literal or a bound constant on a named store, found in code only -- so a
+  read, a string, template or regular expression however write-shaped, a
+  comment, Svelte markup or a test file keeps nothing alive, and a write the
+  grammar cannot attribute, a key built at run time included, is refused
+  rather than ignored.
 - `frontend/e2e/compliance.spec.mjs`, in the browser lanes, drives the shipped
   binary in every engine: no request to an undeclared origin, no CSP
   violation, nothing written to the device before the visitor acts, the

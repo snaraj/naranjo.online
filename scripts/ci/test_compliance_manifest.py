@@ -348,6 +348,14 @@ class ValidateTests(unittest.TestCase):
             "window.sessionStorage.setItem('width', v);\n",
             # The write's own receiver decides, not another store the file names.
             "window.sessionStorage.setItem('width', v);\nwindow.localStorage.getItem('width');\n",
+            # Writes that exist only as the text of a string, a template or a
+            # regular expression never execute (the first is the review's own).
+            "const a = \"document.cookie = 'theme=dark'\"; const store = localStorage; "
+            "const b = \"store.setItem('width', '1')\";",
+            "const t = `document.cookie = 'theme=1'; localStorage.setItem('width', v)`;\n",
+            "const r = /document.cookie = 'theme=1'; localStorage.setItem\\('width', v\\)/;\n",
+            # A read with a second argument, which getItem ignores, is a read.
+            "localStorage.getItem('width', undefined);\n",
         ):
             with self.subTest(source=source):
                 (self.source / "theme.ts").write_text(source)
@@ -367,10 +375,39 @@ class ValidateTests(unittest.TestCase):
             "document.cookie = `theme=${id}`;\nwindow.localStorage.setItem('width', v);\n",
             'document.cookie = "theme=" + id; // not \'width\'\nconst key: string = "width";\n'
             "const s = localStorage;\ns.setItem(key, v);\n",
+            # Code inside a template's ${...} is code.
+            "document.cookie = `theme=${id}`;\nconst t = `${window.localStorage.setItem('width', v)}`;\n",
+            # A quote or backtick inside a regular expression opens nothing,
+            # and a division is no regular expression.
+            "const quote = /'/g; document.cookie = 'theme=' + id; window.localStorage.setItem('width', v);\n",
+            "const tick = /`/;\ndocument.cookie = 'theme=' + id;\nwindow.localStorage.setItem('width', v);\n",
+            "const half = a / 2; document.cookie = 'theme=1'; window.localStorage.setItem('width', v); const c = b / 3;\n",
         ):
             with self.subTest(source=source):
                 (self.source / "theme.ts").write_text(source)
                 self.assertEqual(self.refusals(manifest()), [])
+
+    def test_in_a_component_only_script_and_expressions_are_code(self) -> None:
+        (self.source / "theme.ts").write_text("export {};\n")
+        component = self.source / "Panel.svelte"
+        # An apostrophe in a sentence opens no string, and a block's closing
+        # `{/if}` opens no regular expression, so the handlers after them count.
+        component.write_text(
+            "<script lang=\"ts\">\n  const key = 'width';\n</script>\n"
+            "<p>Don't</p> <button onclick={() => window.localStorage.setItem(key, v)}>Save</button>\n"
+            "{#if open}{label}{/if}<a href=\"/x\">Don't</a> <button onclick={() => (document.cookie = 'theme=1')}>Dark</button>\n"
+            "<style>p { color: red; }</style>\n"
+        )
+        self.assertEqual(self.refusals(manifest()), [])
+        # Markup text, an HTML comment and a stylesheet are not code.
+        component.write_text(
+            "<p>document.cookie = 'theme=1'; window.localStorage.setItem('width', v)</p>\n"
+            "<!-- {window.localStorage.setItem('width', v)} -->\n"
+            "<style>.x { --a: document.cookie = 'theme=1'; }</style>\n"
+        )
+        refusals = self.refusals(manifest())
+        self.assertTrue(any("cookie 'theme', which no file" in r for r in refusals), refusals)
+        self.assertTrue(any("localStorage 'width', which no file" in r for r in refusals), refusals)
 
     def test_an_undeclared_write_is_refused_with_its_lift(self) -> None:
         with (self.source / "theme.ts").open("a") as source:
@@ -381,9 +418,20 @@ class ValidateTests(unittest.TestCase):
         self.assertTrue(any('{"name": "draft", "kind": "sessionStorage"' in r for r in refusals), refusals)
 
     def test_a_write_whose_key_or_store_cannot_be_read_is_refused(self) -> None:
-        with (self.source / "theme.ts").open("a") as source:
-            source.write("function put(key, v) { window.localStorage.setItem(key, v); }\n")
-        self.assertTrue(any("whose key this gate cannot read" in r for r in self.refusals(manifest())), self.refusals(manifest()))
+        base = (self.source / "theme.ts").read_text()
+        for call in (
+            "function put(key, v) { window.localStorage.setItem(key, v); }\n",
+            # A key built at run time is no literal, whatever literal it starts with.
+            "window.localStorage.setItem('wid' + 'th', v);\n",
+            "window.localStorage.setItem(`${prefix}width`, v);\n",
+            "window.localStorage.setItem(keys.width, v);\n",
+            # A binding that exists only as text binds nothing.
+            "const note = \"const key = 'width'\"; // const key = 'width'\nwindow.localStorage.setItem(key, v);\n",
+        ):
+            with self.subTest(call=call):
+                (self.source / "theme.ts").write_text(base + call)
+                refusals = self.refusals(manifest())
+                self.assertTrue(any("whose key this gate cannot read" in r for r in refusals), refusals)
         # A store named only in a sentence or a string is not named by code.
         (self.source / "theme.ts").write_text(
             "document.cookie = 'theme=1';\nconst note = 'kept in localStorage'; // or localStorage\n"
