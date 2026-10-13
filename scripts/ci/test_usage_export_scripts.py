@@ -161,6 +161,24 @@ def run_script(script, args=(), env=None, cwd=None):
     )
 
 
+# The UTC instant every line the push run writes to its logs opens with
+# (issue #371), and one space before the line's own tokens.
+LOG_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z ")
+
+
+def unstamped(text):
+    """The run's log text with each line's opening UTC instant removed.
+
+    The tests that read a log line's TOKENS read them through here, so a
+    reason, a stage name or a SUMMARY field is asserted exactly as before.
+    Whether every line carries the instant at all is its own pin in
+    LogRotationTest, run the way the agent runs, because a fixture may inject
+    an unstamped line of its own into a script copy and this reader has to
+    tolerate that.
+    """
+    return "".join(LOG_STAMP.sub("", line, count=1) for line in text.splitlines(keepends=True))
+
+
 # The fixture record's calendar day, named once so a test that needs a day
 # BEFORE it derives that day instead of restating a literal that can drift.
 TRANSCRIPT_FIXTURE_DAY = "2026-08-10"
@@ -636,7 +654,7 @@ class PushTransportHardeningTest(PushFixture, unittest.TestCase):
         self.write_config(MERGE_CAPTURES="beta=messages=%s" % second)
         result = run_script(PUSH, env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        lines = result.stdout.splitlines()
+        lines = unstamped(result.stdout).splitlines()
         self.assertEqual(
             [line for line in lines if line.startswith("usage-export: START ")],
             [
@@ -808,8 +826,19 @@ class PushTransportHardeningTest(PushFixture, unittest.TestCase):
             self.assertTrue(any(line.startswith("[ -f ") for line in invocations))
             run_line = [line for line in invocations if not line.startswith("[ -f ")][0]
             self.assertIn("python3", run_line)
+        # Each walker starts through `stamped` (issue #371), which only
+        # stamps what the program writes to stderr: its body must run the
+        # command it is handed exactly as handed, or the wrapper would be a
+        # place to swap the sandboxed command for an unconfined one.
+        wrapper = required_match(
+            r"\nstamped\(\) \{\n(.*?)\n\}\n", source, "the push script defines no stamped()", re.S
+        ).group(1)
+        self.assertIn('{ "$@" 2>&1 1>&3 3>&- 4>&- && echo 0 >&4 || echo $? >&4; }', wrapper)
+        self.assertEqual(wrapper.count('"$@"'), 1, wrapper)
         sandbox_lines = [
-            line for line in lines if line.strip().startswith("sandbox-exec ")
+            line
+            for line in lines
+            if line.strip().removeprefix("stamped ").startswith("sandbox-exec ")
         ]
         # One per walker, and each one carrying the profile: a count alone
         # would pass if both lines started the same program.
@@ -826,12 +855,12 @@ class PushTransportHardeningTest(PushFixture, unittest.TestCase):
         for helper, assignment in (
             ('python3 -I -B "$PUSH_WATCHDOG" ssh -F /dev/null \\',
              'PUSH_WATCHDOG="$REPO_DIR/scripts/usage-export/bounded-ssh.py"'),
-            ('GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true',
+            ('stamped env GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true',
              'REPO_FETCH="$REPO_DIR/scripts/usage-export/bounded-fetch.py"'),
-            ('python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state '
+            ('stamped stamped_out python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state '
              '"${HISTORY_DIR:+$HISTORY_DIR/push-state.json}" --exporter "$exporter_revision" </dev/null \\',
              'SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"'),
-            ('python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" '
+            ('stamped python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" '
              '--document "$PLAIN" --sha256 "$local_sum" </dev/null \\',
              'SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"'),
         ):
@@ -1632,7 +1661,7 @@ class LogRotationTest(PushFixture, unittest.TestCase):
         # its stream on the fresh path.
         self.assertEqual((logs / "usage-export.log.1").stat().st_ino, inode)
         self.assertEqual((logs / "usage-export.log.1").read_bytes(), old_out)
-        fresh = (logs / "usage-export.log").read_text(encoding="utf-8")
+        fresh = unstamped((logs / "usage-export.log").read_text(encoding="utf-8"))
         self.assertTrue(fresh.startswith("usage-export: START export\n"), fresh[:80])
         self.assertIn("usage-export: SUMMARY pushed=", fresh)
         # Exactly at the bound is not past it.
@@ -1647,6 +1676,53 @@ class LogRotationTest(PushFixture, unittest.TestCase):
         self.assertIn("coverage alpha=", (logs / "usage-export.err.log").read_text(encoding="utf-8"))
         self.assertFalse((logs / "usage-export.log.1").exists())
         self.assertTrue((logs / "usage-export.log").read_text(encoding="utf-8").startswith("small\n"))
+
+    def test_every_line_written_to_either_log_opens_with_a_utc_instant(self):
+        # Issue #371: the push failures of 2026-10-13 could not be dated from
+        # the log. Every line the run writes to the agent's two log files —
+        # its own, the recapture's, the export's and the ledger's summaries,
+        # and the served check's — opens with the instant it was written.
+        logs = self.logs(b"", b"")
+        history = self.scratch / "history"
+        second = self.scratch / "second-transcripts"
+        transcript_fixture(second)
+        self.write_config(
+            MERGE_CAPTURES="beta=messages=%s" % second,
+            HISTORY_DIR=str(history),
+            SITE_URL="https://127.0.0.1:1",
+        )
+        before = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        self.assertEqual(self.launchd_run(logs), 0)
+        after = datetime.datetime.now(datetime.timezone.utc)
+        out = (logs / "usage-export.log").read_text(encoding="utf-8").splitlines()
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        # Non-vacuity: both logs carry the lines this pins, from the script
+        # and from the programs it runs.
+        self.assertTrue(any("usage-export: SUMMARY pushed=" in line for line in out), out)
+        for needle in ("unattributed-ids ", "coverage alpha=", "ledger appended=", "reason=no-push-state"):
+            self.assertTrue(any(needle in line for line in err), (needle, err))
+        for line in out + err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
+                written = datetime.datetime.strptime(line[:20], "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=datetime.timezone.utc
+                )
+                self.assertTrue(before <= written <= after, (before, written, after))
+
+    def test_a_failed_run_dates_its_failure(self):
+        # The case the rule exists for: the refusal and the FAILED line both
+        # carry the instant, beside the producer's own refusal text.
+        logs = self.logs(b"", b"")
+        empty = self.scratch / "empty"
+        empty.mkdir()
+        self.write_config(MERGE_CAPTURES="beta=messages=%s" % empty)
+        self.assertNotEqual(self.launchd_run(logs), 0)
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(any("FAILED stage=recapture-beta" in line for line in err), err)
+        self.assertTrue(any("no usage records found" in line for line in err), err)
+        for line in err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
 
     def test_a_run_without_the_agents_environment_rotates_nothing(self):
         big = b"o" * (MAX_LOG_BYTES + 1)
@@ -2141,7 +2217,7 @@ class ServedCheckPipelineTest(PushFixture, unittest.TestCase):
         state_file = history / "push-state.json"
         self.assertEqual(stat.S_IMODE(state_file.stat().st_mode), 0o600)
         state = json.loads(state_file.read_text(encoding="utf-8"))
-        summary = first.stdout.splitlines()[-1]
+        summary = unstamped(first.stdout).splitlines()[-1]
         self.assertTrue(summary.startswith("usage-export: SUMMARY pushed="), summary)
         self.assertEqual(state["sha256"][:12], summary.split("sha256=")[1].split()[0])
         self.assertLessEqual(state["oldestCapturedAt"], state["generatedAt"])
@@ -2154,7 +2230,7 @@ class ServedCheckPipelineTest(PushFixture, unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("usage-export: WARN served-check unavailable reason=unreachable", second.stderr)
         # The check happens first, and the push still happens after it.
-        self.assertTrue(second.stdout.splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
+        self.assertTrue(unstamped(second.stdout).splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
 
     def test_no_configured_site_runs_no_check_but_still_records(self):
         history = self.scratch / "history"
@@ -2189,7 +2265,7 @@ class ServedCheckPipelineTest(PushFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("usage-export: WARN served-check unavailable reason=helper-failed", result.stderr)
         self.assertIn("usage-export: WARN push-state unrecorded reason=helper-failed", result.stderr)
-        self.assertTrue(result.stdout.splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
+        self.assertTrue(unstamped(result.stdout).splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
 
 
 # A pinned, private git for the throwaway repositories: no user or system
@@ -2369,7 +2445,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.head(), self.second)
         self.assertEqual(
-            [line for line in result.stdout.splitlines() if "UPDATED" in line],
+            [line for line in unstamped(result.stdout).splitlines() if "UPDATED" in line],
             ["usage-export: UPDATED exporter %s->%s" % (self.first[:12], self.second[:12])],
         )
         # The NEW script ran, exactly once, and the run it finished reports
@@ -2636,7 +2712,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         out, err = run.communicate(timeout=120)
         self.assertEqual(run.returncode, 0, err)
         self.assertIn("usage-export: UPDATED exporter %s->%s" % (self.first[:12], self.second[:12]), out)
-        self.assertTrue(out.splitlines()[-1].startswith("usage-export: SUMMARY pushed="), out)
+        self.assertTrue(unstamped(out).splitlines()[-1].startswith("usage-export: SUMMARY pushed="), out)
         self.assertNotIn("DRIFT", err)
         self.assertEqual(self.git(self.checkout, "symbolic-ref", "HEAD"), "refs/heads/main")
         self.assertEqual(self.git(self.checkout, "rev-parse", "other"), self.first)
@@ -2802,7 +2878,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         out, err = run.communicate(timeout=120)
         self.assertEqual(run.returncode, 0, err)
         self.assertIn("usage-export: UPDATED exporter %s->%s" % (self.first[:12], self.second[:12]), out)
-        self.assertTrue(out.splitlines()[-1].startswith("usage-export: SUMMARY pushed="), out)
+        self.assertTrue(unstamped(out).splitlines()[-1].startswith("usage-export: SUMMARY pushed="), out)
         self.assertNotIn("DRIFT", err)
         self.assertNotIn("interrupted", err)
         self.assert_agreement(self.second)
@@ -3091,7 +3167,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertRegex(result.stderr, r"usage-export: WARN repo-update fetch-failed reason=[a-z-]+\n")
         self.assertEqual(self.head(), self.first)
         self.assertNotIn(str(self.origin), result.stdout + result.stderr)
-        self.assertTrue(result.stdout.splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
+        self.assertTrue(unstamped(result.stdout).splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
 
 
 class BoundedFetchTest(unittest.TestCase):

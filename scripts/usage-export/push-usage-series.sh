@@ -121,6 +121,12 @@
 # sealed size and checksum prefix, and the revision of the checkout the
 # exporter ran from — the fault class where a scheduled job silently ran a
 # tree nine commits behind what the origin admits (issue #288).
+#
+# Every line the run writes to its logs opens with the UTC instant it was
+# written (issue #371): the push failures of 2026-10-13 could not be dated
+# from the log. That covers this script's own lines (`log`) and every line a
+# program it runs writes to the logs (`stamped`, `stamped_out`); the tokens
+# after the instant are unchanged, so every existing grep still matches.
 
 set -eu
 
@@ -130,9 +136,43 @@ elapsed() {
     echo $(( $(/bin/date +%s) - run_started ))
 }
 
+# The instant a log line opens with: RFC 3339, UTC, to the second.
+utc_now() {
+    /bin/date -u +%Y-%m-%dT%H:%M:%SZ
+}
+
+# Copy stdin to stdout, each line opened with the instant it was read. A
+# final line with no newline is still a line.
+stamp() {
+    while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s %s\n' "$(utc_now)" "$line"
+    done
+}
+
+# One line of this script's own, stamped, on stdout (`>&2` for stderr).
+log() {
+    printf '%s usage-export: %s\n' "$(utc_now)" "$*"
+}
+
+# Run "$@" with every line it writes to stderr stamped on the way to this
+# run's stderr; its stdout goes wherever the caller sent it, untouched,
+# because for some programs that is DATA (the capture's document, the sealed
+# bytes, the host's checksum line). The command's own exit status is
+# returned, so `stamped cmd || fail ...` reads exactly as `cmd || fail ...`.
+stamped() {
+    { stamped_status=$( { { "$@" 2>&1 1>&3 3>&- 4>&- && echo 0 >&4 || echo $? >&4; } | stamp >&2; } 4>&1 ); } 3>&1
+    return "${stamped_status:-1}"
+}
+
+# The same for a program whose stdout is LOG lines rather than data.
+stamped_out() {
+    { stamped_status=$( { { "$@" 3>&- 4>&- && echo 0 >&4 || echo $? >&4; } | stamp >&3; } 4>&1 ); } 3>&1
+    return "${stamped_status:-1}"
+}
+
 fail() {
-    echo "usage-export: $1" >&2
-    echo "usage-export: FAILED stage=$stage elapsed=$(elapsed)s" >&2
+    log "$1" >&2
+    log "FAILED stage=$stage elapsed=$(elapsed)s" >&2
     exit 1
 }
 
@@ -143,7 +183,7 @@ stage_started=0
 begin() {
     stage=$1
     stage_started=$(/bin/date +%s)
-    echo "usage-export: START $stage"
+    log "START $stage"
 }
 finish() {
     timings="$timings $stage=$(( $(/bin/date +%s) - stage_started ))s"
@@ -158,7 +198,7 @@ if [ -n "${NARANJO_USAGE_EXPORT_LOG_DIR:-}" ]; then
     for log in usage-export.log usage-export.err.log; do
         log="$NARANJO_USAGE_EXPORT_LOG_DIR/$log"
         if [ -f "$log" ] && [ "$(wc -c < "$log" | tr -d ' ')" -gt "$MAX_LOG_BYTES" ]; then
-            mv -f "$log" "$log.1" || { echo "usage-export: WARN log-rotation failed" >&2; continue; }
+            mv -f "$log" "$log.1" || { log "WARN log-rotation failed" >&2; continue; }
             case "$log" in
                 *.err.log) exec 2>>"$log" ;;
                 *) exec >>"$log" ;;
@@ -269,7 +309,7 @@ update_checkout() {
         now=$(/bin/date +%s)
         if [ $((now - last)) -ge "$FETCH_INTERVAL_SECONDS" ] || [ "$now" -lt "$last" ]; then
             { echo "$now" > "$stamp"; } 2>/dev/null || true
-            GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true
+            stamped env GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true
         fi
     fi
     git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' >/dev/null 2>&1 || return 0
@@ -288,18 +328,18 @@ update_checkout() {
         fast_forward_main
     fi
     if [ "$reason" = updated ]; then
-        echo "usage-export: UPDATED exporter $(git -C "$REPO_DIR" rev-parse --short=12 "$old")->$(git -C "$REPO_DIR" rev-parse --short=12 "$new")"
+        log "UPDATED exporter $(git -C "$REPO_DIR" rev-parse --short=12 "$old")->$(git -C "$REPO_DIR" rev-parse --short=12 "$new")"
     else
-        echo "usage-export: WARN DRIFT behind=$behind ahead=$ahead action=$action reason=$reason" >&2
+        log "WARN DRIFT behind=$behind ahead=$ahead action=$action reason=$reason" >&2
     fi
     if [ -n "$repair" ]; then
-        echo "usage-export: WARN repo-update repair: $repair" >&2
+        log "WARN repo-update repair: $repair" >&2
     fi
     if [ -n "$facts" ]; then
-        echo "usage-export: WARN repo-update state: $facts" >&2
+        log "WARN repo-update state: $facts" >&2
     fi
     if [ -n "$interrupted" ]; then
-        echo "usage-export: WARN repo-update interrupted signal=$interrupted" >&2
+        log "WARN repo-update interrupted signal=$interrupted" >&2
     fi
     if [ "$action" = incomplete ]; then
         stage=repo-update
@@ -599,8 +639,8 @@ exporter_revision=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD 2>/dev/null || 
 SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"
 [ -f "$SERVED_CHECK" ] || fail "served-check helper not found under REPO_DIR"
 if [ -n "$SITE_URL" ]; then
-    python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state "${HISTORY_DIR:+$HISTORY_DIR/push-state.json}" --exporter "$exporter_revision" </dev/null \
-        || echo "usage-export: WARN served-check unavailable reason=helper-failed" >&2
+    stamped stamped_out python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state "${HISTORY_DIR:+$HISTORY_DIR/push-state.json}" --exporter "$exporter_revision" </dev/null \
+        || log "WARN served-check unavailable reason=helper-failed" >&2
 fi
 
 # The producer's capability boundary, and the reason it lives HERE rather than
@@ -671,7 +711,7 @@ for triple in $MERGE_CAPTURES; do
         fi
     fi
     begin "recapture-$key"
-    sandbox-exec -f "$PRODUCER_PROFILE" \
+    stamped sandbox-exec -f "$PRODUCER_PROFILE" \
         /usr/bin/env python3 -I -B "$CAPTURE_SCRIPT" "$@" \
         > "$SCRATCH/$key.json" \
         || fail "a merge source could not be recaptured; nothing was pushed"
@@ -719,13 +759,13 @@ for pair in $MERGE_SOURCES; do
     set -- "$@" --merge-source "$pair"
 done
 begin export
-sandbox-exec -f "$PRODUCER_PROFILE" \
+stamped sandbox-exec -f "$PRODUCER_PROFILE" \
     /usr/bin/env python3 -I -B "$EXPORT_SCRIPT" "$@" || fail "export refused"
 finish
 
 # 3. Seal on this machine, before anything leaves it.
 begin seal
-"$USAGESEAL_BIN" -mode seal -key-file "$KEY_FILE" < "$PLAIN" > "$SEALED" \
+stamped "$USAGESEAL_BIN" -mode seal -key-file "$KEY_FILE" < "$PLAIN" > "$SEALED" \
     || fail "sealing refused"
 finish
 
@@ -921,7 +961,7 @@ check_resolved serveralivecountmax 2
 check_resolved loglevel ERROR
 
 begin push
-remote_line=$(push_ssh "$PUSH_HOST" usage-export-receive < "$SEALED") || fail "push refused"
+remote_line=$(stamped push_ssh "$PUSH_HOST" usage-export-receive < "$SEALED") || fail "push refused"
 
 remote_sum=$(echo "$remote_line" | head -n 1 | cut -d' ' -f1)
 [ "$remote_sum" = "$local_sum" ] || fail "checksum mismatch after push"
@@ -933,9 +973,9 @@ finish
 # sealed checksum, and the push time. Instants and a digest only, private,
 # beside the stores.
 if [ -n "$HISTORY_DIR" ]; then
-    python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" --document "$PLAIN" --sha256 "$local_sum" </dev/null \
-        || echo "usage-export: WARN push-state unrecorded reason=helper-failed" >&2
+    stamped python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" --document "$PLAIN" --sha256 "$local_sum" </dev/null \
+        || log "WARN push-state unrecorded reason=helper-failed" >&2
 fi
 
 # One line per healthy run, printed only once the host's checksum matched.
-echo "usage-export: SUMMARY pushed=${sealed_bytes}B sha256=$(echo "$local_sum" | cut -c1-12) exporter=$exporter_revision elapsed=$(elapsed)s stages:$timings"
+log "SUMMARY pushed=${sealed_bytes}B sha256=$(echo "$local_sum" | cut -c1-12) exporter=$exporter_revision elapsed=$(elapsed)s stages:$timings"
