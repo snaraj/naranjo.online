@@ -99,9 +99,10 @@ checks hold the site to it, and each answers a different question:
   comment, Svelte markup or a test file keeps nothing alive, and a write the
   grammar cannot attribute, a key built at run time included, is refused
   rather than ignored. A `/` after `)`, `}`, `++`, `--` or `of` (or a `!`
-  following one) can divide or open a regular expression, so each file is
-  read both ways, and a file whose writes may depend on the reading is
-  refused until it is written unambiguously.
+  following one, or following an operand across a line break) can divide or
+  open a regular expression, so each file is read both ways, and a file whose
+  writes may depend on the reading is refused until it is written
+  unambiguously.
 - `frontend/e2e/compliance.spec.mjs`, in the browser lanes, drives the shipped
   binary in every engine: no request to an undeclared origin, no CSP
   violation, nothing written to the device before the visitor acts, the

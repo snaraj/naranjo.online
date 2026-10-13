@@ -159,11 +159,13 @@ REGEX_LITERAL = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n\[])+/")
 # these characters, after one of these words, or at the very start. After a
 # name, a property (whatever it is called), a number, `]` or a closing quote
 # it divides. After `)`, `}`, `++`, `--` or `of`, or a `!` that follows one of
-# them, it can do either, and only a parser knows which, so `storage_writes`
-# reads the file both ways.
+# them or follows an operand across a line break, it can do either, and only a
+# parser knows which, so `storage_writes` reads the file both ways.
 REGEX_AFTER = frozenset("(,=:[!&|?{;+-*%<>~^")
 REGEX_AFTER_WORDS = frozenset("return typeof case do else in new delete void throw instanceof yield await".split())
 OPERAND_OR_KEYWORD = frozenset(("of",))
+# JavaScript's line terminators: each ends a `//` comment and a statement.
+LINE_TERMINATOR = re.compile("[\n\r  ]")
 SVELTE_ELEMENT = re.compile(r"<(script|style)\b[^>]*>", re.IGNORECASE)
 HSTS_FLOOR_SECONDS = 31_536_000
 REFERRER_POLICIES = {"no-referrer", "same-origin", "strict-origin", "strict-origin-when-cross-origin"}
@@ -373,10 +375,10 @@ def storage_writes(source_root: Path) -> tuple[dict[tuple[str, str], str], list[
             lines = ", ".join(str(text.count("\n", 0, at) + 1) for at in sorted(set(slashes + other_slashes)))
             unread.append(
                 f"frontend/src/{where}: the storage scan cannot tell whether the `/` on line {lines} divides or "
-                "opens a regular expression (after `)`, `}`, `++`, `--` or `of`, or a `!` that follows one, it "
-                "can do either), and what this file writes may depend on it, so its writes are not counted; "
-                "write it unambiguously, for example by wrapping a regular expression in parentheses or putting "
-                "a division's operands in variables"
+                "opens a regular expression (after `)`, `}`, `++`, `--` or `of`, or a `!` that follows one or a "
+                "line break, it can do either), and what this file writes may depend on it, so its writes are "
+                "not counted; write it unambiguously, for example by wrapping a regular expression in "
+                "parentheses or putting a division's operands in variables"
             )
             continue
         for key, value in found.items():
@@ -468,7 +470,14 @@ def code_only(text: str, svelte: bool = False, ambiguous_regex: bool = False) ->
         if last in ")}" or (before > 0 and out[before - 1] + last in ("++", "--")):
             return None
         if last == "!":
-            return ends_operand(before)  # `x!` asserts non-null; `!x` negates
+            # `x!` asserts non-null and `!x` negates, but a line terminator
+            # between `x` and `!` ends `x`'s statement, comments included,
+            # which the source shows and this buffer may not.
+            ends = ends_operand(before)
+            prior = before - 1
+            while prior >= 0 and out[prior].isspace():
+                prior -= 1
+            return None if ends and LINE_TERMINATOR.search(text, prior + 1, before) else ends
         return last not in REGEX_AFTER
 
     def regex_or_division(at: int, end: int) -> int:
@@ -510,7 +519,9 @@ def code_only(text: str, svelte: bool = False, ambiguous_regex: bool = False) ->
             at = stop.start()
             character = text[at]
             if text.startswith("//", at):
-                at = comment(at, end, "\n")
+                terminator = LINE_TERMINATOR.search(text, at, end)
+                blank(at, terminator.start() if terminator else end)
+                at = terminator.start() if terminator else end
             elif text.startswith("/*", at):
                 at = comment(at, end, "*/")
             elif text.startswith("<!--", at):

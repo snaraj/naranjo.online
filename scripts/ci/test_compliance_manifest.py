@@ -464,6 +464,35 @@ class ValidateTests(unittest.TestCase):
                 self.assertTrue(any("localStorage 'width', which no file" in r for r in refusals), refusals)
                 (self.source / name).unlink()
 
+    def test_a_negation_after_a_line_break_is_no_non_null_assertion(self) -> None:
+        # On one line `x!` is TypeScript's non-null assertion and a `/` after
+        # it divides. With a line terminator between them, a comment's
+        # included, `x` ends its statement and the `!` negates, so the `/`
+        # opens a regex: the scan calls that `!` ambiguous.
+        for gap in ("\n", " /* a\n b */ ", " /* a b */ ", " ", " "):
+            for name, before, after in self.PLACES:
+                with self.subTest(place=name, gap=gap):
+                    (self.source / name).write_text(
+                        before + "let x = 1;\nx" + gap + "!/'/.test('x'); localStorage.setItem('undeclared', '1');" + after
+                    )
+                    refusals = self.refusals(manifest())
+                    self.assertTrue(self.ambiguous(name, refusals), refusals)
+                    (self.source / name).unlink()
+        # The inverse: the write-shaped text is the regex, so it keeps no
+        # declaration alive.
+        (self.source / "theme.ts").write_text("export {};\n")
+        for name, before, after in self.PLACES:
+            with self.subTest(place=name, inverse=True):
+                (self.source / name).write_text(
+                    before + "let x = 1;\nx\n!/document.cookie = 'theme=1'; localStorage.setItem('width', value)/.test('x');"
+                    + after
+                )
+                refusals = self.refusals(manifest())
+                self.assertTrue(self.ambiguous(name, refusals), refusals)
+                self.assertTrue(any("cookie 'theme', which no file" in r for r in refusals), refusals)
+                self.assertTrue(any("localStorage 'width', which no file" in r for r in refusals), refusals)
+                (self.source / name).unlink()
+
     def test_a_division_after_a_property_or_a_non_null_assertion_hides_no_write(self) -> None:
         # A property may be called anything, and TypeScript's `x!` ends an
         # operand where `!x` begins one: each `/` here can only divide.
@@ -471,6 +500,7 @@ class ValidateTests(unittest.TestCase):
             "const a = map.delete / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
             "const a = map. delete / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
             "const a = el.offsetWidth! / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            "const a = x!/2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
         ):
             for name, before, after in self.PLACES:
                 with self.subTest(place=name, line=line):
@@ -496,6 +526,12 @@ class ValidateTests(unittest.TestCase):
             "if (!/'/.test(s)) window.localStorage.setItem('width', v);",
             "function f(s) { return /'/.test(s); } window.localStorage.setItem('width', v);",
             "/'/.test(s); window.localStorage.setItem('width', v);",
+            # A negation that starts a statement or a line stays one.
+            "let x = 1;\n!/'/.test(s); window.localStorage.setItem('width', v);",
+            "if (a ||\n!/'/.test(s)) window.localStorage.setItem('width', v);",
+            # A line comment ends at any line terminator, not only "\n".
+            "let x = 1; // note window.localStorage.setItem('width', v);",
+            "let x = 1; // note window.localStorage.setItem('width', v);",
         ):
             for name, before, after in self.PLACES:
                 with self.subTest(place=name, line=line):
