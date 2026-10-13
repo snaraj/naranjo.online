@@ -32,19 +32,33 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   course to refuse every export at the 256 MiB bound by the end of October.
   They are merged into one reading, and a still-running session is recorded
   at most once per fifteen minutes while its final figure always lands;
-  replayed, the month writes 3.1% of its rows (#358).
+  replayed, the month writes 3.1% of its rows (#358). Every session entry is
+  admitted on its own before entries sharing a start are merged, so a
+  malformed one is refused rather than absorbed.
+- A FIFO or other special file where the panels state directory keeps its
+  floor marker or retained document is refused at once instead of stalling
+  every refresh behind a blocked open (#358).
+- The compliance gate counts storage writes in code only: write-shaped text
+  in a string, template or regular expression, Svelte markup, or a `getItem`
+  read no longer keeps a stale declaration alive, and a `setItem` whose key
+  is built at run time is refused (Refs #355).
+- The watermark tool refuses a NaN or infinite `--size`, `--row` or `--gap`.
 
 ### Added
 
 - The usage push checks, at the start of each run, whether the site's
-  token-usage panel serves the last verified push (`SITE_URL`), logs
-  `SERVED`, `NOT-SERVED` or `RECOVERED`, and raises one desktop notification
-  once the panel has not served it for fifteen minutes (#358).
-- `REPO_UPDATE` (default `ff-only`): a push checkout strictly behind
-  `origin/main` is fast-forwarded, fetching at most hourly under a bounded
-  deadline, and the run re-executes once; drift it will not repair is logged
-  as `DRIFT` (#358). `install-launchd.sh --check` reports, read-only, whether
-  each installed agent runs the configured checkout and exited cleanly.
+  token-usage panel serves, for every source, data at least as new as the
+  last verified push (`SITE_URL`), logs `SERVED`, `NOT-SERVED` (with how many
+  sources are behind) or `RECOVERED`, and raises one desktop notification
+  once the panel has fallen behind for fifteen minutes (#358).
+- `REPO_UPDATE` (default `ff-only`): a push checkout on `main` strictly behind
+  `origin/main` is fast-forwarded inside git's own index lock, moving `main`
+  only and only while the checkout still names it; another git operation in
+  progress, another branch or a moved ref is logged as `DRIFT` and left as it
+  is. It fetches at most hourly under a bounded deadline and the run
+  re-executes once (#358). `install-launchd.sh --check` reports, read-only,
+  whether each installed agent's program arguments run the configured
+  checkout and whether it exited cleanly.
 - `PANELS_CAPTURE=token-usage` refreshes the shipped token-usage snapshot from
   an exported document through the data root's own admission; the snapshot
   now carries both sources through 2026-10-12 (#358).
@@ -62,6 +76,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   #355; supersedes PR #357, with its five review findings repaired).
 - The CI contract suite fails when an `AGENTS.md` `docs/<name>.md` pointer
   names a file that does not exist (#272).
+- Tests that decode J's picture in every browser engine against a
+  corrupt-payload control, run the coverage-badge workflow's own steps the
+  way the runner does, and pin the badge publisher's run-ID bound and the
+  watermark's argument bounds and tile placement.
 
 ### Changed
 
