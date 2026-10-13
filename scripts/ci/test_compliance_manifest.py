@@ -471,7 +471,7 @@ class ValidateTests(unittest.TestCase):
         # it divides. With a line terminator between them, a comment's
         # included, `x` ends its statement and the `!` negates, so the `/`
         # opens a regex: the scan calls that `!` ambiguous.
-        for gap in ("\n", " /* a\n b */ ", " /* a b */ ", " ", " "):
+        for gap in ("\n", " /* a\n b */ ", " /* a\u2028b */ ", "\u2028", "\u2029"):
             for name, before, after in self.PLACES:
                 with self.subTest(place=name, gap=gap):
                     (self.source / name).write_text(
@@ -508,7 +508,7 @@ class ValidateTests(unittest.TestCase):
             "const a = this / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
             "let x = 4;\nconst y = x\n/ 2 / 1; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
             "while (go()) { if (stop) break\nx / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4; }",
-            "while (go()) { if (stop) break /*   */ x / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4; }",
+            "while (go()) { if (stop) break /* \u2028 */ x / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4; }",
         ):
             for name, before, after in self.PLACES:
                 with self.subTest(place=name, line=line):
@@ -556,6 +556,70 @@ class ValidateTests(unittest.TestCase):
                 self.assertFalse(self.ambiguous(name, refusals), refusals)
                 (self.source / name).unlink()
 
+    def test_a_name_spelled_with_a_unicode_escape_is_refused(self) -> None:
+        # An escape can spell a label the slash rule must see, or the very
+        # names the write patterns look for; the scan refuses it instead.
+        for line in (
+            "outer: for (;;) {\n  if (stop) break \\u006futer\n  /'/.test('x'); localStorage.setItem('undeclared', '1');\n}",
+            "outer: for (;;) {\n  if (stop) break \\u{6f}uter\n  /'/.test('x'); localStorage.setItem('undeclared', '1');\n}",
+            "outer: for (;;) {\n  if (skip) continue \\u006futer\n  /'/.test('x'); localStorage.setItem('undeclared', '1');\n}",
+            "outer: for (;;) {\n  if (skip) continue \\u{6f}uter\n  /'/.test('x'); localStorage.setItem('undeclared', '1');\n}",
+            "document.\\u0063ookie = 'theme=1';\nlocal\\u0053torage.setItem('undeclared', '1');",
+            "localStorage.set\\u{49}tem('undeclared', '1');",
+        ):
+            for name, before, after in self.PLACES:
+                with self.subTest(place=name, line=line):
+                    (self.source / name).write_text(before + line + after)
+                    refusals = self.refusals(manifest())
+                    first = (before + line).index("\\")
+                    at = (before + line)[:first].count("\n") + 1
+                    expected = f"frontend/src/{name} spells a name with a Unicode escape on line {at}; write the name plainly"
+                    self.assertIn(expected, refusals)
+                    (self.source / name).unlink()
+
+    def test_a_name_may_hold_any_non_ascii_character_but_white_space(self) -> None:
+        # Every JavaScript punctuator is ASCII, so in code a non-ASCII
+        # character that is not white space belongs to a name: a combining
+        # mark, a joiner or a middle dot inside a label keeps it a label,
+        # and a byte order mark between `break` and its label is white space.
+        for label, gap in (("a\u0301", " "), ("a\u200db", " "), ("a\u00b7b", " "), ("outer", "\ufeff")):
+            for keyword in ("break", "continue"):
+                line = (f"{label}: for (;;) {{ if (go) {keyword}{gap}{label}\n"
+                        "/'/.test('x'); localStorage.setItem('undeclared', '1'); }")
+                for name, before, after in self.PLACES:
+                    with self.subTest(place=name, label=label, keyword=keyword):
+                        (self.source / name).write_text(before + line + after)
+                        refusals = self.refusals(manifest())
+                        self.assertTrue(any(f"{name} writes localStorage 'undeclared'" in r for r in refusals), refusals)
+                        self.assertFalse(self.ambiguous(name, refusals), refusals)
+                        (self.source / name).unlink()
+        # A byte order mark before a line break leaves `debugger` a statement
+        # end, and one after a line break leaves the `!` after it ambiguous.
+        for line, ambiguous in (
+            ("debugger\ufeff\n/'/.test('x'); localStorage.setItem('undeclared', '1');", False),
+            ("let x = 1;\nx\n\ufeff!/'/.test('x'); localStorage.setItem('undeclared', '1');", True),
+        ):
+            for name, before, after in self.PLACES:
+                with self.subTest(place=name, line=line):
+                    (self.source / name).write_text(before + line + after)
+                    refusals = self.refusals(manifest())
+                    self.assertEqual(self.ambiguous(name, refusals), ambiguous, refusals)
+                    if not ambiguous:
+                        self.assertTrue(any(f"{name} writes localStorage 'undeclared'" in r for r in refusals), refusals)
+                    (self.source / name).unlink()
+        # A non-ASCII operand still divides.
+        for line in (
+            "const \u00e9 = 4; const a = \u00e9 / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            "const x\u0301 = 4; const a = x\u0301 / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+        ):
+            for name, before, after in self.PLACES:
+                with self.subTest(place=name, line=line):
+                    (self.source / name).write_text(before + line + after)
+                    refusals = self.refusals(manifest())
+                    self.assertTrue(any(f"{name} writes localStorage 'undeclared'" in r for r in refusals), refusals)
+                    self.assertFalse(self.ambiguous(name, refusals), refusals)
+                    (self.source / name).unlink()
+
     def test_a_slash_whose_reading_changes_nothing_passes(self) -> None:
         # The fixture's theme.ts writes only the cookie here, so each case
         # passes only if its own width write is found.
@@ -575,9 +639,13 @@ class ValidateTests(unittest.TestCase):
             # A negation that starts a statement or a line stays one.
             "let x = 1;\n!/'/.test(s); window.localStorage.setItem('width', v);",
             "if (a ||\n!/'/.test(s)) window.localStorage.setItem('width', v);",
+            # A backslash inside a string, a template, a regex or a comment
+            # spells no name.
+            "const s = '\\u0041' + `\\u0041` + /\\u0041/.source; // \\u0041\n/* \\u0041 */ "
+            "window.localStorage.setItem('width', v);",
             # A line comment ends at any line terminator, not only "\n".
-            "let x = 1; // note window.localStorage.setItem('width', v);",
-            "let x = 1; // note window.localStorage.setItem('width', v);",
+            "let x = 1; // note\u2028window.localStorage.setItem('width', v);",
+            "let x = 1; // note\u2029window.localStorage.setItem('width', v);",
         ):
             for name, before, after in self.PLACES:
                 with self.subTest(place=name, line=line):

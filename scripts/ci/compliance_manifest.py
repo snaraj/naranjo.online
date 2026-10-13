@@ -399,6 +399,14 @@ def file_writes(
     writes: dict[tuple[str, str], str] = {}
     unread: list[str] = []
     code, slashes = code_only(text, svelte, ambiguous_regex)
+    # Outside literals and comments a backslash can only open a Unicode
+    # escape in a name, and an escape can spell `localStorage`, `setItem`,
+    # `cookie` or a label this scan would misread, so it is refused, not
+    # decoded.
+    escape = code.find("\\")
+    if escape >= 0:
+        line = text.count("\n", 0, escape) + 1
+        unread.append(f"frontend/src/{where} spells a name with a Unicode escape on line {line}; write the name plainly")
     for match in COOKIE_WRITE.finditer(code):
         name = COOKIE_NAME.match(text, match.end())
         if name:
@@ -424,6 +432,23 @@ def file_writes(
         for kind in kinds:
             writes.setdefault((kind, literal), where)
     return writes, unread, slashes
+
+
+def js_space(character: str) -> bool:
+    """JavaScript white space or a line terminator. Python's isspace also
+    takes U+001C-U+001F and U+0085, which JavaScript does not, but in code
+    those are syntax errors, so no valid program reads differently."""
+    return character.isspace() or character == "\ufeff"
+
+
+def name_character(character: str) -> bool:
+    """Part of a JavaScript name. Every punctuator is ASCII, so in code a
+    non-ASCII character that is not white space can only belong to a name
+    (anything else there is a syntax error). isalnum is not ASCII-only, so
+    the ASCII test is spelled out."""
+    if character.isascii():
+        return character.isalnum() or character in "_$"
+    return not js_space(character)
 
 
 def code_only(text: str, svelte: bool = False, ambiguous_regex: bool = False) -> tuple[str, list[int]]:
@@ -456,17 +481,17 @@ def code_only(text: str, svelte: bool = False, ambiguous_regex: bool = False) ->
     def ends_operand(at: int) -> bool | None:
         """Whether the code before `at` ends an operand, begins one, or None: either."""
         before = at - 1
-        while before >= 0 and out[before].isspace():
+        while before >= 0 and js_space(out[before]):
             before -= 1
         if before < 0:
             return False
         word = before
-        while word >= 0 and (out[word].isalnum() or out[word] in "_$"):
+        while word >= 0 and name_character(out[word]):
             word -= 1
         name = "".join(out[word + 1 : before + 1])
         if name:
             dot = word
-            while dot >= 0 and out[dot].isspace():
+            while dot >= 0 and js_space(out[dot]):
                 dot -= 1
             if dot >= 0 and out[dot] == ".":
                 return True  # a property, whatever it is called
@@ -476,7 +501,7 @@ def code_only(text: str, svelte: bool = False, ambiguous_regex: bool = False) ->
                 return False
             # A label ends `break` or `continue` when it is on their line.
             keyword = dot
-            while keyword >= 0 and (out[keyword].isalnum() or out[keyword] in "_$"):
+            while keyword >= 0 and name_character(out[keyword]):
                 keyword -= 1
             return not (
                 "".join(out[keyword + 1 : dot + 1]) in ("break", "continue")
@@ -491,7 +516,7 @@ def code_only(text: str, svelte: bool = False, ambiguous_regex: bool = False) ->
             # which the source shows and this buffer may not.
             ends = ends_operand(before)
             prior = before - 1
-            while prior >= 0 and out[prior].isspace():
+            while prior >= 0 and js_space(out[prior]):
                 prior -= 1
             return None if ends and LINE_TERMINATOR.search(text, prior + 1, before) else ends
         return last not in REGEX_AFTER

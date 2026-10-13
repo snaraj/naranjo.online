@@ -102,7 +102,10 @@ checks hold the site to it, and each answers a different question:
   following one, or following an operand across a line break) can divide or
   open a regular expression, so each file is read both ways, and a file whose
   writes may depend on the reading is refused until it is written
-  unambiguously.
+  unambiguously. A name spelled with a Unicode escape is refused, because an
+  escape can spell `localStorage`, `setItem`, `cookie` or a label. Any
+  non-ASCII character in code that is not white space is read as part of a
+  name, since every JavaScript punctuator is ASCII.
 - `frontend/e2e/compliance.spec.mjs`, in the browser lanes, drives the shipped
   binary in every engine: no request to an undeclared origin, no CSP
   violation, nothing written to the device before the visitor acts, the
