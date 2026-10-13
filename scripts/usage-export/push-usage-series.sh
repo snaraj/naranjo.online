@@ -94,8 +94,9 @@
 #   SITE_URL        the site's bare https origin (issue #358). A verified
 #                   checksum proves delivery to the host, never what the PAGE
 #                   serves; when this is set, each run first asks the site's
-#                   public token-usage envelope whether it serves the last
-#                   push (served-check.py) and logs SERVED or NOT-SERVED. It
+#                   public token-usage envelope whether it serves, for every
+#                   source, data at least as new as the last push
+#                   (served-check.py) and logs SERVED or NOT-SERVED. It
 #                   compares against "$HISTORY_DIR/push-state.json", so it
 #                   needs HISTORY_DIR. It never fails or delays the push.
 #   REPO_UPDATE     ff-only (the default) or off; anything else refuses the
@@ -414,10 +415,12 @@ exporter_revision=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD 2>/dev/null || 
 # Served verification (issue #358). The checksum below proves delivery to the
 # host and nothing about what the PAGE serves: the origin once served its
 # release snapshot for days while every run logged a verified push. So each
-# run first asks the site's public token-usage envelope whether it serves the
-# LAST push, at the start rather than after this push, so no run ever waits
-# for the origin's next re-read. One bounded request, OUTSIDE the producer
-# sandbox like the transport, and never a reason to fail or skip the push.
+# run first asks the site's public token-usage envelope whether every source
+# it serves is at least as new as in the LAST push — what a visitor's GET can
+# show, never the exact document — at the start rather than after this push,
+# so no run ever waits for the origin's next re-read. One bounded request,
+# OUTSIDE the producer sandbox like the transport, and never a reason to fail
+# or skip the push.
 SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"
 [ -f "$SERVED_CHECK" ] || fail "served-check helper not found under REPO_DIR"
 if [ -n "$SITE_URL" ]; then
@@ -750,9 +753,10 @@ remote_sum=$(echo "$remote_line" | head -n 1 | cut -d' ' -f1)
 finish
 
 # What the NEXT run's served check compares against (issue #358): this
-# document's export instant, its oldest source capture — the instant the
-# origin serves as the envelope's generatedAt — the sealed checksum, and the
-# push time. Instants and a digest only, private, beside the stores.
+# document's export instant, every source's capture instant, the oldest of
+# them — the instant the origin serves as the envelope's generatedAt — the
+# sealed checksum, and the push time. Instants and a digest only, private,
+# beside the stores.
 if [ -n "$HISTORY_DIR" ]; then
     python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" --document "$PLAIN" --sha256 "$local_sum" </dev/null \
         || echo "usage-export: WARN push-state unrecorded reason=helper-failed" >&2

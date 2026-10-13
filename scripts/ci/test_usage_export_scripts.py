@@ -1720,8 +1720,9 @@ class ServedCheckTest(unittest.TestCase):
 
     def write_state(self, **overrides):
         state = {
-            "schema": "push-state/v1",
+            "schema": "push-state/v2",
             "generatedAt": "2026-10-12T11:58:30Z",
+            "capturedAt": {"alpha": PUSHED_CAPTURE},
             "oldestCapturedAt": PUSHED_CAPTURE,
             "sha256": "a" * 64,
             "pushedAt": "2026-10-12T11:59:00Z",
@@ -1743,7 +1744,7 @@ class ServedCheckTest(unittest.TestCase):
                 "title": "sentinel",
                 "generatedAt": generated,
                 "status": status,
-                "data": {},
+                "data": {"sources": [{"label": "alpha", "capturedAt": generated}]},
             },
             url,
         )
@@ -1782,8 +1783,8 @@ class ServedCheckTest(unittest.TestCase):
         self.assertEqual(
             err,
             [
-                "usage-export: WARN NOT-SERVED status=stale served_at=%s expected_at>=%s since_push=60s"
-                % (PUSHED_CAPTURE, PUSHED_CAPTURE)
+                "usage-export: WARN NOT-SERVED status=stale served_at=%s expected_at>=%s sources_behind=0"
+                " since_push=60s" % (PUSHED_CAPTURE, PUSHED_CAPTURE)
             ],
         )
         self.assertEqual(self.read_state()["notServedSince"], at(CHECK_NOW))
@@ -1797,14 +1798,86 @@ class ServedCheckTest(unittest.TestCase):
         self.assertEqual(
             err,
             [
-                "usage-export: WARN NOT-SERVED status=ok served_at=%s expected_at>=%s since_push=60s"
-                % (RELEASE_INSTANT, PUSHED_CAPTURE)
+                "usage-export: WARN NOT-SERVED status=ok served_at=%s expected_at>=%s sources_behind=1"
+                " since_push=60s" % (RELEASE_INSTANT, PUSHED_CAPTURE)
             ],
         )
         # One second older than the recorded capture is already not served.
         out, err = self.check(self.answer(generated="2026-10-12T11:57:59Z"))
         self.assertEqual(out, [])
         self.assertEqual(len(err), 1)
+        # Both bounds hold on their own: current sources under an envelope
+        # instant older than the push are not served either.
+        envelope = json.loads(self.answer().body)
+        out, err = self.check(EnvelopeResponse(dict(envelope, generatedAt=RELEASE_INSTANT)))
+        self.assertEqual(out, [])
+        self.assertIn(" sources_behind=0 ", err[0])
+
+    def pushed_document(self, generated, captures):
+        path = self.scratch / "usage.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "usage-series/v1",
+                    "generatedAt": generated,
+                    "sources": {key: {"capturedAt": instant} for key, instant in captures.items()},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def served_envelope(self, captures, status="ok"):
+        """The envelope as a visitor's GET returns it: the oldest capture as
+        its generatedAt, and each source's own capture instant beside it."""
+        return EnvelopeResponse(
+            {
+                "schema": "panel/v1",
+                "id": "token-usage",
+                "kind": "token-usage/v2",
+                "title": "sentinel",
+                "generatedAt": min(captures.values()),
+                "status": status,
+                "data": {"sources": [{"label": key, "capturedAt": at} for key, at in captures.items()]},
+            }
+        )
+
+    def test_an_older_document_sharing_the_oldest_capture_is_not_served(self):
+        # Review F2: only the OLDEST capture was compared, so the document
+        # pushed before the last one passed whenever its oldest source equalled
+        # the last one's — the ordinary case of one source moving on.
+        old = {"alpha": "2026-10-12T11:58:00Z", "beta": "2026-10-12T11:58:00Z"}
+        new = {"alpha": "2026-10-12T11:58:00Z", "beta": "2026-10-12T11:59:00Z"}
+        outage = at(CHECK_NOW - datetime.timedelta(minutes=20))
+        self.write_state(notServedSince=outage, notified=True)
+        served.record(
+            str(self.state), str(self.pushed_document("2026-10-12T11:59:30Z", new)), "b" * 64,
+            CHECK_NOW - datetime.timedelta(minutes=1),
+        )
+        for answer in (
+            self.served_envelope(old),
+            # A source the page does not serve at all is not served either.
+            self.served_envelope({"alpha": new["alpha"]}),
+        ):
+            with self.subTest(body=answer.body):
+                out, err = self.check(answer)
+                self.assertEqual(out, [])
+                self.assertEqual(
+                    err,
+                    [
+                        "usage-export: WARN NOT-SERVED status=ok served_at=2026-10-12T11:58:00Z"
+                        " expected_at>=2026-10-12T11:58:00Z sources_behind=1 since_push=60s"
+                    ],
+                )
+                # The outage latch holds: only a SERVED clears it.
+                state = self.read_state()
+                self.assertEqual((state["notServedSince"], state["notified"]), (outage, True))
+        # The pushed document itself is served, and only that ends the outage.
+        out, err = self.check(self.served_envelope(new))
+        self.assertEqual(
+            out, ["usage-export: SERVED status=ok lag=60s", "usage-export: RECOVERED served after 1200s"]
+        )
+        self.assertEqual(err, [])
 
     def test_one_notification_after_fifteen_minutes_and_never_again(self):
         stale = lambda: self.answer(generated=RELEASE_INSTANT)  # noqa: E731
@@ -1846,8 +1919,9 @@ class ServedCheckTest(unittest.TestCase):
         self.assertEqual(
             state,
             {
-                "schema": "push-state/v1",
+                "schema": "push-state/v2",
                 "generatedAt": "2026-10-12T12:05:00Z",
+                "capturedAt": {"alpha": "2026-10-12T12:05:00Z", "beta": "2026-10-12T12:03:10Z"},
                 "oldestCapturedAt": "2026-10-12T12:03:10Z",
                 "sha256": "b" * 64,
                 "pushedAt": at(pushed),
@@ -1919,19 +1993,56 @@ class ServedCheckTest(unittest.TestCase):
         self.state.write_text("{not json", encoding="utf-8")
         _, err = self.check(self.answer())
         self.assertEqual(err, ["usage-export: WARN served-check unavailable reason=state-unreadable"])
-        self.write_state(oldestCapturedAt="yesterday")
-        _, err = self.check(self.answer())
-        self.assertEqual(err, ["usage-export: WARN served-check unavailable reason=state-unreadable"])
+        for broken in (
+            {"oldestCapturedAt": "yesterday"},
+            {"capturedAt": None},
+            {"capturedAt": {}},
+            {"capturedAt": {"alpha": "yesterday"}},
+        ):
+            with self.subTest(state=broken):
+                self.write_state(**broken)
+                with self.assertRaises(served.Unavailable):
+                    served.read_state(str(self.state))
+                _, err = self.check(self.answer())
+                self.assertEqual(err, ["usage-export: WARN served-check unavailable reason=state-unreadable"])
         self.write_state()
+        envelope = json.loads(self.answer().body)
         for answer in (
             self.answer(panel="vcs-activity"),
             self.answer(generated="not an instant"),
             EnvelopeResponse({"schema": "panel/v2"}),
             EnvelopeResponse([1, 2]),
+            EnvelopeResponse(dict(envelope, data={})),
+            EnvelopeResponse(dict(envelope, data={"sources": [None]})),
+            EnvelopeResponse(dict(envelope, data={"sources": [{"label": 7, "capturedAt": PUSHED_CAPTURE}]})),
+            # One source served twice cannot say which capture the page shows.
+            EnvelopeResponse(dict(envelope, data={"sources": envelope["data"]["sources"] * 2})),
         ):
             with self.subTest(body=answer.body[:40]):
                 out, err = self.check(answer)
                 self.assertEqual((out, err), ([], ["usage-export: WARN served-check unavailable reason=malformed-envelope"]))
+
+    def test_a_state_from_before_per_source_instants_is_never_judged(self):
+        # Without the per-source instants there is nothing the stronger check
+        # can compare, so the check declines; the next push records them and
+        # carries the outage latch across, rather than clearing it unserved.
+        outage = at(CHECK_NOW - datetime.timedelta(minutes=20))
+        earlier = json.loads(json.dumps(self.read_state()))
+        earlier.update(schema="push-state/v1", notServedSince=outage, notified=True)
+        del earlier["capturedAt"]
+        self.state.write_text(json.dumps(earlier), encoding="utf-8")
+        # An unreachable site: were the state judged, the request would be
+        # made and fail first.
+        out, err = self.check(urllib.error.URLError(ConnectionRefusedError("refused")))
+        self.assertEqual((out, err), ([], ["usage-export: WARN served-check unavailable reason=state-outdated"]))
+        self.assertEqual(self.opener.requests, [])
+        served.record(
+            str(self.state), str(self.pushed_document(PUSHED_CAPTURE, {"alpha": PUSHED_CAPTURE})), "c" * 64, CHECK_NOW
+        )
+        state = self.read_state()
+        self.assertEqual(state["schema"], "push-state/v2")
+        self.assertEqual(state["capturedAt"], {"alpha": PUSHED_CAPTURE})
+        self.assertEqual((state["notServedSince"], state["notified"]), (outage, True))
 
     def test_the_status_word_never_carries_upstream_text(self):
         _, err = self.check(self.answer(status="stale\nusage-export: SUMMARY pushed=1B"))
@@ -2013,6 +2124,10 @@ class ServedCheckPipelineTest(PushFixture, unittest.TestCase):
         self.assertTrue(summary.startswith("usage-export: SUMMARY pushed="), summary)
         self.assertEqual(state["sha256"][:12], summary.split("sha256=")[1].split()[0])
         self.assertLessEqual(state["oldestCapturedAt"], state["generatedAt"])
+        # The walked source is stamped with the export instant, which is how
+        # the per-source check binds that instant at all: the envelope serves
+        # capture instants, never the document's own.
+        self.assertEqual(state["capturedAt"], {"alpha": state["generatedAt"]})
         self.assertEqual((state["notServedSince"], state["notified"]), (None, False))
         second = run_script(PUSH, env=self.env)
         self.assertEqual(second.returncode, 0, second.stderr)

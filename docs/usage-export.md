@@ -83,21 +83,35 @@ current.
 
 **Served verification.** With `SITE_URL` and `HISTORY_DIR` configured, every
 verified push records `$HISTORY_DIR/push-state.json` (0600): the document's
-export instant, its OLDEST source capture instant — what the origin serves as
-the envelope's `generatedAt` once it has admitted the document — the sealed
-checksum and the push time. At the START of the next run, so no run waits on
-the origin's next re-read, `scripts/usage-export/served-check.py` reads the
-public `/api/panels/token-usage` envelope once, OUTSIDE the producer sandbox,
-with the nightly snapshot's own fetch (https only, the resolved host equal to
-the site's, no redirect, one 20-second timeout, one bounded read) under a
+export instant, every source's capture instant by source key, the OLDEST of
+them — what the origin serves as the envelope's `generatedAt` once it has
+admitted the document — the sealed checksum and the push time. At the START
+of the next run, so no run waits on the origin's next re-read,
+`scripts/usage-export/served-check.py` reads the public
+`/api/panels/token-usage` envelope once, OUTSIDE the producer sandbox, with
+the nightly snapshot's own fetch (https only, the resolved host equal to the
+site's, no redirect, one 20-second timeout, one bounded read) under a
 30-second whole-check deadline. It logs one line:
 
 ```
 usage-export: SERVED status=ok lag=<seconds since that push>s
-usage-export: WARN NOT-SERVED status=<status> served_at=<envelope generatedAt> expected_at>=<recorded> since_push=<s>s
+usage-export: WARN NOT-SERVED status=<status> served_at=<envelope generatedAt> expected_at>=<recorded oldest> sources_behind=<n> since_push=<s>s
 ```
 
-SERVED means the envelope is `ok` and at least as new as the recorded capture.
+SERVED means the envelope is `ok`, its `generatedAt` is at least the recorded
+oldest capture, and EVERY recorded source is served — matched by source key —
+with a capture instant at least as new as the pushed one; `sources_behind`
+counts the ones that are not, a source missing from the envelope included.
+Comparing the oldest capture alone let the document pushed before the last
+one pass whenever one source had moved on and another had not. That is
+exactly as much as a visitor's GET can show: the envelope carries each
+source's capture instant but neither the document's export instant nor its
+checksum, so SERVED proves the page serves data at least as new as the last
+push for every source, not that exact document. The export instant is bound
+only through the walked source, which is stamped with it; the checksum is
+recorded for correlation and never compared. A state recorded before the
+per-source instants existed is never judged (`state-outdated`); the next push
+records them and keeps the outage clock running.
 The first NOT-SERVED instant is kept, and a push does not restart it. Once
 NOT-SERVED has lasted more than fifteen minutes, ONE macOS notification with a
 fixed, payload-free text is raised (skipped where `osascript` does not exist),
@@ -1221,9 +1235,9 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `a panel request was redirected` / `came from a different host` | the snapshot refuses both rather than following them; check the configured site |
 | `ledger snapshot retry <panel> attempt=<n>/3 reason=<code> wait=<s>s` | a 5xx (`http-<status>`) or a timed-out transport (`timeout`); the run waits and asks again, three attempts at most |
 | `ledger snapshot export failed: …` | the night's readings are recorded; only the derived SQLite/CSV views could not be rebuilt, and the night exits 1 |
-| `usage-export: WARN NOT-SERVED status=<status> served_at=<t> expected_at>=<t> since_push=<s>s` | the page does not serve the last verified push. `status=stale`: the origin refused or aged the newest file — read its admission log. `status=ok` with an older `served_at`: it serves an older document, such as its embedded release snapshot — check the host's clock and the origin's log. Past fifteen minutes, one desktop notification |
+| `usage-export: WARN NOT-SERVED status=<status> served_at=<t> expected_at>=<t> sources_behind=<n> since_push=<s>s` | the page does not serve data as new as the last verified push. `status=stale`: the origin refused or aged the newest file — read its admission log. `status=ok` with an older `served_at`, or `sources_behind` above 0: it serves an older document, such as its embedded release snapshot or the push before the last — check the host's clock and the origin's log. Past fifteen minutes, one desktop notification |
 | `usage-export: RECOVERED served after <s>s` | the page serves the pushed data again; the next outage notifies afresh |
-| `usage-export: WARN served-check unavailable reason=<code>` | the check could not judge, and the push went on regardless: `no-push-state` (no verified push recorded yet, or no `HISTORY_DIR`), `state-unreadable`, `bad-site` (`SITE_URL` is not a bare https origin), `unreachable`, `timeout`, `http-<status>`, `redirected`, `host-mismatch`, `over-budget`, `malformed-envelope`, `deadline-exceeded`, `state-unwritable`, `helper-failed` |
+| `usage-export: WARN served-check unavailable reason=<code>` | the check could not judge, and the push went on regardless: `no-push-state` (no verified push recorded yet, or no `HISTORY_DIR`), `state-unreadable`, `state-outdated` (recorded before per-source instants; the next push replaces it), `bad-site` (`SITE_URL` is not a bare https origin), `unreachable`, `timeout`, `http-<status>`, `redirected`, `host-mismatch`, `over-budget`, `malformed-envelope`, `deadline-exceeded`, `state-unwritable`, `helper-failed` |
 | `usage-export: WARN push-state unrecorded reason=<code>` | the push landed, but what it delivered could not be recorded, so the next check compares against the previous push |
 | `usage-export: UPDATED exporter <old>-><new>` | the checkout was strictly behind `origin/main` and was fast-forwarded; the run re-executed the new script once |
 | `usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<code>` | the checkout is behind `origin/main` and was left exactly as it is: `off` (`REPO_UPDATE=off`), `detached`, `not-main`, `diverged` (local commits), `merge-refused` (a local edit the fast-forward would overwrite), `busy` (another git operation holds the index lock; the next run tries again), `none` (already current), `ref-moved` (HEAD or `main` moved during the update; the worktree was rolled back), `rollback-failed` (it could not be), `git-too-old`. Resolve it by hand |

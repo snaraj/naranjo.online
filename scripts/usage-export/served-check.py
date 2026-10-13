@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ask the site whether the page serves what the last push delivered (issue #358).
+"""Ask the site whether the page serves data as new as the last push (issue #358).
 
 WHY THIS EXISTS. The push verifies the checksum the receiving host returns,
 which proves delivery to the host and nothing about what the PAGE serves. The
@@ -11,16 +11,30 @@ push. This helper closes that gap from the workstation's side.
     served-check.py check  --state FILE --site https://<site> --exporter REV
 
 `record` runs after a verified push and writes a small private state file:
-the document's export instant, its OLDEST source capture instant — which is
-exactly what the origin serves as the envelope's `generatedAt` once it has
-admitted the document — the sealed checksum, and the push time. `check` runs
-at the START of the next run, so no run waits for the origin's next re-read:
-it reads the public token-usage envelope once and logs one line, SERVED when
-the envelope is `ok` and at least as new as the recorded capture, NOT-SERVED
-otherwise. A NOT-SERVED state older than fifteen minutes raises ONE desktop
+the document's export instant, EVERY source's capture instant by source key,
+the oldest of them — which is exactly what the origin serves as the
+envelope's `generatedAt` once it has admitted the document — the sealed
+checksum, and the push time. `check` runs at the START of the next run, so
+no run waits for the origin's next re-read: it reads the public token-usage
+envelope once and logs one line, SERVED when the envelope is `ok`, its
+`generatedAt` is at least the recorded oldest capture, AND every recorded
+source is served with a capture instant at least as new as the pushed one;
+NOT-SERVED otherwise. Comparing the oldest capture alone let the document
+pushed BEFORE the last one pass whenever one source had moved on and the
+other had not (review F2).
+
+What this can prove is bounded by what a visitor's GET shows. The envelope
+carries each source's capture instant, but neither the document's export
+instant nor its checksum, so SERVED means the page serves data at least as
+new as the last push for every source — not that it serves that exact
+document. The export instant is bound only where it IS a capture instant:
+the walked source is stamped with it. The checksum is recorded beside them
+and never compared.
+
+A NOT-SERVED state older than fifteen minutes raises ONE desktop
 notification, not repeated until a SERVED run clears it, and that run logs
-RECOVERED. Instants, a status word and closed reason codes only: no payload
-content and no upstream prose ever reaches the log.
+RECOVERED. Instants, a status word, a count and closed reason codes only: no
+payload content and no upstream prose ever reaches the log.
 
 The request is the nightly snapshot's own bounded fetch, imported rather than
 restated — https only, the resolved host must equal the site's, no redirect
@@ -49,7 +63,10 @@ import ledger_snapshot as snapshot  # noqa: E402
 ledger = snapshot.ledger
 
 PANEL = "token-usage"
-STATE_SCHEMA = "push-state/v1"
+STATE_SCHEMA = "push-state/v2"
+# The state before per-source capture instants were recorded. It is read only
+# so a push carries the NOT-SERVED latch across the upgrade; it is never judged.
+EARLIER_STATE_SCHEMA = "push-state/v1"
 ENVELOPE_OK = snapshot.ENVELOPE_OK
 USER_AGENT_PRODUCT = "naranjo-online-usage-export"
 
@@ -91,6 +108,16 @@ def seconds(later, earlier):
     return max(0, int((later - earlier).total_seconds()))
 
 
+def source_instants(value):
+    """A non-empty {source key: capture instant} map, or None."""
+    if not isinstance(value, dict) or not value:
+        return None
+    instants = {key: parse_instant(moment) for key, moment in value.items()}
+    if not all(isinstance(key, str) and key for key in instants) or None in instants.values():
+        return None
+    return instants
+
+
 def read_state(path):
     """The recorded state, or None when nothing was recorded yet."""
     try:
@@ -107,7 +134,8 @@ def read_state(path):
     if (
         len(raw) > MAX_STATE_BYTES
         or not isinstance(state, dict)
-        or state.get("schema") != STATE_SCHEMA
+        or state.get("schema") not in (STATE_SCHEMA, EARLIER_STATE_SCHEMA)
+        or state.get("schema") == STATE_SCHEMA and source_instants(state.get("capturedAt")) is None
         or not all(
             parse_instant(state.get(key)) for key in ("generatedAt", "oldestCapturedAt", "pushedAt")
         )
@@ -132,7 +160,7 @@ def write_state(path, state):
 
 
 def pushed_instants(document_path):
-    """The document's export instant and its oldest source capture instant."""
+    """The document's export instant and every source's capture instant."""
     try:
         with open(document_path, "rb") as handle:
             raw = handle.read(MAX_DOCUMENT_BYTES + 1)
@@ -143,15 +171,14 @@ def pushed_instants(document_path):
         raise Unavailable("document-unreadable")
     generated = parse_instant(document.get("generatedAt"))
     sources = document.get("sources")
-    if generated is None or not isinstance(sources, dict) or not sources:
+    if generated is None or not isinstance(sources, dict):
         raise Unavailable("document-unreadable")
-    captured = [
-        parse_instant(section.get("capturedAt")) if isinstance(section, dict) else None
-        for section in sources.values()
-    ]
-    if None in captured:
+    captured = source_instants(
+        {key: section.get("capturedAt") if isinstance(section, dict) else None for key, section in sources.items()}
+    )
+    if captured is None:
         raise Unavailable("document-unreadable")
-    return generated, min(captured)
+    return generated, captured
 
 
 def record(state_path, document_path, sha256, now):
@@ -159,7 +186,7 @@ def record(state_path, document_path, sha256, now):
     a push every minute must not restart the fifteen minutes it measures."""
     if len(sha256) != 64 or any(character not in "0123456789abcdef" for character in sha256):
         raise Unavailable("checksum-malformed")
-    generated, oldest = pushed_instants(document_path)
+    generated, captured = pushed_instants(document_path)
     try:
         previous = read_state(state_path) or {}
     except Unavailable:
@@ -169,7 +196,8 @@ def record(state_path, document_path, sha256, now):
         {
             "schema": STATE_SCHEMA,
             "generatedAt": ledger.instant(generated),
-            "oldestCapturedAt": ledger.instant(oldest),
+            "capturedAt": {key: ledger.instant(moment) for key, moment in captured.items()},
+            "oldestCapturedAt": ledger.instant(min(captured.values())),
             "sha256": sha256,
             "pushedAt": ledger.instant(now),
             "notServedSince": previous.get("notServedSince"),
@@ -203,6 +231,23 @@ def status_word(value):
     return "unrecognised"
 
 
+def served_captures(envelope):
+    """Each served source's capture instant by source key (None where the
+    source carries none). The keys are data: the same labels the pushed
+    document names its sources by."""
+    data = envelope.get("data")
+    sources = data.get("sources") if isinstance(data, dict) else None
+    if not isinstance(sources, list):
+        raise Unavailable("malformed-envelope")
+    captures = {}
+    for source in sources:
+        label = source.get("label") if isinstance(source, dict) else None
+        if not isinstance(label, str) or label in captures:
+            raise Unavailable("malformed-envelope")
+        captures[label] = parse_instant(source.get("capturedAt"))
+    return captures
+
+
 def evaluate(state, envelope, now, notify):
     """The run's line(s) and the state to keep, from one envelope.
 
@@ -212,10 +257,18 @@ def evaluate(state, envelope, now, notify):
     served_at = parse_instant(envelope.get("generatedAt"))
     if served_at is None:
         raise Unavailable("malformed-envelope")
+    served = served_captures(envelope)
     expected = parse_instant(state["oldestCapturedAt"])
+    # Every pushed source, matched by key: one the page does not serve, or
+    # serves with an older capture, is behind.
+    behind = sum(
+        1
+        for key, pushed in source_instants(state["capturedAt"]).items()
+        if served.get(key) is None or served[key] < pushed
+    )
     since_push = seconds(now, parse_instant(state["pushedAt"]))
     state = dict(state)
-    if envelope.get("status") == ENVELOPE_OK and served_at >= expected:
+    if envelope.get("status") == ENVELOPE_OK and served_at >= expected and behind == 0:
         out = ["usage-export: SERVED status=ok lag=%ds" % since_push]
         if state["notServedSince"] is not None:
             out.append(
@@ -225,8 +278,8 @@ def evaluate(state, envelope, now, notify):
         state["notServedSince"], state["notified"] = None, False
         return out, [], state
     err = [
-        "usage-export: WARN NOT-SERVED status=%s served_at=%s expected_at>=%s since_push=%ds"
-        % (status_word(envelope.get("status")), ledger.instant(served_at), state["oldestCapturedAt"], since_push)
+        "usage-export: WARN NOT-SERVED status=%s served_at=%s expected_at>=%s sources_behind=%d since_push=%ds"
+        % (status_word(envelope.get("status")), ledger.instant(served_at), state["oldestCapturedAt"], behind, since_push)
     ]
     since = parse_instant(state["notServedSince"]) if state["notServedSince"] else None
     # A first NOT-SERVED starts the clock; so does one recorded in the future,
@@ -263,6 +316,8 @@ def check(state_path, site, exporter, now, opener=None, notify=notify_desktop):
         state = read_state(state_path) if state_path else None
         if state is None:
             raise Unavailable("no-push-state")
+        if state["schema"] != STATE_SCHEMA:
+            raise Unavailable("state-outdated")
         envelope = fetch_envelope(site, exporter, opener)
         out, err, updated = evaluate(state, envelope, now, notify)
     except Unavailable as error:
