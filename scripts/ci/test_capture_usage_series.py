@@ -3857,12 +3857,12 @@ class CapParityTest(unittest.TestCase):
         )
         return int(match.group(1)) << int(match.group(2))
 
-    def structural_maximum(self, digits):
-        """Seal-sized bytes of the largest document the origin can admit.
+    def wide_fixture_bytes(self, digits):
+        """Seal-sized bytes of one wide fixture document, as the producer emits it.
 
         MEASURED here rather than quoted from a comment (2026-08-24 round-3
         review, which found the quoted figure off by the mandatory trailing
-        newline). The maximum is one document covering every label the
+        newline). The fixture is one document covering every label the
         SHIPPED snapshot carries — a document can never name another — each
         at the series-day bound with the complete category vocabulary, the
         complete model vocabulary THAT SOURCE MAY CARRY over its own
@@ -3871,6 +3871,17 @@ class CapParityTest(unittest.TestCase):
         compact form with its terminating newline, plus the AEAD overhead.
         Re-deriving it from the shipped constants means the number cannot go
         stale behind a document-shape change again.
+
+        IT IS THIS FIXTURE'S SIZE, NOT A PROVEN MAXIMUM. Its derived day
+        counts, for one, are written at the series-day bound rather than at
+        the ladder's width, and widening those four alone on the eleven-digit
+        fixture measures 122,551 sealed bytes against 122,487 (PR #370
+        review). The ceiling never rested on this number: the exporter
+        before sealing, the sealer, and the origin when it reads the sealed
+        file each REFUSE a document over it rather than truncating one, so a
+        wider document is refused, never served cut short. What the
+        measurement buys is headroom evidence for the shape the producer
+        actually writes.
 
         The models section is why MAX_MODEL_DAYS exists rather than the
         section simply covering the series (issue #170): one integer per day
@@ -3901,8 +3912,8 @@ class CapParityTest(unittest.TestCase):
         # The model rows partition the SAME totals over the trailing window,
         # divided as evenly as integers allow across a vocabulary that need
         # not be the categories' size (issue #299 added a member): every row
-        # keeps the ladder's digit count, so the measurement stays the widest
-        # document the origin would admit rather than one it would refuse.
+        # keeps the ladder's digit count, so the fixture stays a document the
+        # origin would admit rather than one it would refuse.
         scopes = {}
         for label in labels:
             keys = [
@@ -3944,16 +3955,16 @@ class CapParityTest(unittest.TestCase):
                         "active-days": days,
                         "tracked-days": days,
                     },
-                    # The captured-stats section at its widest (issue #276):
+                    # The captured-stats section written wide (issue #276):
                     # every vocabulary member, each at the ladder value, on
-                    # every source — wider than any real document, which is
-                    # the right direction for a structural maximum. Issue #267
+                    # every source — the direction a headroom fixture should
+                    # err in, though it bounds nothing by itself. Issue #267
                     # joined `longest-session` to that vocabulary, so it costs
                     # one more figure here without a further edit.
                     "stats": {
                         key: value for key in capture_usage_series.STATS_KEYS
                     },
-                    # The per-model lifetime split at ITS widest (issue #267):
+                    # The per-model lifetime split written as wide (issue #267):
                     # every member the source may carry, carrying every
                     # accounting class at the ladder value. It is the only new
                     # section whose cost grows with the vocabulary the way the
@@ -3978,17 +3989,20 @@ class CapParityTest(unittest.TestCase):
         plaintext = json.dumps(document, separators=(",", ":")) + "\n"
         return len(plaintext.encode("utf-8")) + 36
 
-    def test_the_canonical_cap_exceeds_the_measured_structural_maximum(self):
+    def test_the_canonical_cap_exceeds_the_measured_wide_fixture(self):
         # Non-vacuity, and the one place the measurement is asserted rather
-        # than described: the ceiling must exceed the largest document the
-        # origin can admit, with real headroom, while staying a bound rather
-        # than an open door. THIS is the binding claim, and it holds.
+        # than described: the ceiling must exceed the measured size of this
+        # wide fixture, with real headroom, while staying a bound rather than
+        # an open door. That is the claim this test binds, and it holds; it is
+        # not a proof that no admissible document is larger. The ceiling
+        # itself is held by refusal, never truncation, at seal and serve time
+        # (`wide_fixture_bytes` says where).
         cap = self.go_cap()
         self.assertEqual(cap, 131072)
-        maximum = self.structural_maximum(10)
-        self.assertGreater(cap, maximum)
-        # The headroom is one further decimal digit on every value: the same
-        # maximum still fits at eleven digits and crosses only at twelve.
+        measured = self.wide_fixture_bytes(10)
+        self.assertGreater(cap, measured)
+        # The headroom is one further decimal digit on every ladder value: the
+        # same fixture still fits at eleven digits and crosses only at twelve.
         # Measured after issue #369 at a fifty-six-day model window, with each
         # source carrying only its own vendor group: 112,642 sealed bytes at
         # ten digits, 122,487 at eleven, 132,332 at twelve. Measured as every
@@ -4005,8 +4019,8 @@ class CapParityTest(unittest.TestCase):
         # needed neither: four members joined the larger group, and scoping
         # each source to its own vendor's models paid for them with room to
         # spare. The ceiling is never the lever.
-        self.assertLess(self.structural_maximum(11), cap)
-        self.assertGreater(self.structural_maximum(12), cap)
+        self.assertLess(self.wide_fixture_bytes(11), cap)
+        self.assertGreater(self.wide_fixture_bytes(12), cap)
 
     def test_matches_the_origin_admission_cap(self):
         source = (self.REPO_ROOT / "internal/panels/types.go").read_text(encoding="utf-8")
