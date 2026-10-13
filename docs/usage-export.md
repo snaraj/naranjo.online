@@ -132,9 +132,9 @@ check's, the ssh runner's and the fetch's, and the shell's own diagnostic
 when it cannot read the configuration, which is parsed and then sourced in a
 child before the run sources it. Every failure, configuration included, ends
 with a dated `FAILED stage=<stage>` line naming its stage; a run killed
-outright by a signal stops where it is. The only undated
-lines are diagnostics a child (git, mv, mktemp, mkfifo) prints inside that
-critical section, and a dated line always follows them. A program whose
+outright by a signal stops where it is. The only undated lines are
+diagnostics a child (git, mv, mktemp, mkfifo) prints inside that critical
+section, and a dated line always follows them. A program whose
 standard output is DATA (the capture's document, the sealed bytes, the host's
 checksum line) keeps it untouched; only its diagnostics are dated. The push
 failures of 2026-10-13 could not be dated from the log, which is the fault

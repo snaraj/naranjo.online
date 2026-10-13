@@ -19,10 +19,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   when the public document is built, so naming a model in `models.json`
   re-attributes every remembered day on the next export, with nothing
   rewritten. Days recorded before this release keep the split they were
-  stored with. Any value in identifier shape is kept as the tool wrote it, so
-  every model ever used is recorded, new families included; paths,
-  whitespace, sentences, over-long and non-string values are recorded as
-  `~unidentified`. The shape does not tell a model from another
+  stored with. Any value in identifier shape is kept, trimmed and
+  lower-cased, so every model ever used is recorded, new families included;
+  paths, whitespace, sentences, over-long and non-string values are
+  recorded as `~unidentified`. The shape does not tell a model from another
   identifier-shaped value the tool wrote in its model field, which is
   recorded as itself (owner ruling, 2026-10-13): the record stays on the
   workstation — history store, ledger, raw archives and exporter log — and
