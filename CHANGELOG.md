@@ -19,14 +19,22 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   when the public document is built, so naming a model in `models.json`
   re-attributes every remembered day on the next export, with nothing
   rewritten. Days recorded before this release keep the split they were
-  stored with. An identifier is kept only in identifier shape; anything else
-  is recorded as `~unidentified`. Identifiers never reach the public document
-  (#371).
+  stored with. Any value in identifier shape is kept as the tool wrote it, so
+  every model ever used is recorded, new families included; paths,
+  whitespace, sentences, over-long and non-string values are recorded as
+  `~unidentified`. The shape does not tell a model from another
+  identifier-shaped value the tool wrote in its model field, which is
+  recorded as itself (owner ruling, 2026-10-13): the record stays on the
+  workstation — history store, ledger, raw archives and exporter log — and
+  identifiers never reach the public document (#371).
 - The capture summary names the five most frequent identifiers the
   vocabulary does not name, so a new model is visible the run it appears
   (#371).
-- Every line the usage exporter writes to its logs carries a UTC timestamp,
-  so a failed push can be dated (#371).
+- Every line the usage exporter writes itself carries a UTC timestamp, and
+  every failure, a configuration refusal included, ends with a dated
+  `FAILED` line naming its stage, so a failed push can be dated. The only
+  undated lines are diagnostics a child program prints while the checkout is
+  fast-forwarded (#371).
 
 ## [0.1.93] - 2026-10-13
 

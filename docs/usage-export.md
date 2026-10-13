@@ -121,17 +121,23 @@ logs `usage-export: WARN served-check unavailable reason=<code>` and nothing
 else happens: the check never fails, delays or skips the push. Instants, one
 status word and closed codes only; no payload content and no upstream text.
 
-**Every log line is dated (issue #371).** Every line the run writes to either
-log opens with the UTC instant it was written, `YYYY-MM-DDTHH:MM:SSZ` and one
-space, and the line's own tokens follow unchanged — so every `reason=`,
-`START`, `SUMMARY` and `FAILED` grep below still matches, and the examples in
-this document show the tokens after the instant. That covers the script's own
-lines and every line a program it runs writes to the logs: the recapture's
-and the export's summaries, the ledger's, the served check's, the ssh
-runner's and the fetch's. A program whose standard output is DATA (the
-capture's document, the sealed bytes, the host's checksum line) keeps it
-untouched; only its diagnostics are dated. The push failures of 2026-10-13
-could not be dated from the log, which is the fault this closes.
+**What is dated (issue #371).** Every line the exporter writes itself opens
+with the UTC instant it was written, `YYYY-MM-DDTHH:MM:SSZ` and one space, and
+the line's own tokens follow unchanged — so every `reason=`, `START`,
+`SUMMARY` and `FAILED` grep below still matches, and the examples in this
+document show the tokens after the instant. So does every line a program it
+runs writes to the logs outside the checkout update's fast-forward critical
+section: the recapture's and the export's summaries, the ledger's, the served
+check's, the ssh runner's and the fetch's, and the shell's own diagnostic
+when it cannot read the configuration, which is parsed and then sourced in a
+child before the run sources it. Every failure, configuration included, ends
+with a dated `FAILED stage=<stage>` line naming its stage. The only undated
+lines are diagnostics a child (git, mv, mktemp, mkfifo) prints inside that
+critical section, and a dated line always follows them. A program whose
+standard output is DATA (the capture's document, the sealed bytes, the host's
+checksum line) keeps it untouched; only its diagnostics are dated. The push
+failures of 2026-10-13 could not be dated from the log, which is the fault
+this closes.
 
 **Log hygiene and rotation.** The push runs ssh at `LogLevel=ERROR`, because
 OpenSSH prints the receiving host's pre-auth banner at INFO and above — about
@@ -650,15 +656,25 @@ rows record usage by that RAW IDENTITY. The fold to a member happens where the
 wire document is built, on every run, from that record; adding a member to
 `models.json` therefore re-attributes every remembered day on the next export
 with nothing in the store rewritten. The raw identity is the string trimmed
-and lower-cased and kept only in the shape `^[a-z0-9][a-z0-9._:-]{0,63}$`,
-which no path (a slash), prompt (a space) or session text (past sixty-four
-characters) fits; anything else, and a record that names no model, is
-recorded as the one reserved bucket `~unidentified`, whose leading `~` no real
-identifier can carry. That bound is what lets a transcript string be kept at
-all, and every reader of the data layer re-admits exactly that shape. The wire
-is untouched: its guard still refuses any raw identifier by name or value, the
-export still strips the ledger block before it, and the closed-vocabulary
-admission, the per-source scope and the byte ceiling stay as they are.
+and lower-cased and kept only in the shape `^[a-z0-9][a-z0-9._:-]{0,63}$`;
+anything else — a path (a slash), whitespace, a sentence, a value past
+sixty-four characters, a value that is not a string — and a record that names
+no model, is recorded as the one reserved bucket `~unidentified`, whose
+leading `~` no real identifier can carry. Every reader of the data layer
+re-admits exactly that shape.
+
+**The trust boundary (owner ruling, 2026-10-13).** The model field is written
+by the tool, and ANY value in that shape is kept, so every model ever used is
+recorded, new families included. The shape blocks paths, whitespace,
+sentences, over-long and non-string values; it does NOT block an
+identifier-shaped value that is not a model — a session-like token a tool
+wrote in its model field is recorded as itself. That record is machine-local
+— the history store, the ledger block and rows, the raw capture archives and
+the exporter's log, whose `unattributed-ids` line prints it — and it is never
+published. The wire is untouched: its guard still refuses any raw identifier
+by name or value, the export still strips the ledger block before it, and the
+closed-vocabulary admission, the per-source scope and the byte ceiling stay
+as they are.
 
 **Attribution in the running-totals shape.** Those journals put the model and
 the token counts in DIFFERENT records: one kind declares the model a turn
@@ -752,7 +768,9 @@ friendly key, because a key nobody reached for is a key nobody copies. The
 one open string it carries is the raw model identity (issue #371), admitted
 only under `id` in `modelIdCategories` and `modelIdStats` and in a session's
 `modelIds`, and only in the raw-identity shape or as the bucket: free text in
-`id`, or a raw identity in `model`, refuses.
+`id`, or a raw identity in `model`, refuses. The shape is not a model check:
+an identifier-shaped value the tool wrote in its model field rides here as
+itself, under the trust boundary above.
 
 **`modelCategories` is the joint of model against accounting class**, day
 indexed over the full depth the walk partitions rather than the eight-week
@@ -862,8 +880,9 @@ vocabulary member: `model-id` (a store day's split, key `<identity>`),
 `model-id-category` (the block's joint, key `<identity>/<class>`, on the days
 it covers) and `model-id-stat` (the cache's lifetime classes, key
 `<identity>/<class>`, on the capture day). Their keys are admitted only in the
-raw-identity shape or as `~unidentified`, never as free printable text, and
-`schema.json` declares them. A session row may carry `modelIds`, its raw
+raw-identity shape or as `~unidentified`, never as free printable text — under
+the trust boundary stated with that shape, so an identifier-shaped value that
+is not a model is recorded as itself — and `schema.json` declares them. A session row may carry `modelIds`, its raw
 identities in first-appearance order; it is optional, so every row written
 before it stays valid, and it is part of the session's append comparison, so
 a session first recorded without it is recorded once more with it and then
@@ -1222,8 +1241,9 @@ window has since dropped and the days a vendor surface later disagrees with.
    the same 0600 refusal, and reads it in a subshell so the file's own
    `REPO_DIR` can never move the schedule's anchor.
 
-   What one run writes to the log (issue #299), every line opening with the
-   UTC instant it was written (issue #371): a `START <stage>` line as
+   What one run writes to the log (issue #299), each line it writes itself
+   opening with the UTC instant it was written (issue #371; what is and is not
+   dated is stated under "What is dated" above): a `START <stage>` line as
    each stage begins — `recapture-<key>`, `export`, `seal`, `push` — so a
    stage that never ends is a START with no SUMMARY; the export's own
    `coverage <key>=<first>..<last>` line naming the newest day each source
@@ -1231,14 +1251,19 @@ window has since dropped and the days a vendor surface later disagrees with.
    naming, by raw identity, the five models it folded to the residual most
    often (`-` for none), so a model the vocabulary does not name is visible
    the run it first appears; on failure the reason, then `FAILED stage=<stage>
-   elapsed=<s>s`; on success one `SUMMARY` line, printed only once the
+   elapsed=<s>s`, where a configuration refusal carries its reason in that
+   line (`FAILED stage=configure reason=<code> … elapsed=<s>s`); on success
+   one `SUMMARY` line, printed only once the
    host's checksum matched, with the sealed size, the
    checksum prefix, the exporter's checkout revision — the fault class where
    a scheduled job ran a tree nine commits behind what the origin admits
    (issue #288) — the total elapsed time, and every stage's duration. Before
    the first START, a run with `SITE_URL` set logs its one served line, and
    a run that found its checkout behind logs `UPDATED` or `DRIFT` (issue
-   #358). Stage names and counts only, never payload content or a path.
+   #358). Stage names, counts and raw model identities, never payload
+   content; a child program's own diagnostic (the shell's about the
+   configuration, `mkdir`'s about the history directory) may name the path it
+   was given.
 
    The installed job is anchored to the PRIMARY checkout
    (`~/code/naranjo.online` by default; override with
@@ -1436,6 +1461,10 @@ Every symptom below is the text AFTER the UTC instant its log line opens with.
 | `unattributed-ids <identity>=<n> …` | not a failure: the raw identities this capture folded to the residual most often, because the vocabulary does not name them (or `-`). Naming one is a data edit to `models.json`; every remembered day it was recorded on re-attributes on the next export |
 | `the history store would be larger than the 1048576 byte bound; the previous one is kept` | the store the run would write could not be read back, so the run refused and kept the last one. At the series-day bound a store measures about a third of that with eight identities a day, so this means many more distinct identities a day than that |
 | `configuration must be private` | config file mode laxer than 0600 |
+| `configuration is not readable` | the file is private but this account cannot read it |
+| `<NAME> missing from configuration`, then `FAILED stage=configure reason=config-incomplete missing=<NAME>[,<NAME>…]` | a required setting is unset or empty; each is named on its own line, and the FAILED line names them all. Names only, never a value |
+| `FAILED stage=configure reason=config-syntax` | the configuration does not parse as shell; the shell's own diagnostic, dated, is above it |
+| `FAILED stage=configure reason=config-error` | the configuration parses but fails when sourced under `set -eu` — commonly a setting written `NAME = value`, or one naming an unset variable; the shell's own diagnostic, dated, is above it |
 | `the ledger line N is malformed: …` | a line in the append-only record is damaged in a way an interrupted write cannot produce. The run refuses rather than skipping it; the named line is the whole diagnosis |
 | `ledger repaired a partial line in …` | the tolerated fault: an interrupted append left a line with no newline. It was truncated back and the run continued |
 | `ledger snapshot skipped <stream>` | that panel's envelope did not report `ok`, so the night has no reading for it. The next night takes one |
