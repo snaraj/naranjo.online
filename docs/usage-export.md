@@ -229,11 +229,13 @@ that matches no commit:
   holds the new index (or its identity could not be read, so no rename was
   tried); it was aborted: `main` and the index are the old commit, the
   worktree is the new one, and the lock keeps the NEW index.
-- `index-uncertain`: the rename ran, but afterwards neither `.git/index` nor
-  `.git/index.lock` can be shown to hold the lock's file. The transaction was
-  aborted, so `main` is the old commit; the worktree is the new one, and the
-  new index is at one of those two paths. The logged `state` line says so and
-  names no command: inspect with `git status` before the next run.
+- `index-uncertain`: the rename was tried, but afterwards neither
+  `.git/index` nor `.git/index.lock` can be shown to hold the lock's file.
+  The transaction was aborted, so `main` is the old commit; the worktree is
+  the new one, and the new index was either renamed to `.git/index` (which
+  another git command may have rewritten since) or is still
+  `.git/index.lock`. The logged `state` line says so and names no command:
+  inspect with `git status` before the next run.
 
 A kept lock is git's own recovery state: every git command names it as a
 stale `index.lock` until someone decides. One limit is deliberate: a later run
@@ -1321,7 +1323,7 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `usage-export: UPDATED exporter <old>-><new>` | the checkout was strictly behind `origin/main` and was fast-forwarded; the run re-executed the new script once |
 | `usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<code>` | the checkout is behind `origin/main` and was left exactly as it is: `off` (`REPO_UPDATE=off`), `detached`, `not-main`, `diverged` (local commits), `merge-refused` (a local edit the fast-forward would overwrite, or git declining before it wrote anything), `busy` (another git operation holds the index lock; the next run tries again), `none` (already current), `git-too-old`. The run goes on exporting from that tree. Resolve it by hand |
 | `usage-export: WARN DRIFT behind=<n> ahead=<m> action=rolled-back reason=ref-moved` | a ref moved under the update (the transaction never prepared, or HEAD no longer named `main`); it was aborted and the worktree rolled back, so the index and worktree are as found, but HEAD may name a commit whose files they do not hold. The run stopped before exporting; check what moved HEAD or `main` |
-| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=incomplete reason=<code>` | the update stopped part-way and the run failed before exporting: `checkout-partial` (some files were written; `git status` lists them against the old commit), `checkout-uncertain` (the checkout may have finished; `.git/index.lock` is kept), `ref-uncertain` (the new index is installed but `main` did not move; follow the logged `repair` line), `rollback-failed` (the worktree could not be put back; `.git/index.lock` keeps the new index), `index-install-failed` (the transaction was aborted, `main` and the index are old; `.git/index.lock` keeps the new index), `index-uncertain` (the transaction was aborted and `main` is old; the new index is at `.git/index` or `.git/index.lock`; follow the logged `state` line). Resolve it by hand before the next run, which would otherwise export from the tree as it stands |
+| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=incomplete reason=<code>` | the update stopped part-way and the run failed before exporting: `checkout-partial` (some files were written; `git status` lists them against the old commit), `checkout-uncertain` (the checkout may have finished; `.git/index.lock` is kept), `ref-uncertain` (the new index is installed but `main` did not move; follow the logged `repair` line), `rollback-failed` (the worktree could not be put back; `.git/index.lock` keeps the new index), `index-install-failed` (the transaction was aborted, `main` and the index are old; `.git/index.lock` keeps the new index), `index-uncertain` (the transaction was aborted and `main` is old; the new index was renamed to `.git/index` or is still `.git/index.lock`; follow the logged `state` line). Resolve it by hand before the next run, which would otherwise export from the tree as it stands |
 | `usage-export: WARN repo-update repair: git update-ref refs/heads/main <new> <current>` | printed with `ref-uncertain`: the one command, in commit ids only, that moves `main` to the index and worktree already installed, and refuses if `main` no longer holds `<current>` |
 | `usage-export: WARN repo-update repair: main could not be read; inspect it ...` | printed with `ref-uncertain` when `main` could not be read: no command is given, because one without the expected old value would overwrite whatever `main` holds; read it with `git rev-parse refs/heads/main` and pass that value as `<that value>` |
 | `usage-export: WARN repo-update state: main is <old> (the update was aborted), ...` | printed with `index-uncertain`: the facts on disk and no command; inspect with `git status` before the next run |

@@ -345,9 +345,9 @@ update_checkout() {
 # F1 r3): a git killed after it finished reports failure too, and so does an
 # mv stopped after it renamed. After a failed checkout the lock's tree is read
 # again; the install is decided by the lock's inode (advance_main); after a
-# commit git never acknowledged, main is read again. Where a state is proven, ref, index and worktree are
-# brought into agreement; where it is not, recovery material is kept and the
-# run stops:
+# commit git never acknowledged, main is read again. Where a state is proven,
+# ref, index and worktree are brought into agreement; where it is not,
+# recovery material is kept and the run stops:
 #   merge-refused         nothing written; the run goes on as it was
 #   ref-moved             nothing was prepared or HEAD no longer named main, so
 #                         the transaction was aborted and the worktree put back
@@ -369,10 +369,11 @@ update_checkout() {
 #                         identity could not be read, so no rename was tried);
 #                         the transaction was aborted, main is OLD, the lock
 #                         keeps the NEW index; the run stops
-#   index-uncertain       prepared and renamed, but neither path holds the
-#                         lock's file afterwards; the transaction was aborted,
-#                         main is OLD, the worktree holds NEW, and the NEW
-#                         index is at index or index.lock; the run stops
+#   index-uncertain       prepared and the rename tried, but neither path
+#                         holds the lock's file afterwards; the transaction was
+#                         aborted, main is OLD, the worktree holds NEW, and
+#                         the NEW index was renamed to index or is still
+#                         index.lock; the run stops
 # A kept lock is git's own recovery state: every git command names it as stale.
 fast_forward_main() {
     # The ref transaction protocol (start/prepare/commit) is what makes the
@@ -542,7 +543,7 @@ advance_main() {
         fi
     elif [ "$install_unknown" = yes ]; then
         reason=index-uncertain action=incomplete drop_lock=no
-        facts="main is $old (the update was aborted), the worktree holds $new, and the $new index is at .git/index or .git/index.lock; inspect with git status before the next run"
+        facts="main is $old (the update was aborted), the worktree holds $new, and the $new index was renamed to .git/index or is still .git/index.lock; inspect with git status before the next run"
     elif [ "$verified" = yes ]; then
         reason=index-install-failed action=incomplete drop_lock=no
     elif (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then

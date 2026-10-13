@@ -2857,7 +2857,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         )
         self.assertIn(
             "usage-export: WARN repo-update state: main is %s (the update was aborted), the worktree holds %s,"
-            " and the %s index is at .git/index or .git/index.lock; inspect with git status before the next run\n"
+            " and the %s index was renamed to .git/index or is still .git/index.lock; inspect with git status before the next run\n"
             % (self.first, self.second, self.second),
             result.stderr,
         )
