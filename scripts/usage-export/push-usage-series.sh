@@ -122,11 +122,20 @@
 # exporter ran from — the fault class where a scheduled job silently ran a
 # tree nine commits behind what the origin admits (issue #288).
 #
-# Every line the run writes to its logs opens with the UTC instant it was
-# written (issue #371): the push failures of 2026-10-13 could not be dated
-# from the log. That covers this script's own lines (`log`) and every line a
-# program it runs writes to the logs (`stamped`, `stamped_out`); the tokens
-# after the instant are unchanged, so every existing grep still matches.
+# What is dated (issue #371; the push failures of 2026-10-13 could not be
+# dated from the log), and exactly no more than this:
+#   * every line this script writes itself opens with the UTC instant it was
+#     written (`log`), and so does every line a program it runs writes to the
+#     logs outside the fast-forward critical section (`stamped`,
+#     `stamped_out`) — the shell's own diagnostic about the configuration
+#     included;
+#   * every failure, configuration included, ends with a dated
+#     `FAILED stage=<stage>` line naming its stage;
+#   * the only undated lines are diagnostics a child (git, mv, mktemp, mkfifo)
+#     prints inside the fast-forward critical section (fast_forward_main and
+#     the helpers it calls), and a dated line always follows them.
+# The tokens after the instant are unchanged, so every existing grep still
+# matches.
 
 set -eu
 
@@ -198,7 +207,7 @@ if [ -n "${NARANJO_USAGE_EXPORT_LOG_DIR:-}" ]; then
     for log in usage-export.log usage-export.err.log; do
         log="$NARANJO_USAGE_EXPORT_LOG_DIR/$log"
         if [ -f "$log" ] && [ "$(wc -c < "$log" | tr -d ' ')" -gt "$MAX_LOG_BYTES" ]; then
-            mv -f "$log" "$log.1" || { log "WARN log-rotation failed" >&2; continue; }
+            stamped mv -f "$log" "$log.1" || { log "WARN log-rotation failed" >&2; continue; }
             case "$log" in
                 *.err.log) exec 2>>"$log" ;;
                 *) exec >>"$log" ;;
@@ -221,16 +230,41 @@ case "$config_mode" in
     600|400|0600|0400) ;;
     *) fail "configuration must be private (chmod 600)" ;;
 esac
+[ -r "$CONFIG" ] || fail "configuration is not readable"
+
+# A configuration refusal names its reason in the FAILED line itself.
+refuse_configuration() {
+    log "FAILED stage=configure reason=$1 elapsed=$(elapsed)s" >&2
+    exit 1
+}
+
+# The configuration is shell, and a shell that cannot read it dies with a
+# line of its own, undated, and no FAILED line after it (issue #371). So it is
+# read twice in a child before this shell sources it, each time through
+# `stamped`, so whatever the shell says is dated: parsed (`-n`), then sourced
+# under this run's own `set -eu` and with CONFIG set as it is here, which is
+# where a setting written `NAME = value` or one naming an unset variable
+# fails.
+stamped /bin/sh -n "$CONFIG" </dev/null || refuse_configuration config-syntax
+stamped /bin/sh -eu -c 'CONFIG=$1; . "$1"' configuration "$CONFIG" </dev/null >/dev/null \
+    || refuse_configuration config-error
 . "$CONFIG"
 
-: "${REPO_DIR:?REPO_DIR missing from configuration}"
-: "${USAGESEAL_BIN:?USAGESEAL_BIN missing from configuration}"
-: "${KEY_FILE:?KEY_FILE missing from configuration}"
-: "${SSH_IDENTITY:?SSH_IDENTITY missing from configuration}"
-: "${PUSH_HOST:?PUSH_HOST missing from configuration}"
-: "${SSH_KNOWN_HOSTS:?SSH_KNOWN_HOSTS missing from configuration}"
-: "${SOURCE_LABEL:?SOURCE_LABEL missing from configuration}"
-: "${TRANSCRIPTS:?TRANSCRIPTS missing from configuration}"
+# Every required setting that is unset or empty is named on a dated line of
+# its own — the NAME, never a value, which this function never reads into a
+# variable — and one FAILED line names them all.
+require_configuration() {
+    missing=
+    for name in "$@"; do
+        if eval "[ -z \"\${$name:-}\" ]"; then
+            log "$name missing from configuration" >&2
+            missing="${missing:+$missing,}$name"
+        fi
+    done
+    [ -z "$missing" ] || refuse_configuration "config-incomplete missing=$missing"
+}
+require_configuration REPO_DIR USAGESEAL_BIN KEY_FILE SSH_IDENTITY PUSH_HOST \
+    SSH_KNOWN_HOSTS SOURCE_LABEL TRANSCRIPTS
 MERGE_SOURCES="${MERGE_SOURCES:-}"
 MERGE_CAPTURES="${MERGE_CAPTURES:-}"
 ACTIVITY_CACHE="${ACTIVITY_CACHE:-}"
@@ -270,7 +304,7 @@ umask 077
 # private as the configuration that names them. Unlike the scratch, it is
 # never wiped: surviving runs is its entire purpose.
 if [ -n "$HISTORY_DIR" ]; then
-    mkdir -p "$HISTORY_DIR" || fail "the history directory cannot be created"
+    stamped mkdir -p "$HISTORY_DIR" || fail "the history directory cannot be created"
 fi
 
 # Checkout drift (issue #358). The job runs whatever commit REPO_DIR has
@@ -665,7 +699,7 @@ command -v sandbox-exec >/dev/null 2>&1 \
     || fail "the producer sandbox is unavailable; raw records are never walked unconfined"
 
 # Private scratch, wiped on every exit path.
-SCRATCH=$(mktemp -d) || fail "cannot create scratch directory"
+SCRATCH=$(stamped mktemp -d) || fail "cannot create scratch directory"
 trap 'rm -rf "$SCRATCH"' EXIT INT TERM
 
 PLAIN="$SCRATCH/usage.json"

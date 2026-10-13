@@ -1724,6 +1724,135 @@ class LogRotationTest(PushFixture, unittest.TestCase):
             with self.subTest(line=line):
                 self.assertRegex(line, LOG_STAMP)
 
+    def write_raw_config(self, text):
+        """The configuration file exactly as given, private."""
+        self.config.write_text(text, encoding="utf-8")
+        self.config.chmod(0o600)
+
+    def refused_configuration(self):
+        """Run as the agent does and return the error log's lines, after
+        proving the run exited 1, wrote nothing to the output log, and dated
+        every line it wrote to the error log."""
+        logs = self.logs(b"", b"")
+        self.assertEqual(self.launchd_run(logs), 1)
+        self.assertEqual((logs / "usage-export.log").read_bytes(), b"")
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(err)
+        for line in err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
+        return [LOG_STAMP.sub("", line, count=1) for line in err]
+
+    def test_a_configuration_missing_a_setting_is_dated_and_names_only_the_setting(self):
+        # Issue #371 review F2: `: "${REPO_DIR:?...}"` made the shell print one
+        # undated line of its own and exit with no FAILED line, so the
+        # commonest misconfiguration could not be dated from the log.
+        values = dict(self.config_lines)
+        del values["REPO_DIR"]
+        self.write_raw_config("".join("%s=%s\n" % pair for pair in values.items()))
+        lines = self.refused_configuration()
+        self.assertEqual(lines[0], "usage-export: REPO_DIR missing from configuration")
+        self.assertRegex(
+            lines[1],
+            r"^usage-export: FAILED stage=configure reason=config-incomplete missing=REPO_DIR elapsed=\d+s$",
+        )
+        self.assertEqual(len(lines), 2, lines)
+        # The setting is named, never a value: not one configured value
+        # reaches the log.
+        for name, value in values.items():
+            with self.subTest(name=name):
+                self.assertNotIn(value, "\n".join(lines))
+        # An empty configuration names every required setting, in order, each
+        # on its own dated line, and one FAILED line names them all.
+        required = ("REPO_DIR", "USAGESEAL_BIN", "KEY_FILE", "SSH_IDENTITY", "PUSH_HOST",
+                    "SSH_KNOWN_HOSTS", "SOURCE_LABEL", "TRANSCRIPTS")
+        self.write_raw_config("")
+        shutil.rmtree(self.scratch / "logs")
+        lines = self.refused_configuration()
+        self.assertEqual(lines[:-1], ["usage-export: %s missing from configuration" % name for name in required])
+        self.assertRegex(
+            lines[-1],
+            r"^usage-export: FAILED stage=configure reason=config-incomplete missing=%s elapsed=\d+s$"
+            % ",".join(required),
+        )
+
+    def test_a_configuration_that_does_not_parse_is_dated_and_refused(self):
+        # Sourced as it was, a syntax error killed the shell with its own
+        # undated line. It is parsed first now, in a child, through `stamped`.
+        lines = self.refused_configuration_with("SOURCE_LABEL=(alpha\n")
+        self.assertRegex(lines[-1], r"^usage-export: FAILED stage=configure reason=config-syntax elapsed=\d+s$")
+        # The shell's own diagnostic is kept, dated, above the FAILED line.
+        self.assertGreaterEqual(len(lines), 2, lines)
+
+    def test_a_configuration_that_parses_but_fails_when_read_is_dated_and_refused(self):
+        # A setting written with spaces around `=` parses, and then runs as a
+        # command that does not exist; a reference to an unset variable parses
+        # and then fails under `set -u`. Both are read in a child first.
+        for broken in ("PUSH_PORT = 22\n", "PUSH_PORT=$NARANJO_TEST_UNSET_SETTING\n"):
+            with self.subTest(broken=broken):
+                lines = self.refused_configuration_with(broken)
+                self.assertRegex(
+                    lines[-1], r"^usage-export: FAILED stage=configure reason=config-error elapsed=\d+s$"
+                )
+                self.assertGreaterEqual(len(lines), 2, lines)
+
+    def test_a_configuration_naming_its_own_path_is_still_read(self):
+        # The child that reads the configuration first sees CONFIG exactly as
+        # this run does, so a setting derived from it is no false refusal.
+        logs = self.logs(b"", b"")
+        self.write_raw_config(
+            "".join("%s=%s\n" % pair for pair in self.config_lines.items())
+            + 'CONFIG_BESIDE="${CONFIG%/*}"\n'
+        )
+        self.assertEqual(self.launchd_run(logs), 0)
+
+    def refused_configuration_with(self, broken):
+        """The fixture's complete configuration with one broken line after it."""
+        shutil.rmtree(self.scratch / "logs", ignore_errors=True)
+        self.write_raw_config(
+            "".join("%s=%s\n" % pair for pair in self.config_lines.items()) + broken
+        )
+        return self.refused_configuration()
+
+    def test_a_history_directory_that_cannot_be_created_is_dated(self):
+        # mkdir's own diagnostic is a child's line outside the fast-forward
+        # critical section, so it is dated too.
+        blocker = self.scratch / "a-file"
+        blocker.write_text("not a directory\n", encoding="utf-8")
+        self.write_config(HISTORY_DIR=str(blocker / "history"))
+        lines = self.refused_configuration()
+        self.assertTrue(lines[-3].startswith("mkdir: "), lines)
+        self.assertEqual(lines[-2], "usage-export: the history directory cannot be created")
+        self.assertRegex(lines[-1], r"^usage-export: FAILED stage=configure elapsed=\d+s$")
+
+    def test_a_scratch_directory_that_cannot_be_created_is_dated(self):
+        # A refusing mktemp in front of the fixture PATH, because a missing
+        # TMPDIR is not a refusal everywhere (one mktemp falls back to another
+        # directory). The scratch is the first mktemp this run reaches.
+        refusing = self.scratch / "refusing"
+        refusing.mkdir()
+        write_executable(refusing / "mktemp", "#!/bin/sh\necho 'mktemp: refused by the fixture' >&2\nexit 1\n")
+        self.env["PATH"] = "%s:%s" % (refusing, self.env["PATH"])
+        lines = self.refused_configuration()
+        self.assertEqual(
+            lines[-3:-1], ["mktemp: refused by the fixture", "usage-export: cannot create scratch directory"]
+        )
+        self.assertRegex(lines[-1], r"^usage-export: FAILED stage=configure elapsed=\d+s$")
+
+    @unittest.skipIf(os.geteuid() == 0, "root renames through a read-only directory")
+    def test_a_rotation_that_cannot_rename_is_dated(self):
+        logs = self.logs(b"o" * (MAX_LOG_BYTES + 1), b"")
+        logs.chmod(0o500)
+        self.addCleanup(logs.chmod, 0o700)
+        self.assertEqual(self.launchd_run(logs), 0)
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(any("WARN log-rotation failed" in line for line in err), err)
+        warned = next(index for index, line in enumerate(err) if "WARN log-rotation failed" in line)
+        self.assertGreaterEqual(warned, 1, "mv's own diagnostic is missing above the warning")
+        for line in err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
+
     def test_a_run_without_the_agents_environment_rotates_nothing(self):
         big = b"o" * (MAX_LOG_BYTES + 1)
         logs = self.logs(big, big)
