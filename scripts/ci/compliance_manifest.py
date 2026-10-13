@@ -165,7 +165,7 @@ REGEX_AFTER = frozenset("(,=:[!&|?{;+-*%<>~^")
 REGEX_AFTER_WORDS = frozenset("return typeof case do else in new delete void throw instanceof yield await".split())
 OPERAND_OR_KEYWORD = frozenset(("of",))
 # JavaScript's line terminators: each ends a `//` comment and a statement.
-LINE_TERMINATOR = re.compile("[\n\r  ]")
+LINE_TERMINATOR = re.compile("[\n\r\u2028\u2029]")
 SVELTE_ELEMENT = re.compile(r"<(script|style)\b[^>]*>", re.IGNORECASE)
 HSTS_FLOOR_SECONDS = 31_536_000
 REFERRER_POLICIES = {"no-referrer", "same-origin", "strict-origin", "strict-origin-when-cross-origin"}
