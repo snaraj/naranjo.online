@@ -520,7 +520,7 @@ class ValidateTests(unittest.TestCase):
 
     def test_a_regex_after_a_statement_ending_keyword_hides_no_write(self) -> None:
         # `debugger` is a whole statement, `break` and `continue` take at
-        # most a label on their own line, and `export default` and `extends`
+        # most a label on the same line, and `export default` and `extends`
         # want an expression: a `/` after any of them opens a regex.
         statements = (
             "debugger\n/'/.test('x'); localStorage.setItem('undeclared', '1');",

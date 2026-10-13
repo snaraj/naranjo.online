@@ -156,16 +156,17 @@ QUOTED = {
 }
 REGEX_LITERAL = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n\[])+/")
 # A `/` starts a regular expression where an operand may begin: after one of
-# these characters, after one of these words (an operator, or a statement's
-# end: `debugger`, `break`, `continue`, or the label `break` or `continue`
-# takes on its own line), or at the very start. After a name, a property
-# (whatever it is called), a number, `]` or a closing quote it divides. After `)`, `}`, `++`, `--` or `of`, or a `!` that follows one of
+# these characters, after one of these words (each wants an expression next or
+# ends a statement, as `debugger`, `break` and `continue` do), after a label on
+# the same line as its `break` or `continue`, or at the very start. After a
+# name, a property (whatever it is called), a number, `]` or a closing quote it
+# divides. After `)`, `}`, `++`, `--` or `of`, or a `!` that follows one of
 # them or follows an operand across a line break, it can do either, and only a
 # parser knows which, so `storage_writes` reads the file both ways.
 REGEX_AFTER = frozenset("(,=:[!&|?{;+-*%<>~^")
 REGEX_AFTER_WORDS = frozenset(
-    "return typeof case do else in new delete void throw instanceof yield await debugger break continue default "
-    "extends".split()
+    "return typeof case do else in new delete void throw instanceof yield await"
+    " debugger break continue default extends".split()
 )
 OPERAND_OR_KEYWORD = frozenset(("of",))
 # JavaScript's line terminators: each ends a `//` comment and a statement.
