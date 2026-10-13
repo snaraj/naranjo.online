@@ -342,6 +342,8 @@ class ValidateTests(unittest.TestCase):
             "if (document.cookie === 'theme=dark') {}\nconst w = window.localStorage.getItem('width');\n",
             # Writes that survive only as comments.
             "// document.cookie = 'theme=' + id;\n/* window.localStorage.setItem('width', v) */\n",
+            # A line comment that ends the file, with no line terminator after it.
+            "// document.cookie = 'theme=1'; localStorage.setItem('width', value)",
             "<!-- document.cookie = 'theme=1'; window.localStorage.setItem('width', v) -->\n",
             # Each name written, but to the other kind of storage.
             "window.localStorage.setItem('theme', v);\ndocument.cookie = 'width=' + v;\n",
@@ -501,6 +503,12 @@ class ValidateTests(unittest.TestCase):
             "const a = map. delete / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
             "const a = el.offsetWidth! / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
             "const a = x!/2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            # `this` is an operand, a name continues across a line break, and
+            # a name on the line after `break` is no label.
+            "const a = this / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            "let x = 4;\nconst y = x\n/ 2 / 1; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            "while (go()) { if (stop) break\nx / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4; }",
+            "while (go()) { if (stop) break /*   */ x / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4; }",
         ):
             for name, before, after in self.PLACES:
                 with self.subTest(place=name, line=line):
@@ -509,6 +517,44 @@ class ValidateTests(unittest.TestCase):
                     self.assertTrue(any(f"{name} writes localStorage 'undeclared'" in r for r in refusals), refusals)
                     self.assertFalse(self.ambiguous(name, refusals), refusals)
                     (self.source / name).unlink()
+
+    def test_a_regex_after_a_statement_ending_keyword_hides_no_write(self) -> None:
+        # `debugger` is a whole statement, `break` and `continue` take at
+        # most a label on their own line, and `export default` and `extends`
+        # want an expression: a `/` after any of them opens a regex.
+        statements = (
+            "debugger\n/'/.test('x'); localStorage.setItem('undeclared', '1');",
+            "while (go()) { if (stop) break\n/'/.test('x'); localStorage.setItem('undeclared', '1'); }",
+            "while (go()) { if (skip) continue\n/'/.test('x'); localStorage.setItem('undeclared', '1'); }",
+            "outer: while (go()) { if (stop) break outer\n/'/.test('x'); localStorage.setItem('undeclared', '1'); }",
+            "outer: while (go()) { if (skip) continue outer\n/'/.test('x'); localStorage.setItem('undeclared', '1'); }",
+            "class A extends /'/ {} localStorage.setItem('undeclared', '1');",
+        )
+        module = (("probe.js", "", "\n"),)  # `export default` belongs to a module's top level
+        for places, line in [(self.PLACES, line) for line in statements] + [
+            (module, "export default /'/; localStorage.setItem('undeclared', '1');")
+        ]:
+            for name, before, after in places:
+                with self.subTest(place=name, line=line):
+                    (self.source / name).write_text(before + line + after)
+                    refusals = self.refusals(manifest())
+                    self.assertTrue(any(f"{name} writes localStorage 'undeclared'" in r for r in refusals), refusals)
+                    self.assertFalse(self.ambiguous(name, refusals), refusals)
+                    (self.source / name).unlink()
+        # The inverse: the write-shaped text is the regex, so it keeps no
+        # declaration alive.
+        (self.source / "theme.ts").write_text("export {};\n")
+        for name, before, after in self.PLACES:
+            with self.subTest(place=name, inverse=True):
+                (self.source / name).write_text(
+                    before + "debugger\n/document.cookie = 'theme=1'; localStorage.setItem('width', value)/.test('x');"
+                    + after
+                )
+                refusals = self.refusals(manifest())
+                self.assertTrue(any("cookie 'theme', which no file" in r for r in refusals), refusals)
+                self.assertTrue(any("localStorage 'width', which no file" in r for r in refusals), refusals)
+                self.assertFalse(self.ambiguous(name, refusals), refusals)
+                (self.source / name).unlink()
 
     def test_a_slash_whose_reading_changes_nothing_passes(self) -> None:
         # The fixture's theme.ts writes only the cookie here, so each case

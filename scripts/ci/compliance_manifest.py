@@ -156,13 +156,17 @@ QUOTED = {
 }
 REGEX_LITERAL = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n\[])+/")
 # A `/` starts a regular expression where an operand may begin: after one of
-# these characters, after one of these words, or at the very start. After a
-# name, a property (whatever it is called), a number, `]` or a closing quote
-# it divides. After `)`, `}`, `++`, `--` or `of`, or a `!` that follows one of
+# these characters, after one of these words (an operator, or a statement's
+# end: `debugger`, `break`, `continue`, or the label `break` or `continue`
+# takes on its own line), or at the very start. After a name, a property
+# (whatever it is called), a number, `]` or a closing quote it divides. After `)`, `}`, `++`, `--` or `of`, or a `!` that follows one of
 # them or follows an operand across a line break, it can do either, and only a
 # parser knows which, so `storage_writes` reads the file both ways.
 REGEX_AFTER = frozenset("(,=:[!&|?{;+-*%<>~^")
-REGEX_AFTER_WORDS = frozenset("return typeof case do else in new delete void throw instanceof yield await".split())
+REGEX_AFTER_WORDS = frozenset(
+    "return typeof case do else in new delete void throw instanceof yield await debugger break continue default "
+    "extends".split()
+)
 OPERAND_OR_KEYWORD = frozenset(("of",))
 # JavaScript's line terminators: each ends a `//` comment and a statement.
 LINE_TERMINATOR = re.compile("[\n\r\u2028\u2029]")
@@ -465,7 +469,18 @@ def code_only(text: str, svelte: bool = False, ambiguous_regex: bool = False) ->
                 dot -= 1
             if dot >= 0 and out[dot] == ".":
                 return True  # a property, whatever it is called
-            return None if name in OPERAND_OR_KEYWORD else name not in REGEX_AFTER_WORDS
+            if name in OPERAND_OR_KEYWORD:
+                return None
+            if name in REGEX_AFTER_WORDS:
+                return False
+            # A label ends `break` or `continue` when it is on their line.
+            keyword = dot
+            while keyword >= 0 and (out[keyword].isalnum() or out[keyword] in "_$"):
+                keyword -= 1
+            return not (
+                "".join(out[keyword + 1 : dot + 1]) in ("break", "continue")
+                and not LINE_TERMINATOR.search(text, dot + 1, word + 1)
+            )
         last = out[before]
         if last in ")}" or (before > 0 and out[before - 1] + last in ("++", "--")):
             return None
