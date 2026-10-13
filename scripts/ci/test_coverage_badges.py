@@ -247,6 +247,22 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(recorder.calls, [])
         self.assertIsNone(self.head())
 
+    def test_a_nonpositive_run_is_refused_even_when_the_totals_agree(self) -> None:
+        # The totals only have to agree with the argument, so the run ID's own
+        # bound is all that keeps an agreed run 0 or -1 from publishing.
+        self.assertEqual(self.publish(self.main[0])[0], 0)
+        before = self.head()
+        for run_id in (0, -1):
+            with self.subTest(run_id=run_id):
+                recorder = Recorder()
+                code, output = self.publish(self.main[1], run_id=run_id, run=recorder)
+                self.assertEqual(code, 1, output)
+                self.assertIn("the run a positive ID", output)
+                self.assertEqual(recorder.calls, [])
+                self.assertEqual(self.head(), before)
+        self.assertEqual(self.publish(self.main[1], run_id=1)[0], 0)
+        self.assertEqual(self.recorded(), f"coverage badges for {self.main[1]}")
+
     def test_a_badge_head_that_cannot_be_placed_is_refused_and_kept(self) -> None:
         def foreign_head(subject: str) -> str:
             tree = sh(self.checkout, "mktree")  # empty tree from empty stdin
