@@ -31,6 +31,12 @@
   wrong speed for every shorter one. Under reduced motion the same two states
   apply instantly — the row still opens, it simply does not travel.
 
+  A CLOSED DRAWER IS INERT (issue 329). Clipped to zero height, its link was
+  still a Tab stop and still in the accessibility tree: a focus ring on
+  nothing between every pair of rows. `inert` takes the closed contents out of
+  both at once and changes no style, so the grow and the reduced-motion snap
+  are exactly what they were; it lifts the moment the row opens.
+
   No domain anywhere: a span, a mark it is handed, a name, a role, a place,
   points, and a link it is handed whole. The work history renders it today. -->
 <script lang="ts">
@@ -112,7 +118,7 @@
             <Icon name={open ? 'chevron-up' : 'chevron-down'} slot="row" />
           </span>
         </button>
-        <div class="ledger-drawer" data-open={open ? 'true' : 'false'}>
+        <div class="ledger-drawer" data-open={open ? 'true' : 'false'} inert={!open}>
           <div class="ledger-drawer-clip">
             <ul class="ledger-points">
               {#each row.points as point, index (index)}

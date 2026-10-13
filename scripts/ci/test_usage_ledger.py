@@ -198,6 +198,126 @@ class AppendRuleTest(LedgerTestCase):
         moved = dict(session, total=900)
         self.assertEqual(self.append(moved, stream="sessions"), (1, 0))
 
+    def running_session(self, captured, ended, total):
+        return {
+            "schema": "ledger/v1",
+            "day": YESTERDAY,
+            "stream": "sessions",
+            "source": SOURCE,
+            "kind": "session",
+            "key": "2026-09-10T09:00:00Z",
+            "value": int(
+                (ledger.parse_instant(ended) - ledger.parse_instant("2026-09-10T09:00:00Z")).total_seconds()
+            ),
+            "unit": "seconds",
+            "capturedAt": captured,
+            "method": "capture",
+            "exporter": EXPORTER,
+            "startedAt": "2026-09-10T09:00:00Z",
+            "endedAt": ended,
+            "total": total,
+            "categories": {"input": total},
+            "models": ["member-one"],
+        }
+
+    def test_a_running_session_is_recorded_at_most_once_per_window(self):
+        # Issue #358: a run every few minutes re-read every running session
+        # and wrote a superseded row for each, megabytes a day. Inside the
+        # window a running session's changed reading waits; once the window
+        # since its last RECORDED reading has passed, the next one lands.
+        first = self.running_session("2026-09-10T10:00:00Z", "2026-09-10T09:59:30Z", 100)
+        self.assertEqual(self.append(first, stream="sessions"), (1, 0))
+        for minute, total in ((3, 200), (6, 300), (14, 400)):
+            captured = "2026-09-10T10:%02d:00Z" % minute
+            reading = self.running_session(captured, "2026-09-10T10:%02d:30Z" % (minute - 1), total)
+            self.assertEqual(self.append(reading, stream="sessions"), (0, 1), captured)
+        late = self.running_session("2026-09-10T10:15:00Z", "2026-09-10T10:14:30Z", 500)
+        self.assertEqual(self.append(late, stream="sessions"), (1, 0))
+        written = (self.ledger / "sessions" / "2026.ndjson").read_text(encoding="utf-8").splitlines()
+        self.assertEqual([json.loads(line)["total"] for line in written], [100, 500])
+
+    def test_a_settled_session_always_records_the_figure_it_finished_on(self):
+        # The guarantee the throttle rests on: once a session has been idle a
+        # whole window, its final reading is written at the next run however
+        # recently the last one was, so no final figure is ever lost.
+        running = self.running_session("2026-09-10T10:00:00Z", "2026-09-10T09:59:30Z", 100)
+        self.append(running, stream="sessions")
+        stopped = self.running_session("2026-09-10T10:04:00Z", "2026-09-10T10:01:00Z", 150)
+        self.assertEqual(self.append(stopped, stream="sessions"), (0, 1))
+        settled = self.running_session("2026-09-10T10:16:00Z", "2026-09-10T10:01:00Z", 150)
+        self.assertEqual(self.append(settled, stream="sessions"), (1, 0))
+        self.assertEqual(ledger.resolve(self.ledger, "sessions")[
+            (YESTERDAY, SOURCE, "session", "2026-09-10T09:00:00Z")]["total"], 150)
+        # And nothing more once it has been written.
+        later = self.running_session("2026-09-10T10:30:00Z", "2026-09-10T10:01:00Z", 150)
+        self.assertEqual(self.append(later, stream="sessions"), (0, 1))
+
+    def collided(self):
+        # Two record files that began in the same second, as the walk reports
+        # them: one identity, two different readings.
+        return [
+            {"startedAt": "2026-09-10T09:00:00Z", "endedAt": "2026-09-10T09:30:00Z",
+             "total": 300, "categories": {"input": 100, "output": 200}, "models": ["member-two"]},
+            {"startedAt": "2026-09-10T09:00:00Z", "endedAt": "2026-09-10T10:00:00Z",
+             "total": 500, "categories": {"input": 500}, "models": ["member-one", "member-two"]},
+        ]
+
+    def session_block_rows(self, entries):
+        return ledger.session_rows(SOURCE, entries, STAMP, EXPORTER, None)
+
+    def test_sessions_sharing_a_start_are_one_reading_and_stop_re_appending(self):
+        # Issue #358: two files sharing a start instant were two rows under one
+        # identity, so EVERY run appended both again (each "changed" the one
+        # before it) — 94% of a 117 MiB stream in a month. They are one
+        # reading now, and an unchanged walk appends nothing.
+        rows = self.session_block_rows(self.collided())
+        self.assertEqual(len(rows), 1)
+        merged = rows[0]
+        self.assertEqual(merged["endedAt"], "2026-09-10T10:00:00Z")
+        self.assertEqual(merged["value"], 3600)
+        self.assertEqual(merged["total"], 800)
+        self.assertEqual(merged["categories"], {"input": 600, "output": 200})
+        self.assertEqual(self.append(*rows, stream="sessions"), (1, 0))
+        for _ in range(3):
+            again = self.session_block_rows(self.collided())
+            self.assertEqual(self.append(*again, stream="sessions"), (0, 1))
+
+    def test_the_merged_reading_does_not_depend_on_walk_order(self):
+        forward = self.session_block_rows(self.collided())
+        backward = self.session_block_rows(list(reversed(self.collided())))
+        self.assertEqual(forward, backward)
+
+    def test_a_malformed_session_is_refused_before_anything_is_merged(self):
+        for field, bad in (("total", "300"), ("total", True), ("categories", []),
+                           ("models", "member-one"), ("endedAt", 7)):
+            entries = self.collided()
+            entries[0][field] = bad
+            with self.subTest(field=field, bad=bad), self.assertRaises(ledger.LedgerError):
+                self.session_block_rows(entries)
+
+    def test_a_member_the_merge_would_hide_is_refused_on_its_own(self):
+        # Each member alone never reaches the record, so it does not merged
+        # either: summing would absorb a negative count into a positive one,
+        # and the other member's later end would cover an earlier or
+        # malformed one.
+        for field, bad in (("total", -100), ("categories", {"input": -100, "output": 200}),
+                           ("endedAt", "2026-09-10T08:30:00Z"), ("endedAt", "2026-09-10T09:30:00+00:00")):
+            for member in (0, 1):
+                entries = self.collided()
+                entries[member][field] = bad
+                for given in ([entries[member]], entries):
+                    with self.subTest(field=field, bad=bad, member=member, merged=len(given) > 1):
+                        with self.assertRaises(ledger.LedgerError):
+                            self.append(*self.session_block_rows(given), stream="sessions")
+        self.assertFalse((self.ledger / "sessions").exists())
+
+    def test_the_window_is_the_sessions_stream_alone(self):
+        # A day's running usage figure is not a session and is never deferred.
+        first = row(capturedAt="2026-09-10T10:00:00Z", value=10)
+        moved = row(capturedAt="2026-09-10T10:01:00Z", value=20)
+        self.assertEqual(self.append(first), (1, 0))
+        self.assertEqual(self.append(moved), (1, 0))
+
 
 class FileMechanicsTest(LedgerTestCase):
     """The syscalls, proven rather than assumed."""
@@ -367,6 +487,71 @@ class MalformedLineTest(LedgerTestCase):
         # hold on read and not on write.
         with self.assertRaises(ledger.LedgerError):
             self.append(row(value=-5))
+
+
+class AdmissionVerdictTest(unittest.TestCase):
+    """The admission checks every run repeats over every stored row, made
+    cheap without moving a single verdict (issue #358)."""
+
+    def setUp(self):
+        ledger.INSTANT_VERDICTS.clear()
+        self.addCleanup(ledger.INSTANT_VERDICTS.clear)
+
+    @staticmethod
+    def parses(value):
+        try:
+            datetime.datetime.strptime(value, ledger.INSTANT_FORMAT)
+        except ValueError:
+            return False
+        return True
+
+    def test_a_remembered_instant_verdict_is_the_parse_verdict(self):
+        # Asked twice, so the second answer comes from memory: a memory that
+        # ever answered differently from the parse would admit or refuse a
+        # row the parse decides the other way.
+        for value in (
+            STAMP,
+            "2026-09-11 07:39:08",
+            "2026-99-99T99:99:99Z",
+            "2026-02-30T00:00:00Z",
+            "2026-9-1T7:3:8Z",
+            STAMP + " ",
+            "",
+        ):
+            for attempt in ("parsed", "remembered"):
+                with self.subTest(value=value, attempt=attempt):
+                    self.assertIs(ledger.valid_instant(value), self.parses(value))
+        self.assertTrue(ledger.INSTANT_VERDICTS)
+
+    def test_a_value_that_is_not_a_string_is_refused_and_not_remembered(self):
+        # Refused BEFORE the memory is asked: a list or a dict is not
+        # hashable, and a lookup first would crash the run on a malformed row
+        # instead of refusing it by name.
+        for value in (None, 17, ["2026-09-11T07:39:08Z"], {"at": STAMP}):
+            with self.subTest(value=value):
+                self.assertFalse(ledger.valid_instant(value))
+        self.assertEqual(ledger.INSTANT_VERDICTS, {})
+
+    def test_the_memory_is_bounded(self):
+        bound = ledger.MAX_INSTANT_VERDICTS
+        ledger.MAX_INSTANT_VERDICTS = 4
+        self.addCleanup(setattr, ledger, "MAX_INSTANT_VERDICTS", bound)
+        for second in range(10):
+            value = "2026-09-11T07:39:%02dZ" % second
+            self.assertTrue(ledger.valid_instant(value))
+            self.assertLessEqual(len(ledger.INSTANT_VERDICTS), 4)
+
+    def test_a_name_is_printable_exactly_when_every_character_is(self):
+        # The whole-string test against the per-character definition it
+        # replaced, over every code point below U+3000: the controls, the
+        # separators, and the scripts a name could plausibly carry.
+        for code in range(0x3000):
+            name = "a%sb" % chr(code)
+            with self.subTest(code=code):
+                self.assertIs(
+                    ledger.valid_name(name),
+                    all(character.isprintable() for character in name),
+                )
 
 
 class ResolutionTest(LedgerTestCase):
@@ -886,6 +1071,19 @@ class ExportTest(LedgerTestCase):
         self.assertEqual(json.loads(categories), {"input": 500})
         self.assertEqual(json.loads(models), ["member-one"])
 
+    @unittest.skipIf(os.geteuid() == 0, "a superuser writes through any directory mode")
+    def test_a_database_fault_is_the_records_own_refusal(self):
+        # The nightly snapshot now rebuilds these views unattended (issue
+        # #358): a database that cannot be built is reported as a refusal it
+        # can log, never as a traceback out of a scheduled job.
+        out = self.ledger / "exports"
+        out.mkdir()
+        out.chmod(0o500)
+        self.addCleanup(out.chmod, 0o700)
+        with self.assertRaises(ledger.LedgerError) as caught:
+            ledger.export_ledger(self.ledger, out)
+        self.assertIn("could not be built", str(caught.exception))
+
 
 class ExporterHookTest(LedgerTestCase):
     """The exporter writes the record beside the dataset, or not at all."""
@@ -973,8 +1171,10 @@ class ImportSurfaceTest(unittest.TestCase):
             # `http` is the standard-library status table (`http.HTTPStatus`),
             # so a refused panel is named by the standard phrase and never by
             # the upstream's own reason text (issue #320); it opens nothing.
+            # `time` is the fixed pause before a transient refusal is retried
+            # (issue #358); it opens nothing and starts nothing.
             "__future__", "argparse", "datetime", "http", "json", "pathlib",
-            "sys", "urllib", "usage_ledger",
+            "sys", "time", "urllib", "usage_ledger",
         },
         "ledger_backfill_github": {
             "__future__", "argparse", "datetime", "json", "pathlib", "re",

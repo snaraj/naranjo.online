@@ -982,6 +982,38 @@ func TestRateBudgetAdmitsOneAttemptPerWindow(t *testing.T) {
 	}
 }
 
+// TestRateBudgetSurvivesABackwardsClockStep is issue #358's live-refresh
+// half. Budgets are wall-clock instants, so a host clock stepped back by
+// weeks used to leave every attempt and cooldown "in the future" for exactly
+// that long: the panel kept its last payload, stale, until the clock caught
+// up. A backwards step now costs at most one ordinary budget.
+func TestRateBudgetSurvivesABackwardsClockStep(t *testing.T) {
+	t.Parallel()
+	source := &FetchSource{config: validFetchConfig(), gates: map[string]time.Time{}}
+	start := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	stepped := start.Add(-39 * 24 * time.Hour)
+
+	if !source.reserve(roleBossLog, start, 10*time.Minute) {
+		t.Fatal("the first attempt was refused")
+	}
+	if source.reserve(roleBossLog, stepped, 10*time.Minute) {
+		t.Error("the step itself must still count as inside the budget")
+	}
+	if !source.reserve(roleBossLog, stepped.Add(10*time.Minute), 10*time.Minute) {
+		t.Error("one budget after a backwards step, the role is still frozen")
+	}
+
+	source.cool(roleVCSCommits, start, source.config.MaxBackoff)
+	if source.reserve(roleVCSCommits, stepped.Add(30*time.Minute), 0) {
+		t.Error("a cooldown re-anchored by a backwards step must still be honoured for its own length")
+	}
+	// The gate re-anchored at the first wake that saw the step, so it opens
+	// one cooldown after THAT wake.
+	if !source.reserve(roleVCSCommits, stepped.Add(30*time.Minute+source.config.MaxBackoff), 0) {
+		t.Error("one cooldown after a backwards step, the role is still frozen")
+	}
+}
+
 // TestCommitProducerSpecFailsClosed drives the commit half's constructor gate
 // the way TestNewFetchSourceFailsClosed drives the others: the complete spec
 // builds, and every incomplete or out-of-band one is refused before a source

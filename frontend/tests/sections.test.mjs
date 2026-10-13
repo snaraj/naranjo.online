@@ -960,6 +960,15 @@ test('the experience section carries four complete real entries, newest first', 
   }
   const ledgerMarkup = withoutHtmlComments(ledgerLog);
   assert.match(ledgerMarkup, /<a\s+class="ledger-link"/);
+  /* A CLOSED DRAWER IS INERT (issue 329), bound to the same state the row
+     announces, so its link leaves the tab order and the accessibility tree
+     exactly while the row is closed. What the engines do with it — the Tab
+     walk and the refused focus — is measured in the browser lanes. */
+  assert.match(
+    ledgerMarkup,
+    /<div class="ledger-drawer" data-open=\{open \? 'true' : 'false'\} inert=\{!open\}>/,
+    'the drawer is not inert exactly while its row is closed'
+  );
   /* Drawn on HAVING a link and on nothing else. The markup pins above all
      survive a condition that can never be true — an anchor nobody renders is
      still an anchor in the file — so the condition is read back too: the row
@@ -1902,29 +1911,67 @@ test('exactly the reviewed sixteen WebP files (plus the sources manifest) are ve
   assert.ok(total <= 16 * 1024 * 1024, `the vendored set is ${total} bytes, over the 16MB total ceiling`);
 });
 
-test('Rime’s flight sheet is exactly one vendored file under its own ceiling (owner 2026-09-11, issue 314)', async () => {
+test('J’s typing sheet and its still are exactly the two vendored files, under one ceiling, laid out as the stylesheet steps them (owner 2026-09-11 issue 314, 2026-10-12)', async () => {
   /* The second dated requirement-11 exception, and a narrower one than the
-     gallery's: ONE file, the owner's own render of his own dragon, carried as
-     a hashed bundle asset because the alternative — a 3D runtime, a model and
-     an iframe from the media origin — is a new publish path and a new
-     content type for a mark in the corner of a row.
-     The ceiling is 1,000,000 bytes rather than the gallery's 2MB because this
-     one is fetched on EVERY first paint, not when a reader opens a picture,
-     and it is what the sheet is encoded against: 80px cells at quality 80.
-     The allowlist half is what makes a missing sheet a red build rather than
-     an empty box — a build that dropped the file fails here, before a reader
+     gallery's: the owner's own render of his own dragon — the typing sheet
+     and the still a reader who asked for less motion sees instead — carried
+     as hashed bundle assets because the alternative, a 3D runtime, a model
+     and an iframe from the media origin, is a new publish path and a new
+     content type for a mark at the ends of a row.
+     The ceiling is 1,000,000 bytes for BOTH files together rather than the
+     gallery's 2MB per image, because one of them is fetched on EVERY first
+     paint, not when a reader opens a picture.
+     The allowlist half is what makes a missing file a red build rather than
+     an empty box — a build that dropped either fails here, before a reader
      ever meets a mark with nothing in it. */
-  const dir = new URL('../src/assets/images/rime/', import.meta.url);
+  const dir = new URL('../src/assets/images/j/', import.meta.url);
   const entries = (await readdir(dir)).filter((entry) => !entry.startsWith('.'));
-  assert.deepEqual(entries.sort(), ['rime-flight.webp'], 'the vendored flight directory is not exactly the one sheet');
-  const styles = await read('../src/styles.css');
-  assert.match(
-    styles,
-    /url\('\.\/assets\/images\/rime\/rime-flight\.webp'\)/,
-    'the stylesheet no longer names the sheet, so the bundler emits a file nothing draws'
+  assert.deepEqual(
+    entries.sort(),
+    ['j-typing-still.webp', 'j-typing.webp'],
+    'the vendored directory is not exactly the sheet and its still'
   );
-  const { size } = await stat(new URL('rime-flight.webp', dir));
-  assert.ok(size <= 1_000_000, `the flight sheet is ${size} bytes, over its 1,000,000-byte ceiling`);
+  const styles = await read('../src/styles.css');
+  for (const file of entries) {
+    assert.match(
+      styles,
+      new RegExp(`url\\('\\./assets/images/j/${file.replaceAll('.', '\\.')}'\\)`),
+      `the stylesheet no longer names ${file}, so the bundler emits a file nothing draws`
+    );
+  }
+  let total = 0;
+  for (const file of entries) total += (await stat(new URL(file, dir))).size;
+  assert.ok(total <= 1_000_000, `the sheet and the still are ${total} bytes, over their 1,000,000-byte ceiling`);
+
+  /* THE GRID THE STYLESHEET STEPS IS THE SHEET'S OWN. The cell ratio, the
+     column count and the row count are stated once, as tokens, and the
+     keyframes walk them; this reads them back and holds them to the file's
+     own canvas (the WebP extended header: 24-bit little-endian width and
+     height, each minus one). A sheet re-rendered on a different grid, or a
+     token edited away from the sheet, shows a cell straddling two frames on
+     every step — and the still is held to the cell's own shape, because it
+     is drawn at 100% 100% and any other shape stretches him. */
+  const canvas = async (file) => {
+    const bytes = await readFile(new URL(file, dir));
+    assert.equal(bytes.toString('ascii', 12, 16), 'VP8X', `${file} has no extended header to read its canvas from`);
+    return [bytes.readUIntLE(24, 3) + 1, bytes.readUIntLE(27, 3) + 1];
+  };
+  const cell = /--j-cell-inline: calc\(var\(--j-cell-block\) \* (\d+) \/ (\d+)\);/.exec(styles);
+  const columns = /--j-sheet-inline: calc\(var\(--j-cell-inline\) \* (\d+)\);/.exec(styles);
+  const rows = /--j-sheet-block: calc\(var\(--j-cell-block\) \* (\d+)\);/.exec(styles);
+  assert.ok(cell && columns && rows, 'the stylesheet no longer states J’s grid as the three tokens this pin reads');
+  const [cellWidth, cellHeight] = [Number(cell[1]), Number(cell[2])];
+  assert.deepEqual(
+    await canvas('j-typing.webp'),
+    [Number(columns[1]) * cellWidth, Number(rows[1]) * cellHeight],
+    'the sheet is not the stylesheet’s grid of cells, so the box shows parts of two frames'
+  );
+  const [stillWidth, stillHeight] = await canvas('j-typing-still.webp');
+  assert.equal(
+    stillWidth * cellHeight,
+    stillHeight * cellWidth,
+    `the still is ${stillWidth} x ${stillHeight}, not the cell’s shape, so drawing it at 100% 100% stretches him`
+  );
 });
 
 /* The enlarged branch, extracted whole. Issue 202 nested a further {#if}

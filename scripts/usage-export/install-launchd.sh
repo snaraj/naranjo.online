@@ -25,27 +25,145 @@
 # configuration file the push script reads, under the same privacy refusal, so
 # a workstation states it once.
 #
-# Usage: scripts/usage-export/install-launchd.sh [--render-only]
+# Usage: scripts/usage-export/install-launchd.sh [--render-only | --check]
 #
 #   --render-only   print the rendered plists to stdout and exit without
 #                   touching launchd or the filesystem (the preview and
 #                   test seam; CI proves the rendered ProgramArguments
 #                   anchor with it).
+#   --check         change nothing; print, per agent, whether its installed
+#                   plist runs the configuration's REPO_DIR and what its last
+#                   exit status was, and exit 1 unless both are good (issue
+#                   #358: the job ran for weeks from a stale checkout, and the
+#                   snapshot failed every night, before anyone looked).
+#
+# Re-running the installer is the update path: each agent is booted out
+# before it is bootstrapped again, whether or not it was loaded.
 #
 # Environment:
 #   NARANJO_USAGE_EXPORT_REPO_DIR   checkout to anchor the schedule to;
 #                                   defaults to $HOME/code/naranjo.online.
 #   NARANJO_USAGE_EXPORT_CONFIG     the push script's configuration file,
-#                                   read here only for LEDGER_DIR/HISTORY_DIR.
+#                                   read here only for LEDGER_DIR/HISTORY_DIR
+#                                   and, under --check, REPO_DIR.
 
 set -eu
 
 RENDER_ONLY=no
+CHECK=no
 case "${1:-}" in
     --render-only) RENDER_ONLY=yes ;;
+    --check) CHECK=yes ;;
     "") ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
 esac
+
+LABEL="com.naranjo-online.usage-export"
+SNAPSHOT_LABEL="com.naranjo-online.ledger-snapshot"
+LOG_DIR="$HOME/Library/Logs/naranjo-online-usage-export"
+AGENT_DIR="$HOME/Library/LaunchAgents"
+AGENT="$AGENT_DIR/$LABEL.plist"
+SNAPSHOT_AGENT="$AGENT_DIR/$SNAPSHOT_LABEL.plist"
+
+# Where the record lives, read from the push script's own configuration so the
+# two jobs cannot be pointed at different directories. Sourced in a SUBSHELL:
+# that file also defines REPO_DIR, and letting it reach this script would hand
+# the anchor back to configuration — the exact coupling the M4 finding above
+# removed. The privacy refusal is the push script's, restated rather than
+# relaxed: a configuration naming key material is required private, and this
+# script reads the same file.
+CONFIG="${NARANJO_USAGE_EXPORT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/naranjo-usage-export/config}"
+LEDGER_DIR=""
+CONFIG_REPO_DIR=""
+if [ -f "$CONFIG" ]; then
+    config_mode=$(stat -c '%a' "$CONFIG" 2>/dev/null || stat -f '%Lp' "$CONFIG")
+    case "$config_mode" in
+        600|400|0600|0400) ;;
+        *) echo "configuration must be private (chmod 600)" >&2; exit 1 ;;
+    esac
+    LEDGER_DIR=$(
+        . "$CONFIG"
+        if [ -n "${LEDGER_DIR:-}" ]; then
+            printf '%s' "$LEDGER_DIR"
+        elif [ -n "${HISTORY_DIR:-}" ]; then
+            printf '%s' "$HISTORY_DIR/ledger"
+        fi
+    )
+    # Read for --check alone, where it is compared and never anchors anything.
+    CONFIG_REPO_DIR=$(. "$CONFIG"; printf '%s' "${REPO_DIR:-}")
+fi
+
+# --check reads the installed plists and launchd's own record of each job, and
+# writes nothing. "Points at REPO_DIR" means the plist runs the script under
+# the checkout the push script exports from; the snapshot agent is required
+# only when a record is configured. Labels and statuses only, never a path.
+#
+# What runs is decided by two keys of the plist and nothing else in it:
+# matching the path anywhere in the XML passed an agent running another
+# program whenever a comment or an environment value spelled the path (review
+# F9). launchd(5): `Program`, when present, is the executable, and
+# ProgramArguments[0] names it only when `Program` is absent (review F9 r2).
+# So the plist is parsed, never searched: `Program` must be absent or exactly
+# the expected first argument, and the leading ProgramArguments — the program
+# and, for the snapshot, the interpreter and flags before its script — must
+# equal what the template installs, which sets no `Program`. The parser is
+# python3's plistlib, already the exporter's hard dependency, rather than
+# plutil, so the one parser the check uses also runs under the suite on CI
+# hosts that are not macOS.
+runs_program() {
+    python3 -I -B -c '
+import plistlib, sys
+expected = sys.argv[2:]
+try:
+    with open(sys.argv[1], "rb") as handle:
+        agent = plistlib.load(handle)
+    matched = (
+        agent.get("Program", expected[0]) == expected[0]
+        and agent["ProgramArguments"][: len(expected)] == expected
+    )
+except Exception:
+    matched = False
+sys.exit(0 if matched else 1)
+' "$@" 2>/dev/null
+}
+
+check_agent() {
+    label=$1 plist=$2 required=$3
+    shift 3
+    if [ ! -f "$plist" ]; then
+        echo "check $label installed=no"
+        if [ "$required" = yes ]; then failed=yes; fi
+        return 0
+    fi
+    if [ -z "$CONFIG_REPO_DIR" ]; then
+        repo=unknown
+    elif runs_program "$plist" "$@"; then
+        repo=match
+    else
+        repo=MISMATCH
+    fi
+    last=$(launchctl print "gui/$(id -u)/$label" 2>/dev/null \
+        | awk -F' = ' '$1 ~ /^[[:space:]]*last exit code$/ { print $2; exit }' || true)
+    case "$last" in
+        "") last=not-loaded ;;
+        "(never exited)") last=never ;;
+        [0-9]*) last=${last%%[!0-9]*} ;;
+        *) last=unknown ;;
+    esac
+    echo "check $label installed=yes repo=$repo last-exit=$last"
+    if [ "$repo" != match ]; then failed=yes; fi
+    case "$last" in 0|never) ;; *) failed=yes ;; esac
+}
+if [ "$CHECK" = yes ]; then
+    failed=no
+    snapshot_required=no
+    if [ -n "$LEDGER_DIR" ]; then snapshot_required=yes; fi
+    check_agent "$LABEL" "$AGENT" yes "$CONFIG_REPO_DIR/scripts/usage-export/push-usage-series.sh"
+    check_agent "$SNAPSHOT_LABEL" "$SNAPSHOT_AGENT" "$snapshot_required" \
+        /usr/bin/env python3 -I -B "$CONFIG_REPO_DIR/scripts/ledger_snapshot.py"
+    if [ "$failed" = yes ]; then exit 1; fi
+    exit 0
+fi
 
 REPO_DIR="${NARANJO_USAGE_EXPORT_REPO_DIR:-$HOME/code/naranjo.online}"
 
@@ -62,44 +180,13 @@ esac
 
 TEMPLATE="$REPO_DIR/scripts/usage-export/com.naranjo-online.usage-export.plist.template"
 PUSH_SCRIPT="$REPO_DIR/scripts/usage-export/push-usage-series.sh"
-LABEL="com.naranjo-online.usage-export"
 SNAPSHOT_TEMPLATE="$REPO_DIR/scripts/usage-export/com.naranjo-online.ledger-snapshot.plist.template"
 SNAPSHOT_SCRIPT="$REPO_DIR/scripts/ledger_snapshot.py"
-SNAPSHOT_LABEL="com.naranjo-online.ledger-snapshot"
-LOG_DIR="$HOME/Library/Logs/naranjo-online-usage-export"
-AGENT_DIR="$HOME/Library/LaunchAgents"
-AGENT="$AGENT_DIR/$LABEL.plist"
-SNAPSHOT_AGENT="$AGENT_DIR/$SNAPSHOT_LABEL.plist"
 
 [ -f "$TEMPLATE" ] || { echo "template missing under REPO_DIR" >&2; exit 1; }
 [ -x "$PUSH_SCRIPT" ] || { echo "push script missing or not executable under REPO_DIR" >&2; exit 1; }
 [ -f "$SNAPSHOT_TEMPLATE" ] || { echo "snapshot template missing under REPO_DIR" >&2; exit 1; }
 [ -f "$SNAPSHOT_SCRIPT" ] || { echo "snapshot script missing under REPO_DIR" >&2; exit 1; }
-
-# Where the record lives, read from the push script's own configuration so the
-# two jobs cannot be pointed at different directories. Sourced in a SUBSHELL:
-# that file also defines REPO_DIR, and letting it reach this script would hand
-# the anchor back to configuration — the exact coupling the M4 finding above
-# removed. The privacy refusal is the push script's, restated rather than
-# relaxed: a configuration naming key material is required private, and this
-# script reads the same file.
-CONFIG="${NARANJO_USAGE_EXPORT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/naranjo-usage-export/config}"
-LEDGER_DIR=""
-if [ -f "$CONFIG" ]; then
-    config_mode=$(stat -c '%a' "$CONFIG" 2>/dev/null || stat -f '%Lp' "$CONFIG")
-    case "$config_mode" in
-        600|400|0600|0400) ;;
-        *) echo "configuration must be private (chmod 600)" >&2; exit 1 ;;
-    esac
-    LEDGER_DIR=$(
-        . "$CONFIG"
-        if [ -n "${LEDGER_DIR:-}" ]; then
-            printf '%s' "$LEDGER_DIR"
-        elif [ -n "${HISTORY_DIR:-}" ]; then
-            printf '%s' "$HISTORY_DIR/ledger"
-        fi
-    )
-fi
 
 # Render with a delimiter that cannot appear in a path.
 render() {

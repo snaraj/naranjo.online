@@ -54,4 +54,7 @@ the pair AND fixing the root cause in the same commit with a `dependabot.yml`
 
 The splits that produced the rule were `github/codeql-action` `init` +
 `analyze` (#53/#54) and `svelte` + `svelte-check` (#51/#52). The merged
-precedents under the rule are #56 and #58.
+precedents under the rule are #56 and #58. A third split, `vite` +
+`@sveltejs/vite-plugin-svelte` (#353/#352; the plugin's peer range pins the
+`vite` major), is superseded under the rule by the bundle tracked in #358,
+which adds the `vite` group.

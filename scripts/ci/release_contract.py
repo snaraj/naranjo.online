@@ -148,11 +148,14 @@ TRIVY_SEVERITIES = ["HIGH", "CRITICAL"]
 # load-bearing the other way round too: a `container` job reporting `success`
 # on a main push means the workflow condition is gone, so the inventory
 # refuses it rather than releasing off a surface nobody re-anchored.
+# Coverage-badge publication is deliberately NOT here (issue #350): it runs
+# after the gate in coverage-badges.yml, so a badge push can neither hold back
+# nor admit a release, and a badge job reappearing in the gate is a foreign
+# job this inventory refuses.
 EXPECTED_MAIN_JOBS = {
     "application": "success",
     "chart": "success",
     "container": "skipped",
-    "coverage-badges": "success",
     "dependency-review": "skipped",
     "security": "success",
 }

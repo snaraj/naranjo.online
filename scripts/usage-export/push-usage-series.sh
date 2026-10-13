@@ -91,6 +91,25 @@
 #                   figure per day and forget how it was measured; the record
 #                   keeps every reading, with its method and the instant it
 #                   was taken, and never rewrites one.
+#   SITE_URL        the site's bare https origin (issue #358). A verified
+#                   checksum proves delivery to the host, never what the PAGE
+#                   serves; when this is set, each run first asks the site's
+#                   public token-usage envelope whether it serves, for every
+#                   source, data at least as new as the last push
+#                   (served-check.py) and logs SERVED or NOT-SERVED. It
+#                   compares against "$HISTORY_DIR/push-state.json", so it
+#                   needs HISTORY_DIR. It never fails or delays the push.
+#   REPO_UPDATE     ff-only (the default) or off; anything else refuses the
+#                   run (issue #358). The job runs whatever REPO_DIR has
+#                   checked out, so with ff-only a checkout on main that is
+#                   strictly behind origin/main is fast-forwarded (fetching at
+#                   most hourly, which needs HISTORY_DIR) and this script
+#                   re-executes once. off only reports the drift. Nothing
+#                   here stashes, resets, rebases, or switches a branch.
+#
+# The launchd agent also names its log directory in the environment as
+# NARANJO_USAGE_EXPORT_LOG_DIR (install-launchd.sh decides it, never this
+# configuration); a run started any other way rotates no log.
 #
 # Exit status is nonzero on any failure; diagnostics never include payload
 # content. Stage names and byte counts only.
@@ -130,6 +149,24 @@ finish() {
     timings="$timings $stage=$(( $(/bin/date +%s) - stage_started ))s"
 }
 
+# Log rotation, before this run writes a line (issue #358): launchd appends to
+# its two log files forever. Each is RENAMED to one kept generation, never
+# truncated, and this run's stream is reopened on the fresh path, so a reader
+# that counts lines sees a shorter file rather than a hole.
+MAX_LOG_BYTES=5242880
+if [ -n "${NARANJO_USAGE_EXPORT_LOG_DIR:-}" ]; then
+    for log in usage-export.log usage-export.err.log; do
+        log="$NARANJO_USAGE_EXPORT_LOG_DIR/$log"
+        if [ -f "$log" ] && [ "$(wc -c < "$log" | tr -d ' ')" -gt "$MAX_LOG_BYTES" ]; then
+            mv -f "$log" "$log.1" || { echo "usage-export: WARN log-rotation failed" >&2; continue; }
+            case "$log" in
+                *.err.log) exec 2>>"$log" ;;
+                *) exec >>"$log" ;;
+            esac
+        fi
+    done
+fi
+
 CONFIG="${NARANJO_USAGE_EXPORT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/naranjo-usage-export/config}"
 [ -f "$CONFIG" ] || fail "no configuration at the expected location"
 # The configuration names key-material paths and the push destination;
@@ -166,6 +203,12 @@ if [ -z "$LEDGER_DIR" ] && [ -n "$HISTORY_DIR" ]; then
     LEDGER_DIR="$HISTORY_DIR/ledger"
 fi
 PUSH_PORT="${PUSH_PORT:-22}"
+SITE_URL="${SITE_URL:-}"
+REPO_UPDATE="${REPO_UPDATE:-ff-only}"
+case "$REPO_UPDATE" in
+    ff-only|off) ;;
+    *) fail "REPO_UPDATE must be ff-only or off" ;;
+esac
 
 # The destination must carry its own user, because -F /dev/null means no
 # config file supplies one and ssh would otherwise fall back to the LOCAL
@@ -177,6 +220,349 @@ case "$PUSH_HOST" in
 esac
 [ -f "$SSH_KNOWN_HOSTS" ] || fail "SSH_KNOWN_HOSTS does not name a file; the host key must be pinned before anything is pushed"
 [ -f "$SSH_IDENTITY" ] || fail "SSH_IDENTITY does not name a file; ssh SILENTLY ignores a missing -i path and falls back to the default keys"
+
+# Everything this run writes is private from here on.
+umask 077
+
+# The history stores must have somewhere to live BEFORE any producer runs —
+# a store whose directory is missing would make every capture refuse — and
+# creating the directory here, under the umask above, keeps the stores as
+# private as the configuration that names them. Unlike the scratch, it is
+# never wiped: surviving runs is its entire purpose.
+if [ -n "$HISTORY_DIR" ]; then
+    mkdir -p "$HISTORY_DIR" || fail "the history directory cannot be created"
+fi
+
+# Checkout drift (issue #358). The job runs whatever commit REPO_DIR has
+# checked out, and three times it has run a tree behind what the origin
+# admits. A checkout on main tracking origin/main is moved by fast-forward
+# ONLY; a local edit the fast-forward would touch, a diverged history, a
+# detached head or another branch is reported and left exactly as it is. An
+# update that stops part-way (action=incomplete), or one rolled back because a
+# ref moved under it (action=rolled-back), ends the run before anything is
+# exported (see fast_forward_main). A run that moved the tree re-executes the
+# (possibly new) script ONCE: the guard variable skips this whole step in the
+# re-executed run, so it cannot loop. Runs before the scratch exists, because
+# exec does not run the EXIT trap.
+REPO_FETCH="$REPO_DIR/scripts/usage-export/bounded-fetch.py"
+FETCH_INTERVAL_SECONDS=3600
+update_checkout() {
+    action=none
+    interrupted=
+    acknowledged=yes
+    repair=
+    facts=
+    git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+    branch=$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    upstream=$(git -C "$REPO_DIR" rev-parse --abbrev-ref 'main@{upstream}' 2>/dev/null || true)
+    tracking=no
+    if [ "$branch" = main ] && [ "$upstream" = origin/main ]; then
+        tracking=yes
+    fi
+    # At most one bounded fetch an hour, and only where a fast-forward could
+    # follow it. A stamp AHEAD of the clock means this clock moved back — the
+    # fault issue #358 met on the cluster host — so it is due, not deferred.
+    if [ "$tracking" = yes ] && [ "$REPO_UPDATE" = ff-only ] && [ -n "$HISTORY_DIR" ] && [ -f "$REPO_FETCH" ]; then
+        stamp="$HISTORY_DIR/repo-update.stamp"
+        last=$(cat "$stamp" 2>/dev/null || true)
+        case "$last" in ''|*[!0-9]*) last=0 ;; esac
+        now=$(/bin/date +%s)
+        if [ $((now - last)) -ge "$FETCH_INTERVAL_SECONDS" ] || [ "$now" -lt "$last" ]; then
+            { echo "$now" > "$stamp"; } 2>/dev/null || true
+            GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true
+        fi
+    fi
+    git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' >/dev/null 2>&1 || return 0
+    behind=$(git -C "$REPO_DIR" rev-list --count HEAD..refs/remotes/origin/main 2>/dev/null || echo 0)
+    [ "$behind" -gt 0 ] || return 0
+    ahead=$(git -C "$REPO_DIR" rev-list --count refs/remotes/origin/main..HEAD 2>/dev/null || echo 0)
+    if [ "$REPO_UPDATE" = off ]; then
+        reason=off
+    elif [ -z "$branch" ]; then
+        reason=detached
+    elif [ "$tracking" = no ]; then
+        reason=not-main
+    elif [ "$ahead" -gt 0 ]; then
+        reason=diverged
+    else
+        fast_forward_main
+    fi
+    if [ "$reason" = updated ]; then
+        echo "usage-export: UPDATED exporter $(git -C "$REPO_DIR" rev-parse --short=12 "$old")->$(git -C "$REPO_DIR" rev-parse --short=12 "$new")"
+    else
+        echo "usage-export: WARN DRIFT behind=$behind ahead=$ahead action=$action reason=$reason" >&2
+    fi
+    if [ -n "$repair" ]; then
+        echo "usage-export: WARN repo-update repair: $repair" >&2
+    fi
+    if [ -n "$facts" ]; then
+        echo "usage-export: WARN repo-update state: $facts" >&2
+    fi
+    if [ -n "$interrupted" ]; then
+        echo "usage-export: WARN repo-update interrupted signal=$interrupted" >&2
+    fi
+    if [ "$action" = incomplete ]; then
+        stage=repo-update
+        fail "the checkout update stopped part-way; nothing was exported"
+    fi
+    if [ "$acknowledged" = no ]; then
+        stage=repo-update
+        fail "main moved without git acknowledging the update; the checkout agrees with it, and nothing was exported"
+    fi
+    # Another actor moved HEAD or main under the update. The checkout is back
+    # as the job found it, but HEAD may now name a commit whose files are not
+    # the worktree's, so this run exports nothing it would misname.
+    if [ "$action" = rolled-back ]; then
+        stage=repo-update
+        fail "a ref moved under the update; the checkout was put back as it was found, and nothing was exported"
+    fi
+    if [ -n "$interrupted" ]; then
+        exit 1
+    fi
+    if [ "$reason" = updated ]; then
+        export NARANJO_USAGE_EXPORT_REEXEC=1
+        exec /bin/sh "$0"
+    fi
+}
+
+# The fast-forward, as ONE critical section under git's own index lock
+# (review F1). Everything read above was read before a fetch that can take
+# seconds, and another actor may have switched the checkout meanwhile; a merge
+# then advances whatever HEAD names by the time it runs. Every porcelain
+# checkout, switch, merge, reset and commit takes the index lock before it
+# touches anything, so while this job holds it nobody else can switch the
+# branch or write the index, and everything is re-read inside it. A lock that
+# already exists is another git operation in progress: the job steps aside and
+# never removes a lock it did not create.
+#
+# The lock file IS the job's working index (review F1 r2): the real index is
+# copied into it and git updates it in place (git locks index.lock.lock and
+# renames that over it, so the lock path never disappears). One rename
+# installs that index and releases the lock together, and it happens while
+# the prepared ref transaction holds HEAD's and main's locks (advance_main).
+#
+# A child's exit status never decides what state the checkout is in (review
+# F1 r3): a git killed after it finished reports failure too, and so does an
+# mv stopped after it renamed. After a failed checkout the lock's tree is read
+# again; the install is decided by the lock's inode (advance_main); after a
+# commit git never acknowledged, main is read again. Where a state is proven,
+# ref, index and worktree are brought into agreement; where it is not,
+# recovery material is kept and the run stops:
+#   merge-refused         nothing written; the run goes on as it was
+#   ref-moved             nothing was prepared or HEAD no longer named main, so
+#                         the transaction was aborted and the worktree put back
+#                         to OLD (action=rolled-back); the run stops
+#   updated               committed with the index installed; when git never
+#                         acknowledged the commit, the run stops unexported
+#   checkout-partial      git wrote some files before refusing; ref and index
+#                         are OLD, so git status shows them; the run stops
+#   checkout-uncertain    the checkout failed, yet the lock no longer holds the
+#                         index it held before; the lock is kept; the run stops
+#   ref-uncertain         the NEW index was installed but the commit was never
+#                         acknowledged and main is not NEW; the repair is
+#                         logged as a compare-and-swap update-ref, or, when main
+#                         cannot be read, as what to inspect first; the run
+#                         stops
+#   rollback-failed       nothing was prepared and the worktree could not be
+#                         put back; the lock keeps the NEW index; the run stops
+#   index-install-failed  prepared, but the lock still holds the index (or its
+#                         identity could not be read, so no rename was tried);
+#                         the transaction was aborted, main is OLD, the lock
+#                         keeps the NEW index; the run stops
+#   index-uncertain       prepared and the rename tried, but neither path
+#                         holds the lock's file afterwards; the transaction was
+#                         aborted, main is OLD, the worktree holds NEW, and
+#                         the NEW index was renamed to index or is still
+#                         index.lock; the run stops
+# A kept lock is git's own recovery state: every git command names it as stale.
+fast_forward_main() {
+    # The ref transaction protocol (start/prepare/commit) is what makes the
+    # advance verifiable; a git without it is told apart before any write.
+    printf 'start\nabort\n' | git -C "$REPO_DIR" update-ref --stdin >/dev/null 2>&1 \
+        || { reason=git-too-old; return 0; }
+    gitdir=$(git -C "$REPO_DIR" rev-parse --absolute-git-dir 2>/dev/null) \
+        || { reason=merge-refused; return 0; }
+    top=$(git -C "$REPO_DIR" rev-parse --show-toplevel 2>/dev/null) \
+        || { reason=merge-refused; return 0; }
+    lock="$gitdir/index.lock"
+    (set -C && : >"$lock") 2>/dev/null || { reason=busy; return 0; }
+    drop_lock=yes
+    trap 'rm -f "$lock"' EXIT
+    trap 'rm -f "$lock"; exit 1' HUP INT TERM
+    old=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/heads/main^{commit}' || true)
+    new=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' || true)
+    if [ "$(git -C "$REPO_DIR" symbolic-ref --quiet HEAD 2>/dev/null || true)" != refs/heads/main ]; then
+        reason=not-main
+    elif [ -n "$old" ] && [ "$old" = "$new" ]; then
+        reason=none
+    elif ! git -C "$REPO_DIR" merge-base --is-ancestor "$old" "$new" >/dev/null 2>&1; then
+        reason=diverged
+    # The checkout is shared, so what git writes takes the repository's
+    # ordinary modes, not this run's private umask. The refresh is the one a
+    # merge does: a file touched but unchanged is not a local change.
+    elif ! (umask 022 && cp "$gitdir/index" "$lock" \
+        && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" update-index -q --refresh) >/dev/null 2>&1; then
+        reason=merge-refused
+    # A local change on a path the update touches is refused before git can
+    # write anything, so that after a failed checkout any difference on those
+    # paths is git's own partial write.
+    elif ! touched_paths_clean "$old" "$new"; then
+        reason=merge-refused
+    # The tree the lock holds now, so that a failed checkout can be told from
+    # one that finished: writing tree objects to the object store is harmless.
+    elif ! before=$(lock_tree) || [ -z "$before" ]; then
+        reason=merge-refused
+    else
+        # From the checkout until the index is installed or rolled back, a
+        # signal is recorded, never acted on: the run ends only once ref,
+        # index and worktree agree, or once a recovery state is kept.
+        trap - EXIT
+        trap 'interrupted=HUP' HUP
+        trap 'interrupted=INT' INT
+        trap 'interrupted=TERM' TERM
+        if (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$old" "$new") >/dev/null 2>&1; then
+            advance_main
+        elif [ "$(lock_tree || true)" != "$before" ]; then
+            reason=checkout-uncertain action=incomplete drop_lock=no
+        elif touched_paths_clean "$old" "$new"; then
+            reason=merge-refused
+        else
+            reason=checkout-partial action=incomplete
+        fi
+    fi
+    if [ "$drop_lock" = yes ]; then
+        rm -f "$lock"
+    fi
+    trap - EXIT HUP INT TERM
+}
+
+# The tree the lock index describes, or nothing when it cannot be written.
+lock_tree() {
+    (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" write-tree 2>/dev/null)
+}
+
+# True when every path the update touches is in the worktree as the job's
+# index has it: no tracked one modified or removed, and nothing at a path NEW
+# adds. The paths are git's own NUL-separated list, matched literally.
+touched_paths_clean() {
+    list=$(mktemp) || return 1
+    # shellcheck disable=SC2016 # $path is the inner shell's loop variable.
+    if git -C "$REPO_DIR" diff --no-renames --name-only -z "$1" "$2" >"$list" \
+        && (cd "$top" && GIT_LITERAL_PATHSPECS=1 GIT_INDEX_FILE="$lock" \
+            xargs -0 -r git diff-files --quiet -- <"$list") \
+        && git -C "$REPO_DIR" diff --no-renames --name-only -z --diff-filter=A "$1" "$2" >"$list" \
+        && (cd "$top" && xargs -0 -r sh -c \
+            'for path do if [ -e "$path" ] || [ -h "$path" ]; then exit 1; fi; done' sh <"$list"); then
+        clean=yes
+    else
+        clean=no
+    fi
+    rm -f "$list"
+    [ "$clean" = yes ]
+}
+
+# The ref transaction, with the index installed INSIDE it (review F1 r4).
+# `update HEAD NEW OLD` is made through HEAD: `symref-verify HEAD
+# refs/heads/main` cannot share a transaction with an update of HEAD's own
+# branch (git refuses "multiple updates for 'HEAD'"). Once prepare answers,
+# git holds HEAD's lock and the lock of the branch HEAD names, so no
+# update-ref, symbolic-ref, checkout or commit can move either until commit
+# or abort. Inside that window HEAD is verified to name main and the index is
+# installed by the one rename (git's own lockfile commit, which also releases
+# the index lock); only then is the commit sent. A state re-read after the
+# commit would be a snapshot plumbing could change before the install.
+#
+# Whether the rename happened is decided by the file's identity, never by
+# mv's exit status (review F1 r5): mv stopped by a signal after renaming
+# reports failure too. A rename moves the inode, and no git command renames
+# index.lock away (they refuse while it exists), so the inode recorded just
+# before the mv says where the index went.
+#   commit acknowledged       updated: nothing could move the refs between the
+#                             verify, the install and the commit
+#   installed, no answer      main re-read: NEW is updated but unacknowledged;
+#                             anything else is ref-uncertain, the installed NEW
+#                             index is kept and the repair is logged
+#   lock still holds it       aborted: index-install-failed, the lock kept (also
+#                             when its identity could not be read, and then no
+#                             rename is tried)
+#   neither path holds it     aborted: index-uncertain; the facts are logged
+#   nothing prepared          aborted: the worktree is rolled back to OLD and
+#                             the run stops (ref-moved)
+advance_main() {
+    verified=no installed=no committed=no install_unknown=no
+    trap '' PIPE
+    channel=$(mktemp -d) || channel=
+    if [ -n "$channel" ] && mkfifo "$channel/in" "$channel/out"; then
+        git -C "$REPO_DIR" update-ref -m 'usage-export: fast-forward' --stdin \
+            <"$channel/in" >"$channel/out" 2>/dev/null &
+        transaction=$!
+        exec 3>"$channel/in" 4<"$channel/out"
+        printf 'start\nupdate HEAD %s %s\nprepare\n' "$new" "$old" >&3 2>/dev/null || true
+        if read -r line <&4 && [ "$line" = 'start: ok' ] \
+            && read -r line <&4 && [ "$line" = 'prepare: ok' ] \
+            && [ "$(git -C "$REPO_DIR" symbolic-ref --quiet HEAD 2>/dev/null || true)" = refs/heads/main ]; then
+            verified=yes
+            held=$(inode_of "$lock")
+            if [ -n "$held" ]; then
+                mv -f "$lock" "$gitdir/index" || true
+                if [ "$(inode_of "$gitdir/index")" = "$held" ]; then
+                    installed=yes
+                    printf 'commit\n' >&3 2>/dev/null || true
+                    if read -r line <&4 && [ "$line" = 'commit: ok' ]; then
+                        committed=yes
+                    fi
+                elif [ "$(inode_of "$lock")" != "$held" ]; then
+                    install_unknown=yes
+                fi
+            fi
+        fi
+        if [ "$installed" = no ]; then
+            printf 'abort\n' >&3 2>/dev/null || true
+        fi
+        exec 3>&- 4<&-
+        wait "$transaction" || true
+    fi
+    if [ -n "$channel" ]; then
+        rm -rf "$channel"
+    fi
+    trap - PIPE
+    if [ "$committed" = yes ]; then
+        reason=updated drop_lock=no
+    elif [ "$installed" = yes ]; then
+        drop_lock=no
+        if ! main=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/heads/main^{commit}' 2>/dev/null) || [ -z "$main" ]; then
+            # An update-ref without the value it expects would overwrite
+            # whatever main holds by then, so none is printed.
+            reason=ref-uncertain action=incomplete
+            repair="main could not be read; inspect it (git rev-parse refs/heads/main), then run git update-ref refs/heads/main $new <that value>"
+        elif [ "$main" = "$new" ]; then
+            reason=updated acknowledged=no
+        else
+            reason=ref-uncertain action=incomplete
+            repair="git update-ref refs/heads/main $new $main"
+        fi
+    elif [ "$install_unknown" = yes ]; then
+        reason=index-uncertain action=incomplete drop_lock=no
+        facts="main is $old (the update was aborted), the worktree holds $new, and the $new index was renamed to .git/index or is still .git/index.lock; inspect with git status before the next run"
+    elif [ "$verified" = yes ]; then
+        reason=index-install-failed action=incomplete drop_lock=no
+    elif (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then
+        reason=ref-moved action=rolled-back
+    else
+        reason=rollback-failed action=incomplete drop_lock=no
+    fi
+}
+
+# The inode number at a path, or nothing when it cannot be read (`ls -i` is
+# POSIX).
+inode_of() {
+    # shellcheck disable=SC2012 # one known path; only the leading inode field is read.
+    ls -di "$1" 2>/dev/null | awk '{ print $1 }'
+}
+
+if [ -z "${NARANJO_USAGE_EXPORT_REEXEC:-}" ]; then
+    update_checkout
+fi
 
 EXPORT_SCRIPT="$REPO_DIR/scripts/export_usage_series.py"
 [ -f "$EXPORT_SCRIPT" ] || fail "export script not found under REPO_DIR"
@@ -201,6 +587,22 @@ BASELINES_FILE="$REPO_DIR/scripts/usage-export/lifetime-baselines.json"
 # is not a checkout at all.
 exporter_revision=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 
+# Served verification (issue #358). The checksum below proves delivery to the
+# host and nothing about what the PAGE serves: the origin once served its
+# release snapshot for days while every run logged a verified push. So each
+# run first asks the site's public token-usage envelope whether every source
+# it serves is at least as new as in the LAST push — what a visitor's GET can
+# show, never the exact document — at the start rather than after this push,
+# so no run ever waits for the origin's next re-read. One bounded request,
+# OUTSIDE the producer sandbox like the transport, and never a reason to fail
+# or skip the push.
+SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"
+[ -f "$SERVED_CHECK" ] || fail "served-check helper not found under REPO_DIR"
+if [ -n "$SITE_URL" ]; then
+    python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state "${HISTORY_DIR:+$HISTORY_DIR/push-state.json}" --exporter "$exporter_revision" </dev/null \
+        || echo "usage-export: WARN served-check unavailable reason=helper-failed" >&2
+fi
+
 # The producer's capability boundary, and the reason it lives HERE rather than
 # inside the producer (2026-08-24 security review, round 3, finding 1). The
 # owner's ruling is that the step walking raw transcripts must be structurally
@@ -223,18 +625,8 @@ command -v sandbox-exec >/dev/null 2>&1 \
     || fail "the producer sandbox is unavailable; raw records are never walked unconfined"
 
 # Private scratch, wiped on every exit path.
-umask 077
 SCRATCH=$(mktemp -d) || fail "cannot create scratch directory"
 trap 'rm -rf "$SCRATCH"' EXIT INT TERM
-
-# The history stores must have somewhere to live BEFORE any producer runs —
-# a store whose directory is missing would make every capture refuse — and
-# creating the directory here, under the umask above, keeps the stores as
-# private as the configuration that names them. Unlike the scratch, it is
-# never wiped: surviving runs is its entire purpose.
-if [ -n "$HISTORY_DIR" ]; then
-    mkdir -p "$HISTORY_DIR" || fail "the history directory cannot be created"
-fi
 
 PLAIN="$SCRATCH/usage.json"
 SEALED="$SCRATCH/usage.enc"
@@ -417,6 +809,11 @@ fi
 #      KbdInteractiveAuthentication=no  than falling back to something the
 #      GSSAPIAuthentication=no    scheduler cannot answer anyway
 #      NumberOfPasswordPrompts=0
+#      LogLevel=ERROR           OpenSSH prints the receiving host's pre-auth
+#                               banner at INFO and above, which put ~9 lines
+#                               of it into the scheduler's log on every run
+#                               (issue #358). Errors still print, and the
+#                               runner reduces them to a closed reason.
 #
 #    The receiving account's authorized_keys entry is `restrict` + a forced
 #    command, so whatever is requested here, the host runs exactly its own
@@ -452,6 +849,7 @@ push_ssh() {
         -o KbdInteractiveAuthentication=no \
         -o GSSAPIAuthentication=no \
         -o NumberOfPasswordPrompts=0 \
+        -o LogLevel=ERROR \
         -o Port="$PUSH_PORT" \
         -i "$SSH_IDENTITY" \
         "$@"
@@ -520,6 +918,7 @@ check_resolved connecttimeout 15
 check_resolved connectionattempts 1
 check_resolved serveraliveinterval 15
 check_resolved serveralivecountmax 2
+check_resolved loglevel ERROR
 
 begin push
 remote_line=$(push_ssh "$PUSH_HOST" usage-export-receive < "$SEALED") || fail "push refused"
@@ -528,5 +927,15 @@ remote_sum=$(echo "$remote_line" | head -n 1 | cut -d' ' -f1)
 [ "$remote_sum" = "$local_sum" ] || fail "checksum mismatch after push"
 finish
 
-echo "usage-export: pushed $sealed_bytes sealed bytes; checksum verified"
+# What the NEXT run's served check compares against (issue #358): this
+# document's export instant, every source's capture instant, the oldest of
+# them — the instant the origin serves as the envelope's generatedAt — the
+# sealed checksum, and the push time. Instants and a digest only, private,
+# beside the stores.
+if [ -n "$HISTORY_DIR" ]; then
+    python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" --document "$PLAIN" --sha256 "$local_sum" </dev/null \
+        || echo "usage-export: WARN push-state unrecorded reason=helper-failed" >&2
+fi
+
+# One line per healthy run, printed only once the host's checksum matched.
 echo "usage-export: SUMMARY pushed=${sealed_bytes}B sha256=$(echo "$local_sum" | cut -c1-12) exporter=$exporter_revision elapsed=$(elapsed)s stages:$timings"

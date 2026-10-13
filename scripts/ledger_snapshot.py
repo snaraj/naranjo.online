@@ -19,10 +19,12 @@ transcript, no configuration but the ledger directory and the site.
 WHAT IT REFUSES. The request is bounded in every direction a fetch can run
 away: https only, the resolved host must equal the configured site's, no
 redirect is followed (a redirect is where a public read turns into a request
-somewhere else), one bounded read, one timeout. A panel whose envelope reports
-anything but `ok` is SKIPPED with no rows — the envelope's status is the
-origin's own statement that the payload is stale or unavailable, and a stale
-reading recorded as today's is a lie the record would keep forever.
+somewhere else), one bounded read, one timeout. A 5xx or a timed-out transport
+is retried twice after fixed pauses, and nothing else is. A panel whose
+envelope reports anything but `ok` is SKIPPED with no rows — the envelope's
+status is the origin's own statement that the payload is stale or unavailable,
+and a stale reading recorded as today's is a lie the record would keep forever.
+After the reading the derived SQLite and CSV views are rebuilt.
 
     scripts/ledger_snapshot.py --ledger DIR --site https://<site> [--today DAY]
 """
@@ -35,6 +37,7 @@ import http
 import json
 import pathlib
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -152,7 +155,18 @@ def checkout_revision(script=__file__):
     return head[:12] if is_revision(head) else DEFAULT_EXPORTER
 
 
-class PanelRefused(ledger.LedgerError):
+class FetchRefused(ledger.LedgerError):
+    """A refused fetch that also names its closed reason code, for a caller
+    that logs codes rather than sentences (the push's served check, issue
+    #358). `transient` marks the two failures one later attempt can cure."""
+
+    def __init__(self, message, reason, transient=False):
+        super().__init__(message)
+        self.reason = reason
+        self.transient = transient
+
+
+class PanelRefused(FetchRefused):
     """One panel could not be read this run. The run goes on to the others,
     counts the refusal, names it, and exits non-zero at the end — a stream
     the origin would not serve is one stream missing, not a night lost."""
@@ -161,6 +175,14 @@ class PanelRefused(ledger.LedgerError):
 # REFUSED rather than truncated into something that parses.
 REQUEST_TIMEOUT_SECONDS = 20
 MAX_BODY_BYTES = 512 * 1024
+
+# A 5xx or a timed-out transport is retried inside the one nightly run, after
+# these fixed pauses: three attempts at most, so one panel costs at most
+# 3 x 20 s + 150 s. The edge answering 530 for a moment cost a whole night's
+# reading before (issue #358). Nothing else is retried: a redirect, another
+# host, a 4xx or a body that is not the envelope is the same answer next time.
+RETRY_PAUSES_SECONDS = (30, 120)
+FETCH_ATTEMPTS = len(RETRY_PAUSES_SECONDS) + 1
 
 # Sunday-first, the shape the contribution calendar is served in.
 WEEK_DAYS = 7
@@ -224,32 +246,59 @@ def fetch_panel(opener, url, host, agent=user_agent(DEFAULT_EXPORTER)):
     PanelRefused that names the panel's fate without a byte of upstream prose.
     """
     if urllib.parse.urlsplit(url).hostname != host:
-        raise ledger.LedgerError("a panel request names a different host than the site")
+        raise FetchRefused("a panel request names a different host than the site", "host-mismatch")
     request = urllib.request.Request(
         url, headers={"Accept": "application/json", "User-Agent": agent}
     )
     try:
         with opener.open(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             if urllib.parse.urlsplit(response.geturl()).hostname != host:
-                raise ledger.LedgerError("a panel response came from a different host")
+                raise FetchRefused("a panel response came from a different host", "host-mismatch")
             body = response.read(MAX_BODY_BYTES + 1)
     except urllib.error.HTTPError as error:
         if 300 <= error.code < 400:
-            raise ledger.LedgerError("a panel request was redirected; the snapshot follows none")
-        raise PanelRefused("HTTP %d %s" % (error.code, status_phrase(error.code)))
+            raise FetchRefused("a panel request was redirected; the snapshot follows none", "redirected")
+        code = error.code if 100 <= error.code <= 599 else 0
+        raise PanelRefused(
+            "HTTP %d %s" % (error.code, status_phrase(error.code)),
+            "http-%d" % code if code else "http-other",
+            transient=code >= 500,
+        )
     except (urllib.error.URLError, OSError) as error:
-        raise PanelRefused("unreachable (%s)" % failure_class(error))
+        timed_out = isinstance(error, TimeoutError) or isinstance(getattr(error, "reason", None), TimeoutError)
+        raise PanelRefused(
+            "unreachable (%s)" % failure_class(error),
+            "timeout" if timed_out else "unreachable",
+            transient=timed_out,
+        )
     if len(body) > MAX_BODY_BYTES:
-        raise ledger.LedgerError(
-            "a panel response is larger than the %d byte bound" % MAX_BODY_BYTES
+        raise FetchRefused(
+            "a panel response is larger than the %d byte bound" % MAX_BODY_BYTES, "over-budget"
         )
     try:
         envelope = json.loads(body.decode("utf-8"))
     except (ValueError, RecursionError, UnicodeDecodeError):
-        raise ledger.LedgerError("a panel response is not a parsable JSON document")
+        raise FetchRefused("a panel response is not a parsable JSON document", "malformed-envelope")
     if not isinstance(envelope, dict) or envelope.get("schema") != ENVELOPE_SCHEMA:
-        raise ledger.LedgerError("a panel response is not the expected envelope")
+        raise FetchRefused("a panel response is not the expected envelope", "malformed-envelope")
     return envelope
+
+
+def fetch_with_retries(opener, panel, url, host, agent, sleeper):
+    """fetch_panel, retried after a fixed pause only when the refusal is
+    transient, each retry logged with its closed reason."""
+    for attempt, pause in enumerate(RETRY_PAUSES_SECONDS + (None,), start=1):
+        try:
+            return fetch_panel(opener, url, host, agent)
+        except PanelRefused as error:
+            if pause is None or not error.transient:
+                raise
+            print(
+                "ledger snapshot retry %s attempt=%d/%d reason=%s wait=%ds"
+                % (panel, attempt + 1, FETCH_ATTEMPTS, error.reason, pause),
+                file=sys.stderr,
+            )
+            sleeper(pause)
 
 
 def admit_payload(envelope, panel, kind):
@@ -512,7 +561,9 @@ PANEL_ROWS = {
 }
 
 
-def snapshot(ledger_dir, site, now, today=None, exporter=DEFAULT_EXPORTER, opener=None):
+def snapshot(
+    ledger_dir, site, now, today=None, exporter=DEFAULT_EXPORTER, opener=None, sleeper=time.sleep
+):
     """Read every panel once and append what it said. Returns the counters."""
     ledger_dir = pathlib.Path(ledger_dir)
     host = admit_site(site)
@@ -528,7 +579,7 @@ def snapshot(ledger_dir, site, now, today=None, exporter=DEFAULT_EXPORTER, opene
     agent = user_agent(exporter)
     for panel, kind, stream in PANELS:
         try:
-            envelope = fetch_panel(opener, panel_url(site, panel), host, agent)
+            envelope = fetch_with_retries(opener, panel, panel_url(site, panel), host, agent, sleeper)
         except PanelRefused as error:
             print("ledger snapshot refused %s: %s" % (panel, error), file=sys.stderr)
             refused.append(panel)
@@ -602,9 +653,33 @@ def main(argv=None):
     except OSError:
         print("the snapshot could not be written", file=sys.stderr)
         return 1
+    exported = regenerate_exports(ledger_dir)
     # A refused panel is reported above, panel by panel; the run still fails,
     # so the agent's last exit status is the visible signal it always was.
-    return 1 if refused else 0
+    return 1 if refused or not exported else 0
+
+
+def regenerate_exports(ledger_dir):
+    """Rebuild the derived SQLite and CSV views after the night's reading.
+
+    Nothing else schedules them, so without this they were as old as the
+    last time someone remembered to run the command (issue #358). The rows
+    are already appended when this runs: a failure here costs the views one
+    night, never a reading.
+    """
+    try:
+        written = ledger.export_ledger(ledger_dir, ledger_dir / ledger.EXPORTS_DIR)
+    except ledger.LedgerError as error:
+        print("ledger snapshot export failed: %s" % error, file=sys.stderr)
+        return False
+    except OSError:
+        print("ledger snapshot export failed: the exports could not be written", file=sys.stderr)
+        return False
+    print(
+        "ledger export " + " ".join("%s=%d" % pair for pair in sorted(written.items())),
+        file=sys.stderr,
+    )
+    return True
 
 
 if __name__ == "__main__":

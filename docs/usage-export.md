@@ -73,6 +73,193 @@ An idle eligibility check reports `attempted=false`; a partial result keeps its
 `stale` status, and retained commit rows are counted separately. These events
 describe publication outcomes, never individual private activity records.
 
+### What the workstation's log can see (issue #358)
+
+A verified checksum once sat beside a page serving something else: the cluster
+host rebooted with its clock weeks behind, the origin served its embedded
+release snapshot for days, and every run still logged a verified push. Four
+mechanisms make the job's own log say what the page serves and keep the job
+current.
+
+**Served verification.** With `SITE_URL` and `HISTORY_DIR` configured, every
+verified push records `$HISTORY_DIR/push-state.json` (0600): the document's
+export instant, every source's capture instant by source key, the OLDEST of
+them — what the origin serves as the envelope's `generatedAt` once it has
+admitted the document — the sealed checksum and the push time. At the START
+of the next run, so no run waits on the origin's next re-read,
+`scripts/usage-export/served-check.py` reads the public
+`/api/panels/token-usage` envelope once, OUTSIDE the producer sandbox, with
+the nightly snapshot's own fetch (https only, the resolved host equal to the
+site's, no redirect, one 20-second timeout, one bounded read) under a
+30-second whole-check deadline. It logs one line:
+
+```
+usage-export: SERVED status=ok lag=<seconds since that push>s
+usage-export: WARN NOT-SERVED status=<status> served_at=<envelope generatedAt> expected_at>=<recorded oldest> sources_behind=<n> since_push=<s>s
+```
+
+SERVED means the envelope is `ok`, its `generatedAt` is at least the recorded
+oldest capture, and EVERY recorded source is served — matched by source key —
+with a capture instant at least as new as the pushed one; `sources_behind`
+counts the ones that are not, a source missing from the envelope included.
+Comparing the oldest capture alone let the document pushed before the last
+one pass whenever one source had moved on and another had not. That is
+exactly as much as a visitor's GET can show: the envelope carries each
+source's capture instant but neither the document's export instant nor its
+checksum, so SERVED proves the page serves data at least as new as the last
+push for every source, not that exact document. The export instant is bound
+only through the walked source, which is stamped with it; the checksum is
+recorded for correlation and never compared. A state recorded before the
+per-source instants existed is never judged (`state-outdated`); the next push
+records them and keeps the outage clock running.
+The first NOT-SERVED instant is kept, and a push does not restart it. Once
+NOT-SERVED has lasted more than fifteen minutes, ONE macOS notification with a
+fixed, payload-free text is raised (skipped where `osascript` does not exist),
+never repeated until a SERVED run clears it; that run also logs
+`usage-export: RECOVERED served after <s>s`. A check that cannot be evaluated
+logs `usage-export: WARN served-check unavailable reason=<code>` and nothing
+else happens: the check never fails, delays or skips the push. Instants, one
+status word and closed codes only; no payload content and no upstream text.
+
+**Log hygiene and rotation.** The push runs ssh at `LogLevel=ERROR`, because
+OpenSSH prints the receiving host's pre-auth banner at INFO and above — about
+nine lines on every run. Errors still print. One class does not: a connection
+closed, reset or timed out after the identification exchange is reported at
+INFO, so ssh exits 255 with no text, and the runner names that exactly what
+the INFO text mapped to, `connection-lost` (measured against a loopback peer).
+The separate `pushed <n> sealed bytes; checksum verified` line is gone: it
+repeated the SUMMARY, which is printed only after the checksum matched. launchd
+never rotates its two log files, so the installed agent names their directory
+in its environment (`NARANJO_USAGE_EXPORT_LOG_DIR`, the installer's decision
+and never the configuration's), and before writing a line the run RENAMES each
+file past 5 MiB to `<file>.1` — one kept generation, never a truncation — and
+reopens its own stream on the fresh path. A run started any other way rotates
+nothing.
+
+**Checkout drift.** The job runs whatever commit `REPO_DIR` has checked out,
+and three times it ran a tree behind `origin/main`. With `REPO_UPDATE=ff-only`
+(the default) a checkout on `main` tracking `origin/main` is fetched at most
+once an hour — `scripts/usage-export/bounded-fetch.py`, the push runner's
+lifecycle with a 30-second deadline, stamped in `$HISTORY_DIR/repo-update.stamp`
+(a stamp ahead of the clock is due) — and, when strictly behind,
+fast-forwarded, after which the script re-executes once; a guard variable
+makes a second update in the same run impossible. The fast-forward is one
+critical section under git's own index lock, taken exclusively: every
+porcelain checkout, switch, merge, reset and commit takes that lock first, so
+while the job holds it nobody else can switch the branch or write the index.
+Inside it the job re-reads HEAD and both refs — the fetch can take seconds,
+and another actor may have switched the checkout meanwhile. The lock file
+itself is the job's working index: the real index is copied into it, and git's
+two-tree fast-forward moves it and the worktree together (git renames its own
+`index.lock.lock` over it, so the lock path never disappears). `main` then
+moves in one ref transaction, made through HEAD with the old commit as its
+expected value. Once that transaction is prepared, git holds HEAD's lock and
+`main`'s lock, so no `update-ref`, `symbolic-ref`, checkout or commit can move
+either. Inside that window the job verifies that HEAD names `main`, installs
+the new index with one rename (which also releases the index lock), and only
+then sends the commit. An acknowledged commit therefore leaves ref, index and
+worktree in agreement, because nothing could move the refs between the
+verify, the install and the commit. One boundary remains, and it is git's
+own: between the install and the commit the index lock is free while HEAD
+and `main` stay locked, so a command that writes only the index (`read-tree`,
+`update-index`) can run there and lands after the update, exactly as it would
+after the commit or during the export; one that also moves HEAD or `main`
+fails on git's lock.
+
+A child's exit status never decides what state the checkout is in. A git
+killed after it finished its work reports failure too, and so does an `mv`
+stopped after it renamed. So after a failed checkout the job reads the lock's
+tree again; the install is decided by the file's identity (the lock's inode,
+read just before the rename, found at `.git/index` or still at
+`.git/index.lock`), never by `mv`'s status; and after a commit git never
+acknowledged it reads `main` again. Where a state is proven, ref, index and
+worktree are brought into agreement; where it is not, the run keeps its
+recovery material and stops. A signal that arrives from the checkout until
+the index is installed or rolled back is held, not acted on: the run first
+settles, then logs `usage-export: WARN repo-update interrupted
+signal=<HUP|INT|TERM>` and exits 1 without exporting.
+
+```
+usage-export: UPDATED exporter <old12>-><new12>
+usage-export: WARN DRIFT behind=<n> ahead=<m> action=<none|rolled-back|incomplete> reason=<code>
+usage-export: WARN repo-update repair: git update-ref refs/heads/main <new> <current>
+usage-export: WARN repo-update state: main is <old> (the update was aborted), the worktree holds <new>, ...
+```
+
+`action=none` means the checkout is exactly as it was and the run goes on
+exporting from it: `off`, `detached`, `not-main`, `diverged`, `busy` (another
+git operation holds the index lock, which the job never removes), `none`
+(another actor brought the checkout current meanwhile), `git-too-old` (a git
+whose `update-ref` has no transaction commands), and `merge-refused` (a local
+change on a path the update touches, or git declining before it wrote
+anything). Nothing stashes, resets, rebases, forces, switches a branch, or
+touches an untracked or modified file.
+
+`action=rolled-back reason=ref-moved` means the transaction never prepared,
+or HEAD no longer named `main` once it had: another actor moved a ref under
+the update. It was aborted with nothing installed and the worktree was put
+back, so the index and worktree are as the job found them, but HEAD may now
+name a commit whose files they do not hold. The run then fails at
+`stage=repo-update` and exports nothing; no lock is kept.
+
+`UPDATED` followed by a FAILED line saying `main moved without git
+acknowledging the update` means the commit was sent with the index already
+installed, git never answered it, and a re-read found `main` at the new
+commit. The checkout agrees with `main`, but that run exports nothing. The
+next run exports normally.
+
+`action=incomplete` means the update stopped part-way. The run then fails at
+`stage=repo-update` and exports nothing, because it would export from a tree
+that matches no commit:
+
+- `checkout-partial`: git wrote some files before refusing (a directory it
+  could not write, say). `main` and the index are still the old commit, so
+  `git status` lists exactly the files that were written.
+- `checkout-uncertain`: the checkout reported failure, but the lock no longer
+  holds the index it held before, so it may have finished. The lock is kept.
+- `ref-uncertain`: the new index was installed and the commit sent, but git
+  never answered it and `main` is not the new commit. The index and worktree
+  are the new commit; the logged `repair` line, run as printed, moves `main`
+  to match, and only if `main` still holds the value it was read at. When
+  `main` could not be read at all, the line carries no command to run: it
+  says to read `main` first and pass that value as the expected old one.
+- `rollback-failed`: nothing was prepared and the worktree could not be put
+  back. The lock keeps the NEW index.
+- `index-install-failed`: the transaction was prepared but the lock still
+  holds the new index (or its identity could not be read, so no rename was
+  tried); it was aborted: `main` and the index are the old commit, the
+  worktree is the new one, and the lock keeps the NEW index.
+- `index-uncertain`: the rename was tried, but afterwards neither
+  `.git/index` nor `.git/index.lock` can be shown to hold the lock's file.
+  The transaction was aborted, so `main` is the old commit; the worktree is
+  the new one, and the new index was either renamed to `.git/index` (which
+  another git command may have rewritten since) or is still
+  `.git/index.lock`. The logged `state` line says so and names no command:
+  inspect with `git status` before the next run.
+
+A kept lock is git's own recovery state: every git command names it as a
+stale `index.lock` until someone decides. One limit is deliberate: a later run
+does not refuse the files a `checkout-partial` left behind — it sees a local
+change on the touched paths, reports `merge-refused` and exports from the tree
+as it stands — so resolve a stopped update before the next run.
+`REPO_UPDATE=off` neither fetches nor moves; it only reports. The SUMMARY
+keeps naming the tree the run exported from.
+
+**The nightly snapshot.** A 5xx or a timed-out transport is retried inside the
+night's one run after fixed 30- and 120-second pauses (three attempts at most),
+each retry logged with its reason; a redirect, another host, a 4xx or an
+answer that is not the envelope is never retried. After the reading the job
+rebuilds the ledger's SQLite and CSV views (below).
+
+`scripts/usage-export/install-launchd.sh --check` changes nothing and prints,
+per agent, whether its installed plist runs the configuration's `REPO_DIR` and
+what its last exit status was, exiting 1 unless both are good. "Runs" is read
+from the two keys launchd executes, parsed: `Program`, which when present
+selects the executable, must be absent (the template sets none) or exactly
+the expected first argument, and the leading `ProgramArguments`, the
+snapshot's interpreter and flags included, must equal what the template
+installs. The path appearing anywhere else in the file counts for nothing.
+
 ## Security properties, stage by stage
 
 - **Capture cannot fork and cannot reach a network — enforced by the kernel,
@@ -565,7 +752,7 @@ osrs/<YYYY>.ndjson
 raw/usage/<day>/<key>.T<HHMMSS>Z.json.gz   the capture document a reading came from, kept 30 days
 raw/usage/<day>/<key>.last.json.gz         the day's latest, kept forever
 raw/<stream>/<day>.json.gz                 the panel envelope a reading came from
-exports/                                   derived SQLite and CSV, regenerated on demand
+exports/                                   derived SQLite and CSV, rebuilt nightly and on demand
 ```
 
 **One row is one reading**:
@@ -594,13 +781,23 @@ one.
 
 1. A run builds an index of the LAST value written per identity by reading the
    year files for the days it touches. Reading a whole year file each run is
-   the deliberate trade: a year of this pipeline's rows is a few megabytes, and
-   any index beside the file would be a second source of truth that can
-   disagree with the lines it indexes.
+   the deliberate trade: any index beside the file would be a second source of
+   truth that can disagree with the lines it indexes. It holds only while the
+   files grow with information, which rule 2 is what guarantees, and every
+   file is bounded at 256 MiB.
 2. Only rows whose value DIFFERS from that last one are appended. A run that
    changes nothing appends nothing and rewrites nothing — the file grows with
    information rather than with runs. A session row also compares its end and
    its running total, because either can move while the duration does not.
+   Two session rules keep that true (issue #358). Record files that began in
+   the same second share one identity, so their entries are merged into one
+   reading (the latest end, the summed total and classes, the members in a
+   stable order); as separate rows each "changed" the other on every run, and
+   34 such identities wrote 94% of a 117 MiB sessions file in a month. And a
+   session still running, one that ended within fifteen minutes of the
+   capture, is recorded at most once per fifteen minutes; a settled session is
+   always recorded, so the figure it finished on lands at the first run after
+   it stops. Replayed over that month, the two rules write 3.1% of its rows.
 3. The write is `O_WRONLY|O_CREAT|O_APPEND` at mode 0600, one `os.write` of
    every line, one `os.fsync`. Directories are 0700, including every one the
    record creates on its way to them.
@@ -642,7 +839,10 @@ night and records what they said. It runs OUTSIDE `producer.sb`, deliberately
 and unlike every other job here: it needs a network the profile denies, and it
 reads nothing private. Its bounds are the fetch's: https only, the resolved
 host must equal the configured site's, no redirect is followed, one 20-second
-timeout, one 512 KiB read. A panel whose envelope status is not `ok` is
+timeout, one 512 KiB read. A 5xx or a timed-out transport is retried twice
+inside the run, after 30 and 120 seconds, each retry logged as
+`ledger snapshot retry <panel> attempt=<n>/3 reason=<code> wait=<s>s`; nothing
+else is retried. A panel whose envelope status is not `ok` is
 skipped with no rows at all — the status is the origin's own statement that
 the payload is stale, and a stale reading recorded as today's is a lie the
 record would keep forever.
@@ -660,7 +860,11 @@ is safe to run again.
 rebuilds `exports/ledger.sqlite` (one table per stream, plus the resolved
 `<stream>_current` tables) and one long-format CSV per stream, from scratch,
 into a temporary file that is renamed into place. The lines are the record;
-a derived view that drifted from them is repaired by deleting it.
+a derived view that drifted from them is repaired by deleting it. The nightly
+snapshot runs the same rebuild after every reading (issue #358), so the views
+are never older than a day; a failed rebuild is logged as
+`ledger snapshot export failed: …`, keeps every row, and fails that night's
+exit status.
 
 **What is and is not recoverable.** The ledger starts the day it is switched
 on. It cannot reconstruct a day whose evidence is already gone — the GitHub
@@ -719,7 +923,19 @@ window has since dropped and the days a vendor surface later disagrees with.
    # MERGE_CAPTURES=other-label=running-totals=$HOME/<other-tool-records>
    # HISTORY_DIR=$HOME/.config/naranjo-usage-export/history
    # LEDGER_DIR=$HOME/.config/naranjo-usage-export/history/ledger
+   # SITE_URL=https://<site>
+   # REPO_UPDATE=ff-only
    ```
+
+   `SITE_URL` is the site's bare https origin, and setting it (with
+   `HISTORY_DIR`) turns on the served verification described under
+   "What the workstation's log can see": each run says whether the page
+   serves, for every source, data at least as new as the last push. It is
+   operator configuration only; the repository
+   names no host. `REPO_UPDATE` is `ff-only` when unset — a checkout on
+   `main` that is strictly behind `origin/main` is fast-forwarded, fetching
+   at most hourly, which needs `HISTORY_DIR` for its stamp — or `off`, which
+   only reports the drift; any other value refuses the run.
 
    **`PUSH_HOST` is a real `user@host`, not an `~/.ssh/config` alias, and
    `SSH_KNOWN_HOSTS` is required** (2026-08-24 round-3 review, finding 8).
@@ -867,8 +1083,14 @@ window has since dropped and the days a vendor surface later disagrees with.
 
    Every minute plus at load; launchd keeps a single instance of the labeled
    job, so a capture that runs long does not overlap itself. Logs live under
-   `~/Library/Logs/naranjo-online-usage-export/`. One manual run first is good
-   practice: `scripts/usage-export/push-usage-series.sh`.
+   `~/Library/Logs/naranjo-online-usage-export/`; the agent passes that
+   directory to the push as `NARANJO_USAGE_EXPORT_LOG_DIR`, which rotates
+   each file past 5 MiB to one `.1` generation. One manual run first is good
+   practice: `scripts/usage-export/push-usage-series.sh`. Re-running the
+   installer is safe and is how an agent is updated: each one is booted out
+   before it is bootstrapped again. `install-launchd.sh --check` reports,
+   without changing anything, whether each installed agent runs the
+   configured `REPO_DIR` and whether its last exit status was 0.
 
    The installer lands TWO agents when `LEDGER_DIR` (or `HISTORY_DIR`) is
    configured, and says so on the last line of its output. The second is
@@ -887,12 +1109,14 @@ window has since dropped and the days a vendor surface later disagrees with.
    stage that never ends is a START with no SUMMARY; the export's own
    `coverage <key>=<first>..<last>` line naming the newest day each source
    reaches; on failure the reason, then `FAILED stage=<stage>
-   elapsed=<s>s`; on success the `pushed <n> sealed bytes; checksum
-   verified` line, then one `SUMMARY` line with the sealed size, the
+   elapsed=<s>s`; on success one `SUMMARY` line, printed only once the
+   host's checksum matched, with the sealed size, the
    checksum prefix, the exporter's checkout revision — the fault class where
    a scheduled job ran a tree nine commits behind what the origin admits
-   (issue #288) — the total elapsed time, and every stage's duration. Stage
-   names and counts only, never payload content or a path.
+   (issue #288) — the total elapsed time, and every stage's duration. Before
+   the first START, a run with `SITE_URL` set logs its one served line, and
+   a run that found its checkout behind logs `UPDATED` or `DRIFT` (issue
+   #358). Stage names and counts only, never payload content or a path.
 
    The installed job is anchored to the PRIMARY checkout
    (`~/code/naranjo.online` by default; override with
@@ -1026,12 +1250,53 @@ repository.
    to its embedded as-of-release snapshot, whose envelope says exactly how
    old it is.
 
+## Restarts keep the last accepted document (issue #358)
+
+Every acceptance also writes the exact accepted ciphertext into the state
+directory as `token-usage.accepted.enc`, beside the floor marker that records
+its digest. A restarted origin reads it back at its first authentic marker
+load and serves it as `stale` before it considers any new file, so a restart
+never falls back to the snapshot embedded at release time while a newer
+document exists. That fallback is what the 2026-10 host clock outage
+exposed: the host came back with its clock 39 days behind, every tick refused
+as `floor-future`, and an online site served release-time data for days.
+
+What the copy cannot do is as deliberate as what it does:
+
+- It is served only when its SHA-256 equals the digest the AUTHENTICATED
+  marker names. An older acceptance, a write interrupted before its commit,
+  or a file swapped on the host is refused and logged
+  (`token usage retained copy not restored`, `reason=retained-mismatch`).
+- It never writes or lowers the floor and never admits a new document. A
+  newer push still passes every admission check before the panel returns to
+  `ok`, and a clock that is behind still refuses every newer push until it is
+  repaired. Restoring proves what was last published, not what has been
+  captured since, which is why it is always `stale`.
+- A copy older than the binary's own embedded snapshot is not restored.
+- A failed write of the copy (`reason=retain-failed`, logged on transition)
+  never blocks publication. The cost is only that the next restart cannot
+  restore that document.
+
+The copy is the cluster host's own full-depth record of the series: it is the
+whole sealed window (up to 732 days per source), readable by the key holder
+with `usageseal -mode open -key-file <data.key> < token-usage.accepted.enc`.
+The workstation's history stores and the append-only ledger remain the
+lifelong record; the repository's embedded snapshot is refreshed from the
+same admission path (`PANELS_CAPTURE=token-usage`, see README "Refreshing the
+shipped snapshots").
+
 ## Verifying end to end
 
 ```sh
 # On the workstation: one manual push.
 scripts/usage-export/push-usage-series.sh
-# -> usage-export: pushed <N> sealed bytes; checksum verified
+# -> usage-export: SUMMARY pushed=<N>B sha256=<prefix> exporter=<rev> ...
+# With SITE_URL set, the NEXT run first says what the page serves:
+# -> usage-export: SERVED status=ok lag=<s>s
+
+# The installed agents, read without changing anything.
+scripts/usage-export/install-launchd.sh --check
+# -> check com.naranjo-online.usage-export installed=yes repo=match last-exit=0
 
 # Against the cluster: the panel now reports the pushed instant.
 kubectl -n <namespace> port-forward deploy/naranjo-online 8080:8080 &
@@ -1049,18 +1314,39 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `ledger repaired a partial line in …` | the tolerated fault: an interrupted append left a line with no newline. It was truncated back and the run continued |
 | `ledger snapshot skipped <stream>` | that panel's envelope did not report `ok`, so the night has no reading for it. The next night takes one |
 | `a panel request was redirected` / `came from a different host` | the snapshot refuses both rather than following them; check the configured site |
+| `ledger snapshot retry <panel> attempt=<n>/3 reason=<code> wait=<s>s` | a 5xx (`http-<status>`) or a timed-out transport (`timeout`); the run waits and asks again, three attempts at most |
+| `ledger snapshot export failed: …` | the night's readings are recorded; only the derived SQLite/CSV views could not be rebuilt, and the night exits 1 |
+| `usage-export: WARN NOT-SERVED status=<status> served_at=<t> expected_at>=<t> sources_behind=<n> since_push=<s>s` | the page does not serve data as new as the last verified push. `status=stale`: the origin refused or aged the newest file — read its admission log. `status=ok` with an older `served_at`, or `sources_behind` above 0: it serves an older document, such as its embedded release snapshot or the push before the last — check the host's clock and the origin's log. Past fifteen minutes, one desktop notification |
+| `usage-export: RECOVERED served after <s>s` | the page serves the pushed data again; the next outage notifies afresh |
+| `usage-export: WARN served-check unavailable reason=<code>` | the check could not judge, and the push went on regardless: `no-push-state` (no verified push recorded yet, or no `HISTORY_DIR`), `state-unreadable`, `state-outdated` (recorded before per-source instants; the next push replaces it), `bad-site` (`SITE_URL` is not a bare https origin), `unreachable`, `timeout`, `http-<status>`, `redirected`, `host-mismatch`, `over-budget`, `malformed-envelope`, `deadline-exceeded`, `state-unwritable`, `helper-failed` |
+| `usage-export: WARN push-state unrecorded reason=<code>` | the push landed, but what it delivered could not be recorded, so the next check compares against the previous push |
+| `usage-export: UPDATED exporter <old>-><new>` | the checkout was strictly behind `origin/main` and was fast-forwarded; the run re-executed the new script once |
+| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<code>` | the checkout is behind `origin/main` and was left exactly as it is: `off` (`REPO_UPDATE=off`), `detached`, `not-main`, `diverged` (local commits), `merge-refused` (a local edit the fast-forward would overwrite, or git declining before it wrote anything), `busy` (another git operation holds the index lock; the next run tries again), `none` (already current), `git-too-old`. The run goes on exporting from that tree. Resolve it by hand |
+| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=rolled-back reason=ref-moved` | a ref moved under the update (the transaction never prepared, or HEAD no longer named `main`); it was aborted and the worktree rolled back, so the index and worktree are as found, but HEAD may name a commit whose files they do not hold. The run stopped before exporting; check what moved HEAD or `main` |
+| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=incomplete reason=<code>` | the update stopped part-way and the run failed before exporting: `checkout-partial` (some files were written; `git status` lists them against the old commit), `checkout-uncertain` (the checkout may have finished; `.git/index.lock` is kept), `ref-uncertain` (the new index is installed but `main` did not move; follow the logged `repair` line), `rollback-failed` (the worktree could not be put back; `.git/index.lock` keeps the new index), `index-install-failed` (the transaction was aborted, `main` and the index are old; `.git/index.lock` keeps the new index), `index-uncertain` (the transaction was aborted and `main` is old; the new index was renamed to `.git/index` or is still `.git/index.lock`; follow the logged `state` line). Resolve it by hand before the next run, which would otherwise export from the tree as it stands |
+| `usage-export: WARN repo-update repair: git update-ref refs/heads/main <new> <current>` | printed with `ref-uncertain`: the one command, in commit ids only, that moves `main` to the index and worktree already installed, and refuses if `main` no longer holds `<current>` |
+| `usage-export: WARN repo-update repair: main could not be read; inspect it ...` | printed with `ref-uncertain` when `main` could not be read: no command is given, because one without the expected old value would overwrite whatever `main` holds; read it with `git rev-parse refs/heads/main` and pass that value as `<that value>` |
+| `usage-export: WARN repo-update state: main is <old> (the update was aborted), ...` | printed with `index-uncertain`: the facts on disk and no command; inspect with `git status` before the next run |
+| `usage-export: FAILED ... main moved without git acknowledging the update` | the commit was sent with the index installed, git never answered, and `main` was found at the new commit; the checkout agrees with `main`, but that run exported nothing. The next run exports normally |
+| `usage-export: WARN repo-update interrupted signal=<name>` | a signal arrived during the update; the run settled it first (agreement, or a kept lock and a stop), then exited 1 without exporting |
+| `usage-export: WARN repo-update fetch-failed reason=<code>` | the hourly fetch failed or hit its 30-second deadline; the run continued on the tree it had |
+| `REPO_UPDATE must be ff-only or off` | the configuration names another update mode; nothing ran |
+| `install-launchd.sh --check` exits 1 | an agent is missing, runs a different checkout than `REPO_DIR` (`repo=MISMATCH`), is not loaded, or last exited non-zero |
 | `sealing refused` / key-file refusal | key file missing, malformed, or group/world-readable |
-| `push refused` | ssh transport failed; nothing landed |
+| `push refused` | ssh transport failed; nothing landed. `reason=connection-lost` includes ssh's silent exit 255, which is how a connection closed after the identification exchange reports at `LogLevel=ERROR` |
 | `checksum mismatch after push` | landed bytes differ from sealed bytes — investigate before trusting the panel |
 | origin WARN `failed to fetch token usage` | the sealed data-root tick failed; the structured `error` field names the cause and `next_retry` names the next thirty-second attempt. An unchanged cause logs once, and recovery writes one `token usage data root recovered` transition |
 | panel `status: stale` | the origin refused the newest file (tamper, replay, wrong key, over-cap, malformed) and kept the last good payload |
 | panel `status: stale` after every push, panel never advances | the document does not cover every shipped source — add the missing `MERGE_SOURCES` entry (see step 4) — or one of its sections is malformed |
 | panel `status: stale`, sealed file gone from the data dir | the runtime document this pod had already served from was deleted or unmounted: the data is retained, the freshness claim is not (2026-08-24 security review, finding 5). Before the FIRST push an absent file is the ordinary cold state and stays `ok` on the embedded snapshot |
-| panel serves embedded snapshot | `panels.data.enabled=false` (an explicit as-of-release decision), or no sealed file has been admitted yet |
+| panel serves embedded snapshot | `panels.data.enabled=false` (an explicit as-of-release decision), or no sealed file has been admitted yet. After a restart the retained copy is served instead whenever the marker names it (see "Restarts keep the last accepted document") |
+| boot log `token usage restored from the retained copy` | a restart served the last accepted document as `stale`; the next admitted push returns the panel to `ok` |
+| boot log `token usage retained copy not restored` | `reason=retained-mismatch`: the kept file is not the document the marker names (expected once after a failed commit or the first boot of a build that retains); `retained-unreadable`: the state directory could not be read; `retained-refused`: the kept document failed admission |
 | panel shows "data through … · last capture …" | the frontend's own staleness reading (issue #276): the envelope says `stale`, or its `generatedAt` has fallen more than two days behind — the one state the origin structurally cannot flag itself, since an unchanged file is its ordinary between-pushes state. Check the workstation's scheduled export first |
 | floor marker absent in the state dir, no `token-usage.floor.init` beside it | a first boot: benign, the floor is the embedded snapshot's, and the first published push writes both files |
 | floor marker absent but `token-usage.floor.init` present | the durable floor was INITIALIZED and its marker is now gone — deleted, or lost with the volume. Durable mode refuses the tick and reports `stale` instead of cold-starting on a floor of zero (2026-08-24 round-3 review, finding 4). The reset ceremony below is the only way out |
-| floor marker present but corrupt, unauthentic, or future-dated | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor. The reset ceremony below is the only way out |
+| floor marker present but corrupt or unauthentic | durable mode refuses the tick and reports `stale` rather than serving on a silently lowered floor. The reset ceremony below is the only way out |
+| floor marker future-dated (`reason=floor-future`) | almost always the HOST CLOCK, not the marker: a reboot without a working real-time clock can come back weeks behind. The retained copy keeps serving as `stale`; repair the clock and the next tick resolves the floor and admits the newest push with no ceremony. Never run the reset ceremony for this |
 | boot log line `panel=token-usage` describing the floor state | the one operator-facing statement of WHICH state the state directory is in — recovered, rotated, lost, or untrusted. It carries no path, no key, and no payload |
 | floor marker present but sealed under a previous key | the key was rotated without the floor being reset. Durable mode refuses rather than migrating: the marker's key identifier is UNAUTHENTICATED, so honouring it would let anyone who can write the state directory lower the floor by editing a header. The reset ceremony below is the only way out, and it is part of the rotation ceremony for exactly that reason |
 | panel `status: stale` right after a push, state volume full or read-only | the floor could not be persisted, so the payload was not published; free or remount the state directory and the next tick publishes the same file |

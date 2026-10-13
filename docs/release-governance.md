@@ -57,9 +57,11 @@ with only Actions/content read access. That job
 GETs the run by ID and requires the exact repository and head repository,
 workflow name and path, `push` event, completed/success state, `main` branch,
 and source SHA. It also GETs the exact run's complete job inventory and requires
-exactly successful `application`, `chart`, `coverage-badges`, and `security`
-jobs plus the two context-appropriate skipped jobs, `container` and
-`dependency-review`, both of which run on pull requests only. Those two are
+exactly successful `application`, `chart`, and `security` jobs plus the two
+context-appropriate skipped jobs, `container` and `dependency-review`, both of
+which run on pull requests only. Coverage-badge publication is not in that
+inventory: it runs after the gate in `coverage-badges.yml` (issue #350), so a
+badge push can neither hold back nor admit a release. Those two are
 pinned in the skipped direction as strictly as the rest are in the successful
 one: a `container` job reporting success on a main push means its
 pull-request condition is gone, and the inventory refuses that run rather than

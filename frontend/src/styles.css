@@ -786,16 +786,22 @@
   --control-target: 2.75rem;
   --control-mark: 2rem;
 
-  /* Rime's sheet, DERIVED from the control target rather than restated as the
-     880 x 1056 pixels it comes to (owner decision, 2026-09-11, issue 314).
-     One cell must draw at exactly the size of the mark's box, and that box is
-     a rem length: a reader whose browser font size is not 16px gets a box the
-     literal numbers no longer divide, and the cell beside the one being shown
-     starts to show inside it. Twenty columns by twenty-four rows is the
-     sheet's own layout, so these two lines are the one place the grid is
-     stated and the keyframes below read them back. */
-  --rime-sheet-inline: calc(var(--control-target) * 20);
-  --rime-sheet-block: calc(var(--control-target) * 24);
+  /* J's box and sheet, DERIVED from the control target rather than restated
+     as the 60.5 x 44 and 726 x 440 pixels they come to (owner request,
+     2026-10-12). He stands the row's own 44px height, and his cell is wider
+     than it is tall: the render is 176 x 128 per frame, so the box keeps that
+     ratio rather than squeezing him into a square. One cell must draw at
+     exactly the size of the box, and that box is a rem length: a reader whose
+     browser font size is not 16px gets a box literal numbers no longer
+     divide, and the cell beside the one being shown starts to show inside it.
+     Twelve columns by ten rows is the sheet's own layout, so these lines are
+     the one place the grid is stated and the keyframes below read them back.
+     His height is its own token so the phone block can lower it alone; every
+     length below follows, because they are all declared on this same element. */
+  --j-cell-block: var(--control-target);
+  --j-cell-inline: calc(var(--j-cell-block) * 176 / 128);
+  --j-sheet-inline: calc(var(--j-cell-inline) * 12);
+  --j-sheet-block: calc(var(--j-cell-block) * 10);
 
   /* The board of cards, and the strip under it. The minimum is the height the
      owner's drawing gives a card at 1440px; a row is taller when a card in it
@@ -850,17 +856,16 @@
   --band-fade: 320ms;
   --masthead-draw: 1400ms;
   --ticker-duration: 90s;
-  /* Rime's flight (owner decision, 2026-09-11, issue 314). The study is 480
-     frames at 60Hz, laid out as 24 rows of 20: --rime-flight is the whole
-     loop and --rime-flight-strip is one row of it, DIVIDED rather than
-     stated so the two stay phase-locked. A written 0.33333s is 0.08ms short
-     of a row: the strip gains a column on the sheet every 28 minutes and
-     every row boundary then shows a wrong frame — a stutter three times a
-     second that grows for as long as the tab stays open. calc keeps the
-     quotient exact to double precision and the browser lands on a new cell
-     every 16.67ms for the life of the page. */
-  --rime-flight: 8s;
-  --rime-flight-strip: calc(var(--rime-flight) / 24);
+  /* J's typing loop (owner request, 2026-10-12). The render is 120 frames
+     at 15fps, laid out as 10 rows of 12: --j-typing is the whole 8s loop and
+     --j-typing-row is one row of it, DIVIDED rather than stated so the two
+     stay phase-locked. A row duration written on its own is free to disagree
+     with the loop: any remainder walks the row animation a column across the
+     sheet over time, and every row boundary then shows a wrong frame — a
+     stutter that grows for as long as the tab stays open. The quotient keeps
+     the two exact whatever the loop is later set to. */
+  --j-typing: 8s;
+  --j-typing-row: calc(var(--j-typing) / 10);
 
   /* The panel theme layer. Every panel component was built "shaped, not
      styled" — each color reads a --panel-* custom property with a
@@ -1082,7 +1087,6 @@
      than a line glyph, so it sits back until it is addressed. */
   --swatch-rest-opacity: 0.7;
   --swatch-active-opacity: 1;
-  --swatch-gap: 0.25rem;
   --swatch-popover-padding: 0.25rem;
   /* The popover's own shape (owner directive, issue 169, 2026-08-24): a flat
      radius shared with the rest of the page's chrome (--card-radius,
@@ -1542,7 +1546,7 @@ html[data-column-resizing] {
 
 /* The home link. An anchor to the page's own name, so the row's first stop is
    "back to the top" — and since the owner's ruling of 2026-09-12 (issue 325)
-   what it DRAWS is the mirrored dragon rather than the "SN." wordmark.
+   what it DRAWS is the dragon rather than the "SN." wordmark.
 
    The BOX is all that is left here, and that is the point: the link is a 44px
    hit lane holding a picture that states its own size, so every typographic
@@ -1561,9 +1565,15 @@ html[data-column-resizing] {
    words in it again, would inherit the exemption from. The ring is the one
    that paints on this link today: it is the only thing telling a keyboard
    reader where they are, it marks the box rather than the text, and it is
-   unchanged. */
+   unchanged.
+
+   flex: none, because the link must stay as wide as the picture it holds. J
+   is wider than the 44px floor, and a link the row may shrink to that floor
+   leaves him overhanging it toward the nav at every phone width, with the
+   focus ring drawn round a box narrower than the picture. */
 .page-mark {
   display: inline-flex;
+  flex: none;
   align-items: center;
   min-inline-size: var(--control-target);
   min-block-size: var(--control-target);
@@ -1606,45 +1616,52 @@ html[data-column-resizing] {
   color: var(--ledger-muted);
 }
 
-/* RIME FLIES AT THE END OF THE ROW (owner decision, 2026-09-11, issue 314).
+/* J TYPES AT BOTH ENDS OF THE ROW (owner request, 2026-10-12: "use him
+   typing on the computer now instead of just flying"; the two seats are
+   issue 314's and issue 325's).
 
-   One WebP sheet of the owner's own v6 flight study — 480 frames at 60Hz laid
-   out as 24 rows of 20 — stepped by two composed animations: the columns of a
-   row every --rime-flight-strip and the rows of the sheet over --rime-flight,
-   which is one new cell every 16.67ms. No canvas, no WebGL, no library, no
-   script, no second origin and no new content type: the alternative on disk
-   renders the model with a 3D runtime from an iframe the origin refuses at
-   three layers, and this needs none of that. The sheet is named here, in the
-   stylesheet, so the bundler resolves it to a content-hashed URL and the
-   component never learns a file name (requirement 11's rule for media, the
-   same one the gallery's adapter follows).
+   One WebP sheet of the owner's own render of J at his laptop — 120 frames
+   at 15fps laid out as 10 rows of 12 — stepped by two composed animations:
+   the columns of a row every --j-typing-row and the rows of the sheet over
+   --j-typing, which is one new cell every 66.67ms. No canvas, no WebGL, no
+   library, no script, no second origin and no new content type. The sheet
+   and the still are named here, in the stylesheet, so the bundler resolves
+   each to a content-hashed URL and the component never learns a file name
+   (requirement 11's rule for media, the same one the gallery's adapter
+   follows).
 
-   The box is the site's own 44px hit lane and it is RESERVED: stated on the
-   element rather than measured from the picture, so the row is the same
-   height before the sheet has arrived as after, and a decode cannot move the
-   page (the zero-CLS floor). flex: none for the same reason — the row's end
-   cluster must not let him shrink when the nav is wide.
+   The box is the row's own 44px height (the drawn mark's 32px on a phone) at
+   the render's 176:128 ratio, and it is RESERVED: stated on the element rather than measured from the picture,
+   so the row is the same height before either file has arrived as after, and
+   a decode cannot move the page (the zero-CLS floor). flex: none for the same
+   reason — the row must not squeeze him when the nav is wide.
 
-   He holds frame 0 here. The flight is declared once, inside the page's one
-   no-preference block further down, so a reader who asked for less motion
-   gets the pose rather than a cancelled animation — and so does a browser
-   that has never heard of the preference. */
-.rime-mark {
+   HERE HE IS THE STILL: the render's own reduced-motion frame, one small file
+   drawn whole into the box. The sheet and the loop are declared together
+   inside the page's one no-preference block further down, so a reader who
+   asked for less motion gets the pose rather than a cancelled animation —
+   and so does a browser that has never heard of the preference — and neither
+   downloads the whole sheet to show one frame of it. A browser fetches only
+   the background-image an element computes, so each reader fetches exactly
+   one of the two files. */
+.j-mark {
   flex: none;
-  inline-size: var(--control-target);
-  block-size: var(--control-target);
-  background-image: url('./assets/images/rime/rime-flight.webp');
+  inline-size: var(--j-cell-inline);
+  block-size: var(--j-cell-block);
+  background-image: url('./assets/images/j/j-typing-still.webp');
   background-repeat: no-repeat;
   background-position: 0 0;
-  background-size: var(--rime-sheet-inline) var(--rime-sheet-block);
+  background-size: 100% 100%;
 }
 
 /* THE SAME DRAGON, FACING THE OTHER WAY (owner ruling, 2026-09-12, issue 325:
    "replace this with another dragon facing inwards to match the opposite
-   side"). One declaration is the whole difference between the two seats: the
-   sheet, the reserved 44px box, the still at frame 0 and both steps()
-   animations above are SHARED, so the second dragon costs one element and no
-   second request — two boxes naming one background-image are one resource.
+   side"). J's render faces screen-right, toward his laptop, so the seat at
+   the END of the row is the flipped one. One declaration is the whole
+   difference between the two seats: the still, the sheet, the reserved box
+   and both steps() animations are SHARED, so the second J costs one element
+   and no second request — two boxes naming one background-image are one
+   resource.
 
    It is a static transform rather than motion, so it sits out here with the
    rest of the mark's shape instead of inside the no-preference block: a reader
@@ -1652,13 +1669,13 @@ html[data-column-resizing] {
    transform-origin is stated because the flip has to happen about the box's
    own middle — the default IS the centre, and saying so is what keeps a later
    origin change from silently sliding the dragon out of his own hit lane. */
-.rime-mark-mirrored {
+.j-mark-mirrored {
   transform: scaleX(-1);
   transform-origin: center;
 }
 
 /* The place label is the first thing to go when the row runs out of room: it
-   is context, not navigation, and the nav and the mode control are both. Rime
+   is context, not navigation, and the nav and the mode control are both. J
    is not in that queue: the owner's decision puts him in the row at every
    width, and the row has space for him precisely because the label yields. */
 @media (max-width: 45rem) {
@@ -3382,6 +3399,12 @@ h1 {
      because an earlier declaration at equal specificity loses to it. */
   :root {
     --gallery-columns: 2;
+    /* J at the drawn mark's 32px instead of the touch row's 44px (owner ruling,
+       2026-10-12): two of him at 60.5px took 33px from the nav's window on a
+       390px phone. At 44 x 32 he is exactly as wide as the touch floor, so the
+       home link around him is no wider than any other control, and he still
+       sits centred in the row's own 44px. */
+    --j-cell-block: var(--control-mark);
   }
   .band {
     block-size: var(--band-height-phone);
@@ -3704,28 +3727,32 @@ h1 {
     animation-play-state: paused;
   }
 
-  /* THE FLIGHT (owner decision, 2026-09-11, issue 314). Two steps() composed
-     on one element: the inner one walks the 20 cells of a row, the outer one
-     walks the 24 rows, and together they name each of the 480 frames once
-     before returning to the first. steps() rather than a duration, because a
-     sprite has no in-between state to interpolate — a smooth tween would draw
-     two half-frames at once.
+  /* THE TYPING LOOP (owner request, 2026-10-12). The sheet replaces the still
+     HERE, together with the size that lays its grid over the box, so only a
+     reader who welcomes motion downloads it. Two steps() composed on one
+     element: the inner one walks the 12 cells of a row, the outer one walks
+     the 10 rows, and together they name each of the 120 frames once before
+     returning to the first. steps() rather than a duration, because a sprite
+     has no in-between state to interpolate — a smooth tween would draw two
+     half-frames at once.
 
      The loop closes on itself by construction rather than by a fade: the
-     study was authored with frame 480 equal to frame 0, so the step back to
-     the top-left cell is one more 16.67ms step like every other. Measured on
-     the shipped sheet: the mean absolute difference between the last frame
-     and the first is 13.4/255, under the 18.0 the widest pair of consecutive
-     frames already spends, so the seam is the smallest kind of motion in the
-     loop rather than a cut.
+     scene was rendered with its closing frame equal to frame 0, so the step
+     back to the top-left cell is one more 66.67ms step like every other.
+     Measured on the shipped sheet: the mean absolute difference between the
+     last cell and the first is 0.65/255, under the 1.24 the widest pair of
+     consecutive cells already spends, so the seam is no larger than the
+     motion inside the loop.
 
      Nothing is paused when the tab is hidden and nothing needs to be: a
      document that is not being painted does not run its animations, and
      buying that with script would cost the page a listener it cannot check. */
-  .rime-mark {
+  .j-mark {
+    background-image: url('./assets/images/j/j-typing.webp');
+    background-size: var(--j-sheet-inline) var(--j-sheet-block);
     animation:
-      rime-flight-strip var(--rime-flight-strip) steps(20) infinite,
-      rime-flight var(--rime-flight) steps(24) infinite;
+      j-typing-row var(--j-typing-row) steps(12) infinite,
+      j-typing var(--j-typing) steps(10) infinite;
   }
 }
 
@@ -3749,14 +3776,14 @@ h1 {
    the background is sized by, so the sprite grid is stated once. A literal
    here would be a second copy free to disagree with the first, and the frame
    the mark shows is exactly where those two numbers meet. */
-@keyframes rime-flight-strip {
+@keyframes j-typing-row {
   to {
-    background-position-x: calc(-1 * var(--rime-sheet-inline));
+    background-position-x: calc(-1 * var(--j-sheet-inline));
   }
 }
 
-@keyframes rime-flight {
+@keyframes j-typing {
   to {
-    background-position-y: calc(-1 * var(--rime-sheet-block));
+    background-position-y: calc(-1 * var(--j-sheet-block));
   }
 }

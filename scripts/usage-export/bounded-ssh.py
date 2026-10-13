@@ -22,7 +22,11 @@ DEADLINE_SECONDS = 45
 MAX_RESPONSE_BYTES = 32768  # Also accommodates the local `ssh -G` self-check.
 
 
-def failure_reason(stderr: bytes) -> str:
+# ssh's own failure status, as distinct from the forced command's.
+SSH_FAILURE_STATUS = 255
+
+
+def failure_reason(stderr: bytes, code: int = 1) -> str:
     """Closed diagnostic vocabulary; private host, key and path text stays local."""
     lowered = stderr.lower()
     for needles, reason in (
@@ -36,6 +40,11 @@ def failure_reason(stderr: bytes) -> str:
     ):
         if any(needle in lowered for needle in needles):
             return reason
+    # At LogLevel=ERROR (issue #358) ssh reports a lost connection — closed,
+    # reset or timed out after the identification exchange — at INFO only, so
+    # it fails with its own status and says nothing at all.
+    if code == SSH_FAILURE_STATUS and not lowered.strip():
+        return "connection-lost"
     return "ssh-refused"
 
 
@@ -90,7 +99,7 @@ def bounded_command(argv: list[str], *, timeout: float = DEADLINE_SECONDS) -> tu
                     completed = True
                     if code == 0:
                         return 0, bytes(stdout), ""
-                    return code if code > 0 else 1, b"", failure_reason(bytes(stderr))
+                    return code if code > 0 else 1, b"", failure_reason(bytes(stderr), code)
         return 124 if reason == "deadline-exceeded" else 1, b"", reason
     except OSError:
         return 1, b"", "runner-unavailable"

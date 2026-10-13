@@ -32,6 +32,7 @@ import json
 import os
 import pathlib
 import shutil
+import sqlite3
 import stat
 import tempfile
 import time
@@ -140,7 +141,8 @@ class FakeResponse:
 
 
 class FakeOpener:
-    """An opener that answers from a table, or raises what a test staged."""
+    """An opener that answers from a table, or raises what a test staged.
+    A list answers one attempt per entry, in order."""
 
     def __init__(self, answers):
         self.answers = answers
@@ -151,6 +153,8 @@ class FakeOpener:
         self.requests.append(request)
         self.timeouts.append(timeout)
         answer = self.answers[request.full_url]
+        if isinstance(answer, list):
+            answer = answer.pop(0)
         if isinstance(answer, Exception):
             raise answer
         return answer
@@ -183,13 +187,15 @@ class SnapshotCase(unittest.TestCase):
         self.ledger = self.scratch / "ledger"
 
     def take(self, answers=None, today=TODAY):
-        opener = FakeOpener(answers if answers is not None else all_panels())
+        # Kept before the run, so a run that raises can still be inspected;
+        # the retry pauses are recorded, never slept.
+        opener = self.opener = FakeOpener(answers if answers is not None else all_panels())
+        self.slept = []
         with contextlib.redirect_stderr(io.StringIO()) as captured:
             result = snapshot.snapshot(
-                self.ledger, SITE, NOW, today, "snapshot", opener
+                self.ledger, SITE, NOW, today, "snapshot", opener, self.slept.append
             )
         self.stderr = captured.getvalue()
-        self.opener = opener
         return result
 
     def rows(self, stream, year="2026"):
@@ -704,6 +710,141 @@ class PanelIdentityAndRefusalTest(SnapshotCase):
         self.assertEqual(status, 0)
         self.assertIn("exporter=%s" % revision, captured.getvalue())
         self.assertEqual({r["exporter"] for r in self.rows("github")}, {revision})
+
+
+class RetryTest(SnapshotCase):
+    """A transient refusal is retried inside the night's one run (issue #358):
+    the edge answering 530 for a moment used to cost the whole reading."""
+
+    URL = snapshot.panel_url(SITE, "vcs-activity")
+
+    def attempts(self):
+        return [request for request in self.opener.requests if request.full_url == self.URL]
+
+    def ok(self):
+        return FakeResponse(envelope("vcs-activity", "vcs-activity/v1", activity()), self.URL)
+
+    def test_the_pauses_are_fixed_and_the_attempts_bounded(self):
+        self.assertEqual(snapshot.RETRY_PAUSES_SECONDS, (30, 120))
+        self.assertEqual(snapshot.FETCH_ATTEMPTS, 3)
+
+    def test_a_5xx_is_retried_after_fixed_pauses_and_then_recorded(self):
+        answers = all_panels()
+        answers[self.URL] = [self.refusal(self.URL, 503, "x"), self.refusal(self.URL, 530, "x"), self.ok()]
+        _, _, _, refused = self.take(answers)
+        self.assertEqual(refused, 0)
+        self.assertEqual(self.slept, [30, 120])
+        self.assertEqual(len(self.attempts()), 3)
+        self.assertTrue(self.rows("github"))
+        self.assertIn("ledger snapshot retry vcs-activity attempt=2/3 reason=http-503 wait=30s", self.stderr)
+        self.assertIn("ledger snapshot retry vcs-activity attempt=3/3 reason=http-530 wait=120s", self.stderr)
+
+    def test_a_timed_out_transport_is_retried(self):
+        answers = all_panels()
+        answers[self.URL] = [urllib.error.URLError(TimeoutError("private-looking detail")), self.ok()]
+        _, _, _, refused = self.take(answers)
+        self.assertEqual(refused, 0)
+        self.assertEqual(self.slept, [30])
+        self.assertIn("attempt=2/3 reason=timeout wait=30s", self.stderr)
+        self.assertNotIn("private-looking", self.stderr)
+
+    def test_three_refusals_give_up_and_name_the_panel(self):
+        answers = all_panels()
+        answers[self.URL] = [self.refusal(self.URL, 503, "x") for _ in range(3)] + [self.ok()]
+        _, _, _, refused = self.take(answers)
+        self.assertEqual(refused, 1)
+        self.assertEqual(self.slept, [30, 120])
+        self.assertEqual(len(self.attempts()), 3)
+        self.assertIn("ledger snapshot refused vcs-activity: HTTP 503 Service Unavailable", self.stderr)
+        self.assertEqual(self.rows("github"), [])
+        # The other panels were read once each, untouched by the retries.
+        self.assertTrue(self.rows("projects"))
+        self.assertEqual(len(self.opener.requests), 5)
+
+    def test_a_redirect_is_never_retried(self):
+        answers = all_panels()
+        answers[self.URL] = [self.refusal(self.URL, 302, "Found"), self.ok()]
+        with self.assertRaises(ledger.LedgerError):
+            self.take(answers)
+        self.assertEqual(len(self.attempts()), 1)
+        self.assertEqual(self.slept, [])
+
+    def test_a_4xx_or_an_unreachable_origin_is_not_retried(self):
+        for first in (
+            self.refusal(self.URL, 403, "Forbidden"),
+            urllib.error.URLError(ConnectionRefusedError("detail")),
+        ):
+            with self.subTest(first=type(first).__name__):
+                answers = all_panels()
+                answers[self.URL] = [first, self.ok()]
+                _, _, _, refused = self.take(answers)
+                self.assertEqual(refused, 1)
+                self.assertEqual(len(self.attempts()), 1)
+                self.assertEqual(self.slept, [])
+
+    def test_another_host_is_never_retried(self):
+        answers = all_panels()
+        answers[self.URL] = [
+            FakeResponse(envelope("vcs-activity", "vcs-activity/v1", activity()),
+                         "https://elsewhere.example/api/panels/vcs-activity"),
+            self.ok(),
+        ]
+        with self.assertRaises(ledger.LedgerError):
+            self.take(answers)
+        self.assertEqual(len(self.attempts()), 1)
+        self.assertEqual(self.slept, [])
+
+
+class ExportRegenerationTest(SnapshotCase):
+    """The derived views are rebuilt after every night's reading (issue #358);
+    nothing else scheduled them, and the owner's machine had none at all."""
+
+    def run_main(self, answers):
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as captured,
+            mock.patch.object(snapshot, "build_opener", lambda: FakeOpener(answers)),
+        ):
+            status = snapshot.main(
+                ["--ledger", str(self.ledger), "--site", SITE, "--exporter-version", "abc1234"]
+            )
+        self.stderr = captured.getvalue()
+        return status
+
+    def test_the_views_are_rebuilt_from_the_record_after_the_reading(self):
+        self.assertEqual(self.run_main(all_panels()), 0)
+        exports = self.ledger / "exports"
+        connection = sqlite3.connect(exports / "ledger.sqlite")
+        try:
+            count = connection.execute("SELECT COUNT(*) FROM github").fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(count, len(self.rows("github")))
+        for stream in ledger.STREAM_KINDS:
+            self.assertTrue((exports / ("%s.csv" % stream)).is_file())
+        self.assertIn("ledger export github=", self.stderr)
+
+    def test_a_partial_night_still_rebuilds_and_still_fails(self):
+        answers = all_panels()
+        answers[snapshot.panel_url(SITE, "coding-projects")] = self.refusal(
+            snapshot.panel_url(SITE, "coding-projects"), 403, "Forbidden"
+        )
+        self.assertEqual(self.run_main(answers), 1)
+        self.assertTrue((self.ledger / "exports" / "ledger.sqlite").is_file())
+
+    def test_a_failed_rebuild_keeps_the_rows_and_fails_the_run(self):
+        self.ledger.mkdir()
+        (self.ledger / "exports").write_text("not a directory", encoding="utf-8")
+        self.assertEqual(self.run_main(all_panels()), 1)
+        self.assertIn("ledger snapshot export failed", self.stderr)
+        self.assertTrue(self.rows("github"))
+        self.assertTrue(self.rows("osrs"))
+
+    def test_a_refused_run_rebuilds_nothing(self):
+        answers = all_panels()
+        url = snapshot.panel_url(SITE, "vcs-activity")
+        answers[url] = self.refusal(url, 302, "Found")
+        self.assertEqual(self.run_main(answers), 1)
+        self.assertFalse((self.ledger / "exports").exists())
 
 
 class SnapshotCommandTest(SnapshotCase):

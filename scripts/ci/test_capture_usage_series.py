@@ -645,6 +645,177 @@ class OversizedLineTest(unittest.TestCase):
             module.MAX_RECORD_BYTES = original_bytes
 
 
+class CountingJson:
+    """A stand-in for the module's `json` that records every line it decodes."""
+
+    def __init__(self, real):
+        self.real = real
+        self.decoded = []
+
+    def loads(self, text, *args, **kwargs):
+        self.decoded.append(text)
+        return self.real.loads(text, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+
+
+def json_escaped(text, upper=False):
+    """`text` with every character spelled as a JSON unicode escape.
+
+    Built from the backslash's code point so no tool between this file and
+    the interpreter can decode the escape before JSON ever sees it.
+    """
+    form = "u%04X" if upper else "u%04x"
+    return "".join(chr(92) + form % ord(character) for character in text)
+
+
+class PreFilterTest(unittest.TestCase):
+    """`may_carry` skips the decode of lines no reader could count (issue #358).
+
+    The filter is a cost cut and nothing else, so the proof is differential:
+    each reader walks a hostile tree twice, once as shipped and once with the
+    filter forced open, and every row, counter and session entry must agree.
+    The trees carry the spellings JSON admits that a careless filter would
+    miss — whitespace around the colon, keys spelled through escapes in both
+    hex cases, an escaped underscore — beside lines that carry a key token
+    without being a record at all.
+    """
+
+    MEMBER = capture_usage_series.MODEL_KEYS[1]
+
+    MESSAGE_LINES = (
+        transcript_line(),
+        # Replayed: the duplicate tally must agree as well as the rows.
+        transcript_line(),
+        r'{"timestamp" : "2026-08-10T13:00:00Z" , "requestId":"req_spaced",'
+        ' "message" :\t{"id":"msg_spaced", "usage"\t:  {"input_tokens": 3}}}',
+        '{"timestamp":"2026-08-10T14:00:00Z","requestId":"req_half",'
+        '"message":{"id":"msg_half","us%sge":{"output_tokens":4}}}' % json_escaped("a"),
+        '{"timestamp":"2026-08-10T15:00:00Z","requestId":"req_whole",'
+        '"message":{"id":"msg_whole","%s":{"input_tokens":5}}}' % json_escaped("usage"),
+        # Key tokens that are not a counted record: a token as a value, a
+        # quoted mention inside prose (its quotes are escaped, so it never
+        # spells the token), a usage object outside the message, a list, a
+        # truncated record, and prose with no JSON at all.
+        '{"type":"usage","timestamp":"2026-08-10T12:00:00Z"}',
+        r'{"timestamp":"2026-08-10T12:00:00Z","message":{"content":"the word \"usage\" quoted"}}',
+        '{"timestamp":"2026-08-10T12:00:00Z","message":{"id":"m9"},"meta":{"usage":{"input_tokens":9}}}',
+        '["usage", {"usage": {"input_tokens": 9}}]',
+        '{"timestamp":"2026-08-10T12:00:00Z","message":{"usage":{"input_tokens":9}',
+        "prose that mentions usage and never opens a brace",
+    )
+
+    RUNNING_LINES = (
+        session_meta_line(),
+        turn_model_line("avendor-%s" % MEMBER),
+        r'{"timestamp" : "2026-08-23T12:00:00Z", "payload" : {"info" :'
+        ' {"total_token_usage" :\t{"total_tokens" : 100, "input_tokens" : 100}}}}',
+        # A second declaration, spelled through an upper-case escape, moves
+        # every later advance to the residual: missing it would not.
+        '{"timestamp":"2026-08-23T12:01:00Z","type":"turn_context",'
+        '"payload":{"%sodel":"avendor-not-a-member"}}' % json_escaped("m", upper=True),
+        '{"timestamp":"2026-08-23T12:05:00Z","payload":{"info":'
+        '{"total%stoken_usage":{"total_tokens":250,"input_tokens":250}}}}' % json_escaped("_"),
+        # Tokens that are not a record: a token as a value, and a quoted
+        # mention inside tool output.
+        '{"timestamp":"2026-08-23T12:06:00Z","payload":{"type":"model"}}',
+        r'{"timestamp":"2026-08-23T12:06:00Z","payload":{"output":"saw \"total_token_usage\""}}',
+        running_line(400, stamp="2026-08-23T12:10:00.000Z"),
+    )
+
+    def walk(self, reader, lines, filtered=True):
+        counters = capture_usage_series.new_counters()
+        sessions = []
+        shipped = capture_usage_series.may_carry
+        if not filtered:
+            capture_usage_series.may_carry = lambda line, tokens: True
+        try:
+            with tempfile.TemporaryDirectory() as root:
+                path = pathlib.Path(root) / "day" / "session.jsonl"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                rows = list(reader(root, counters, sessions))
+        finally:
+            capture_usage_series.may_carry = shipped
+        return rows, counters, sessions
+
+    def test_the_escaped_spellings_spell_no_token_literally(self):
+        # Non-vacuity for the two tests below: these lines reach the decoder
+        # ONLY through the escape rule, so a filter that lost it loses them.
+        for line, token in (
+            (self.MESSAGE_LINES[3], '"usage"'),
+            (self.MESSAGE_LINES[4], '"usage"'),
+            (self.RUNNING_LINES[3], '"model"'),
+            (self.RUNNING_LINES[4], '"total_token_usage"'),
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, line)
+                self.assertIn(capture_usage_series.JSON_ASCII_ESCAPE, line)
+
+    def test_the_filter_is_invisible_to_the_message_reader(self):
+        shipped = self.walk(capture_usage_series.read_records, self.MESSAGE_LINES)
+        opened = self.walk(capture_usage_series.read_records, self.MESSAGE_LINES, filtered=False)
+        self.assertEqual(shipped, opened)
+        rows, counters, _sessions = shipped
+        # Non-vacuity: every spelling of the key was COUNTED, so agreement is
+        # not two walks that both missed the same records.
+        self.assertEqual([total for _d, total, _p, _m in rows], [135, 3, 4, 5])
+        self.assertEqual(counters["duplicates"], 1)
+        self.assertEqual(counters["lines"], len(self.MESSAGE_LINES))
+
+    def test_the_filter_is_invisible_to_the_running_totals_reader(self):
+        lines = self.RUNNING_LINES
+        shipped = self.walk(capture_usage_series.read_running_totals, lines)
+        opened = self.walk(capture_usage_series.read_running_totals, lines, filtered=False)
+        self.assertEqual(shipped, opened)
+        rows, counters, _sessions = shipped
+        # Both declarations and all three advances were read, whichever way
+        # their keys were spelled.
+        self.assertEqual(
+            [(total, member) for _d, total, _p, member in rows],
+            [
+                (100, self.MEMBER),
+                (150, capture_usage_series.MODEL_OTHER),
+                (150, capture_usage_series.MODEL_OTHER),
+            ],
+        )
+        self.assertEqual(counters["unattributed"], 1)
+        self.assertEqual(counters["lines"], len(lines))
+
+    def test_a_line_carrying_no_key_token_is_never_decoded(self):
+        # The cost the filter exists to cut, pinned for both readers: prose
+        # lines are read and TALLIED, never decoded. Only the record is.
+        prose = ["tool output %d with no key token in it" % index for index in range(5)]
+        for reader, record in (
+            (capture_usage_series.read_records, transcript_line()),
+            (capture_usage_series.read_running_totals, running_line(100)),
+        ):
+            with self.subTest(reader=reader.__name__):
+                decoder = CountingJson(json)
+                capture_usage_series.json = decoder
+                try:
+                    rows, counters, _sessions = self.walk(reader, prose + [record])
+                finally:
+                    capture_usage_series.json = json
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(counters["lines"], 6)
+                self.assertEqual(decoder.decoded, [record])
+
+    def test_every_key_token_is_one_the_escape_rule_covers(self):
+        # may_carry's soundness argument holds only for a quoted key in
+        # printable ASCII with no quote, backslash or solidus, because those
+        # three are what an escape OTHER than `\u00XX` can produce. A key
+        # outside that set has to change the filter before it joins a tuple.
+        tokens = capture_usage_series.MESSAGE_KEY_TOKENS + capture_usage_series.RUNNING_KEY_TOKENS
+        for token in tokens:
+            with self.subTest(token=token):
+                self.assertTrue(len(token) > 2 and token[0] == token[-1] == '"')
+                for character in token[1:-1]:
+                    self.assertTrue(" " <= character <= "~")
+                    self.assertNotIn(character, '"\\/')
+
+
 class RunningTotalsAttributionTest(unittest.TestCase):
     """The model and the counts arrive in DIFFERENT records (issue #302).
 

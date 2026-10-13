@@ -7,6 +7,128 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.91] - 2026-10-12
+
+### Fixed
+
+- A restarted origin no longer falls back to the token-usage snapshot shipped
+  at release time. Every accepted sealed document is kept beside the replay
+  floor and served, as `stale`, at the next boot when the authenticated
+  marker names its digest — including when the host's clock came back behind
+  the floor, which refused every tick and showed a month-old panel on an
+  online site (#358). Restoring never moves the floor or admits a new file.
+- Live-refresh rate budgets survive a backwards wall-clock step: an attempt or
+  cooldown found ahead of the clock is re-anchored to it, so a step costs one
+  ordinary budget instead of its whole size (#358).
+- A collapsed role drawer is `inert`, so its employer link is no longer an
+  invisible Tab stop or present in the accessibility tree (#329).
+- `docs/media-manifest.md` states that media is enabled by default (#271).
+- The nightly ledger snapshot retries a 5xx or timed-out panel read (three
+  attempts, fixed 30 s and 120 s pauses) instead of losing the night, and
+  rebuilds the ledger's SQLite and CSV exports after every reading (#358).
+- The workstation ledger no longer re-records the same sessions on every run.
+  Record files that began in the same second shared one identity and were
+  appended again each run — 94% of a 117 MiB sessions file in a month, on
+  course to refuse every export at the 256 MiB bound by the end of October.
+  They are merged into one reading, and a still-running session is recorded
+  at most once per fifteen minutes while its final figure always lands;
+  replayed, the month writes 3.1% of its rows (#358). Every session entry is
+  admitted on its own before entries sharing a start are merged, so a
+  malformed one is refused rather than absorbed.
+- A FIFO or other special file where the panels state directory keeps its
+  floor marker or retained document is refused at once instead of stalling
+  every refresh behind a blocked open (#358).
+- The compliance gate counts storage writes in code only: write-shaped text
+  in a string, template or regular expression, Svelte markup, or a `getItem`
+  read no longer keeps a stale declaration alive, and a `setItem` whose key
+  is built at run time is refused. A file whose writes depend on whether a
+  `/` divides or opens a regular expression is refused until it is written
+  unambiguously, and so is one that spells a name with a Unicode escape,
+  which could disguise `localStorage`, `setItem`, `cookie` or a label
+  (Refs #355).
+- The watermark tool refuses a NaN or infinite `--size`, `--row` or `--gap`.
+
+### Added
+
+- The usage push checks, at the start of each run, whether the site's
+  token-usage panel serves, for every source, data at least as new as the
+  last verified push (`SITE_URL`), logs `SERVED`, `NOT-SERVED` (with how many
+  sources are behind) or `RECOVERED`, and raises one desktop notification
+  once the panel has fallen behind for fifteen minutes (#358).
+- `REPO_UPDATE` (default `ff-only`): a push checkout on `main` strictly behind
+  `origin/main` is fast-forwarded inside git's own index lock, moving `main`
+  only and only while the checkout still names it; another git operation in
+  progress, another branch or a moved ref is logged as `DRIFT` and left as it
+  is. The new index is installed while git's prepared ref transaction still
+  locks HEAD and `main`, and the ref commits only after, so neither can move
+  between the check and the commit. What an interrupted or failed update did
+  is decided by re-reading, never by a child's exit status (whether the
+  index was installed, by where the lock file's inode now is): a proven state
+  is brought into agreement; an unproven one keeps its recovery material (the
+  lock's index, or the installed index and a logged repair, which names a
+  compare-and-swap `update-ref` only when `main` could be read); and any
+  update that stops part-way, is uncertain, was never acknowledged or met a
+  moved ref ends the run before anything is exported. A signal waits until
+  the checkout is settled. It fetches at most hourly under a bounded deadline
+  and the run re-executes once (#358). `install-launchd.sh --check` reports,
+  read-only, whether each installed agent's program and arguments run the
+  configured checkout and whether it exited cleanly.
+- `PANELS_CAPTURE=token-usage` refreshes the shipped token-usage snapshot from
+  an exported document through the data root's own admission; the snapshot
+  now carries both sources through 2026-10-12 (#358).
+- `scripts/ops/watermark.py`, the gallery's credit-mark tool, is tracked and
+  tested: pixel-identical output, a private scratch removed on every path, an
+  atomic replace, the credit read from operator configuration, and a receipt
+  the staging step can check (#358).
+- `compliance.json` states what the site stores on a visitor's device, which
+  third-party origins a page may contact, which legal pages exist and which
+  edge behaviours are known and why; the PR gate holds the storage list to the
+  writes the frontend makes, the browser lanes refuse undeclared origins, CSP
+  breaks, writes before consent, missed measurable WCAG 2.1 floors (including
+  a focus indicator that paints nothing) and credential-shaped literals, and a
+  weekly read-only workflow judges the live site against the manifest (Refs
+  #355; supersedes PR #357, with its five review findings repaired).
+- The CI contract suite fails when an `AGENTS.md` `docs/<name>.md` pointer
+  names a file that does not exist (#272).
+- Tests that decode J's picture in every browser engine against a
+  corrupt-payload control, run the coverage-badge workflow's own steps the
+  way the runner does, and pin the badge publisher's run-ID bound and the
+  watermark's argument bounds and tile placement.
+
+### Changed
+
+- The chrome row's dragon is J typing at his laptop: both bookends play one
+  8-second, 120-frame loop and face into the row; a reader who asked for less
+  motion fetches one 17 kB still and never the 347 kB sheet (the flying sheet
+  was 882 kB). The reading-mode popover drops its swatch gaps so it still fits
+  a 320 px screen; every swatch keeps its 44 px target. On a phone J stands
+  32 px tall (44 × 32), so the two of him no longer take 33 px from the nav.
+- The tab icon, the home-screen icon and the link-preview card show J at his
+  laptop instead of Rime, from the same render as the chrome row's still.
+- Coverage badges publish after the PR gate in their own workflow: a badge
+  push can no longer hold back a release, and an older main commit can no
+  longer replace newer badges (#350).
+- The usage producer skips decoding transcript lines that carry none of the
+  keys either record shape reads (sound against whitespace and `\u`-escaped
+  key spellings), and the ledger remembers each distinct instant's validity
+  within a run: output is byte-identical on the real record (all 4,082 output
+  files), and the two capture stages run about 37% faster under the scheduler.
+- The usage push runs ssh at `LogLevel=ERROR`, so the receiving host's banner
+  no longer fills the error log (a silent exit 255 is `connection-lost`), and
+  rotates its launchd logs past 5 MiB, renaming one generation and never
+  truncating (#358).
+- Frontend toolchain: svelte 5.57.1, @sveltejs/vite-plugin-svelte 7.3.1, vite
+  8.3.1; CodeQL init and analyze pinned to github/codeql-action v4.38.2; the
+  vite pair is one Dependabot group (supersedes #351, #352, #353, #354).
+- CI actions: actions/setup-node v7.1.0 and actions/upload-artifact v7.0.2,
+  each pinned to the commit its release tag names (supersedes #360, #361).
+
+### Security
+
+- devalue 5.9.0 → 5.9.4 (supersedes #356) and source-map-js 1.2.1 → 1.2.2
+  (GHSA-68fv-2mgg-jv7q): `npm audit`, development dependencies included, goes
+  from two high findings to none.
+
 ## [0.1.90] - 2026-09-23
 
 ### Removed

@@ -998,7 +998,7 @@ class MainJobBindingTests(unittest.TestCase):
     def test_skipped_critical_missing_duplicate_extra_and_foreign_jobs_fail(self):
         exact = main_jobs_record(self.SHA)
         mutations: list[dict[str, object]] = []
-        for name in ("security", "application", "chart", "coverage-badges"):
+        for name in ("security", "application", "chart"):
             changed = copy.deepcopy(exact)
             job = next(job for job in changed["jobs"] if job["name"] == name)
             job["conclusion"] = "skipped"
@@ -1061,6 +1061,56 @@ class MainJobBindingTests(unittest.TestCase):
             self.assertEqual(job["conclusion"], "skipped")
             job["conclusion"] = "success"
             with self.subTest(fail_open_mutant=name), self.assertRaises(RC.ContractError):
+                RC.validate_main_jobs_record(
+                    changed, expected_run_id=123, expected_source_sha=self.SHA
+                )
+
+    def test_no_badge_outcome_reaches_the_release_inventory(self):
+        """Issue #350: badge publication is not a release input, either way.
+
+        The inventory is exactly the five gate jobs, so a badge job carried
+        back into the gate is foreign whatever it concluded -- a success
+        cannot admit a release, and a failure was never asked about. The
+        five-job record stands without any badge job, and every one of its
+        five names is still required.
+        """
+        self.assertEqual(
+            RC.EXPECTED_MAIN_JOBS,
+            {
+                "application": "success",
+                "chart": "success",
+                "container": "skipped",
+                "dependency-review": "skipped",
+                "security": "success",
+            },
+        )
+        exact = main_jobs_record(self.SHA)
+        self.assertEqual(
+            RC.validate_main_jobs_record(exact, expected_run_id=123, expected_source_sha=self.SHA),
+            self.SHA,
+        )
+        for conclusion in ("success", "failure", "skipped", "cancelled"):
+            changed = copy.deepcopy(exact)
+            changed["jobs"].append(
+                {
+                    "id": 6,
+                    "run_id": 123,
+                    "head_sha": self.SHA,
+                    "name": "coverage-badges",
+                    "status": "completed",
+                    "conclusion": conclusion,
+                }
+            )
+            changed["total_count"] += 1
+            with self.subTest(badge_job=conclusion), self.assertRaises(RC.ContractError):
+                RC.validate_main_jobs_record(
+                    changed, expected_run_id=123, expected_source_sha=self.SHA
+                )
+        for name in RC.EXPECTED_MAIN_JOBS:
+            changed = copy.deepcopy(exact)
+            changed["jobs"] = [job for job in changed["jobs"] if job["name"] != name]
+            changed["total_count"] -= 1
+            with self.subTest(missing=name), self.assertRaises(RC.ContractError):
                 RC.validate_main_jobs_record(
                     changed, expected_run_id=123, expected_source_sha=self.SHA
                 )
@@ -5649,7 +5699,10 @@ class MainAndCodeQLAuthorizationShellPathTests(unittest.TestCase):
         dependency = gate.split("\n  dependency-review:\n", 1)[1].split(
             "\n  application:\n", 1
         )[0]
-        container = gate.split("\n  container:\n", 1)[1].split("\n  coverage-badges:\n", 1)[0]
+        container = gate.split("\n  container:\n", 1)[1]
+        following = _NEXT_JOB.search(container)
+        if following is not None:
+            container = container[: following.start()]
         # Normalized keys, not raw text: `if :` is a live conditional the
         # runner honors, so `^    if:` would let the security job be skipped
         # (same fail-open class as the publisher gate's conditional pin).
@@ -8205,6 +8258,70 @@ class GovernanceParityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.require_manifest_scan_audit_docs(**changed)
 
+    # Issue #272: AGENTS.md hands whole topics to files under docs/ by naming
+    # them in backticks, and nothing checked that a named file exists — the
+    # PR #270 review deleted one and the suite stayed green. Existence only:
+    # what a target says stays review's job. Names are compared entry by
+    # entry, so a case-only rename fails on a case-insensitive filesystem
+    # exactly as it does on CI's.
+    AGENTS_DOCS_POINTER = re.compile(r"`(docs/[^`\s]+\.md)`")
+
+    @staticmethod
+    def require_agents_docs_pointers_exist(agents: str, root: Path) -> list[str]:
+        pointers = sorted(set(GovernanceParityTests.AGENTS_DOCS_POINTER.findall(agents)))
+        if not pointers:
+            raise ValueError("AGENTS.md names no `docs/<name>.md` pointer; the walk proves nothing")
+
+        def exists(pointer: str) -> bool:
+            current = root
+            for part in pointer.split("/"):
+                try:
+                    names = {entry.name for entry in os.scandir(current)}
+                except OSError:
+                    return False
+                if part not in names:
+                    return False
+                current = current / part
+            return current.is_file()
+
+        missing = [pointer for pointer in pointers if not exists(pointer)]
+        if missing:
+            raise ValueError("AGENTS.md points at missing docs file(s): " + ", ".join(missing))
+        return pointers
+
+    def test_every_agents_docs_pointer_names_an_existing_file(self):
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        pointers = self.require_agents_docs_pointers_exist(agents, ROOT)
+        with self.assertRaises(ValueError):
+            self.require_agents_docs_pointers_exist(agents.replace("`docs/", "`doc/"), ROOT)
+        with tempfile.TemporaryDirectory() as tmp:
+            copy_root = Path(tmp)
+            shutil.copytree(ROOT / "docs", copy_root / "docs")
+            self.require_agents_docs_pointers_exist(agents, copy_root)
+            for pointer in pointers:
+                target = copy_root / pointer
+                for mutation, moved in (
+                    ("deleted", None),
+                    ("renamed", target.with_name("relocated-" + target.name)),
+                    ("case-renamed", target.with_name(target.name.upper())),
+                    ("made-a-directory", target),
+                ):
+                    target.unlink()
+                    if moved == target:
+                        target.mkdir()
+                    elif moved is not None:
+                        shutil.copyfile(ROOT / pointer, moved)
+                    with self.subTest(pointer=pointer, mutation=mutation):
+                        with self.assertRaises(ValueError) as caught:
+                            self.require_agents_docs_pointers_exist(agents, copy_root)
+                        self.assertIn(pointer, str(caught.exception))
+                    if moved == target:
+                        target.rmdir()
+                    elif moved is not None:
+                        moved.unlink()
+                    shutil.copyfile(ROOT / pointer, target)
+                    self.require_agents_docs_pointers_exist(agents, copy_root)
+
 
 class TrivyDevelopmentDependencyShellPathTests(unittest.TestCase):
     STEP = "Reject high or critical source dependency vulnerabilities"
@@ -8360,40 +8477,166 @@ go() {
                 result = self.execute(block, 'node() { printf "%s\\n" "$REPORT"; }', {"REPORT": report})
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_publisher_refuses_invalid_metrics_before_any_git_command(self):
-        block = self.run_block("Publish badge JSONs to the badges branch")
-        for name in ("GO_PCT", "FRONT_PCT"):
+    HANDOFF = "Hand the measured totals to the badge publisher"
+    HANDOFF_RUN = {"GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "4242"}
+
+    def test_handoff_refuses_invalid_metrics_before_writing_anything(self):
+        block = self.run_block(self.HANDOFF)
+        # The stand-in reports on stderr: the step redirects jq's stdout.
+        reached = 'jq() { printf "JQ_REACHED\\n" >&2; return 0; }'
+        for name in ("GO_TOTAL", "FRONT_TOTAL"):
             for invalid in ("", "NaN", "101", "100.1", "-1", "100\nextra=1"):
                 with self.subTest(name=name, invalid=invalid):
-                    environment = {"GO_PCT": "96.3", "FRONT_PCT": "100", name: invalid}
-                    result = self.execute(block, 'git() { printf "GIT_REACHED\\n"; return 0; }', environment)
+                    environment = {**self.HANDOFF_RUN, "GO_TOTAL": "96.3", "FRONT_TOTAL": "100", name: invalid}
+                    result = self.execute(block, reached, environment)
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertNotIn("GIT_REACHED", result.stdout)
-
-    def test_publish_block_and_guarded_directory_transition_fail_closed(self):
-        block = self.run_block("Publish badge JSONs to the badges branch")
-        prelude = r'''
-mkdir() { return 48; }
-cd() { return 49; }
-git() { return 0; }
-'''
-        environment = {
-            "GH_TOKEN": "fixture-token",
-            "GO_PCT": "96.3",
-            "FRONT_PCT": "100",
-            "GITHUB_SHA": "a" * 40,
-            "GITHUB_REPOSITORY": "snaraj/naranjo.online",
-        }
-        strict = self.execute(block, prelude, environment)
-        self.assertEqual(strict.returncode, 48, strict.stdout + strict.stderr)
+                    self.assertNotIn("JQ_REACHED", result.stderr)
+        # The stand-in is reachable at all, and without the fail-fast
+        # boundary the same invalid total reaches it.
+        valid = self.execute(block, reached, {**self.HANDOFF_RUN, "GO_TOTAL": "96.3", "FRONT_TOTAL": "100"})
+        self.assertIn("JQ_REACHED", valid.stderr)
         fail_open = self.execute(
-            block.replace("set -euo pipefail\n", "", 1).replace(
-                'cd "${work}" || exit 1', 'cd "${work}"', 1
-            ),
-            prelude,
-            environment,
+            block.replace("set -euo pipefail\n", "", 1),
+            reached,
+            {**self.HANDOFF_RUN, "GO_TOTAL": "NaN", "FRONT_TOTAL": "100"},
         )
-        self.assertEqual(fail_open.returncode, 0, fail_open.stdout + fail_open.stderr)
+        self.assertIn("JQ_REACHED", fail_open.stderr)
+
+    def test_handoff_writes_exactly_what_the_badge_publisher_accepts(self):
+        """The gate's hand-off and the publisher's reader agree, end to end."""
+        if shutil.which("jq") is None:
+            raise AssertionError("required tool is not installed on this machine: jq -- refusing to skip silently")
+        spec = importlib.util.spec_from_file_location("coverage_badges", HERE / "coverage_badges.py")
+        assert spec and spec.loader
+        coverage_badges = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(coverage_badges)
+
+        block = self.run_block(self.HANDOFF)
+        reader = "cat \"${RUNNER_TEMP}/coverage-totals/coverage.json\""
+        result = self.execute(block + reader + "\n", "", {**self.HANDOFF_RUN, "GO_TOTAL": "96.3", "FRONT_TOTAL": "100"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = json.loads(result.stdout)
+        self.assertEqual(
+            record,
+            {"schema": "coverage-totals/v1", "sourceSha": "a" * 40, "runId": 4242, "go": "96.3", "frontend": "100"},
+        )
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "coverage.json"
+            path.write_text(result.stdout, encoding="utf-8")
+            self.assertEqual(coverage_badges.read_totals(path, "a" * 40, 4242), ("96.3", "100"))
+
+
+class CoverageBadgeWorkflowShellPathTests(SyntheticRepo, unittest.TestCase):
+    """coverage-badges.yml's two run blocks, executed as the runner executes them.
+
+    The workflow runs only after a protected-main gate run, so no pull request
+    ever exercises it. Its steps name no `shell` and it sets no
+    `defaults.run.shell`, so on Linux the runner executes each block as
+    `bash -e {0}`; `bash --noprofile --norc -eo pipefail {0}` is what an
+    explicit `shell: bash` gets (the shell table under
+    https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepsshell).
+    Each block runs here exactly as `bash -e <file>`, in a one-commit
+    checkout, with `gh` and the publisher replaced by stand-ins that record
+    their argv. A block that stops calling either, or swallows its exit
+    status, goes red.
+    """
+
+    DOWNLOAD = "Download the gate's measured totals"
+    PUBLISH = "Publish the gate's numbers unless newer badges stand"
+    RUN_ID = "4242"
+    STAND_IN = (
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "with open(os.environ['STAND_IN_LOG'], 'a', encoding='utf-8') as log:\n"
+        "    log.write(json.dumps([os.path.basename(sys.argv[0]), *sys.argv[1:]]) + '\\n')\n"
+        "sys.exit(int(os.environ['STAND_IN_STATUS']))\n"
+    )
+
+    def execute(
+        self, step: str, *, real_publisher: bool = False, status: int = 0,
+        event_sha: str | None = None, totals: dict[str, object] | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], list[list[str]], str, str]:
+        """Run one step; return its result, the stand-in calls, the SHA and RUNNER_TEMP."""
+        block = workflow_run_block("coverage-badges.yml", step)
+        with tempfile.TemporaryDirectory(prefix="coverage-badge-workflow-") as temporary:
+            root = Path(temporary)
+            (root / "checkout").mkdir()
+            checkout = self.main_repo(str(root / "checkout"))
+            publisher = (HERE / "coverage_badges.py").read_text(encoding="utf-8") if real_publisher else self.STAND_IN
+            sha = self.paths_commit(
+                checkout,
+                {
+                    "scripts/ci/release_contract.py": (HERE / "release_contract.py").read_text(encoding="utf-8"),
+                    "scripts/ci/coverage_badges.py": publisher,
+                },
+                "one measured commit",
+            )
+            stand_ins = root / "bin"
+            stand_ins.mkdir()
+            (stand_ins / "python3").symlink_to(sys.executable)
+            (stand_ins / "gh").write_text(self.STAND_IN, encoding="utf-8")
+            (stand_ins / "gh").chmod(0o755)
+            runner = ExistingImageShellPathTests.bash_path(str(root / "runner"))
+            (root / "runner" / "coverage-totals").mkdir(parents=True)
+            record = {"schema": "coverage-totals/v1", "sourceSha": sha, "runId": int(self.RUN_ID),
+                      "go": "96.3", "frontend": "100", **(totals or {})}
+            (root / "runner" / "coverage-totals" / "coverage.json").write_text(json.dumps(record), encoding="utf-8")
+            (root / "event.json").write_text(json.dumps(event(event_sha or sha)), encoding="utf-8")
+            (root / "step.sh").write_text(block, encoding="utf-8")
+            environment = {
+                **os.environ,
+                "PATH": f"{stand_ins}{os.pathsep}{os.environ.get('PATH', '')}",
+                "BASH_ENV": "",
+                "GITHUB_EVENT_PATH": str(root / "event.json"),
+                "GITHUB_REPOSITORY": "owner/site",
+                "GH_TOKEN": "fixture-token",
+                "BADGE_REMOTE": str(root / "absent.git"),
+                "SOURCE_SHA": sha,
+                "GATE_RUN_ID": self.RUN_ID,
+                "RUNNER_TEMP": runner,
+                "STAND_IN_LOG": str(root / "calls.log"),
+                "STAND_IN_STATUS": str(status),
+            }
+            result = subprocess.run(
+                [ExistingImageShellPathTests.bash_executable(), "-e", str(root / "step.sh")],
+                cwd=checkout, env=environment, check=False, capture_output=True, text=True, timeout=60,
+            )
+            log = root / "calls.log"
+            calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+            return result, calls, sha, runner
+
+    def test_the_workflow_names_no_shell_so_its_steps_run_under_bash_e(self):
+        # The invocation above is the runner's only while nothing reshells.
+        workflow = (ROOT / ".github" / "workflows" / "coverage-badges.yml").read_text(encoding="utf-8")
+        self.assertEqual([line for line in workflow.splitlines()
+                          if normalized_yaml_key(line) in ("shell", "defaults")], [])
+
+    def test_the_download_step_fetches_this_runs_totals_and_propagates_a_failure(self):
+        result, calls, _, runner = self.execute(self.DOWNLOAD)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(calls, [["gh", "run", "download", self.RUN_ID, "--repo", "owner/site",
+                                  "--name", "coverage-totals", "--dir", f"{runner}/coverage-totals"]])
+        failed, calls, _, _ = self.execute(self.DOWNLOAD, status=42)
+        self.assertEqual(failed.returncode, 42, failed.stdout + failed.stderr)
+        self.assertEqual(len(calls), 1)
+        # Control: an event naming another commit stops the step before gh.
+        refused, calls, _, _ = self.execute(self.DOWNLOAD, event_sha="b" * 40)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(calls, [])
+
+    def test_the_publish_step_runs_the_publisher_on_this_run_and_propagates_a_failure(self):
+        result, calls, sha, runner = self.execute(self.PUBLISH)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(calls, [["coverage_badges.py", "--totals", f"{runner}/coverage-totals/coverage.json",
+                                  "--source-sha", sha, "--run-id", self.RUN_ID, "--repository", "."]])
+        failed, calls, _, _ = self.execute(self.PUBLISH, status=42)
+        self.assertEqual(failed.returncode, 42, failed.stdout + failed.stderr)
+        self.assertEqual(len(calls), 1)
+
+    def test_malformed_totals_make_the_real_publisher_and_the_step_fail(self):
+        result, _, _, _ = self.execute(self.PUBLISH, real_publisher=True, totals={"go": "NaN"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("coverage-badges: REFUSE the go coverage total is not a percentage", result.stdout)
 
 
 class NoArtifactWiringTests(unittest.TestCase):
@@ -8504,46 +8747,85 @@ class WorkflowStructureTests(unittest.TestCase):
             if publisher.count(literal) != 1:
                 raise ValueError(f"publisher identity oracle changed: {literal.strip()}")
 
-    @staticmethod
-    def require_coverage_badge_fail_fast(gate: str) -> None:
-        marker = "\n  coverage-badges:\n"
-        if gate.count(marker) != 1:
-            raise ValueError("coverage-badges job identity is not exact")
-        coverage = gate.split(marker, 1)[1]
-        publish_heading = "      - name: Publish badge JSONs to the badges branch\n"
-        if len(job_steps(gate, "coverage-badges")) != 1 or coverage.count(publish_heading) != 1:
-            raise ValueError("coverage-badges step inventory is not exact")
-        for required in (
-            "    needs: application\n",
-            "          GO_PCT: ${{ needs.application.outputs.go }}\n",
-            "          FRONT_PCT: ${{ needs.application.outputs.front }}\n",
-        ):
-            if coverage.count(required) != 1:
-                raise ValueError("badge metrics must come from the successful application job")
+    BADGE_JOB_CONDITION = (
+        "    if: >-\n"
+        "      github.event.workflow_run.conclusion == 'success' &&\n"
+        "      github.event.workflow_run.event == 'push' &&\n"
+        "      github.event.workflow_run.head_branch == 'main'\n"
+    )
+
+    @classmethod
+    def require_coverage_badge_handoff(cls, gate: str, badges: str, orchestrator: str) -> None:
+        """Issue #350: badges publish after the gate, on its numbers, outside the release path."""
+        # The gate holds no badge job and no write grant, so nothing in the
+        # inventory the publisher authorizes against can push a badge.
+        if "\n  coverage-badges:\n" in gate or re.search(r"(?m)^\s+[a-z-]+:\s*write\s*$", gate):
+            raise ValueError("badge publication must stay out of the PR gate")
         application = gate.split("\n  application:\n", 1)[1].split("\n  chart:\n", 1)[0]
-        for required in (
-            "      go: ${{ steps.go_coverage.outputs.total }}\n",
-            "      front: ${{ steps.frontend_coverage.outputs.total }}\n",
-            "        id: go_coverage\n",
-            "        id: frontend_coverage\n",
-        ):
+        for required in ("        id: go_coverage\n", "        id: frontend_coverage\n"):
             if application.count(required) != 1:
                 raise ValueError("application measurement output identity changed")
-        measurements = {
-            step["name"]: executable_commands(step["run"])
-            for step in job_steps(gate, "application")
-            if step["name"] in ("Enforce and report Go test coverage", "Report frontend test coverage")
-        }
-        if len(measurements) != 2 or any(commands[0] != "set -euo pipefail" for commands in measurements.values()):
-            raise ValueError("measurement failures must stop the application job")
-        publish = coverage.split(publish_heading, 1)[1]
-        if publish.count("          set -euo pipefail\n") != 1:
-            raise ValueError("badge publication must have one exact fail-fast boundary")
-        guarded_cd = '          cd "${work}" || exit 1\n'
-        if publish.count(guarded_cd) != 1:
-            raise ValueError("badge publication directory transition is not fail closed")
-        if re.search(r'(?m)^          cd "\$\{work\}"\s*$', publish):
-            raise ValueError("badge publication retained an unguarded directory change")
+        steps = job_steps(gate, "application")
+        names = [step["name"] for step in steps]
+        measured = ("Enforce and report Go test coverage", "Report frontend test coverage")
+        handoff = ("Hand the measured totals to the badge publisher", "Upload the measured totals")
+        if any(names.count(name) != 1 for name in (*measured, *handoff)):
+            raise ValueError("coverage measurement and hand-off steps are not exact")
+        if max(names.index(name) for name in measured) > min(names.index(name) for name in handoff):
+            raise ValueError("the hand-off must follow both measurements")
+        for name in (*measured, handoff[0]):
+            if executable_commands(steps[names.index(name)]["run"])[0] != "set -euo pipefail":
+                raise ValueError("measurement and hand-off failures must stop the application job")
+        for name in handoff:
+            if _step_scalar(steps[names.index(name)]["lines"], "if") != (
+                "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+            ):
+                raise ValueError("the hand-off runs on protected-main pushes only")
+        write = "\n".join(steps[names.index(handoff[0])]["lines"])
+        for required in (
+            "GO_TOTAL: ${{ steps.go_coverage.outputs.total }}",
+            "FRONT_TOTAL: ${{ steps.frontend_coverage.outputs.total }}",
+            '--arg sha "${GITHUB_SHA}" --argjson run "${GITHUB_RUN_ID}"',
+        ):
+            if write.count(required) != 1:
+                raise ValueError("the hand-off must carry this run's measured outputs")
+        upload = "\n".join(steps[names.index(handoff[1])]["lines"])
+        for required in ("name: coverage-totals", "if-no-files-found: error", "uses: actions/upload-artifact@"):
+            if upload.count(required) != 1:
+                raise ValueError("the hand-off artifact is not exact")
+        # The release path follows the PR gate alone, so no badge run can
+        # reach the orchestrator, let alone the publisher's authorization.
+        if orchestrator.count("    workflows: [PR gate]\n") != 1:
+            raise ValueError("the release orchestrator must follow exactly the PR gate")
+        # The badge publisher: a success-only continuation of a protected-main
+        # gate run, holding exactly the two grants it uses.
+        for required in (
+            "on:\n  workflow_run:\n    workflows: [PR gate]\n    types: [completed]\n",
+            "\npermissions: {}\n",
+            cls.BADGE_JOB_CONDITION,
+            "    permissions:\n      actions: read\n      contents: write\n    steps:\n",
+            "          ref: ${{ github.event.workflow_run.head_sha }}\n",
+            "          persist-credentials: false\n",
+            "release_contract.py workflow-run",
+            'test "${event_sha}" = "${SOURCE_SHA}"',
+            'test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"',
+            'gh run download "${GATE_RUN_ID}"',
+            "--name coverage-totals",
+            "scripts/ci/coverage_badges.py",
+            '--source-sha "${SOURCE_SHA}" --run-id "${GATE_RUN_ID}"',
+        ):
+            if required not in badges:
+                raise ValueError(f"badge publisher binding lost: {required.strip()}")
+        # Both steps read the run and commit from the event, and nothing else
+        # assigns either name.
+        for name, value in (
+            ("GATE_RUN_ID", "${{ github.event.workflow_run.id }}"),
+            ("SOURCE_SHA", "${{ github.event.workflow_run.head_sha }}"),
+        ):
+            if badges.count(f"          {name}: {value}\n") != 2 or badges.count(f"{name}:") != 2:
+                raise ValueError(f"badge publisher {name} must come from the triggering run")
+        if job_conditions(badges) != [">-"] or len(re.findall(r"(?m)^\s+[a-z-]+:\s*write\s*$", badges)) != 1:
+            raise ValueError("badge publisher condition or grants are not exact")
 
     @staticmethod
     def require_vulnerability_and_alias_audit(
@@ -9238,7 +9520,7 @@ class WorkflowStructureTests(unittest.TestCase):
         gate: str, codeql: str, orchestrator: str, publisher: str
     ) -> None:
         expected_deadlines = (
-            (gate, (20, 10, 30, 15, 45, 30)),
+            (gate, (20, 10, 30, 15, 45)),
             (codeql, (30,)),
             (orchestrator, (15,)),
             (publisher, (10, 10, 90)),
@@ -9320,37 +9602,61 @@ class WorkflowStructureTests(unittest.TestCase):
                 self.require_publication_identity_oracles(
                     changed_contract, changed_publisher
                 )
-        self.require_coverage_badge_fail_fast(gate)
-        badge_mutants = (
-            gate.replace("    needs: application\n", "", 1),
-            gate.replace("needs.application.outputs.go", "steps.cov.outputs.go", 1),
-            gate.replace("needs.application.outputs.front", "100", 1),
-            gate.replace("steps.go_coverage.outputs.total", "100", 1),
-            gate.replace("steps.frontend_coverage.outputs.total", "100", 1),
-            gate.replace(
-                "        run: |\n          set -euo pipefail\n          node --test",
-                "        run: |\n          node --test",
-                1,
-            ),
-            gate.replace(
-                '        run: |\n          set -euo pipefail\n          [[ "${GO_PCT}"',
-                '        run: |\n          [[ "${GO_PCT}"',
-                1,
-            ),
-            gate.replace('          cd "${work}" || exit 1', '          cd "${work}"', 1),
+        badges = (ROOT / ".github/workflows/coverage-badges.yml").read_text(encoding="utf-8")
+        self.require_coverage_badge_handoff(gate, badges, orchestrator)
+        old_badge_job = (
+            "\n  coverage-badges:\n    needs: application\n    runs-on: ubuntu-24.04\n"
+            "    permissions:\n      contents: write\n    steps:\n      - run: git push\n"
         )
-        combined_badge_mutant = gate.replace(
-            "        run: |\n          set -euo pipefail\n          node --test",
-            "        run: |\n          node --test",
-            1,
-        ).replace(
-            '        run: |\n          set -euo pipefail\n          [[ "${GO_PCT}"',
-            '        run: |\n          [[ "${GO_PCT}"',
-            1,
-        ).replace('          cd "${work}" || exit 1', '          cd "${work}"', 1)
-        for index, mutant in enumerate((*badge_mutants, combined_badge_mutant)):
-            with self.subTest(coverage_badge_mutant=index), self.assertRaises(ValueError):
-                self.require_coverage_badge_fail_fast(mutant)
+        handoff_step = gate.split("      - name: Hand the measured totals to the badge publisher\n", 1)[1].split(
+            "      - name: Upload the measured totals\n", 1
+        )[0]
+        gate_mutants = (
+            ("badge job back in the gate", gate + old_badge_job),
+            ("write grant in the gate", gate.replace("    permissions:\n      contents: read\n", "    permissions:\n      contents: write\n", 1)),
+            ("hand-off on every event", gate.replace(
+                "      - name: Hand the measured totals to the badge publisher\n"
+                "        # Main pushes only, and only once both measurements above passed.\n",
+                "      - name: Hand the measured totals to the badge publisher\n", 1,
+            ).replace("        if: github.event_name == 'push' && github.ref == 'refs/heads/main'\n        env:\n          GO_TOTAL", "        env:\n          GO_TOTAL", 1)),
+            ("hand-off of a literal", gate.replace("GO_TOTAL: ${{ steps.go_coverage.outputs.total }}", "GO_TOTAL: '100'", 1)),
+            ("hand-off of another run", gate.replace('--argjson run "${GITHUB_RUN_ID}"', '--argjson run 1', 1)),
+            ("hand-off without fail-fast", gate.replace(
+                '        run: |\n          set -euo pipefail\n          [[ "${GO_TOTAL}"', '        run: |\n          [[ "${GO_TOTAL}"', 1)),
+            ("hand-off before measurement", gate.replace(
+                "      - name: Hand the measured totals to the badge publisher\n" + handoff_step, "", 1,
+            ).replace(
+                "      - name: Enforce and report Go test coverage\n",
+                "      - name: Hand the measured totals to the badge publisher\n" + handoff_step
+                + "      - name: Enforce and report Go test coverage\n", 1,
+            )),
+            ("artifact renamed", gate.replace("          name: coverage-totals\n", "          name: totals\n", 1)),
+            ("measurement without fail-fast", gate.replace(
+                "        run: |\n          set -euo pipefail\n          node --test", "        run: |\n          node --test", 1)),
+        )
+        badge_mutants = (
+            ("any conclusion", badges.replace("conclusion == 'success'", "conclusion != 'cancelled'", 1)),
+            ("pull-request runs", badges.replace("event == 'push'", "event == 'pull_request'", 1)),
+            ("any branch", badges.replace("head_branch == 'main'", "head_branch != ''", 1)),
+            ("follows another workflow", badges.replace("workflows: [PR gate]", "workflows: [CodeQL]", 1)),
+            ("extra grant", badges.replace("      contents: write\n", "      contents: write\n      packages: write\n", 1)),
+            ("workflow-level grant", badges.replace("\npermissions: {}\n", "\npermissions: write-all\n", 1)),
+            ("persisted credential", badges.replace("persist-credentials: false", "persist-credentials: true", 1)),
+            ("another commit", badges.replace("ref: ${{ github.event.workflow_run.head_sha }}", "ref: main", 1)),
+            ("another run's numbers", badges.replace(
+                "GATE_RUN_ID: ${{ github.event.workflow_run.id }}\n", "GATE_RUN_ID: ${{ github.run_id }}\n", 1)),
+            ("event unchecked", badges.replace("release_contract.py workflow-run", "release_contract.py --help", 1)),
+            ("a second condition", badges.replace("    steps:\n", "    if: always()\n    steps:\n", 1)),
+        )
+        orchestrator_mutant = orchestrator.replace("workflows: [PR gate]", "workflows: [PR gate, Coverage badges]", 1)
+        for name, changed_gate, changed_badges, changed_orchestrator in (
+            *((name, mutant, badges, orchestrator) for name, mutant in gate_mutants),
+            *((name, gate, mutant, orchestrator) for name, mutant in badge_mutants),
+            ("release follows badges", gate, badges, orchestrator_mutant),
+        ):
+            self.assertNotEqual((changed_gate, changed_badges, changed_orchestrator), (gate, badges, orchestrator), name)
+            with self.subTest(coverage_badge_mutant=name), self.assertRaises(ValueError):
+                self.require_coverage_badge_handoff(changed_gate, changed_badges, changed_orchestrator)
         self.assertIn("github.event.pull_request.number || github.run_id", gate)
         self.assertNotIn("queue:", gate + orchestrator + publisher)
         self.assertIn("workflow_run:", orchestrator)

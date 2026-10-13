@@ -396,7 +396,7 @@ test('no control is a drawing with nothing to say', () => {
   /* WHAT COUNTS AS A DRAWING WIDENED (owner ruling, 2026-09-12, issue 325).
      This walk used to look only at controls holding an `<Icon>`, which was the
      only wordless content any control had — and then the home link stopped
-     being the "SN." wordmark and became a mirrored dragon, a <RimeMark>
+     being the "SN." wordmark and became a dragon, a <JMark>
      rather than an Icon. A silent link is silent whichever component drew the
      picture inside it, so the subject is now every control whose whole content
      says nothing to a reader who cannot see it: marks, sprites, and anything

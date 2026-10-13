@@ -238,17 +238,32 @@ MAX_NAME_LENGTH = 120
 # it has none. Bounded so a line cannot carry a paragraph.
 MAX_EXPORTER_LENGTH = 64
 
+# valid_instant's remembered verdicts, by instant string. Emptied whenever it
+# fills, so a file of distinct instants costs parses rather than memory.
+INSTANT_VERDICTS = {}
+MAX_INSTANT_VERDICTS = 1 << 16
+
 # Directory and file modes. The record is machine-local and private: it holds
 # the whole measured history of this workstation's work.
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 
 # A year file is read WHOLE on every run that touches its year, to build the
-# last-value index. That is a deliberate trade: a year of this pipeline's rows
-# measures a few megabytes, and reading it costs milliseconds, while any index
-# beside the file would be a second source of truth that can disagree with the
-# lines it indexes.
+# last-value index, because any index beside the file would be a second source
+# of truth that can disagree with the lines it indexes. The size that trade
+# was made for did not hold for sessions: re-recording every running session on
+# every run grew that stream by megabytes a day and would have refused the
+# whole export at this bound within weeks (issue #358). SESSION_SETTLE_SECONDS
+# below is what keeps it inside the bound.
 MAX_STREAM_FILE_BYTES = 256 << 20
+
+# How long a RUNNING session's reading may wait behind its last recorded one,
+# and how long a session must have been idle to count as settled. A session
+# is re-read on every run while it moves, and each of those readings is
+# superseded by the next (sessions resolve to their latest reading), so a
+# running session is recorded at most once per window, and a settled one is
+# always recorded: its final figure lands at the first run after it stops.
+SESSION_SETTLE_SECONDS = 15 * 60
 
 # The raw capture archive. A fresh capture document per source per run is kept
 # so a figure can be re-derived from the bytes it came from; the day's LATEST
@@ -273,18 +288,30 @@ def valid_name(value, bound=MAX_NAME_LENGTH):
         return False
     if value != value.strip():
         return False
-    return all(character.isprintable() for character in value)
+    return value.isprintable()
 
 
 def valid_instant(value):
-    """True for the one instant form this record writes: RFC 3339, UTC."""
+    """True for the one instant form this record writes: RFC 3339, UTC.
+
+    The verdict is a pure function of the string, and every run re-admits
+    every row its year files hold, in which the same capture and session
+    instants recur thousands of times. So each distinct string is parsed once
+    and its verdict remembered; the parse, not the memory, decides.
+    """
     if not isinstance(value, str):
         return False
-    try:
-        datetime.datetime.strptime(value, INSTANT_FORMAT)
-    except ValueError:
-        return False
-    return True
+    verdict = INSTANT_VERDICTS.get(value)
+    if verdict is None:
+        try:
+            datetime.datetime.strptime(value, INSTANT_FORMAT)
+            verdict = True
+        except ValueError:
+            verdict = False
+        if len(INSTANT_VERDICTS) >= MAX_INSTANT_VERDICTS:
+            INSTANT_VERDICTS.clear()
+        INSTANT_VERDICTS[value] = verdict
+    return verdict
 
 
 def valid_count(value):
@@ -321,7 +348,9 @@ def make_row(
     builds is handed to: the same admission the reader applies to a line it
     did not write, so a rule can never hold on read and not on write. A second
     admission here was decorative — no input told it apart from the one
-    downstream (PR #312 review, finding 5).
+    downstream (PR #312 review, finding 5). Session entries are also admitted
+    one by one before session_rows merges them, because a merged row no
+    longer shows its members.
     """
     row = {
         "schema": SCHEMA,
@@ -593,6 +622,29 @@ def unchanged(previous, row):
     return True
 
 
+def deferred(previous, row):
+    """True when a changed reading of a still-running session can wait.
+
+    Only a session can wait, and only while it is RUNNING — it ended within
+    SESSION_SETTLE_SECONDS of this reading's capture — and only when its last
+    recorded reading is younger than that window. A settled session is never
+    deferred, so the figure it finished on is always written, at the first run
+    after it stops; nothing that run sees is lost, only the readings a later
+    one in the same window supersedes (issue #358).
+    """
+    if row["stream"] != STREAM_SESSIONS:
+        return False
+    captured = parse_instant(row["capturedAt"])
+    if (captured - parse_instant(row["endedAt"])).total_seconds() >= SESSION_SETTLE_SECONDS:
+        return False
+    return (captured - parse_instant(previous["capturedAt"])).total_seconds() < SESSION_SETTLE_SECONDS
+
+
+def parse_instant(value):
+    """An admitted RFC 3339 UTC instant as an aware datetime."""
+    return datetime.datetime.strptime(value, INSTANT_FORMAT).replace(tzinfo=datetime.timezone.utc)
+
+
 def append_rows(ledger_dir, stream, rows):
     """Append only what is new. Returns (appended, unchanged).
 
@@ -613,7 +665,7 @@ def append_rows(ledger_dir, stream, rows):
         lines = []
         for row in by_year[year]:
             previous = index.get(reading(row))
-            if previous is not None and unchanged(previous, row):
+            if previous is not None and (unchanged(previous, row) or deferred(previous, row)):
                 kept += 1
                 continue
             index[reading(row)] = row
@@ -1018,58 +1070,108 @@ def model_category_rows(key, members, stamp, exporter, digest):
     return rows
 
 
+def merge_sessions(entries):
+    """One entry per start instant, whatever order the walk produced them in.
+
+    A session's identity is the instant it began, and two record files can
+    begin in the same second. Recorded as separate rows they shared one
+    identity, so every run appended each of them again — each "changed" the
+    reading the other had just written — and 34 such identities wrote 94% of
+    a 117 MiB stream in a month (issue #358). Entries sharing a start are one
+    reading: the latest end, the summed total and classes, and the members
+    in a stable order, so unchanged inputs yield an identical row and nothing
+    is appended. Every other entry passes through unchanged.
+    """
+    groups = {}
+    for entry in entries:
+        groups.setdefault(entry["startedAt"], []).append(entry)
+    merged = []
+    for started, group in groups.items():
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+        group = sorted(group, key=lambda entry: json.dumps(entry, sort_keys=True))
+        categories = {}
+        models = []
+        for entry in group:
+            for name, count in entry["categories"].items():
+                categories[name] = categories.get(name, 0) + count
+            for model in entry["models"]:
+                if model not in models:
+                    models.append(model)
+        merged.append(
+            {
+                "startedAt": started,
+                "endedAt": max(entry["endedAt"] for entry in group),
+                "total": sum(entry["total"] for entry in group),
+                "categories": categories,
+                "models": models,
+            }
+        )
+    return merged
+
+
 def session_rows(key, entries, stamp, exporter, digest):
-    """One row per session, identified by the instant it began."""
+    """One row per session, identified by the instant it began.
+
+    Every entry is admitted as its own row first, on exactly the terms an
+    entry that shares its start with nothing is, and only then are entries
+    sharing a start merged. A merge sums counts and keeps the latest end, so a
+    negative count or a backwards or malformed end in one member would
+    otherwise vanish into a merged row that looks valid.
+    """
     if not isinstance(entries, list):
         raise LedgerError("a capture ledger block carries a malformed session list")
-    rows = []
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != {
-            "startedAt",
-            "endedAt",
-            "total",
-            "categories",
-            "models",
-        }:
-            raise LedgerError("a capture ledger block carries a malformed session")
-        started = entry["startedAt"]
-        ended = entry["endedAt"]
-        if not valid_instant(started) or not valid_instant(ended):
-            raise LedgerError("a capture ledger block carries a malformed session instant")
-        began = datetime.datetime.strptime(started, INSTANT_FORMAT).replace(
-            tzinfo=datetime.timezone.utc
-        )
-        finished = datetime.datetime.strptime(ended, INSTANT_FORMAT).replace(
-            tzinfo=datetime.timezone.utc
-        )
-        seconds = int((finished - began).total_seconds())
-        if seconds < 0:
-            raise LedgerError("a capture ledger block carries a session that ends before it starts")
-        rows.append(
-            make_row(
-                # The day a session belongs to is the LOCAL day it began, the
-                # same clock every other day in this pipeline is bucketed by.
-                began.astimezone().date().isoformat(),
-                STREAM_SESSIONS,
-                key,
-                KIND_SESSION,
-                started,
-                seconds,
-                UNIT_SECONDS,
-                stamp,
-                METHOD_CAPTURE,
-                exporter,
-                digest,
-                extra={
-                    "startedAt": started,
-                    "endedAt": ended,
-                    "total": entry["total"],
-                    "categories": entry["categories"],
-                    "models": entry["models"],
-                },
-            )
-        )
-    return rows
+        admit_row(session_row(key, entry, stamp, exporter, digest), STREAM_SESSIONS)
+    return [session_row(key, entry, stamp, exporter, digest) for entry in merge_sessions(entries)]
+
+
+def session_row(key, entry, stamp, exporter, digest):
+    """One session entry as its row; bounds and vocabularies are admit_row's."""
+    if not isinstance(entry, dict) or set(entry) != {
+        "startedAt",
+        "endedAt",
+        "total",
+        "categories",
+        "models",
+    }:
+        raise LedgerError("a capture ledger block carries a malformed session")
+    started = entry["startedAt"]
+    ended = entry["endedAt"]
+    if not valid_instant(started) or not valid_instant(ended):
+        raise LedgerError("a capture ledger block carries a malformed session instant")
+    began = datetime.datetime.strptime(started, INSTANT_FORMAT).replace(
+        tzinfo=datetime.timezone.utc
+    )
+    finished = datetime.datetime.strptime(ended, INSTANT_FORMAT).replace(
+        tzinfo=datetime.timezone.utc
+    )
+    seconds = int((finished - began).total_seconds())
+    if seconds < 0:
+        raise LedgerError("a capture ledger block carries a session that ends before it starts")
+    return make_row(
+        # The day a session belongs to is the LOCAL day it began, the
+        # same clock every other day in this pipeline is bucketed by.
+        began.astimezone().date().isoformat(),
+        STREAM_SESSIONS,
+        key,
+        KIND_SESSION,
+        started,
+        seconds,
+        UNIT_SECONDS,
+        stamp,
+        METHOD_CAPTURE,
+        exporter,
+        digest,
+        extra={
+            "startedAt": started,
+            "endedAt": ended,
+            "total": entry["total"],
+            "categories": entry["categories"],
+            "models": entry["models"],
+        },
+    )
 
 
 def store_rows(key, history_dir, stamp, exporter):
@@ -1209,6 +1311,10 @@ def prune_raw(ledger_dir, today):
 
 SQLITE_NAME = "ledger.sqlite"
 
+# Where the derived views land inside the ledger directory unless told
+# otherwise: the export command and the nightly snapshot both write here.
+EXPORTS_DIR = "exports"
+
 # The row columns every stream table carries, in the record's own field order.
 TABLE_COLUMNS = (
     "day",
@@ -1251,8 +1357,9 @@ def export_ledger(ledger_dir, out_dir):
     temporary = out_dir / (SQLITE_NAME + ".tmp")
     if temporary.exists():
         temporary.unlink()
-    connection = sqlite3.connect(temporary)
+    connection = None
     try:
+        connection = sqlite3.connect(temporary)
         written = {}
         for stream in sorted(STREAM_KINDS):
             columns = TABLE_COLUMNS + (
@@ -1268,8 +1375,12 @@ def export_ledger(ledger_dir, out_dir):
                 out_dir / ("%s.csv" % stream), columns, [row for _, row in current]
             )
         connection.commit()
+    except sqlite3.Error:
+        # The record's own refusal, never a traceback out of a scheduled job.
+        raise LedgerError("the ledger database could not be built")
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
     os.chmod(temporary, FILE_MODE)
     os.replace(temporary, database)
     return written
@@ -1329,7 +1440,7 @@ def main(argv=None):
     out_dir = (
         pathlib.Path(arguments.out).expanduser()
         if arguments.out is not None
-        else ledger_dir / "exports"
+        else ledger_dir / EXPORTS_DIR
     )
     try:
         written = export_ledger(ledger_dir, out_dir)

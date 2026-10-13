@@ -782,32 +782,44 @@ test('the page name clears the fixed chrome row rather than starting under it', 
   }
 });
 
-/* RIME BOOKENDS THE CHROME ROW (owner decision, 2026-09-11, issue 314; owner
- * ruling, 2026-09-12, issue 325: "replace this with another dragon facing
- * inwards to match the opposite side").
+/* J BOOKENDS THE CHROME ROW, TYPING (owner request, 2026-10-12: "use him
+ * typing on the computer now instead of just flying"; the seats are the owner
+ * decision of 2026-09-11, issue 314, and the ruling of 2026-09-12, issue 325:
+ * "replace this with another dragon facing inwards to match the opposite
+ * side").
  *
  * The source pins in tests/experience.test.mjs hold the declarations; this
  * holds what an engine did with them, which for a sprite is the only place the
  * claim can be tested at all: "the picture advances" is not a property of any
- * declaration, it is 480 background positions a compositor steps through.
+ * declaration, it is 120 background positions a compositor steps through.
  *
- * THERE ARE TWO OF HIM NOW AND STILL ONE SHEET, which is the claim the second
- * dragon has to earn: the mirror is a transform on a shared rule, so the two
- * boxes name one background-image and the browser fetches it once. A second
- * URL — a mirrored copy of the file, a rule of its own per seat — would look
- * identical on the page and cost every first paint another 880kB, so the
- * requests are COUNTED rather than reasoned about.
+ * THERE ARE TWO OF HIM AND ONE PICTURE PER READER, which is the claim the pair
+ * has to earn: the mirror is a transform on a shared rule, so the two boxes
+ * name one background-image and the browser fetches it once. And WHICH picture
+ * depends on the reader: the typing sheet only where motion is welcome, the
+ * small still everywhere else, so a reader who asked for less motion never
+ * downloads the 347kB sheet. Both are COUNTED from the network rather than
+ * reasoned about.
  *
  * Both halves of the motion doctrine are measured, in two contexts and at both
  * seats, because "no animation" must never mean "no dragon": with the
- * preference reduced they are still there, still 44px, still showing frame 0 —
- * they simply hold it, still facing each other. */
-const rimeSeats = [
-  ['.page-mark .rime-mark', 'the home link', 'matrix(-1, 0, 0, 1, 0, 0)'],
-  ['.page-chrome .rime-mark', "the row's end", 'none'],
+ * preference reduced they are still there, still the row's height, showing
+ * the still — they simply hold it, still facing each other. */
+const jSeats = [
+  ['.page-mark .j-mark', 'the home link', 'none'],
+  ['.page-chrome .j-mark', "the row's end", 'matrix(-1, 0, 0, 1, 0, 0)'],
 ];
+/* The render's own cell, 176 x 128, drawn at the row's control height — and at
+ * the drawn mark's 32px at phone widths (owner ruling, 2026-10-12), where two
+ * of him at full height took 33px from the nav's window. */
+const jCellPx = (width) => {
+  const height = width <= 720 ? 32 : touchFloorPx;
+  return { width: (height * 176) / 128, height };
+};
+const jSheetPath = /\/j-typing-(?!still-)[^/]*\.webp$/;
+const jStillPath = /\/j-typing-still-[^/]*\.webp$/;
 
-test('Rime bookends the row from one sheet, mirrored at the start, flying where motion is welcome and still where it is not (owner 2026-09-11 issue 314, 2026-09-12 issue 325)', async ({
+test('J bookends the row from one picture, facing inwards at both ends, typing where motion is welcome and still where it is not (owner 2026-09-11 issue 314, 2026-09-12 issue 325, 2026-10-12)', async ({
   browser,
 }) => {
   for (const motion of ['no-preference', 'reduce']) {
@@ -815,43 +827,79 @@ test('Rime bookends the row from one sheet, mirrored at the start, flying where 
       reducedMotion: motion === 'reduce' ? 'reduce' : 'no-preference',
     });
     const page = await context.newPage();
-    /* Counted from before the navigation, so the sheet's own first load is in
-       the tally rather than only whatever a later viewport change provokes. */
-    const sheetRequests = [];
+    /* Counted from before the navigation, so each picture's own first load is
+       in the tally rather than only whatever a later viewport change
+       provokes. */
+    const requested = { sheet: [], still: [] };
     page.on('request', (request) => {
-      if (/rime-flight[^/]*\.webp$/.test(new URL(request.url()).pathname)) {
-        sheetRequests.push(request.url());
-      }
+      const { pathname } = new URL(request.url());
+      if (jSheetPath.test(pathname)) requested.sheet.push(request.url());
+      if (jStillPath.test(pathname)) requested.still.push(request.url());
     });
     await visit(page);
-    for (const width of [1440, 390]) {
+    for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
       await settled(page);
-      await expect(
-        page.locator('.rime-mark'),
-        `the row does not hold both dragons at ${width}px`
-      ).toHaveCount(2);
-      for (const [selector, seat] of rimeSeats) {
+      await expect(page.locator('.j-mark'), `the row does not hold both of him at ${width}px`).toHaveCount(2);
+      for (const [selector, seat] of jSeats) {
         const box = await page.locator(selector).boundingBox();
         expect(
           box.width,
-          `Rime at ${seat} is ${box.width}px wide at ${width}px with motion ${motion}`
-        ).toBeCloseTo(touchFloorPx, 0);
+          `J at ${seat} is ${box.width}px wide at ${width}px with motion ${motion}`
+        ).toBeCloseTo(jCellPx(width).width, 0);
         expect(
           box.height,
-          `Rime at ${seat} is ${box.height}px tall at ${width}px with motion ${motion}`
-        ).toBeCloseTo(touchFloorPx, 0);
+          `J at ${seat} is ${box.height}px tall at ${width}px with motion ${motion}`
+        ).toBeCloseTo(jCellPx(width).height, 0);
       }
       /* THE BOX IS RESERVED, so the row he sits in is exactly as tall as the
          row's own stated reserve: the site's hit lane plus the one rule it
          draws. A mark sized by its picture instead would make this taller the
-         moment the sheet decoded, which is the layout shift the static shell
+         moment a picture decoded, which is the layout shift the static shell
          exists to prevent. */
       const row = await page.locator('.page-header').boundingBox();
       expect(
         row.height,
-        `the chrome row is ${row.height}px tall at ${width}px with Rime in it`
+        `the chrome row is ${row.height}px tall at ${width}px with J in it`
       ).toBeCloseTo(touchFloorPx + 2, 0);
+      /* HE FITS BESIDE THE NAV at every width down to the narrowest this site
+         serves. He is wider than the 44px floor, so the home link has to hold
+         all of him (otherwise he overhangs it toward the nav and its focus
+         ring marks a box narrower than the picture), and the nav has to sit
+         between the two of him rather than under either. The tolerance is one
+         DEVICE pixel: his box is 60.5px wide, and WebKit snaps the flipped
+         one's layer to the device grid — measured 1/6px past the row's end at
+         3x, a box that is flush with it in layout. */
+      const seats = await page.evaluate(() => {
+        const box = (selector) => {
+          const rect = window.document.querySelector(selector).getBoundingClientRect();
+          return { left: rect.left, right: rect.right };
+        };
+        return {
+          row: box('.page-header'),
+          link: box('.page-mark'),
+          start: box('.page-mark .j-mark'),
+          nav: box('.section-nav'),
+          end: box('.page-chrome .j-mark'),
+          pixel: 1 / window.devicePixelRatio,
+        };
+      });
+      expect(
+        seats.link.right,
+        `the home link ends at ${seats.link.right}px and the J inside it at ${seats.start.right}px, at ${width}px`
+      ).toBeGreaterThanOrEqual(seats.start.right - seats.pixel);
+      expect(
+        seats.nav.left,
+        `the nav starts at ${seats.nav.left}px, under the J that ends at ${seats.start.right}px, at ${width}px`
+      ).toBeGreaterThanOrEqual(seats.start.right - seats.pixel);
+      expect(
+        seats.end.left,
+        `the J at the row's end starts at ${seats.end.left}px, over the nav that ends at ${seats.nav.right}px, at ${width}px`
+      ).toBeGreaterThanOrEqual(seats.nav.right - seats.pixel);
+      expect(
+        seats.end.right,
+        `the J at the row's end runs to ${seats.end.right}px, past the row's own end at ${seats.row.right}px, at ${width}px`
+      ).toBeLessThanOrEqual(seats.row.right + seats.pixel);
       /* And the page still does not scroll sideways with him in the row. */
       const overflow = await page.evaluate(
         () => window.document.documentElement.scrollWidth - window.document.documentElement.clientWidth
@@ -861,22 +909,30 @@ test('Rime bookends the row from one sheet, mirrored at the start, flying where 
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await settled(page);
-    /* ONE SHEET. One distinct URL is "the two seats share a picture"; at most
-       one request for it is "the browser fetched that picture once" — and a
-       set of one already requires at least one request, so the pair is exact
-       without pinning a count an engine's preload heuristics could
-       legitimately change. */
+    /* ONE PICTURE, AND THE RIGHT ONE. One distinct URL is "the two seats share
+       a picture"; at most one request for it is "the browser fetched that
+       picture once" — and a set of one already requires at least one request,
+       so the pair is exact without pinning a count an engine's preload
+       heuristics could legitimately change. The OTHER picture is never asked
+       for: the sheet is the cost of the loop and only a reader who welcomes
+       the loop pays it, and a reader who does gets no still on top. */
+    const [drawn, skipped] =
+      motion === 'reduce' ? ['still', 'sheet'] : ['sheet', 'still'];
     expect(
-      new Set(sheetRequests).size,
-      `the page asked for ${new Set(sheetRequests).size} different flight sheets: ${[...new Set(sheetRequests)].join(', ')}`
+      new Set(requested[drawn]).size,
+      `the page asked for ${new Set(requested[drawn]).size} different ${drawn} files with motion ${motion}: ${[...new Set(requested[drawn])].join(', ')}`
     ).toBe(1);
     expect(
-      sheetRequests.length,
-      `the one flight sheet was requested ${sheetRequests.length} times; the two seats are not sharing it`
+      requested[drawn].length,
+      `the ${drawn} was requested ${requested[drawn].length} times with motion ${motion}; the two seats are not sharing it`
     ).toBeLessThanOrEqual(1);
+    expect(
+      requested[skipped],
+      `the ${skipped} was downloaded with motion ${motion}, where nothing draws it`
+    ).toHaveLength(0);
 
     const seatImages = [];
-    for (const [selector, seat, expectedTransform] of rimeSeats) {
+    for (const [selector, seat, expectedTransform] of jSeats) {
       const mark = page.locator(selector);
       const declared = await mark.evaluate((node) => ({
         name: getComputedStyle(node).animationName,
@@ -886,32 +942,30 @@ test('Rime bookends the row from one sheet, mirrored at the start, flying where 
         image: getComputedStyle(node).backgroundImage,
       }));
       seatImages.push(declared.image);
-      /* FACING EACH OTHER, as the engine computed it: the start of the row is
-         the inline flip and the end of the row is untransformed. Both
-         directions are asserted, which is what makes it a mirror rather than a
-         pair — a rule that flipped everything, or nothing, satisfies one of
-         these and fails the other. */
+      /* FACING EACH OTHER, as the engine computed it: J's render faces
+         screen-right, so the start of the row is untransformed and the end of
+         the row is the inline flip. Both directions are asserted, which is
+         what makes it a mirror rather than a pair — a rule that flipped
+         everything, or nothing, satisfies one of these and fails the other. */
       expect(
         declared.transform,
-        `Rime at ${seat} computed transform "${declared.transform}" rather than ${expectedTransform}`
+        `J at ${seat} computed transform "${declared.transform}" rather than ${expectedTransform}`
       ).toBe(expectedTransform);
-    /* THE SPRITE REALLY MOVES, sampled rather than reasoned: every animation
-       frame for longer than one full pass across the sheet's 20 columns,
-       counting the DISTINCT background positions an engine actually computed.
-       A declaration that named the keyframes but never advanced — a sheet
-       that failed to load, an engine that dropped a var() inside @keyframes —
-       passes every source pin and fails here.
+      /* THE SPRITE REALLY MOVES, sampled rather than reasoned: every animation
+         frame for longer than one full pass across a row of the sheet's 12
+         columns, counting the DISTINCT background positions an engine
+         actually computed. A declaration that named the keyframes but never
+         advanced — a sheet that failed to load, an engine that dropped a var()
+         inside @keyframes — passes every source pin and fails here.
 
-       Counting distinct frames rather than comparing two samples is what
-       makes it a measurement instead of a coin toss: a steps(1) mutant, which
-       jumps the whole sheet once per cycle, was MEASURED surviving the
-       two-sample form (it lands on either side of the single jump often
-       enough to look like motion) and dies here on the count. MEASURED in
-       this window: the shipped sheet draws 37 distinct positions — the two
-       animations step together, so the count is pairs rather than cells — and
-       the mutant draws 3. The floor is 8, low enough that a loaded machine
-       sampling at half rate still clears it and high enough that no mutant
-       this lane is for can reach it. */
+         Counting distinct frames rather than comparing two samples is what
+         makes it a measurement instead of a coin toss: a steps(1) mutant
+         holds a whole axis still and lands on the far side of the single row
+         step often enough to look like motion in a two-sample comparison.
+         The loop draws a new cell every 66.67ms, so 1200ms is eighteen cells
+         (MEASURED on a local run: 18 or 19 distinct positions in each of the
+         five projects). The floor is 8 on a desktop engine and 4 on the
+         emulated phones, whose hosted runners paint fewer frames. */
       const frames = await mark.evaluate(
         (node) =>
           new Promise((done) => {
@@ -919,7 +973,7 @@ test('Rime bookends the row from one sheet, mirrored at the start, flying where 
             const opened = performance.now();
             const sample = () => {
               seen.add(getComputedStyle(node).backgroundPosition);
-              if (performance.now() - opened < 600) requestAnimationFrame(sample);
+              if (performance.now() - opened < 1200) requestAnimationFrame(sample);
               else done([...seen]);
             };
             requestAnimationFrame(sample);
@@ -929,64 +983,126 @@ test('Rime bookends the row from one sheet, mirrored at the start, flying where 
       if (motion === 'reduce') {
         expect(
           declared.name,
-          `Rime at ${seat} animates (${declared.name}) with the reader's motion reduced`
+          `J at ${seat} animates (${declared.name}) with the reader's motion reduced`
         ).toBe('none');
         expect(
           frames,
-          `Rime at ${seat} advanced through ${frames.length} positions with the reader's motion reduced`
+          `J at ${seat} advanced through ${frames.length} positions with the reader's motion reduced`
         ).toHaveLength(1);
-        /* He is on frame 0 — the pose, not a blank box. */
+        /* He is the still, drawn from its own origin — the pose, not a blank
+           box. */
         expect(
           declared.position,
-          `Rime at ${seat} rests at ${declared.position} rather than on his first frame`
+          `J at ${seat} rests at ${declared.position} rather than at the still's own origin`
         ).toMatch(/^0(?:px|%)? 0(?:px|%)?$/);
       } else {
-        for (const keyframes of ['rime-flight-strip', 'rime-flight']) {
+        for (const keyframes of ['j-typing-row', 'j-typing']) {
           expect(
             declared.name,
-            `Rime at ${seat} computed animation-name "${declared.name}", which does not include ${keyframes}`
+            `J at ${seat} computed animation-name "${declared.name}", which does not include ${keyframes}`
           ).toContain(keyframes);
         }
         /* steps(), not a tween: a sprite has no in-between state, and an
            interpolating timing function paints two half-frames at once. */
         expect(
           declared.timing,
-          `Rime at ${seat} has tweened frames (${declared.timing}), not stepped ones`
+          `J at ${seat} has tweened frames (${declared.timing}), not stepped ones`
         ).toContain('steps(');
-        /* The floor is per project, measured: a desktop engine draws 30-plus
-           distinct frames in 600 ms and the one-step mutant three; the two
-           emulated phones on a hosted runner without a GPU drew five (WebKit,
-           iOS profile), which is still a moving sheet and still not the mutant,
-           so their floor sits between the two rather than above what the
-           runner can paint. */
         const floor = test.info().project.use.isMobile ? 4 : 8;
         expect(
           frames.length,
-          `Rime at ${seat} drew only ${frames.length} distinct frames in 600ms (floor ${floor}): ${frames.slice(0, 4).join(' / ')}`
+          `J at ${seat} drew only ${frames.length} distinct frames in 1200ms (floor ${floor}): ${frames.slice(0, 4).join(' / ')}`
         ).toBeGreaterThanOrEqual(floor);
+        /* AND EVERY ONE OF THEM IS A WHOLE CELL: each position the engine
+           computed is a whole number of cells into the 12 x 10 grid, so the box
+           never shows the edges of two frames at once. A step count or a
+           keyframe distance that disagreed with the sheet's grid lands
+           between cells and fails here in the engine, whatever the source
+           pins say. */
+        for (const position of frames) {
+          const offsets = /^(-?[\d.]+)px (-?[\d.]+)px$/.exec(position);
+          expect(offsets, `J at ${seat} computed a position "${position}" this lane cannot read as pixels`).not.toBeNull();
+          const column = -Number(offsets[1]) / jCellPx(1440).width;
+          const row = -Number(offsets[2]) / jCellPx(1440).height;
+          for (const [axis, cells, count] of [
+            ['column', column, 12],
+            ['row', row, 10],
+          ]) {
+            expect(
+              Math.abs(cells - Math.round(cells)),
+              `J at ${seat} drew ${position}, ${cells} ${axis}s into the sheet rather than a whole cell`
+            ).toBeLessThan(0.02);
+            expect(Math.round(cells), `J at ${seat} drew ${position}, off the sheet's ${count} ${axis}s`).toBeGreaterThanOrEqual(0);
+            expect(Math.round(cells), `J at ${seat} drew ${position}, off the sheet's ${count} ${axis}s`).toBeLessThan(count);
+          }
+        }
       }
     }
 
     /* ...AND IT IS THE SAME PICTURE IN BOTH, asked of the two elements rather
-       than of the network. The request tally above is name-based and a sheet
-       under some other name would slip past it — MEASURED: a mutant pointing
-       the mirrored seat at a second file was deduplicated by the bundler onto
-       an existing asset's name and survived the tally. Comparing what the two
-       seats actually resolved closes that: any second image, under any name,
-       makes these two strings differ. */
+       than of the network. The request tally above is name-based and a
+       picture under some other name would slip past it; comparing what the
+       two seats actually resolved closes that: any second image, under any
+       name, makes these two strings differ. */
     expect(
       new Set(seatImages).size,
       `the two seats resolved different pictures: ${seatImages.join(' vs ')}`
     ).toBe(1);
-    expect(seatImages[0], 'neither seat draws the flight sheet').toMatch(/rime-flight[^/]*\.webp/);
+    expect(seatImages[0], `neither seat draws the ${drawn}`).toMatch(
+      motion === 'reduce' ? /j-typing-still-[^/]*\.webp/ : /j-typing-(?!still-)[^/]*\.webp/
+    );
 
-    /* THE KEYBOARD ORDER IS UNCHANGED, and the second dragon is the reason to
-       ask again: he sits INSIDE the row's first stop now, and a picture that
-       became focusable there would put a nameless stop in front of every
-       keyboard reader on arrival. Asked of the row's own focusable inventory
-       rather than by pressing Tab, because engines in this matrix disagree
-       about whether a plain link is tabbable and that disagreement would
-       decide the result instead of the change under test. */
+    /* AND THE ENGINE CAN DECODE IT (review of #359, F4). Every check above
+       reads a name, a header, a request or a computed position, and all of
+       them stay green on a file whose pixels are gone: the review zeroed each
+       WebP's image payload, kept every header, chunk and byte count, and this
+       whole test passed. So the picture the seats resolved is decoded here
+       and held to its intrinsic size — the sheet's 12 x 10 cells of 176 x 128,
+       the still's one cell at 2x — and the same bytes with their image chunk
+       zeroed are decoded too and must be REFUSED, which is what proves this
+       decode tells a picture from a corpse in this engine rather than
+       passing whatever it is handed. createImageBitmap reads a Blob directly,
+       so the page's image policy is not what decides it. */
+    const decoded = await page.evaluate(async (css) => {
+      const url = /url\("?([^")]+)"?\)/.exec(css)[1];
+      const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+      const decode = async (data) => {
+        try {
+          const bitmap = await createImageBitmap(new Blob([data], { type: 'image/webp' }));
+          const size = [bitmap.width, bitmap.height];
+          bitmap.close();
+          return size;
+        } catch {
+          return null;
+        }
+      };
+      const corrupt = bytes.slice();
+      const view = new DataView(corrupt.buffer);
+      let zeroed = 0;
+      for (let at = 12; at + 8 <= corrupt.length; ) {
+        const fourcc = String.fromCharCode(...corrupt.subarray(at, at + 4));
+        const size = view.getUint32(at + 4, true);
+        if (fourcc === 'VP8 ' || fourcc === 'VP8L') {
+          corrupt.fill(0, at + 8, at + 8 + size);
+          zeroed += size;
+        }
+        at += 8 + size + (size % 2);
+      }
+      return { size: await decode(bytes), corrupt: await decode(corrupt), zeroed };
+    }, seatImages[0]);
+    expect(decoded.size, `the ${drawn} does not decode in this engine`).toEqual(
+      motion === 'reduce' ? [352, 256] : [176 * 12, 128 * 10]
+    );
+    expect(decoded.zeroed, `no image chunk was found in the ${drawn} to corrupt`).toBeGreaterThan(0);
+    expect(decoded.corrupt, `the ${drawn} with its image chunk zeroed still decoded, so this check proves nothing`).toBeNull();
+
+    /* THE KEYBOARD ORDER IS UNCHANGED: one of him sits INSIDE the row's first
+       stop, and a picture that became focusable there would put a nameless
+       stop in front of every keyboard reader on arrival. Asked of the row's
+       own focusable inventory rather than by pressing Tab, because engines in
+       this matrix disagree about whether a plain link is tabbable and that
+       disagreement would decide the result instead of the change under
+       test. */
     const order = await page.evaluate(() => {
       const header = window.document.querySelector('.page-header');
       const focusable = [
@@ -995,24 +1111,19 @@ test('Rime bookends the row from one sheet, mirrored at the start, flying where 
       const inOrder = [...header.querySelectorAll('*')];
       return {
         classes: focusable.map((node) => node.className || node.tagName.toLowerCase()),
-        includesMark: focusable.some((node) => node.classList.contains('rime-mark')),
+        includesMark: focusable.some((node) => node.classList.contains('j-mark')),
         firstStop: focusable[0]?.className ?? '',
         markAfterMode:
-          inOrder.indexOf(header.querySelector('.page-chrome .rime-mark')) >
+          inOrder.indexOf(header.querySelector('.page-chrome .j-mark')) >
           inOrder.indexOf(header.querySelector('[aria-label="Reading mode"], button')),
       };
     });
-    expect(
-      order.includesMark,
-      'a dragon is a keyboard stop; the row’s pinned order has gained one'
-    ).toBe(false);
+    expect(order.includesMark, 'J is a keyboard stop; the row’s pinned order has gained one').toBe(false);
     expect(
       order.firstStop,
       `the row’s first stop is "${order.firstStop}" rather than the home link`
     ).toContain('page-mark');
-    expect(order.markAfterMode, 'Rime is drawn before the reading mode, so he sits between two stops').toBe(
-      true
-    );
+    expect(order.markAfterMode, 'J is drawn before the reading mode, so he sits between two stops').toBe(true);
     /* AND THE FIRST STOP SAYS SOMETHING. The link's whole content is
        aria-hidden, so its name has to be computed from the heading it scrolls
        to — and only a real accessibility tree can report whether that
@@ -1095,7 +1206,7 @@ test('a phone still renders the single full-width column it always did', async (
         right: seat.right,
         bottom: seat.bottom,
         /* The LAST thing in the row, whatever it is. The reading mode was the
-           end of the row until Rime joined it (owner decision, 2026-09-11,
+           end of the row until the dragon joined it (owner decision, 2026-09-11,
            issue 314); what issue 264 was about is the GAP after the last of
            them, so that is what is measured. */
         endLabel: chrome.lastElementChild.className,
@@ -1133,8 +1244,8 @@ test('a phone still renders the single full-width column it always did', async (
        end the owner reported (issue 264) shows up here as a gap at either of
        these two joints. The subject is the row's last element rather than the
        reading-mode control by name — the control was the last of them until
-       Rime joined the row (owner decision, 2026-09-11, issue 314), and a lane
-       that named the control would have reported a 56px dead strip that is
+       the dragon joined the row (owner decision, 2026-09-11, issue 314), and a lane
+       that named the control would have reported a 72.5px dead strip that is
        not there. */
     expect(
       control.rest.endRight,
@@ -3053,7 +3164,7 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
         return { right: box.right, bottom: box.bottom };
       })(),
       /* The LAST thing in the row, whatever it is: the reading mode was the
-         end of it until Rime joined (owner decision, 2026-09-11, issue 314),
+         end of it until the dragon joined (owner decision, 2026-09-11, issue 314),
          and what the corner rule protected is the gap AFTER the last of them
          rather than the identity of that last one. */
       rowEnd: (() => {
@@ -7424,9 +7535,9 @@ test('the reading-mode popover fits the narrowest phone this site supports', asy
      reasoning that the header was glued to the viewport's corner (issue 168)
      — an arrangement retired with the in-flow ledger row (issue 287), and a
      measurement that only kept working because the control happened to be the
-     last thing in the row. Rime is the last thing in the row now (owner
+     last thing in the row. The dragon is the last thing in the row now (owner
      decision, 2026-09-11, issue 314), so the viewport measurement would be
-     reporting the 56px he occupies as a defect in a menu he is not part of.
+     reporting the 72.5px he occupies as a defect in a menu he is not part of.
      The anchoring claim is the one this lane was always making. */
   expect(
     Math.abs(observed.right - observed.triggerRight),
@@ -11802,8 +11913,8 @@ test('the keyboard still walks the chrome row: the home link, the four nav links
 }) => {
   await visit(page);
   /* THE ROW'S FIRST STOP IS A PICTURE NOW (owner ruling, 2026-09-12, issue
-     325): the home link draws the mirrored dragon rather than the "SN."
-     wordmark, and a control with no text of its own is exactly the kind that
+     325): the home link draws the dragon rather than the "SN." wordmark, and
+     a control with no text of its own is exactly the kind that
      quietly leaves the tab order — an anchor that lost its href, a span
      someone styled to look pressable. The nav links went the other way in the
      same ruling and got their words back. Either change could move a stop, so
@@ -11875,6 +11986,120 @@ test('the keyboard still walks the chrome row: the home link, the four nav links
   expect(home.tabbable, 'the home link left the tab order').toBe(true);
   expect(home.text, `the home link prints "${home.text}"; its content is a picture now`).toBe('');
 });
+
+/* A CLOSED DRAWER HOLDS NO STOP (issue 329). The drawer closes by clipping its
+ * contents to zero height, and clipping alone left the employer link a Tab
+ * stop and in the accessibility tree, so Chromium and Firefox walked row,
+ * invisible link, row, invisible link. The closed drawer is `inert`
+ * (LedgerLog.svelte), and this measures what each engine DOES with that at
+ * both layouts: every drawer closed, the walk goes row to row; one drawer
+ * open, its link is the stop between its row and the next; and the open still
+ * grows where motion is welcome and still opens where it is not.
+ *
+ * Two halves, because WebKit cannot answer the walk. Its automation build
+ * leaves plain links out of the tab order (the chrome-row walk above) and the
+ * role rows' buttons with them — a Tab from one row was measured landing on
+ * the projects table, past every row and every link — so a walk there proves
+ * nothing either way. An inert subtree refuses programmatic focus in every
+ * engine, so that half, and the grow, are asserted everywhere; the walks are
+ * asserted wherever the chrome-row walk's own independent probe — one Tab out
+ * of the last row — reaches an anchor. */
+for (const viewport of markViewports) {
+  test(`a closed role drawer holds no keyboard stop and an open one does, at ${viewport.width}px (issue 329)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await visit(page);
+    const entries = page.locator('#work .ledger-entry');
+    const count = await entries.count();
+    expect(count, 'the experience section rendered fewer than two rows to walk').toBeGreaterThan(1);
+    const drawers = () =>
+      entries.evaluateAll((nodes) =>
+        nodes.map((entry) => {
+          const link = entry.querySelector('.ledger-link');
+          link.focus({ preventScroll: true });
+          const focusable = window.document.activeElement === link;
+          link.blur();
+          return [entry.querySelector('.ledger-drawer').inert, focusable];
+        })
+      );
+    const stop = () =>
+      page.evaluate(() => {
+        const active = window.document.activeElement;
+        const at = (selector) => [...window.document.querySelectorAll(selector)].indexOf(active);
+        return { row: at('#work .ledger-row'), link: at('#work .ledger-link') };
+      });
+    const closed = [true, false];
+    const open = [false, true];
+
+    expect(await drawers(), 'a closed drawer is not inert, or still lets its link take focus').toEqual(
+      Array(count).fill(closed)
+    );
+    await entries.last().locator('.ledger-row').focus();
+    await page.keyboard.press('Tab');
+    const engineTabsLinks = await page.evaluate(
+      () => window.document.activeElement?.tagName === 'A'
+    );
+    if (engineTabsLinks) {
+      await entries.first().locator('.ledger-row').focus();
+      for (let index = 1; index < count; index += 1) {
+        await page.keyboard.press('Tab');
+        expect(
+          await stop(),
+          `with every drawer closed, the Tab after row ${index - 1} did not land on row ${index}`
+        ).toEqual({ row: index, link: -1 });
+      }
+    }
+
+    /* Opened where motion is welcome: the drawer leaves inert at once and
+       still GROWS — a running grid-template-rows transition the engine itself
+       reports — and its link is the next stop after its own row. */
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    const first = entries.first();
+    await first.locator('.ledger-row').click();
+    expect(
+      await first
+        .locator('.ledger-drawer')
+        .evaluate((drawer) =>
+          drawer.getAnimations().some((motion) => motion.transitionProperty === 'grid-template-rows')
+        ),
+      'the drawer opened without growing where motion is welcome'
+    ).toBe(true);
+    expect(await drawers(), 'the opened drawer still refuses focus, or another one stopped refusing').toEqual(
+      [open, ...Array(count - 1).fill(closed)]
+    );
+    if (engineTabsLinks) {
+      await first.locator('.ledger-row').focus();
+      await page.keyboard.press('Tab');
+      expect(await stop(), 'the Tab after an opened row did not land on its own link').toEqual({
+        row: -1,
+        link: 0,
+      });
+      await page.keyboard.press('Tab');
+      expect(await stop(), 'the Tab out of an opened drawer did not land on the next row').toEqual({
+        row: 1,
+        link: -1,
+      });
+    }
+
+    /* Opened where it is not: the same two states, applied instantly. */
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await entries.nth(1).locator('.ledger-row').click();
+    expect(
+      await entries
+        .nth(1)
+        .locator('.ledger-drawer')
+        .evaluate((drawer) => drawer.getAnimations().length),
+      'the drawer travels for a reader who asked for less motion'
+    ).toBe(0);
+    expect(await drawers(), 'a drawer opened without motion still refuses focus').toEqual([
+      open,
+      open,
+      ...Array(count - 2).fill(closed),
+    ]);
+    await page.emulateMedia({ reducedMotion: null });
+  });
+}
 
 /* THE TABLE'S HEAD IS MARKS AND ITS NUMERALS ARE A COLUMN (owner directive,
  * 2026-09-11, issue #317).

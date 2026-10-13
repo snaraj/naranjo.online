@@ -7,11 +7,13 @@ release, and no validation gate beyond the origin's own runtime defences
 — what the volume carries, what the frontend will accept, and what happens
 when none of it is there.
 
-Nothing in this document asserts that media is enabled anywhere. It is not:
-`chart/values.yaml` ships `media.enabled: false`, and turning it on needs
-ADR 0012's storage evidence and the platform lane's provisioning receipt for
-the claim. What is prepared is the shape of the thing; enablement is a
-separate, later, reviewed step.
+Media is enabled by default. Since 2026-08-27 `chart/values.yaml` ships
+`media.enabled: true` together with the reviewed profile, the named claim, the
+mount path and the measured transfer budget that the values schema demands
+beside it, because ADR 0012's storage evidence and the platform lane's
+provisioning receipt for the claim both landed (receipts on issue #182).
+Turning media off for a deployment is a values override, `media.enabled=false`,
+never a code change; `scripts/ci/chart-media-pin.sh` pins both renders.
 
 ## Where it lives
 
@@ -163,7 +165,8 @@ row costs one row.
 `loadGalleryManifest` answers `null` — one answer for every failure, because
 the caller's response to all of them is identical:
 
-- media disabled in the chart, so the route serves nothing;
+- media turned off for the deployment (`media.enabled=false`), so the route
+  serves nothing;
 - no manifest published (404);
 - the origin at its transfer ceiling (503);
 - a network fault;

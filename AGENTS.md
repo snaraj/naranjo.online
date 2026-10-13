@@ -806,7 +806,8 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   `dependency-review` (PRs only; fails on high severity), `application`
   (toolchain pinned AND verified — Node 24.19.0, npm 11.17.0,
   Go 1.26.6; frontend check/test/build; gofmt/vet/tests/race; the
-  coverage floor), `chart` (the four chart pin scripts; helm lint + render
+  coverage floor; on main pushes, the measured totals handed over as the
+  `coverage-totals` artifact), `chart` (the four chart pin scripts; helm lint + render
   at `--kube-version v1.36.0`; the numeric VERSION ↔ numeric chart
   `version` ↔ numeric `appVersion` ↔ plain-v chart `image.tag` four-way
   lock, plus a render assertion that the emitted reference still carries a
@@ -814,16 +815,21 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   production architectures built, never published). `container` remains a
   REQUIRED pull-request check; `EXPECTED_MAIN_JOBS` in
   `scripts/ci/release_contract.py` expects `container` and
-  `dependency-review` `skipped` on a main push and the other four
+  `dependency-review` `skipped` on a main push and the other three
   successful, exact in both directions. What each chart pin proves, and why
   the two PR-only jobs carry no main trigger, is in `docs/ci-map.md`.
-- **coverage-badges** — `main` pushes only: waits for `application` to
-  succeed and publishes its numeric coverage outputs from the same run,
-  without rebuilding or repeating tests. It force-updates the generated
-  single-commit `badges` branch. Badge numbers are CI-computed, never
-  hand-edited; the badge publishes the identical number the gate
-  enforced for Go and reported for frontend. A badge is a coverage report;
-  the release publisher separately requires every main gate job to pass.
+- **coverage-badges.yml** — success-only `workflow_run` of a protected-main
+  PR gate run (issue #350): publishes that exact run's `coverage-totals`,
+  bound to its commit and run ID, to the generated single-commit `badges`
+  branch, without rebuilding or repeating tests. Badge numbers are
+  CI-computed, never hand-edited; the badge publishes the identical number
+  the gate enforced for Go and reported for frontend. It is NOT a release
+  input: it sits outside `pr-gate.yml`'s job inventory and the orchestrator
+  follows only the PR gate, so a badge failure is a red run of this workflow
+  and nothing else. An older main commit never replaces newer badges: the
+  push proceeds only when the commit the current badges record is an
+  ancestor of, or equal to, the one being published, under a lease on the
+  badge head it read (`scripts/ci/coverage_badges.py`; `docs/ci-map.md`).
 - **browser-lanes.yml** — pull requests and manual dispatch (no `main` push
   trigger): the rendering-lane smoke matrix (issue #26 stage 2), five
   projects against the real Go binary on localhost. It holds `contents:
@@ -850,6 +856,19 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   one-asset manifest staging, and terminal immutable Release/manifest/tag
   state are stated under Releases above; an ordinary manual/unmerged
   dispatch, skip flag, or force path cannot publish (requirement 10).
+- **compliance-live.yml** — weekly, manual, and pull requests that change the
+  judge: GETs production and judges what the edge serves against
+  `compliance.json` with `scripts/ci/compliance_manifest.py live` (a complete
+  answer, CSP origins, framing, HSTS, nosniff, Referrer-Policy, no cookie,
+  reporting endpoints, scripts in the served HTML and whether the CSP blocks a
+  declared injected one, published legal pages). It holds `contents: read` and
+  no secret. The manifest's schema, its storage list against the writes the
+  source makes, and the judge's rules run in the PR gate's contract suites;
+  the build's own behaviour runs in `frontend/e2e/compliance.spec.mjs` in the
+  browser lanes. Lift: the `compliance.json` entry a liftable refusal prints,
+  with a written reason; header, cookie, on-load-write and incomplete-answer
+  refusals have no manifest lift. `docs/ci-map.md` records what the three
+  checks prove.
 - **release-audit.yml** — weekly and manual, read-only audit of the latest
   immutable Release. It re-binds the successful run, annotated tag, exact
   manifest bytes, image/chart semantic aliases and digests, signatures,

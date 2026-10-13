@@ -53,6 +53,94 @@ which selects the engine revisions. The job installs that exact pinned
 `@playwright/test` from the lockfile and restores the engine cache keyed on
 that version.
 
+## Why coverage badges publish outside the PR gate
+
+Until issue #350 the badge push was a `coverage-badges` job inside
+`pr-gate.yml`, and two facts made that wrong. The release publisher authorizes
+against that workflow's exact job inventory, so a transport failure on a
+generated branch held back a release whose tests, chart and scans had all
+passed. And main pushes share no gate concurrency group, so two runs could
+finish out of order and the older one force-push its numbers over the newer.
+
+Now the gate's `application` job hands its two measured totals, with its
+commit and run ID, to the `coverage-totals` artifact on main pushes, after
+both measurement steps passed, and `coverage-badges.yml` publishes them after
+a successful protected-main gate run. Nothing is re-measured, and no release
+input reads the outcome: `EXPECTED_MAIN_JOBS` has no badge job (one carried
+back into the gate is refused as foreign), and `release-after-main.yml`
+follows the PR gate alone. `scripts/ci/coverage_badges.py` refuses totals
+bound to another commit or run, and orders publications by history: the
+badge commit's subject (`coverage badges for <sha>`) and `source.json` record
+the measured commit, a newer or equal commit replaces the badges, an older one
+stands down successfully, and a badge head it cannot place fails. The push is
+leased on the badge head the decision read and bounded at five attempts; a
+lost answer is recognised as published. Deleting the `badges` branch is the
+recovery from a head nobody can place. `scripts/ci/test_coverage_badges.py`
+proves each of those against real git, including two runs completing in
+reverse order and a race lost to a newer publisher.
+
+## What the compliance gate proves, and where it cannot reach
+
+`compliance.json` states what the site stores on a visitor's device and when,
+which third-party origins a page may contact (none today), which legal pages
+exist, and which edge behaviours are known and why (issue #355). Three
+checks hold the site to it, and each answers a different question:
+
+- `scripts/ci/test_compliance_manifest.py`, in the PR gate's contract suites,
+  keeps the manifest valid and current: a closed schema (a present section,
+  `null` included, must be a list); a storage entry only while a frontend file
+  still WRITES that name as that kind, and no write the manifest leaves
+  undeclared; evidence files that still exist; and the judging rules
+  themselves, each refused on its own. A write is what
+  `compliance_manifest.py`'s `storage_writes` grammar reads -- a
+  `document.cookie` assignment by literal name, or a `setItem` whose key is a
+  literal or a bound constant on a named store, found in code only -- so a
+  read, a string, template or regular expression however write-shaped, a
+  comment, Svelte markup or a test file keeps nothing alive, and a write the
+  grammar cannot attribute, a key built at run time included, is refused
+  rather than ignored. A `/` after `)`, `}`, `++`, `--` or `of` (or a `!`
+  following one, or following an operand across a line break) can divide or
+  open a regular expression, so each file is read both ways, and a file whose
+  writes may depend on the reading is refused until it is written
+  unambiguously. A name spelled with a Unicode escape is refused, because an
+  escape can spell `localStorage`, `setItem`, `cookie` or a label. Any
+  non-ASCII character in code that is not white space is read as part of a
+  name, since every JavaScript punctuator is ASCII.
+- `frontend/e2e/compliance.spec.mjs`, in the browser lanes, drives the shipped
+  binary in every engine: no request to an undeclared origin, no CSP
+  violation, nothing written to the device before the visitor acts, the
+  WCAG 2.1 floors a browser can measure (page language, image `alt`, an
+  accessible name on every visible control, no positive `tabindex`, and on
+  every keyboard stop a focus indicator that PAINTS -- an outline or a
+  box-shadow whose colour is not transparent and whose width or extent is not
+  zero; its contrast against the page is not measured), no credential-shaped
+  literal in the served document, scripts or stylesheets, and every published
+  legal page linked and served. The focus measurement is itself proven able
+  to refuse, in every engine, against indicators that paint nothing.
+- `compliance-live.yml`, weekly and on demand, GETs production and judges what
+  the edge serves: the answer read whole (a body past 2 MiB, or short of its
+  `Content-Length`, fails rather than being judged by its prefix); CSP fetch
+  directives admit no undeclared origin, wildcard, bare scheme or
+  `'unsafe-inline'` script source; a declared injected script passes only
+  while some enforced policy blocks every inline script, because that block is
+  the declaration's reason; framing is denied; HSTS lasts a year; nosniff and
+  a Referrer-Policy are present; the document sets no cookie; every reporting
+  endpoint and every script, stylesheet or embed in the served HTML is this
+  origin's or declared; every published legal page answers 200. It also runs
+  on a pull request that changes the judge, so the judge is proven against
+  the live site before it merges, but not on one that only edits the
+  manifest, which often declares what the next deployment ships.
+
+A declared entry that no longer occurs is refused as stale, so no exemption
+outlives its case. A refusal a manifest line can lift prints that line; the
+rest -- a missing header, a cookie on the document, a write on load, an
+injected script the CSP can let run, an incomplete answer -- print none,
+because they need a code, policy or owner decision. What none of the three
+can see: what a visitor's device writes after they act, a screen reader's
+actual reading, and anything only a lawyer can judge. The manifest's
+`storage` list is the disclosure for the first, kept honest against the
+writes the source makes, in both directions.
+
 ## The documented GitHub behaviours the release path depends on
 
 GitHub documents that `GITHUB_TOKEN`-created refs suppress recursive workflow

@@ -15,6 +15,10 @@
   file every thirty seconds and a visible browser does the same. Failures land
   in the log files below; the push script's diagnostics are stage names and
   byte counts, never payload content.
+
+  launchd never rotates those two files, so the agent tells the push script
+  where they live (NARANJO_USAGE_EXPORT_LOG_DIR) and the script rotates them
+  itself, past 5 MiB, keeping one generation (issue #358).
 -->
 <plist version="1.0">
 <dict>
@@ -24,6 +28,11 @@
     <array>
         <string>__PUSH_SCRIPT__</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NARANJO_USAGE_EXPORT_LOG_DIR</key>
+        <string>__LOG_DIR__</string>
+    </dict>
     <key>StartInterval</key>
     <integer>60</integer>
     <key>RunAtLoad</key>
