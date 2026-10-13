@@ -2793,12 +2793,11 @@ func TestASourceRefusesAnotherVendorsModel(t *testing.T) {
 		} {
 			t.Run(label+" "+name, func(t *testing.T) {
 				t.Parallel()
-				state, err := pushToShippedRegistry(t, func(at time.Time) map[string]any {
+				_, err := pushToShippedRegistry(t, func(at time.Time) map[string]any {
 					return shippedUsageDocument(t, at, residual, label, testCase.models, testCase.modelStats)
 				})
 				if err == nil {
-					_, data := decodeServedUsage(t, state)
-					t.Fatalf("a source carrying another vendor's model %q was admitted: %+v", foreign, data.Sources)
+					t.Fatalf("source %q carrying another vendor's model %q was admitted", label, foreign)
 				}
 				if !strings.Contains(err.Error(), testCase.wantErr) {
 					t.Fatalf("refused with %q, want %q", err, testCase.wantErr)
@@ -2890,7 +2889,13 @@ func TestEverySourceIsScopedToItsOwnVendorGroup(t *testing.T) {
 		}
 	}
 	// A label no source file declares belongs to no group: the residual only.
-	if got := modelScope(sourceModelScopes, "a-source-nobody-declared"); strings.Join(got, ",") != residual {
+	got := modelScope(sourceModelScopes, "a-source-nobody-declared")
+	if strings.Join(got, ",") != residual {
 		t.Errorf("an undeclared source is scoped to %v; want only the residual", got)
+	}
+	// Cut from the serve order itself, so it must carry no spare capacity: an
+	// append to it would otherwise overwrite the serve order's next member.
+	if cap(got) != len(got) {
+		t.Errorf("the residual-only scope has capacity %d for %d keys; an append would write into the serve order", cap(got), len(got))
 	}
 }

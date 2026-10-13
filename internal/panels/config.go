@@ -137,12 +137,14 @@ func scopeModelVocabularies(serveOrder []string, groups map[string][]string, ven
 // label the source vocabulary does not bind belongs to no vendor group, so the
 // residual is the only key it may carry — the same answer the producer and the
 // page give. No shipped snapshot label can reach that branch: every one is
-// pinned to a declared source by the vocabulary tests.
+// pinned to a declared source by the vocabulary tests. The residual-only slice
+// is capacity-capped, so nothing a caller appends can ever write into the
+// serve order it is cut from.
 func modelScope(scopes map[string][]string, label string) []string {
 	if scope, ok := scopes[label]; ok {
 		return scope
 	}
-	return modelServeOrder[:1]
+	return modelServeOrder[:1:1]
 }
 
 // loadSourceVocabulary strictly decodes the embedded source vocabulary — the

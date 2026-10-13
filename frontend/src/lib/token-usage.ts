@@ -502,8 +502,8 @@ const maxCategoryRows = 8;
  * its second vendor group (issue #302), and ten weeks until the sealed
  * ceiling needed its further digit (issue #267): the section costs one
  * integer per day per member of the source's own vendor group (issue #369),
- * and the ceiling is never the lever. The categories breakdown carries no separate day bound on either side,
- * exactly as in Go. */
+ * and the ceiling is never the lever. The categories breakdown carries no
+ * separate day bound on either side, exactly as in Go. */
 const maxModelDays = 56;
 
 /* admitSeries returns the admitted series, undefined when the section is
