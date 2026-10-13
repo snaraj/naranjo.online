@@ -334,8 +334,8 @@
   /* The token-usage ENTITY set: identity colors for the per-day breakdowns.
      The five accounting classes take slots 1..5 (input, output, cache read,
      cache write, reasoning) and the model vocabulary's members take a slot
-     within their own vendor group, which is why the set runs to seven
-     chromatic hues (issue 302: the larger group declares seven named
+     within their own vendor group, which is why the set runs to nine
+     chromatic hues (issue 369: the larger group declares nine named
      members). A slot is fixed per KEY so a color follows its entity across
      every payload, and slot 0 is the neutral the residual and any key
      outside a vocabulary draw. Reuse ACROSS groups is deliberate — a colour
@@ -351,6 +351,29 @@
      that keeps its ADJACENT pairs apart: worst adjacent separation across
      the three chromatic modes is 19.8 to normal vision and 13.8 under
      deuteranopia and protanopia, against floors of 15 and 8.
+
+     Slots 8 and 9 (issue 369) are an orchid and a cyan, the two hue gaps
+     the first seven leave, chosen by the same validator against the same
+     raised surfaces: every new hue inside its mode's lightness band, the
+     lowest chroma 0.110 and the lowest contrast 3.17:1, and the two pairs
+     the new slots make in the vocabulary's own order (7 with 8, 8 with 9)
+     at worst 20.8 to normal vision and 9.7 under deuteranopia and
+     protanopia. Re-run today, that validator does NOT reproduce the figures
+     above for slots 6 and 7: slot 7's chroma measures 0.095 to 0.097
+     against its 0.10 floor, and in the larger group's order the 5-6 pair
+     measures 10.1 to normal vision and the 6-7 pair 0.8 under deuteranopia
+     at their worst. Those two colours are left where they are, because
+     repainting a slot moves a member's colour, and the gap is recorded here
+     rather than restated as a pass.
+
+     What these slots are today, plainly: TOKENS THE VOCABULARY RULE REQUIRES,
+     not colours a reader sees. models.json gives every member a slot unique
+     within its group, and the swatch pin in tests/token-usage.test.mjs
+     demands a declared token in every reading mode for every slot the file
+     hands out, so a member whose slot had none could not ship. The model bars
+     on the board paint a SINGLE ink (--board-ink, .board-fill below), and no
+     component reads --usage-cat-* at all, so no reader is shown any of these
+     colours. A card that one day paints by entity reads them from here.
 
      The true dark mode is the DELIBERATE exception, exactly as its grid
      ramp is: the mode's whole design is that the brand mark stays its only
@@ -368,6 +391,8 @@
   --palette-light-cat-5: #a3315e;
   --palette-light-cat-6: #cc5145;
   --palette-light-cat-7: #698240;
+  --palette-light-cat-8: #86318a;
+  --palette-light-cat-9: #048aad;
 
   --palette-dark-cat-0: #565656;
   --palette-dark-cat-1: #6f6f6f;
@@ -377,6 +402,8 @@
   --palette-dark-cat-5: #dadada;
   --palette-dark-cat-6: #949494;
   --palette-dark-cat-7: #f2f2f2;
+  --palette-dark-cat-8: #7a7a7a;
+  --palette-dark-cat-9: #cccccc;
 
   --palette-slate-cat-0: #5a657e;
   --palette-slate-cat-1: #3f81d9;
@@ -386,6 +413,8 @@
   --palette-slate-cat-5: #cf5585;
   --palette-slate-cat-6: #b46852;
   --palette-slate-cat-7: #678546;
+  --palette-slate-cat-8: #8e5793;
+  --palette-slate-cat-9: #01a2c5;
 
   --palette-sepia-cat-0: #77685a;
   --palette-sepia-cat-1: #5c88d8;
@@ -395,6 +424,8 @@
   --palette-sepia-cat-5: #d15a88;
   --palette-sepia-cat-6: #b56754;
   --palette-sepia-cat-7: #6d8a4b;
+  --palette-sepia-cat-8: #985a96;
+  --palette-sepia-cat-9: #0fa3bf;
 
   /* Stacking order, as tokens rather than magic numbers. Two things sit over
      the document and they must be told apart. The reading-mode popover hangs
@@ -975,6 +1006,8 @@
   --usage-cat-5: var(--color-cat-5);
   --usage-cat-6: var(--color-cat-6);
   --usage-cat-7: var(--color-cat-7);
+  --usage-cat-8: var(--color-cat-8);
+  --usage-cat-9: var(--color-cat-9);
   /* The hover-detail token layer. The detail that hangs off a tile is one
      primitive (lib/components/DetailTip.svelte), so like the card above it
      every dimension it has is a token declared once here — including the two
@@ -1035,6 +1068,8 @@
   --color-cat-5: var(--palette-light-cat-5);
   --color-cat-6: var(--palette-light-cat-6);
   --color-cat-7: var(--palette-light-cat-7);
+  --color-cat-8: var(--palette-light-cat-8);
+  --color-cat-9: var(--palette-light-cat-9);
   /* The page's one font stack, as a token: a card's type ramp reads it rather
      than restating it, so the family is chosen in exactly one place. The face
      is the self-hosted JetBrains Mono declared at the top of this file (owner
@@ -1157,6 +1192,8 @@
     --color-cat-5: var(--palette-dark-cat-5);
     --color-cat-6: var(--palette-dark-cat-6);
     --color-cat-7: var(--palette-dark-cat-7);
+    --color-cat-8: var(--palette-dark-cat-8);
+    --color-cat-9: var(--palette-dark-cat-9);
     --gallery-stage-ground: var(--palette-projection-ground);
   }
 }
@@ -1189,6 +1226,8 @@
   --color-cat-5: var(--palette-dark-cat-5);
   --color-cat-6: var(--palette-dark-cat-6);
   --color-cat-7: var(--palette-dark-cat-7);
+  --color-cat-8: var(--palette-dark-cat-8);
+  --color-cat-9: var(--palette-dark-cat-9);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 
@@ -1226,6 +1265,8 @@
   --color-cat-5: var(--palette-slate-cat-5);
   --color-cat-6: var(--palette-slate-cat-6);
   --color-cat-7: var(--palette-slate-cat-7);
+  --color-cat-8: var(--palette-slate-cat-8);
+  --color-cat-9: var(--palette-slate-cat-9);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 
@@ -1257,6 +1298,8 @@
   --color-cat-5: var(--palette-sepia-cat-5);
   --color-cat-6: var(--palette-sepia-cat-6);
   --color-cat-7: var(--palette-sepia-cat-7);
+  --color-cat-8: var(--palette-sepia-cat-8);
+  --color-cat-9: var(--palette-sepia-cat-9);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 
@@ -3099,18 +3142,38 @@ h1 {
    runs under both, and the accounting line under that where the source
    reports one — four cells of one small grid, placed rather than auto-flowed
    so the reading stays beside its name instead of being pushed under the
-   rule it belongs to. */
+   rule it belongs to.
+
+   THE LIST NEVER SETS THE CARD'S HEIGHT, AND IT DRAWS ONLY WHOLE ROWS (owner
+   ruling, 2026-10-13, issue 369: "just show the top 4-5 but make it
+   responsive ... it should fit nicely in the box and change as needs
+   change"). The adapter hands over at most five rows and the box decides how
+   many of them show. `contain: size` makes the rows count for nothing when
+   the grid sizes the row, so the card's height comes from its grid row and
+   --board-card-min, never from the list; the list then grows into whatever
+   height the card has left. Inside that height the rows run down a column
+   that WRAPS, spread evenly through it: a row that does not fit moves, whole,
+   into a second column past the list's right edge, and `overflow: hidden`
+   keeps that column unpainted. A row is therefore drawn complete or not drawn
+   at all, never cut through its name or its rule, and because the rows
+   arrive by usage, what is left off is always the tail. */
 .board-models {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: wrap;
+  justify-content: space-evenly;
+  align-content: flex-start;
   gap: var(--board-model-gap);
   flex: 1 1 auto;
-  align-content: space-evenly;
+  contain: size;
+  overflow: hidden;
 }
 
 .board-model {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.1875rem 0.5rem;
+  inline-size: 100%;
   font-family: var(--font-mono);
   font-size: var(--board-fact-size);
 }

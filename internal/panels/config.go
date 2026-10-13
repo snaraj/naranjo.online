@@ -92,7 +92,7 @@ func applyTitles(definitions []panelDefinition, titles map[string]string) {
 // subset nobody reviewed. Refusing to start is the loud, fail-closed answer,
 // and loadModelVocabulary below is a pure function so every refusal it can
 // reach is exercised by tests rather than by a broken binary.
-func mustLoadModelVocabulary(raw []byte) ([]string, map[string]bool) {
+func mustLoadModelVocabulary(raw []byte) ([]string, map[string][]string) {
 	serveOrder, groups, err := loadModelVocabulary(raw)
 	if err != nil {
 		panic("panels: the embedded model vocabulary is unusable: " + err.Error())
@@ -104,12 +104,47 @@ func mustLoadModelVocabulary(raw []byte) ([]string, map[string]bool) {
 // program, for mustLoadModelVocabulary's reason exactly: the bytes are
 // compiled in, so a fault is a build defect no runtime input can reach, and
 // a half-loaded vocabulary would leave a source the page cannot name.
-func mustLoadSourceVocabulary(raw []byte, groups map[string]bool) map[string]string {
-	names, err := loadSourceVocabulary(raw, groups)
+func mustLoadSourceVocabulary(raw []byte, groups map[string][]string) map[string]string {
+	vendors, err := loadSourceVocabulary(raw, groups)
 	if err != nil {
 		panic("panels: the embedded source vocabulary is unusable: " + err.Error())
 	}
-	return names
+	return vendors
+}
+
+// scopeModelVocabularies binds every declared source to the CLOSED model
+// vocabulary it may carry (issue #369): the residual, then its own vendor
+// group's members in serve order. A source's model keys are its own vendor's
+// models plus the fold of everything else, so a document naming another
+// group's member under it is refused exactly as an unknown key is — and the
+// payload ceiling is measured per source group rather than as every member
+// on every source.
+//
+// Built from the two loaded vocabularies, never transcribed: the source file
+// already declares who a source belongs to, and the model file which members
+// a group holds, so binding them here is one reading of each.
+func scopeModelVocabularies(serveOrder []string, groups map[string][]string, vendors map[string]string) map[string][]string {
+	scopes := make(map[string][]string, len(vendors))
+	for source, vendor := range vendors {
+		scope := make([]string, 0, len(groups[vendor])+1)
+		scope = append(scope, serveOrder[0])
+		scopes[source] = append(scope, groups[vendor]...)
+	}
+	return scopes
+}
+
+// modelScope is the closed model vocabulary the source `label` may carry. A
+// label the source vocabulary does not bind belongs to no vendor group, so the
+// residual is the only key it may carry — the same answer the producer and the
+// page give. No shipped snapshot label can reach that branch: every one is
+// pinned to a declared source by the vocabulary tests. The residual-only slice
+// is capacity-capped, so nothing a caller appends can ever write into the
+// serve order it is cut from.
+func modelScope(scopes map[string][]string, label string) []string {
+	if scope, ok := scopes[label]; ok {
+		return scope
+	}
+	return modelServeOrder[:1:1]
 }
 
 // loadSourceVocabulary strictly decodes the embedded source vocabulary — the
@@ -131,10 +166,12 @@ func mustLoadSourceVocabulary(raw []byte, groups map[string]bool) map[string]str
 //   - every vendor is a GROUP KEY of the model vocabulary, so the two data
 //     files cannot come to disagree about who a source belongs to.
 //
-// The origin reads nothing but those rules: it never prints a name. The page
-// imports the same bytes, which is what keeps the name out of every compiled
-// artifact that is not this file.
-func loadSourceVocabulary(raw []byte, groups map[string]bool) (map[string]string, error) {
+// The origin never prints a name. What it keeps is the one binding it does
+// act on: each source key mapped to its vendor group, because a source may
+// carry only its own group's models (issue #369). The page imports the same
+// bytes, which is what keeps the name out of every compiled artifact that is
+// not this file.
+func loadSourceVocabulary(raw []byte, groups map[string][]string) (map[string]string, error) {
 	var document sourcesDocument
 	if err := decodeStrict(raw, &document); err != nil {
 		return nil, err
@@ -145,13 +182,13 @@ func loadSourceVocabulary(raw []byte, groups map[string]bool) (map[string]string
 	if len(document.Sources) == 0 {
 		return nil, errors.New("source vocabulary: no sources")
 	}
-	names := make(map[string]string, len(document.Sources))
+	vendors := make(map[string]string, len(document.Sources))
 	written := make(map[string]bool, len(document.Sources))
 	for _, source := range document.Sources {
 		if !isLabelShaped(source.Key) {
 			return nil, fmt.Errorf("source vocabulary: %q is not a machine key", source.Key)
 		}
-		if _, ok := names[source.Key]; ok {
+		if _, ok := vendors[source.Key]; ok {
 			return nil, fmt.Errorf("source vocabulary: %q is declared twice", source.Key)
 		}
 		if source.Name == "" || len(source.Name) > maxSourceNameBytes {
@@ -160,13 +197,13 @@ func loadSourceVocabulary(raw []byte, groups map[string]bool) (map[string]string
 		if written[source.Name] {
 			return nil, fmt.Errorf("source vocabulary: %q repeats a written name; two sources would render identically", source.Key)
 		}
-		if !groups[source.Vendor] {
+		if _, ok := groups[source.Vendor]; !ok {
 			return nil, fmt.Errorf("source vocabulary: %q names a vendor the model vocabulary does not group", source.Key)
 		}
 		written[source.Name] = true
-		names[source.Key] = source.Name
+		vendors[source.Key] = source.Vendor
 	}
-	return names, nil
+	return vendors, nil
 }
 
 // loadModelVocabulary strictly decodes the embedded model vocabulary and
@@ -188,12 +225,12 @@ func loadSourceVocabulary(raw []byte, groups map[string]bool) (map[string]string
 // A fault in any of them refuses the whole file rather than dropping the
 // offending member: a vocabulary with a hole is a pipeline whose three
 // readers disagree, which is the failure this file exists to make impossible.
-// It returns the serve order AND the set of group keys, because the source
-// vocabulary beside it declares which group each source belongs to and the
-// two files may never disagree about who exists (issue #267). Deriving the
-// set here rather than re-decoding the file for it means there is one
+// It returns the serve order AND each group's members in serve order, because
+// the source vocabulary beside it declares which group each source belongs to
+// (issue #267) and a source may carry only that group's members (issue #369).
+// Deriving both here rather than re-decoding the file means there is one
 // reading of these bytes, not two.
-func loadModelVocabulary(raw []byte) ([]string, map[string]bool, error) {
+func loadModelVocabulary(raw []byte) ([]string, map[string][]string, error) {
 	var document modelsDocument
 	if err := decodeStrict(raw, &document); err != nil {
 		return nil, nil, err
@@ -216,15 +253,14 @@ func loadModelVocabulary(raw []byte) ([]string, map[string]bool, error) {
 	serveOrder := []string{document.Residual.Key}
 	keys := map[string]bool{document.Residual.Key: true}
 	identifiers := map[string]bool{}
-	groups := map[string]bool{}
+	groups := map[string][]string{}
 	for _, group := range document.Groups {
 		if !isLabelShaped(group.Key) || group.Label == "" {
 			return nil, nil, errors.New("model vocabulary: every group needs a label-shaped key and a written label")
 		}
-		if groups[group.Key] {
+		if _, ok := groups[group.Key]; ok {
 			return nil, nil, fmt.Errorf("model vocabulary: group %q is declared twice", group.Key)
 		}
-		groups[group.Key] = true
 		if len(group.Members) == 0 {
 			return nil, nil, fmt.Errorf("model vocabulary: group %q has no members", group.Key)
 		}
@@ -254,6 +290,7 @@ func loadModelVocabulary(raw []byte) ([]string, map[string]bool, error) {
 				identifiers[identifier] = true
 			}
 			serveOrder = append(serveOrder, member.Key)
+			groups[group.Key] = append(groups[group.Key], member.Key)
 		}
 	}
 	return serveOrder, groups, nil

@@ -65,8 +65,31 @@ const dataRootSnapshot = `{
   ]}
 }`
 
+// syntheticModelScopes binds the two synthetic labels to the SHIPPED model
+// scopes (issue #369), derived from the embedded vocabularies rather than
+// spelled: alpha takes the scope of the source whose vendor group holds the
+// vocabulary's first named member — the group every fixture in this file
+// draws its model keys from — and beta takes the other shipped source's. The
+// labels stay neutral; the rule they are admitted under is the production one.
+var syntheticModelScopes = func() map[string][]string {
+	scopes := map[string][]string{}
+	for _, scope := range sourceModelScopes {
+		if inVocabulary(modelServeOrder[1], scope) {
+			scopes["alpha"] = scope
+		} else {
+			scopes["beta"] = scope
+		}
+	}
+	if len(scopes) != 2 || len(sourceModelScopes) != 2 {
+		panic("the synthetic labels expect exactly two shipped sources in two vendor groups")
+	}
+	return scopes
+}()
+
 // usageDataRootRegistry builds a one-panel registry over a synthetic
 // snapshot filesystem, so every test controls the merge base completely.
+// The synthetic labels are bound to the shipped model scopes, exactly as the
+// production labels are by construction.
 func usageDataRootRegistry(t *testing.T, snapshot string) (*Registry, *panelState) {
 	t.Helper()
 	fsys := fstest.MapFS{
@@ -78,6 +101,7 @@ func usageDataRootRegistry(t *testing.T, snapshot string) (*Registry, *panelStat
 		title:  "Token usage",
 		source: SnapshotSource{Name: "snapshots/token-usage.json"},
 	}})
+	reg.modelScopes = syntheticModelScopes
 	state, ok := reg.byID["token-usage"]
 	if !ok {
 		t.Fatal("registry has no token-usage panel")
@@ -746,11 +770,11 @@ func TestDataRootRefusesHostileBreakdownWindows(t *testing.T) {
 		}, "categories: rows sum to 6 on day 2; the series total is 7"},
 		"more model rows than the bound allows": {func(d map[string]any) {
 			rows := map[string]any{}
-			for index := range maxSeriesModels + 1 {
+			for index := range len(syntheticModelScopes["alpha"]) + 1 {
 				rows[fmt.Sprintf("model-%d", index)] = []int64{0, 0, 0}
 			}
 			alphaSection(d)["models"] = rows
-		}, fmt.Sprintf("models: %d rows, over the %d bound", maxSeriesModels+1, maxSeriesModels)},
+		}, fmt.Sprintf("models: %d rows, over the %d bound", len(syntheticModelScopes["alpha"])+1, len(syntheticModelScopes["alpha"]))},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1074,9 +1098,10 @@ func TestDataRootRefusesEveryHostilePerModelSplit(t *testing.T) {
 		},
 		"more rows than the vocabulary has members": {
 			func(document map[string]any) {
-				rows := make([]any, 0, maxSeriesModels+1)
-				for index := 0; index <= maxSeriesModels; index++ {
-					rows = append(rows, map[string]any{"key": modelServeOrder[index%len(modelServeOrder)], "totals": map[string]any{"input": 1}})
+				scope := syntheticModelScopes["alpha"]
+				rows := make([]any, 0, len(scope)+1)
+				for index := 0; index <= len(scope); index++ {
+					rows = append(rows, map[string]any{"key": scope[index%len(scope)], "totals": map[string]any{"input": 1}})
 				}
 				alphaSection(document)["modelStats"] = rows
 			},
@@ -1315,12 +1340,16 @@ func TestDataRootRefusesOversizeBeforeDecryption(t *testing.T) {
 // whose merged envelope would bust the owner's response budget keeps the
 // last good payload: the budget is structural on this path exactly as it is
 // on construction and refresh.
-// maximalDocument is the largest document the ORIGIN'S OWN BOUNDS admit: the
-// full 732-day series on both shipped sources, the complete category
-// partition on the one that reports one, the complete per-model partition at
-// its own day bound on BOTH, and every value at the shared numeric ceiling.
-// Nothing structurally valid can be bigger, which is what makes the
-// measurements below meaningful rather than arbitrary.
+// maximalDocument is a LARGE admissible document built at the origin's own
+// bounds: the full 732-day series on both shipped sources, the complete
+// category partition on the one that reports one, the complete per-model
+// partition at its own day bound on BOTH, and every value at the shared
+// numeric ceiling. It is not proven to be the largest, and the name is older
+// than that finding: giving the second source a category partition too,
+// which admission also accepts, seals to 116,313 bytes against this
+// fixture's 103,844 (measured 2026-10-13). What keeps every admissible
+// document inside the ceilings is refusal at seal and serve time; these
+// measurements say how much room a realistic large document leaves.
 //
 // It is BUILT from the shipped vocabularies and bounds rather than
 // transcribed, so a vocabulary edit or a bound change moves the measurement
@@ -1343,12 +1372,14 @@ func maximalDocument() map[string]any {
 	section["series"] = map[string]any{"startDate": "2024-01-01", "totals": totals, "recorded": true}
 	section["categories"] = fullBreakdown(categoryServeOrder, category, nil, days)
 	// The models window is the trailing maxModelDays of the same series, on
-	// both sources, every row at the numeric ceiling its own total allows.
-	section["models"] = fullBreakdown(modelServeOrder, nil, totals[days-maxModelDays:], maxModelDays)
+	// both sources, every row at the numeric ceiling its own total allows,
+	// and every source carrying every member its own scope admits (issue
+	// #369) — the widest document the origin can admit for each.
+	section["models"] = fullBreakdown(syntheticModelScopes["alpha"], nil, totals[days-maxModelDays:], maxModelDays)
 	section["modelsStartDate"] = maximalModelsStart(days)
 	beta := betaSection(document)
 	beta["series"] = map[string]any{"startDate": "2024-01-01", "totals": betaTotals, "recorded": true}
-	beta["models"] = fullBreakdown(modelServeOrder, nil, betaTotals[days-maxModelDays:], maxModelDays)
+	beta["models"] = fullBreakdown(syntheticModelScopes["beta"], nil, betaTotals[days-maxModelDays:], maxModelDays)
 	beta["modelsStartDate"] = maximalModelsStart(days)
 	return document
 }
@@ -2425,7 +2456,7 @@ func TestEnvelopeInstantIsTheOldestSourcesCapture(t *testing.T) {
 			if err := json.Unmarshal(raw, &decoded); err != nil {
 				t.Fatal(err)
 			}
-			_, instant, err := mergeSeriesDocument(decoded, fallback, fixedNow())
+			_, instant, err := mergeSeriesDocument(decoded, fallback, fixedNow(), syntheticModelScopes)
 			if err != nil {
 				t.Fatalf("merge: %v", err)
 			}
@@ -2607,4 +2638,268 @@ func TestDataRootRestartRecoversExpiredCiphertextAsStale(t *testing.T) {
 			t.Fatalf("restart renewed expired capture: status=%q at=%q", restarted.Status, restarted.GeneratedAt)
 		}
 	})
+}
+
+// shippedVendorBinding reads the two SHIPPED vocabulary files from disk — the
+// same bytes the binary embeds — and returns the residual key plus, for every
+// declared source, the members of its own vendor group in file order. Read
+// rather than transcribed, and without reaching for any symbol the scoping
+// change added, so the two behavioural tests below compile against any
+// revision of this package and fail on behaviour, not on a missing name.
+func shippedVendorBinding(t *testing.T) (residual string, members map[string][]string) {
+	t.Helper()
+	var models struct {
+		Residual struct {
+			Key string `json:"key"`
+		} `json:"residual"`
+		Groups []struct {
+			Key     string `json:"key"`
+			Members []struct {
+				Key string `json:"key"`
+			} `json:"members"`
+		} `json:"groups"`
+	}
+	var sources struct {
+		Sources []struct {
+			Key    string `json:"key"`
+			Vendor string `json:"vendor"`
+		} `json:"sources"`
+	}
+	for path, target := range map[string]any{modelsFilePath: &models, sourcesFilePath: &sources} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if err := json.Unmarshal(raw, target); err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+	}
+	members = map[string][]string{}
+	for _, source := range sources.Sources {
+		for _, group := range models.Groups {
+			if group.Key != source.Vendor {
+				continue
+			}
+			for _, member := range group.Members {
+				members[source.Key] = append(members[source.Key], member.Key)
+			}
+		}
+	}
+	if len(members) < 2 {
+		t.Fatalf("the shipped vocabularies bind %d sources to a group; the scoping rule needs two to say anything", len(members))
+	}
+	return models.Residual.Key, members
+}
+
+// shippedUsageDocument builds one complete, admissible series document for
+// the EMBEDDED snapshot — every shipped source, each a whole section whose
+// figures sit under the tiles it refreshes — and lets the caller shape one
+// source's model sections. The labels are read from the snapshot rather than
+// spelled, exactly as cmd/server's lifecycle suite reads them.
+func shippedUsageDocument(t *testing.T, generatedAt time.Time, residual, label string, models map[string][]int64, modelStats []any) map[string]any {
+	t.Helper()
+	loaded, err := SnapshotSource{Name: "snapshots/token-usage.json"}.load(snapshotFiles, KindTokenUsageV2)
+	if err != nil {
+		t.Fatalf("load token snapshot: %v", err)
+	}
+	var payload TokenUsageData
+	if err := json.Unmarshal(loaded.data, &payload); err != nil {
+		t.Fatalf("decode token snapshot: %v", err)
+	}
+	instant := generatedAt.UTC().Format(time.RFC3339)
+	sources := map[string]any{}
+	for _, source := range payload.Sources {
+		section := map[string]any{
+			"capturedAt": instant,
+			"series":     map[string]any{"startDate": "2026-08-20", "totals": []int64{11, 31}, "recorded": true},
+			"categories": map[string]any{"input": []int64{2, 4}, "output": []int64{3, 7}, "cache-read": []int64{6, 20}},
+			"windows": map[string]any{
+				"today": map[string]any{"input": 24, "output": 7},
+				"week":  map[string]any{"input": 24, "output": 7},
+			},
+			"derived": map[string]any{"peak-day": 31, "current-streak": 2, "longest-streak": 2, "active-days": 2, "tracked-days": 2},
+			"stats": map[string]any{
+				"lifetime": 77, "input": 11, "output": 22, "cache-read": 33,
+				"cache-write": 44, "sessions": 55, "longest-session": 66,
+			},
+			"modelStats": []any{map[string]any{"key": residual, "totals": map[string]any{"input": 1, "output": 2}}},
+		}
+		if source.Label == label {
+			if models != nil {
+				section["models"] = models
+			}
+			if modelStats != nil {
+				section["modelStats"] = modelStats
+			}
+		}
+		sources[source.Label] = section
+	}
+	if _, ok := sources[label]; !ok {
+		t.Fatalf("the embedded snapshot ships no source %q to shape", label)
+	}
+	return map[string]any{"schema": "usage-series/v1", "generatedAt": instant, "sources": sources}
+}
+
+// pushToShippedRegistry runs one data-root refresh of a production-shaped
+// registry over the EMBEDDED snapshot, with the clock just past the snapshot's
+// own instant so the document is fresh, and returns the refusal or nil.
+func pushToShippedRegistry(t *testing.T, build func(generatedAt time.Time) map[string]any) (*panelState, error) {
+	t.Helper()
+	reg := newRegistry(snapshotFiles, []panelDefinition{{
+		id:     "token-usage",
+		kind:   KindTokenUsageV2,
+		title:  "Token usage",
+		source: SnapshotSource{Name: "snapshots/token-usage.json"},
+	}})
+	state := reg.byID["token-usage"]
+	floor := FloorState{Instant: reg.embeddedUsageInstant(state)}
+	if floor.Instant.IsZero() {
+		t.Fatal("the embedded snapshot carries no instant to floor the push on")
+	}
+	now := func() time.Time { return floor.Instant.Add(10 * time.Minute) }
+	document := build(floor.Instant.Add(5 * time.Minute))
+	_, err := reg.refreshFromDataRoot(state, seriesFS(sealDocument(t, document)), productionUnsealer(dataRootTestKeyHex), now, floor, false, nil, nil)
+	return state, err
+}
+
+// TestASourceRefusesAnotherVendorsModel is issue #369's origin half: a
+// source's model keys are its own vendor group's members plus the residual,
+// so a document whose source carries ANOTHER group's member — in the daily
+// partition or in the lifetime split — is refused exactly as an unknown key
+// is, through the production registry over the shipped snapshot. Before the
+// rule every key of the whole file was admitted on every source.
+func TestASourceRefusesAnotherVendorsModel(t *testing.T) {
+	t.Parallel()
+	residual, members := shippedVendorBinding(t)
+	for label, own := range members {
+		var foreign string
+		for other, theirs := range members {
+			if other != label {
+				foreign = theirs[0]
+			}
+		}
+		for name, testCase := range map[string]struct {
+			models     map[string][]int64
+			modelStats []any
+			wantErr    string
+		}{
+			"in the daily partition": {
+				models:  map[string][]int64{own[0]: {5, 20}, foreign: {6, 11}},
+				wantErr: "models: key is outside the closed vocabulary",
+			},
+			"in the lifetime split": {
+				modelStats: []any{
+					map[string]any{"key": own[0], "totals": map[string]any{"input": 1}},
+					map[string]any{"key": foreign, "totals": map[string]any{"input": 1}},
+				},
+				wantErr: "per-model key is outside the closed vocabulary",
+			},
+		} {
+			t.Run(label+" "+name, func(t *testing.T) {
+				t.Parallel()
+				_, err := pushToShippedRegistry(t, func(at time.Time) map[string]any {
+					return shippedUsageDocument(t, at, residual, label, testCase.models, testCase.modelStats)
+				})
+				if err == nil {
+					t.Fatalf("source %q carrying another vendor's model %q was admitted", label, foreign)
+				}
+				if !strings.Contains(err.Error(), testCase.wantErr) {
+					t.Fatalf("refused with %q, want %q", err, testCase.wantErr)
+				}
+			})
+		}
+		// The negative control: the same source carrying only its OWN
+		// members in both sections is admitted, so the refusals above are
+		// about the vendor and nothing else.
+		t.Run(label+" its own members", func(t *testing.T) {
+			t.Parallel()
+			if _, err := pushToShippedRegistry(t, func(at time.Time) map[string]any {
+				return shippedUsageDocument(t, at, residual, label,
+					map[string][]int64{own[0]: {5, 20}, residual: {6, 11}},
+					[]any{map[string]any{"key": own[0], "totals": map[string]any{"input": 1}}})
+			}); err != nil {
+				t.Fatalf("a source carrying its own members was refused: %v", err)
+			}
+		})
+	}
+}
+
+// TestTheNewMembersAreAdmittedOnTheirOwnSource is the other half of the same
+// issue: Opus 5.5, Mythos 5.1, Haiku 5.5 and Sonnet 5.5 used to fold into the
+// residual because the vocabulary did not name them, and a document naming
+// them was refused as carrying unknown keys. Spelled here as the model KEYS
+// the vocabulary file declares — keys are data a test here may name, and no
+// vendor is spelled — and admitted on the source whose group holds them, in
+// both sections, and served in that source's vocabulary order.
+func TestTheNewMembersAreAdmittedOnTheirOwnSource(t *testing.T) {
+	t.Parallel()
+	added := []string{"opus-5-5", "mythos-5-1", "haiku-5-5", "sonnet-5-5"}
+	residual, members := shippedVendorBinding(t)
+	owner := ""
+	for label, own := range members {
+		if strings.Contains(","+strings.Join(own, ",")+",", ","+added[0]+",") {
+			owner = label
+		}
+	}
+	if owner == "" {
+		t.Fatalf("no shipped source's vendor group declares %q", added[0])
+	}
+	models := map[string][]int64{}
+	stats := []any{}
+	daily := [][]int64{{2, 7}, {3, 8}, {3, 8}, {3, 8}}
+	for index, key := range added {
+		models[key] = daily[index]
+		stats = append(stats, map[string]any{"key": key, "totals": map[string]any{"input": 1, "output": 2}})
+	}
+	state, err := pushToShippedRegistry(t, func(at time.Time) map[string]any {
+		return shippedUsageDocument(t, at, residual, owner, models, stats)
+	})
+	if err != nil {
+		t.Fatalf("the four members were refused on their own source: %v", err)
+	}
+	_, data := decodeServedUsage(t, state)
+	for _, source := range data.Sources {
+		if source.Label != owner {
+			continue
+		}
+		var served, split []string
+		for _, row := range source.Series.Models {
+			served = append(served, row.Key)
+		}
+		for _, row := range source.ModelStats {
+			split = append(split, row.Key)
+		}
+		if strings.Join(served, ",") != strings.Join(added, ",") || strings.Join(split, ",") != strings.Join(added, ",") {
+			t.Fatalf("served the partition %v and the split %v; want both to be %v in vocabulary order", served, split, added)
+		}
+		return
+	}
+	t.Fatalf("the served payload carries no source %q", owner)
+}
+
+// TestEverySourceIsScopedToItsOwnVendorGroup pins the binding the two tests
+// above exercise: each declared source's scope is the residual, then exactly
+// its own group's members in file order, and its row bound is that length.
+func TestEverySourceIsScopedToItsOwnVendorGroup(t *testing.T) {
+	t.Parallel()
+	residual, members := shippedVendorBinding(t)
+	if len(sourceModelScopes) != len(members) {
+		t.Fatalf("%d sources are scoped; the shipped files bind %d", len(sourceModelScopes), len(members))
+	}
+	for label, own := range members {
+		want := append([]string{residual}, own...)
+		if got := modelScope(sourceModelScopes, label); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("source %q is scoped to %v; want %v", label, got, want)
+		}
+	}
+	// A label no source file declares belongs to no group: the residual only.
+	got := modelScope(sourceModelScopes, "a-source-nobody-declared")
+	if strings.Join(got, ",") != residual {
+		t.Errorf("an undeclared source is scoped to %v; want only the residual", got)
+	}
+	// Cut from the serve order itself, so it must carry no spare capacity: an
+	// append to it would otherwise overwrite the serve order's next member.
+	if cap(got) != len(got) {
+		t.Errorf("the residual-only scope has capacity %d for %d keys; an append would write into the serve order", cap(got), len(got))
+	}
 }

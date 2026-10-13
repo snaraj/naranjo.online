@@ -76,11 +76,19 @@ func TestTheShippedModelVocabularyLoads(t *testing.T) {
 	if modelServeOrder[0] != document.Residual.Key {
 		t.Errorf("the serve order opens with %q, not the residual %q; the fold is keyed on the residual leading", modelServeOrder[0], document.Residual.Key)
 	}
-	// The row bound is the vocabulary's own size, so a document naming more
-	// rows than the file has members is refused before a key is looked up,
-	// and widening the bound is a data edit rather than a code edit.
-	if maxSeriesModels != len(want) {
-		t.Errorf("maxSeriesModels is %d; the vocabulary declares %d members", maxSeriesModels, len(want))
+	// Each group's members, in the file's order, are what the loader hands
+	// the source binding below (issue #369); derived from the same JSON.
+	for _, group := range document.Groups {
+		members := make([]string, 0, len(group.Members))
+		for _, member := range group.Members {
+			members = append(members, member.Key)
+		}
+		if strings.Join(modelGroups[group.Key], ",") != strings.Join(members, ",") {
+			t.Errorf("group %q loads as %v; %s declares %v", group.Key, modelGroups[group.Key], modelsFilePath, members)
+		}
+	}
+	if len(modelGroups) != len(document.Groups) {
+		t.Errorf("the vocabulary loads %d groups; %s declares %d", len(modelGroups), modelsFilePath, len(document.Groups))
 	}
 	// More than one group, or the group machinery below is untested by the
 	// shipped file and the block-per-group rendering has nothing to render.
@@ -379,8 +387,11 @@ func TestTheShippedSourceVocabularyNamesEveryPushableSource(t *testing.T) {
 		t.Fatalf("%s declares %d sources; the loaded vocabulary holds %d", sourcesFilePath, len(shipped.Sources), len(sourceVocabulary))
 	}
 	for _, source := range shipped.Sources {
-		if !modelGroupOrder[source.Vendor] {
+		if _, ok := modelGroups[source.Vendor]; !ok {
 			t.Errorf("source %q names vendor %q, which %s does not group", source.Key, source.Vendor, modelsFilePath)
+		}
+		if sourceVocabulary[source.Key] != source.Vendor {
+			t.Errorf("source %q loads bound to %q; %s binds it to %q", source.Key, sourceVocabulary[source.Key], sourcesFilePath, source.Vendor)
 		}
 		if source.Name == source.Key {
 			t.Errorf("source %q carries its own key as its written name; a name is display copy, never the key", source.Key)
@@ -402,7 +413,7 @@ func TestTheSourceVocabularyRefusesEveryMalformedShape(t *testing.T) {
 			{"key": "beta-tool", "name": "Beta Tool", "vendor": "beta"}
 		]
 	}`
-	groups := map[string]bool{"alpha": true, "beta": true}
+	groups := map[string][]string{"alpha": {"alpha-one"}, "beta": {"beta-one"}}
 	if _, err := loadSourceVocabulary([]byte(template), groups); err != nil {
 		t.Fatalf("the template must load, or every case below refuses for the wrong reason: %v", err)
 	}
@@ -453,15 +464,15 @@ func TestTheSourceVocabularyRefusesEveryMalformedShape(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			names, err := loadSourceVocabulary([]byte(testCase.document), groups)
+			vendors, err := loadSourceVocabulary([]byte(testCase.document), groups)
 			if err == nil {
-				t.Fatalf("the vocabulary was admitted, naming %v", names)
+				t.Fatalf("the vocabulary was admitted, binding %v", vendors)
 			}
 			if !strings.Contains(err.Error(), testCase.wantErr) {
 				t.Fatalf("refused with %q, want a refusal naming %q", err, testCase.wantErr)
 			}
-			if names != nil {
-				t.Fatalf("a refused vocabulary still returned %v; a partial vocabulary is the failure this refuses", names)
+			if vendors != nil {
+				t.Fatalf("a refused vocabulary still returned %v; a partial vocabulary is the failure this refuses", vendors)
 			}
 		})
 	}

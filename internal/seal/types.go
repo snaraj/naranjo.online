@@ -86,7 +86,7 @@ const (
 	// it is one number five stages agree on.
 	//
 	// The numbers are no longer transcribed into an assertion. CapParityTest
-	// BUILDS that maximum document from the shipped snapshot's own labels and
+	// BUILDS its capacity fixture from the shipped snapshot's own labels and
 	// the producer's own vocabulary and measures it, so the class of drift
 	// that made this comment wrong cannot recur silently. docs/usage-export.md
 	// carries the same figures in full and is the canonical prose copy.

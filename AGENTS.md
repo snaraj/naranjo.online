@@ -309,10 +309,13 @@ conscious edits, never fights:
 - Adding a model, or a whole vendor group, to the usage split: one edit to
   `internal/panels/config/models.json` plus the release it rides. The three
   consumers read that file, so no code moves; what a growing vocabulary DOES
-  cost is measured rather than assumed — every member costs one integer per
-  window day on every source against the sealed payload ceiling, and
-  `CapParityTest` fails the build when the window and the vocabulary no
-  longer fit together (the ceiling is never the lever; the window is).
+  cost is measured rather than assumed. Each source carries only its own
+  vendor group's members plus the residual — the group
+  `internal/panels/config/sources.json` binds it to, enforced alike by the
+  capture, the origin and the page (issue #369) — so every member costs one
+  integer per window day on each source of its OWN group against the sealed
+  payload ceiling, and `CapParityTest` fails the build when the window and a
+  group no longer fit together (the ceiling is never the lever).
 - Ingress provider changes: a values override of the `ingress` block per
   the deployment-provider contract.
 

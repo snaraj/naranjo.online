@@ -713,8 +713,8 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     '#3d5330', '#55823f', '#79b455', '#a9e37e', '#ccff8a', // sepia greens + peak
     '#161a23', '#1d222d', '#2a3040', '#5f6a84', '#b9c2d4', // slate ramp
     '#1b1612', '#28221d', '#312a25', '#3e362f', '#7b6d60', '#b79d7e', '#f4eaea', // browntown seeds
-    // The token-usage entity sets (issue #142, widened at #302): four modes
-    // times eight slots, every value its own hex — including dark's neutral
+    // The token-usage entity sets (issue #142, widened at #302 and #369): four
+    // modes times ten slots, every value its own hex — including dark's neutral
     // steps, which the r==g==b sweep above also holds to the no-hue rule.
     '#5f6672', '#2a63b8', '#96550a', '#0b8a6a', '#6d4bb8', '#a3315e', // light categories
     '#565656', '#6f6f6f', '#868686', '#a2a2a2', '#bebebe', '#dadada', // dark category steps
@@ -730,6 +730,15 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     '#949494', '#f2f2f2', // dark steps
     '#b46852', '#678546', // slate
     '#b56754', '#6d8a4b', // sepia
+    // Slots 8 and 9, added at issue #369 when the Anthropic group grew to nine
+    // named members: an orchid and a cyan, 3.17:1 at the lowest on each mode's
+    // raised surface, and the 7-8 and 8-9 pairs at worst 20.8 (normal) and
+    // 9.7 (deuteranopia and protanopia) in every chromatic mode. Dark's two
+    // are greys at 3.88:1 and 10.38:1, held to the no-hue rule by the sweep.
+    '#86318a', '#048aad', // light
+    '#7a7a7a', '#cccccc', // dark steps
+    '#8e5793', '#01a2c5', // slate
+    '#985a96', '#0fa3bf', // sepia
     // The two status inks added at issues 222 and 229, each with its own
     // darkened twin for the light card. They are enumerated here for the
     // same reason every value above is: a status ink restated at a second

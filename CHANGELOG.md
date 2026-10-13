@@ -7,6 +7,47 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.93] - 2026-10-13
+
+### Fixed
+
+- The Claude Code model split names Opus 5.5, Mythos 5.1, Haiku 5.5 and
+  Sonnet 5.5. They were folded into the residual `other` row, and the card
+  divided each share by the rows it drew, so every named share was
+  overstated. A share is now of everything the source spent: the residual
+  and any model the card does not draw stay in the total, so the drawn
+  shares sum to less than 100% whenever something is left out. The shares
+  are recomputed from the tool's own per-model accounting on the first
+  export after deploy. A day the history store remembers but no transcript
+  or cache still holds keeps its old split in the daily window (#369).
+
+### Changed
+
+- Each tool's data carries only its own vendor's models: the Claude Code
+  split names Anthropic models and the Codex split OpenAI models, plus the
+  residual. The binding is the vendor `internal/panels/config/sources.json`
+  declares for each source. The capture folds another vendor's model into
+  the residual and counts it (`cross_group`), and the exporter, the origin
+  and the page refuse one. This is what lets the four models fit the payload
+  ceiling. The capacity check's fixture is now measured per source group:
+  122,487 bytes at eleven digits against 131,072. With every model on every
+  source it would be 135,028, so the eight-week model window stays. The
+  fixture is a measured shape, not a proven maximum; every stage still
+  refuses an over-budget document. No wire shape changes: absent models were
+  always admissible (#369).
+- The entity palette gains slots 8 and 9, an orchid and a cyan (two greys in
+  the true dark mode), in every reading mode, because the Anthropic group now
+  declares nine members. The slots are tokens the vocabulary rule requires;
+  the model bars still paint one ink (#369).
+- A models card draws the largest models first, at most five, and only as
+  many whole rows as its box fits: four at the current card size, on phones
+  and desktops alike. The list no longer sets the card's height, so a long
+  split never stretches its grid row. Every model stays in the payload and
+  in the total; this is only what the card draws (#369).
+- Frontend toolchain: svelte 5.57.2, vite 8.3.4, @playwright/test 1.64.0;
+  CodeQL init and analyze pinned to github/codeql-action v4.38.3 (supersedes
+  #362, #363, #364, #365).
+
 ## [0.1.92] - 2026-10-12
 
 ### Security

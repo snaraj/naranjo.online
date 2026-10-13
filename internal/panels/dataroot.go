@@ -588,7 +588,7 @@ func (reg *Registry) publishSealed(state *panelState, sealed []byte, unseal Unse
 	if err != nil {
 		return FloorState{}, refuse(reasonSnapshotMissing, err)
 	}
-	merged, provenance, err := mergeSeriesDocument(document, fallback, now())
+	merged, provenance, err := mergeSeriesDocument(document, fallback, now(), reg.modelScopes)
 	if err != nil {
 		return FloorState{}, refuse(reasonDocumentRefused, err)
 	}
@@ -800,7 +800,13 @@ func (reg *Registry) loadSnapshotUsageData(state *panelState) (TokenUsageData, e
 // the whole payload ("nothing here is fresher than this"). The document's own
 // `generatedAt` keeps its separate job as the monotonic replay floor, so a
 // push still advances the floor even when one source did not move.
-func mergeSeriesDocument(document usageSeriesDocument, fallback TokenUsageData, current time.Time) (TokenUsageData, string, error) {
+//
+// SCOPED MODELS (issue #369). Each source's per-model partition and lifetime
+// split are admitted against the closed vocabulary its own vendor group
+// declares plus the residual — `scopes`, bound from the embedded source and
+// model vocabularies — so a source can never carry another vendor's model,
+// and the payload ceiling is measured per source group.
+func mergeSeriesDocument(document usageSeriesDocument, fallback TokenUsageData, current time.Time, scopes map[string][]string) (TokenUsageData, string, error) {
 	if len(document.Sources) == 0 {
 		return TokenUsageData{}, "", errors.New("data root: the document carries no sources")
 	}
@@ -831,7 +837,7 @@ func mergeSeriesDocument(document usageSeriesDocument, fallback TokenUsageData, 
 		if err != nil {
 			return TokenUsageData{}, "", fmt.Errorf("data root: source %q: %w", label, err)
 		}
-		source, err := mergeSeriesSource(section, merged.Sources[index], captured)
+		source, err := mergeSeriesSource(section, merged.Sources[index], captured, modelScope(scopes, label))
 		if err != nil {
 			return TokenUsageData{}, "", fmt.Errorf("data root: source %q: %w", label, err)
 		}
@@ -868,8 +874,9 @@ func admitCaptureInstant(value string, emitted, current time.Time) (time.Time, e
 // mergeSeriesSource validates one document section and overlays it onto its
 // snapshot source, carrying that source's own capture instant into the served
 // payload so a reader can see which half of a multi-source panel is older.
-func mergeSeriesSource(section usageSeriesSource, base TokenUsageSource, captured time.Time) (TokenUsageSource, error) {
-	series, err := admitSeriesSection(section)
+// `models` is the closed model vocabulary this source may carry (issue #369).
+func mergeSeriesSource(section usageSeriesSource, base TokenUsageSource, captured time.Time, models []string) (TokenUsageSource, error) {
+	series, err := admitSeriesSection(section, models)
 	if err != nil {
 		return TokenUsageSource{}, err
 	}
@@ -885,13 +892,13 @@ func mergeSeriesSource(section usageSeriesSource, base TokenUsageSource, capture
 	if err != nil {
 		return TokenUsageSource{}, err
 	}
-	models, err := admitModelStats(base.ModelStats, section.ModelStats, stats)
+	modelStats, err := admitModelStats(base.ModelStats, section.ModelStats, stats, models)
 	if err != nil {
 		return TokenUsageSource{}, err
 	}
 	base.Series = series
 	base.Stats = stats
-	base.ModelStats = models
+	base.ModelStats = modelStats
 	base.Windows = windows
 	base.CapturedAt = captured.UTC().Format(time.RFC3339)
 	return base, nil
@@ -901,9 +908,10 @@ func mergeSeriesSource(section usageSeriesSource, base TokenUsageSource, capture
 // the served form (issue #267). One refusal per rule, and the rules are the
 // ones every other admission here already states, applied to a new shape:
 //
-//   - every key is a MEMBER of the closed model vocabulary, never merely
-//     label-shaped (the H1 lesson: `private-feature` walks through a shape
-//     test and onto a public page);
+//   - every key is a MEMBER of the closed model vocabulary THIS SOURCE may
+//     carry — its own vendor group plus the residual (issue #369) — never
+//     merely label-shaped (the H1 lesson: `private-feature` walks through a
+//     shape test and onto a public page);
 //   - a key appears once, so one member cannot be served twice and the served
 //     order cannot repeat a row;
 //   - every totals key is a member of the closed CATEGORY vocabulary, which
@@ -926,14 +934,14 @@ func mergeSeriesSource(section usageSeriesSource, base TokenUsageSource, capture
 // findings 5 and 7 refused. A source whose snapshot ships none owes nothing,
 // and its pushed section is validated and DISCARDED rather than served —
 // a pushed figure can never add a surface the owner did not ship.
-func admitModelStats(base []TokenUsageModelStat, pushed []usageSeriesModelStat, stats []TokenUsageStat) ([]TokenUsageModelStat, error) {
+func admitModelStats(base []TokenUsageModelStat, pushed []usageSeriesModelStat, stats []TokenUsageStat, vocabulary []string) ([]TokenUsageModelStat, error) {
 	if len(base) == 0 {
 		// Validated for shape even though it is discarded: a malformed
 		// section is a producer fault worth refusing wherever it appears, and
 		// silently dropping one would hide the drift until the day the
 		// snapshot starts shipping the surface.
 		if len(pushed) > 0 {
-			if _, err := orderModelStats(pushed, stats); err != nil {
+			if _, err := orderModelStats(pushed, stats, vocabulary); err != nil {
 				return nil, err
 			}
 		}
@@ -942,7 +950,7 @@ func admitModelStats(base []TokenUsageModelStat, pushed []usageSeriesModelStat, 
 	if len(pushed) == 0 {
 		return nil, errors.New("the document does not refresh the per-model lifetime split; a shipped section may never keep a release-time value beside a runtime series")
 	}
-	return orderModelStats(pushed, stats)
+	return orderModelStats(pushed, stats, vocabulary)
 }
 
 // orderModelStats applies every per-member rule and returns the rows in
@@ -955,14 +963,14 @@ func admitModelStats(base []TokenUsageModelStat, pushed []usageSeriesModelStat, 
 // classes cannot overflow an int64 today and neither branch is reachable from
 // any input. They exist so a future edit to either bound cannot quietly
 // reopen the wrap that once summed three authenticated values to zero.
-func orderModelStats(pushed []usageSeriesModelStat, stats []TokenUsageStat) ([]TokenUsageModelStat, error) {
-	if len(pushed) > maxSeriesModels {
-		return nil, fmt.Errorf("%d per-model rows, over the %d bound", len(pushed), maxSeriesModels)
+func orderModelStats(pushed []usageSeriesModelStat, stats []TokenUsageStat, vocabulary []string) ([]TokenUsageModelStat, error) {
+	if len(pushed) > len(vocabulary) {
+		return nil, fmt.Errorf("%d per-model rows, over the %d bound", len(pushed), len(vocabulary))
 	}
 	rows := make(map[string]map[string]int64, len(pushed))
 	sums := map[string]int64{}
 	for _, member := range pushed {
-		if !inVocabulary(member.Key, modelServeOrder) {
+		if !inVocabulary(member.Key, vocabulary) {
 			return nil, errors.New("per-model key is outside the closed vocabulary")
 		}
 		if _, ok := rows[member.Key]; ok {
@@ -1007,7 +1015,7 @@ func orderModelStats(pushed []usageSeriesModelStat, stats []TokenUsageStat) ([]T
 		}
 	}
 	ordered := make([]TokenUsageModelStat, 0, len(rows))
-	for _, key := range modelServeOrder {
+	for _, key := range vocabulary {
 		if totals, ok := rows[key]; ok {
 			ordered = append(ordered, TokenUsageModelStat{Key: key, Totals: totals})
 		}
@@ -1016,8 +1024,10 @@ func orderModelStats(pushed []usageSeriesModelStat, stats []TokenUsageStat) ([]T
 }
 
 // admitSeriesSection validates the daily series and its category partition
-// and returns the served form.
-func admitSeriesSection(section usageSeriesSource) (*TokenUsageSeries, error) {
+// and returns the served form. `models` is the closed model vocabulary the
+// section's source may carry, and its length is the model partition's row
+// bound (issue #369).
+func admitSeriesSection(section usageSeriesSource, models []string) (*TokenUsageSeries, error) {
 	if !section.Series.Recorded {
 		return nil, errors.New("a pushed series must declare recorded provenance")
 	}
@@ -1046,13 +1056,13 @@ func admitSeriesSection(section usageSeriesSource) (*TokenUsageSeries, error) {
 	if err != nil {
 		return nil, fmt.Errorf("categories: %w", err)
 	}
-	models, err := admitBreakdown(
+	partition, err := admitBreakdown(
 		section.Models,
 		section.ModelsStartDate,
 		section.Series.StartDate,
 		totals,
-		modelServeOrder,
-		maxSeriesModels,
+		models,
+		len(models),
 		maxModelDays,
 		true,
 	)
@@ -1064,7 +1074,7 @@ func admitSeriesSection(section usageSeriesSource) (*TokenUsageSeries, error) {
 		Totals:     totals,
 		Recorded:   true,
 		Categories: categories,
-		Models:     models,
+		Models:     partition,
 	}, nil
 }
 

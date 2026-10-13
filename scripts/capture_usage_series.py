@@ -424,6 +424,103 @@ except CaptureError as error:  # pragma: no cover - proven by subprocess
     print(str(error), file=sys.stderr)
     raise SystemExit(1)
 
+# EACH SOURCE CARRIES ONLY ITS OWN VENDOR'S MODELS (issue #369).
+#
+# The second vocabulary file, internal/panels/config/sources.json, declares
+# every reporting tool and the vendor GROUP of the model vocabulary it belongs
+# to. That binding is the one fact this program reads from it: a source's
+# model keys are its own group's members plus the residual, so an identifier
+# the vocabulary names for ANOTHER vendor folds to the residual here, counted,
+# exactly as an identifier the vocabulary does not name at all. The origin
+# and the page admit by the same rule from the same bytes, which is what
+# lets the payload ceiling be measured per source group rather than as every
+# member on every source.
+SOURCES_FILE = pathlib.Path(__file__).resolve().parents[1].joinpath(
+    "internal", "panels", "config", "sources.json"
+)
+
+# The exact schema marker the source vocabulary declares, and the bounds the
+# origin's own loader holds it to: the file's size, for the reason the model
+# file has one, and a written name's length, which is a rendering bound.
+SOURCES_SCHEMA = "usage-sources/v1"
+MAX_SOURCES_FILE_BYTES = 1 << 16
+MAX_SOURCE_NAME_BYTES = 40
+
+
+def load_source_vocabulary(path, group_labels):
+    """Read the source vocabulary as {source key: vendor group}, or refuse.
+
+    Every rule internal/panels/config.go's loader enforces is enforced here
+    against the same bytes, so the two cannot disagree about who a source
+    belongs to: the schema marker, no unknown field, machine-shaped keys
+    declared once, a written name present, bounded and unique, and a vendor
+    that is a group of the model vocabulary.
+    """
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_SOURCES_FILE_BYTES + 1)
+    except OSError:
+        raise CaptureError("the source vocabulary could not be read")
+    if len(raw) > MAX_SOURCES_FILE_BYTES:
+        raise CaptureError("the source vocabulary is over its size bound")
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise CaptureError("the source vocabulary is not a JSON document")
+    if not isinstance(document, dict) or document.get("schema") != SOURCES_SCHEMA:
+        raise CaptureError("the source vocabulary does not declare the expected schema")
+    if set(document) != {"schema", "sources"}:
+        raise CaptureError("the source vocabulary carries an unknown section")
+    declared = document["sources"]
+    if not isinstance(declared, list) or not declared:
+        raise CaptureError("the source vocabulary declares no sources")
+    groups = {}
+    names = set()
+    for source in declared:
+        if not isinstance(source, dict) or set(source) != {"key", "name", "vendor"}:
+            raise CaptureError("the source vocabulary carries a malformed source")
+        key, name, vendor = source["key"], source["name"], source["vendor"]
+        if not isinstance(key, str) or not KEY_PATTERN.fullmatch(key) or key != key.lower():
+            raise CaptureError("a source vocabulary entry carries no machine key")
+        if key in groups:
+            raise CaptureError("a source vocabulary key is declared twice")
+        if (
+            not isinstance(name, str)
+            or not name
+            or len(name.encode("utf-8")) > MAX_SOURCE_NAME_BYTES
+            or name in names
+        ):
+            raise CaptureError("a source vocabulary entry carries no unique written name")
+        if vendor not in group_labels:
+            raise CaptureError("a source vocabulary entry names a vendor no model group declares")
+        names.add(name)
+        groups[key] = vendor
+    return groups
+
+
+try:
+    SOURCE_GROUPS = load_source_vocabulary(SOURCES_FILE, MODEL_GROUP_LABELS)
+except CaptureError as error:  # pragma: no cover - proven by the contract test
+    print(str(error), file=sys.stderr)
+    raise SystemExit(1)
+
+
+def model_scope(source):
+    """The CLOSED set of model keys one source may carry (issue #369).
+
+    The residual plus every member of the source's own vendor group. A source
+    the vocabulary does not declare belongs to no group, so the residual is
+    the only key it may carry; that is the same answer the origin and the
+    page give, and a capture for such a source can never be served anyway,
+    because the origin admits only the sources its snapshot ships.
+    """
+    group = SOURCE_GROUPS.get(source)
+    return frozenset(
+        [MODEL_OTHER]
+        + [key for key in MODEL_KEYS if group is not None and MODEL_GROUPS.get(key) == group]
+    )
+
+
 def require_disjoint_retirements(keys, retired):
     """A retired key must not be a vocabulary key: the fold runs before the
     membership check, so a key on both lists would silently reattribute real,
@@ -684,7 +781,9 @@ WEEK_DAYS = 7
 # wire, seventy no longer did either, and it fell to fifty-six. The ceiling is
 # one number five stages agree on and is not a lever, so the window moves
 # instead — and CapParityTest measures the result rather than trusting this
-# comment.
+# comment. Since issue #369 the members are each source's OWN vendor group plus
+# the residual (model_scope), so a member added to one group costs the sources
+# of that group alone.
 MAX_MODEL_DAYS = 56
 
 # The tool's own per-day roll-up, named for what it contains. `activity_days`
@@ -837,6 +936,12 @@ def new_counters():
         # therefore contributed to the reserved residual member instead of
         # minting a label nobody reviewed.
         "unattributed": 0,
+        # Records whose model the vocabulary DOES name, for another vendor
+        # group than the source's own (issue #369), and history-store entries
+        # remembered under such a member. They fold to the residual too, and
+        # are counted apart because the cause differs: the vocabulary knows the
+        # model, and this source is simply not allowed to carry it.
+        "cross_group": 0,
     }
 
 
@@ -1224,7 +1329,7 @@ def may_carry(line, tokens):
     return JSON_ASCII_ESCAPE in line
 
 
-def read_records(root, counters, sessions=None):
+def read_records(root, counters, sessions=None, *, scope):
     """Yield (day, total, parts, model) rows from every message-shaped record.
 
     Every value this generator produces is already reduced to a date and an
@@ -1252,7 +1357,7 @@ def read_records(root, counters, sessions=None):
             for line in bounded_lines(handle, counters):
                 if not may_carry(line, MESSAGE_KEY_TOKENS):
                     continue
-                reduced = reduce_line(line, seen, counters)
+                reduced = reduce_line(line, seen, counters, scope=scope)
                 if reduced is None:
                     continue
                 counters["counted"] += 1
@@ -1262,7 +1367,7 @@ def read_records(root, counters, sessions=None):
         close_session(sessions, opened)
 
 
-def read_running_totals(root, counters, sessions=None):
+def read_running_totals(root, counters, sessions=None, *, scope):
     """Yield (day, advance, parts, model) rows from every running-totals record.
 
     The running total is per FILE — every journal in the owner's tree opens
@@ -1312,7 +1417,7 @@ def read_running_totals(root, counters, sessions=None):
                     continue
                 declared = declared_model_of(decoded)
                 if declared is not None:
-                    member = model_key(declared, counters)
+                    member = scoped_key(declared, counters, scope)
                     continue
                 reduced = running_totals_of(decoded)
                 if reduced is None:
@@ -1409,7 +1514,7 @@ def close_session(sessions, opened):
     sessions.append(opened)
 
 
-def reduce_line(line, seen, counters):
+def reduce_line(line, seen, counters, *, scope):
     """Reduce one transcript line to (day, instant, total, parts, model), or None.
 
     De-duplication is load-bearing rather than tidy. The tool replays earlier
@@ -1453,7 +1558,7 @@ def reduce_line(line, seen, counters):
         utc_instant(stamp),
         sum(parts.values()),
         parts,
-        model_key(message.get(MESSAGE_MODEL_FIELD), counters),
+        scoped_key(message.get(MESSAGE_MODEL_FIELD), counters, scope),
     )
 
 
@@ -1647,6 +1752,24 @@ def model_key(value, counters):
         if separator and remainder in MODEL_PREFIX_KEYS:
             return remainder
     counters["unattributed"] += 1
+    return MODEL_OTHER
+
+
+def scoped_key(value, counters, scope):
+    """One record's model identifier reduced to a member THIS source may carry.
+
+    `model_key` answers which member the vocabulary names; this answers whether
+    the source being captured is allowed to carry it (issue #369). A member of
+    another vendor group folds to the residual and is counted apart from the
+    unattributed tally, so a cross-vendor identifier can never put a member on
+    the wire that the origin would refuse for this source. Every production
+    path that folds an identifier goes through here; `model_key` stays the
+    pure vocabulary fold its own tests pin.
+    """
+    member = model_key(value, counters)
+    if member in scope:
+        return member
+    counters["cross_group"] += 1
     return MODEL_OTHER
 
 
@@ -2025,7 +2148,7 @@ def read_activity_cache(path):
     return document
 
 
-def activity_days(document, counters):
+def activity_days(document, counters, *, scope):
     """The cache's per-day, per-model roll-up: {day: {member: count}}.
 
     WHY THIS EXISTS. The transcript journals are RETENTION-PRUNED — the tool
@@ -2063,7 +2186,7 @@ def activity_days(document, counters):
         for identifier, value in amounts.items():
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 continue
-            key = model_key(identifier, counters)
+            key = scoped_key(identifier, counters, scope)
             bucket[key] = bucket.get(key, 0) + value
     return by_day
 
@@ -2221,7 +2344,7 @@ def longest_session_seconds(document, sessions):
     return max(spans)
 
 
-def model_stats(document, counters):
+def model_stats(document, counters, *, scope):
     """The cache's lifetime classes, per vocabulary member (issue #267).
 
     The four class tiles say what the whole account spent on cache reads;
@@ -2240,7 +2363,7 @@ def model_stats(document, counters):
     """
     folded = {}
     for identifier, row in admitted_lifetime_usage(document).items():
-        member = folded.setdefault(model_key(identifier, counters), {})
+        member = folded.setdefault(scoped_key(identifier, counters, scope), {})
         for key, value in row.items():
             member[key] = member.get(key, 0) + value
     return folded
@@ -3036,8 +3159,15 @@ def capture(
     today=None,
     history_store=None,
     verified_readings=None,
+    *,
+    source,
 ):
     """Walk the transcripts and return (section, counters).
+
+    `source` is the source key the capture is FOR, and it is required: the
+    model keys a section may carry are that source's own vendor group plus the
+    residual (issue #369), so a capture that does not know whose it is cannot
+    know which members it may emit.
 
     The shape decides only HOW a record becomes a (day, integer, parts,
     member) row. Every step after that — the contiguous day index, the
@@ -3074,10 +3204,11 @@ def capture(
         # tomorrow's usage.
         today = datetime.datetime.now().astimezone().date()
     counters = new_counters()
+    scope = model_scope(source)
     reader = read_records if record_format == FORMAT_MESSAGES else read_running_totals
     sessions = []
     series, categories, models, partitioned, joint = daily_series(
-        reader(root, counters, sessions)
+        reader(root, counters, sessions, scope=scope)
     )
     # The days whose emitted split is still the WALK's own, which is what the
     # ledger's joint is a refinement of. It starts as everything the walk
@@ -3091,7 +3222,7 @@ def capture(
     if activity_cache is not None:
         cache_document = read_activity_cache(activity_cache)
         series, categories, models, partitioned = extend_with_cache(
-            series, categories, models, partitioned, activity_days(cache_document, counters)
+            series, categories, models, partitioned, activity_days(cache_document, counters, scope=scope)
         )
         stats = lifetime_stats(cache_document)
     if history_store is not None:
@@ -3100,7 +3231,7 @@ def capture(
         # refusal in daily_series stands), because a source that suddenly
         # reads completely empty is a misconfiguration to surface, never a
         # gap for remembered history to paper over.
-        stored = read_history_store(history_store)
+        stored = scoped_history(read_history_store(history_store), scope, counters)
         readings = {} if verified_readings is None else read_verified_readings(verified_readings)
         for day, total in readings.items():
             # Seeded so the union window reaches every verified day; the
@@ -3186,7 +3317,9 @@ def capture(
     section["stats"] = stats
     if cache_document is not None:
         members = model_stats_section(
-            accrue_model_stats(model_stats(cache_document, counters), cache_document, joint, owned)
+            accrue_model_stats(
+                model_stats(cache_document, counters, scope=scope), cache_document, joint, owned
+            )
         )
         if members:
             section[MODEL_STATS_KEY] = members
@@ -3195,8 +3328,46 @@ def capture(
     # refusal is what keeps the block off the wire, so the block cannot be
     # inside the document the guard walks.
     assert_only_dates_and_integers(section, "section")
+    assert_scoped(section, scope)
     section[LEDGER_KEY] = ledger
     return section, counters
+
+
+def scoped_history(stored, scope, counters):
+    """Fold every remembered model key outside the source's scope to the residual.
+
+    A history store written before issue #369 may remember a day under a member
+    of another vendor group, and refusing it would end every capture over the
+    pipeline's own memory (the trap issue #322 recorded for retired keys). The
+    fold is the one `scoped_key` applies to a fresh record, it is counted, and
+    the store is written back folded, so it happens once.
+    """
+    for entry in stored.values():
+        models = entry.get("models")
+        if not models:
+            continue
+        folded = {}
+        for key, value in models.items():
+            if key not in scope:
+                counters["cross_group"] += 1
+                key = MODEL_OTHER
+            folded[key] = folded.get(key, 0) + value
+        entry["models"] = folded
+    return stored
+
+
+def assert_scoped(section, scope):
+    """Refuse a section naming a model its source may not carry (issue #369).
+
+    Every fold already lands outside members on the residual, so this cannot
+    fire on any path the walk takes today; it is the emission's own statement
+    of the rule, so a future fold that forgets the scope refuses the push here
+    instead of at the origin.
+    """
+    keys = set(section.get("models") or ())
+    keys.update(member[MODEL_STATS_MEMBER_KEY] for member in section.get(MODEL_STATS_KEY) or ())
+    if not keys <= scope:
+        raise CaptureError("the section carries a model its source's vendor group does not declare")
 
 
 def splice(document, label, series, derived, generated_at):
@@ -3323,7 +3494,12 @@ def main(argv=None):
             return 2
     try:
         section, counters = capture(
-            root, arguments.record_format, cache, history_store=history, verified_readings=verified
+            root,
+            arguments.record_format,
+            cache,
+            history_store=history,
+            verified_readings=verified,
+            source=arguments.source,
         )
     except CaptureError as error:
         print(str(error), file=sys.stderr)
@@ -3334,7 +3510,7 @@ def main(argv=None):
         return 1
     print(
         "files=%d unreadable=%d symlinks=%d oversized=%d lines=%d counted=%d "
-        "duplicates=%d restarts=%d unpartitioned=%d unattributed=%d days=%d"
+        "duplicates=%d restarts=%d unpartitioned=%d unattributed=%d cross_group=%d days=%d"
         % (
             counters.get("files", 0),
             counters.get("unreadable", 0),
@@ -3346,6 +3522,7 @@ def main(argv=None):
             counters.get("restarts", 0),
             counters.get("unpartitioned", 0),
             counters.get("unattributed", 0),
+            counters.get("cross_group", 0),
             len(section["series"]["totals"]),
         ),
         file=sys.stderr,

@@ -47,12 +47,15 @@ const (
 	// envelope, and this is the canonical record of it — handler_test and
 	// dataroot_test point here rather than restating it.
 	//
-	// Raised from 32 KiB to 128 KiB by the owner on 2026-08-24. Full-depth
-	// token-usage history structurally maxes at 113,304 bytes SERVED,
-	// re-measured 2026-09-11 with the thirteen-member vocabulary over its
-	// fifty-six-day window by TestTheMaximalDocumentFitsTheRaisedBudget; the
-	// 32 KiB gate, chosen before any real content existed, would have refused
-	// exactly the documents the sealed-data pipeline exists to deliver.
+	// Raised from 32 KiB to 128 KiB by the owner on 2026-08-24. A large
+	// full-depth token-usage document served at 113,304 bytes when
+	// TestTheMaximalDocumentFitsTheRaisedBudget re-measured it on 2026-09-11
+	// with the thirteen-member vocabulary over its fifty-six-day window, and
+	// at 105,091 at 0.1.93, once each source carried only its own vendor's
+	// models (issue #369). Those are fixture measurements, not proven maxima.
+	// The 32 KiB gate, chosen before any real content existed, would have
+	// refused exactly the documents the sealed-data pipeline exists to
+	// deliver.
 	//
 	// It is the same VALUE as seal.MaxSealedBytes, so the serve step no longer
 	// hides a smaller ceiling than the transport steps. That is NOT the
@@ -60,10 +63,11 @@ const (
 	// the 2026-08-25 round-4 review found stated here and false: the two bound
 	// different bytes — this one the finished envelope, seal.MaxSealedBytes
 	// the sealed FILE — and the envelope adds the embedded snapshot and its
-	// own scaffolding on top. Measured at +1,625 bytes for the maximal
-	// admissible document (111,679 sealed, 113,304 served), and unbounded
-	// above that as the snapshot grows, so a file sealed at exactly 131,072
-	// bytes serves OVER budget and is refused.
+	// own scaffolding on top. Measured at +1,247 bytes for the suite's large
+	// admissible document at 0.1.93 (103,844 sealed, 105,091 served; +1,625
+	// on the 2026-09-11 fixture), and unbounded above that as the snapshot
+	// grows, so a file sealed at exactly 131,072 bytes serves OVER budget and
+	// is refused.
 	//
 	// That delta measures the sections the SNAPSHOT also ships. A pushed
 	// section the snapshot ships none of — a per-model lifetime split on a
@@ -2026,6 +2030,13 @@ type Registry struct {
 	// holds whichever capability starts first: a loop already running exits
 	// at its next wake rather than racing the claim.
 	dataRootOwnsPanel atomic.Bool
+	// modelScopes binds each source label to the closed model vocabulary a
+	// pushed document may carry under it (issue #369). Construction sets it to
+	// sourceModelScopes, the binding the embedded vocabularies declare, and no
+	// runtime input can reach it; a label it does not bind may carry only the
+	// residual, so an empty or missing binding narrows admission rather than
+	// widening it.
+	modelScopes map[string][]string
 }
 
 // dataRootPanelID is the one panel the sealed data-root path serves. It is a
@@ -2123,10 +2134,14 @@ const (
 	// ENVELOPE — payload plus framing, minus the AEAD overhead. At the very
 	// top of the range a file at exactly this ceiling can therefore still be
 	// refused at serve time by the envelope's own bytes. That is refusal,
-	// not truncation, and the measured maxima sit below it: the maximal
-	// admissible document seals to 103,633 bytes and serves at 104,508, and
-	// the structural maximum CapParityTest builds from the shipped
-	// vocabularies seals to 109,280.
+	// not truncation, and it is the refusal that bounds every document, not
+	// any measurement. The measured fixtures are particular shapes, not
+	// proven maxima: the suite's large admissible document seals to 103,844
+	// bytes and serves at 105,091, and giving its second source a category
+	// partition as well, which admission also accepts, seals to 116,313 and
+	// serves at 117,577. The fixture CapParityTest builds from the shipped
+	// vocabularies, each source scoped to its own vendor group (issue #369),
+	// seals to 112,642.
 	maxSealedSeriesBytes = 128 << 10
 
 	// dataRootFutureSkew is how far ahead of the local clock a series
@@ -2164,7 +2179,9 @@ const (
 	// lifetime split joined the wire, seventy no longer did either, and it
 	// fell to fifty-six. The ceiling itself is not a lever — it is one number
 	// five stages agree on — so the WINDOW moves instead, and CapParityTest
-	// measures the result rather than trusting this comment.
+	// measures the result rather than trusting this comment. Since issue #369
+	// the members are each source's OWN vendor group plus the residual, so a
+	// member added to one group costs the sources of that group alone.
 	//
 	// The categories breakdown has no separate day bound: it answers to
 	// maxSeriesDays like the series it partitions, because it costs the same
@@ -2392,28 +2409,32 @@ const maxSourceNameBytes = 40
 // bytes are compiled in and no runtime input can reach them, so the load
 // panics rather than degrading to an empty vocabulary that would silently
 // refuse every models section for the life of the process.
-// modelGroupOrder rides beside it: the set of vendor groups the file
-// declares, which the SOURCE vocabulary below must name a member of. One
-// reading of one file produces both, so the two can never be measured from
-// different bytes.
-var modelServeOrder, modelGroupOrder = mustLoadModelVocabulary(modelsConfigBytes)
+// modelGroups rides beside it: each vendor group the file declares, mapped to
+// its members in serve order. The SOURCE vocabulary below must name one of
+// these groups for every source, and a source may carry only its group's
+// members (issue #369). One reading of one file produces both, so the two can
+// never be measured from different bytes.
+var modelServeOrder, modelGroups = mustLoadModelVocabulary(modelsConfigBytes)
 
-// sourceVocabulary is the source key to written name map, validated at init
-// exactly as the model vocabulary is and for exactly its reasons: the bytes
-// are compiled in, a fault is a build defect, and a half-loaded vocabulary
-// would leave a source the page cannot name. The ORIGIN never prints a name —
-// the page resolves it from the same file — so what this var buys the binary
-// is the validation, and what it buys the pipeline is the guarantee that a
-// pushed source label always has a name waiting for it.
-var sourceVocabulary = mustLoadSourceVocabulary(sourcesConfigBytes, modelGroupOrder)
+// sourceVocabulary maps every declared source key to its vendor group,
+// validated at init exactly as the model vocabulary is and for exactly its
+// reasons: the bytes are compiled in, a fault is a build defect, and a
+// half-loaded vocabulary would leave a source the page cannot name. The
+// ORIGIN never prints a name — the page resolves it from the same file — so
+// what this var buys the binary is the validation and the one binding the
+// origin acts on: which vendor's models a source may carry.
+var sourceVocabulary = mustLoadSourceVocabulary(sourcesConfigBytes, modelGroups)
 
-// maxSeriesModels bounds the per-model breakdown the way maxSeriesCategories
-// bounds the category one, and it is the vocabulary's own size: the file
-// declares every key a document may carry, so a document naming more rows
-// than the file has members is refused before a single key is looked up.
-// Raising it means adding a member to the file, which is a reviewed data
-// edit — never a widening of this bound on its own.
-var maxSeriesModels = len(modelServeOrder)
+// sourceModelScopes is the closed model vocabulary each declared source may
+// carry, and it is also that source's row bound (issue #369): the residual
+// plus its own vendor group's members, in serve order. A pushed per-model
+// partition or lifetime split is admitted against its source's scope rather
+// than against the whole file, so another vendor's member is refused exactly
+// as an unknown key is, and a document naming more rows than its source's
+// group has members plus one is refused before a single key is looked up.
+// Widening a scope means adding a member to that group in the file, which is
+// a reviewed data edit — never a widening of a bound on its own.
+var sourceModelScopes = scopeModelVocabularies(modelServeOrder, modelGroups, sourceVocabulary)
 
 // usageSeriesDocument is the strict on-disk shape of the sealed series file
 // (schema usage-series/v1). Sources are keyed by the SAME label the embedded

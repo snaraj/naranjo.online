@@ -124,6 +124,17 @@ def write_tree(root, files):
 MERGE_CAPTURED_AT = "2026-08-11T09:00:00Z"
 MERGE_NOW = datetime.datetime(2026, 8, 11, 10, 0, 0, tzinfo=datetime.timezone.utc)
 
+# The source a merge file is loaded FOR, and the walked source of the direct
+# capture below (issue #369). A source may carry only its own vendor group's
+# members plus the residual, and these fixtures name the vocabulary's first
+# member, so they are loaded for the shipped source whose group holds it. It
+# is read from the two vocabulary files rather than spelled.
+MERGE_SOURCE = next(
+    key
+    for key, group in capture.SOURCE_GROUPS.items()
+    if group == capture.MODEL_GROUPS[capture.MODEL_KEYS[1]]
+)
+
 
 def merge_document(**overrides):
     """A well-formed two-day merge source in the capture tool's stdout shape."""
@@ -533,7 +544,11 @@ class SharedWalkTest(unittest.TestCase):
                 },
             )
             section, counters = capture.capture(
-                root, capture.FORMAT_MESSAGES, None, datetime.date(2026, 8, 12)
+                root,
+                capture.FORMAT_MESSAGES,
+                None,
+                datetime.date(2026, 8, 12),
+                source=MERGE_SOURCE,
             )
         totals = section["series"]["totals"]
         self.assertEqual(section["series"]["startDate"], "2026-08-10")
@@ -621,7 +636,9 @@ class MergeSourceTest(unittest.TestCase):
             path = os.path.join(scratch, "merge.json")
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(document, handle)
-            section, captured, _document = export_usage_series.load_merge_source(path, MERGE_NOW)
+            section, captured, _document = export_usage_series.load_merge_source(
+                path, MERGE_NOW, MERGE_SOURCE
+            )
             return section, captured
 
     def test_well_formed_document_is_admitted_in_full(self):
@@ -668,6 +685,34 @@ class MergeSourceTest(unittest.TestCase):
             with self.subTest(name):
                 with self.assertRaises(CaptureError):
                     self.load(document)
+
+    def test_a_member_of_another_sources_vendor_group_refuses_the_document(self):
+        # Issue #369: a source carries only its own group's members plus the
+        # residual, and the capture that wrote the file folds every other one
+        # before it is written. A file carrying one was edited or produced by
+        # something that disagrees with the origin, which would refuse it on
+        # every push, so it is refused here, in both sections that name models.
+        own = capture.MODEL_KEYS[1]
+        foreign = next(key for key in capture.MODEL_KEYS if key not in capture.model_scope(MERGE_SOURCE))
+        totals = {"input": 1}
+        for name, document, needle in (
+            ("models", merge_document(models={own: [30, 4], foreign: [0, 6]}), "outside its closed vocabulary"),
+            (
+                "modelStats",
+                merge_document(modelStats=[{"key": own, "totals": totals}, {"key": foreign, "totals": totals}]),
+                "another source's vendor group",
+            ),
+        ):
+            with self.subTest(name):
+                with self.assertRaises(CaptureError) as raised:
+                    self.load(document)
+                self.assertIn(needle, str(raised.exception))
+        # The same two sections naming only the source's own members load.
+        section, _captured = self.load(
+            merge_document(models={own: [30, 10]}, modelStats=[{"key": own, "totals": totals}])
+        )
+        self.assertEqual(section["models"], {own: [30, 10]})
+        self.assertEqual([member["key"] for member in section["modelStats"]], [own])
 
     def test_a_breakdown_that_does_not_partition_refuses_in_both_directions(self):
         for name, rows in (
@@ -757,7 +802,7 @@ class MergeSourceTest(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("[" + "0," * export_usage_series.MAX_MERGE_BYTES + "0]")
             with self.assertRaises(CaptureError) as caught:
-                export_usage_series.load_merge_source(path, MERGE_NOW)
+                export_usage_series.load_merge_source(path, MERGE_NOW, MERGE_SOURCE)
             self.assertIn("byte bound", str(caught.exception))
             self.assertNotIn(scratch, str(caught.exception))
 
@@ -1357,7 +1402,7 @@ class MainTest(unittest.TestCase):
         self.assertRegex(
             lines[0],
             r"^files=\d+ unreadable=\d+ symlinks=\d+ oversized=\d+ lines=\d+ counted=\d+ "
-            r"duplicates=\d+ unpartitioned=\d+ unattributed=\d+ sources=\d+$",
+            r"duplicates=\d+ unpartitioned=\d+ unattributed=\d+ cross_group=\d+ sources=\d+$",
         )
         self.assertRegex(lines[1], r"^coverage alpha=\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$")
 
@@ -1780,7 +1825,7 @@ class MergeSourceModelStatsTest(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(document, handle)
             section, _captured, _document = export_usage_series.load_merge_source(
-                path, MERGE_NOW
+                path, MERGE_NOW, MERGE_SOURCE
             )
         return section
 
