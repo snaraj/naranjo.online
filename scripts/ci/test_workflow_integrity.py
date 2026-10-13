@@ -2876,33 +2876,48 @@ class WorkflowIntegrityTests(unittest.TestCase):
         while every `GOTOOLCHAIN: local` step builds and tests with an older
         installed compiler (#367 review). Text cannot show that a check
         enforces anything: a commented-out or `|| true` assertion reads the
-        same. So every `run:` block that reads GOVERSION is executed against a
+        same. So every `run:` block that reads GOVERSION is executed as the
+        runner executes a step with no `shell:`, `bash -e {0}`, against a
         stand-in `go` that reports the installed compiler in local mode and
-        go.mod's toolchain in auto mode. The block must pass when the installed
-        compiler is that toolchain and fail when it is older, and pr-gate.yml,
-        which the release publisher authorizes against, must keep one.
+        go.mod's toolchain in auto mode. A step, job or workflow shell is
+        refused rather than imitated. The block must pass with exactly that
+        toolchain installed and fail with every other release of its train
+        below it, the next patch and minor, the bare minor, and go1.0; and
+        pr-gate.yml, which the release publisher authorizes against, must keep
+        one.
         """
-        declared = re.search(r"^toolchain (go\S+)$", (ROOT / "go.mod").read_text(), re.M)
+        declared = re.search(r"^toolchain go(\d+)\.(\d+)\.(\d+)$", (ROOT / "go.mod").read_text(), re.M)
         if declared is None:
-            self.fail("go.mod names no toolchain")
-        toolchain = declared[1]
+            self.fail("go.mod names no toolchain of the form goX.Y.Z")
+        major, minor, patch = map(int, declared.groups())
+        toolchain = f"go{major}.{minor}.{patch}"
+        others = [f"go{major}.{minor}.{earlier}" for earlier in range(patch)] + [
+            f"go{major}.{minor}.{patch + 1}", f"go{major}.{minor + 1}.0", f"go{major}.{minor}", "go1.0",
+        ]
         checks: dict[str, int] = {}
         for path in workflow_paths():
             text = path.read_text()
+            workflow = read_workflow(path)
             covered: set[int] = set()
             for lineno, length, block in run_blocks(text):
                 covered.update(range(lineno, lineno + length + 1))
                 if "GOVERSION" not in block:
                     continue
                 where = f"{path.relative_to(ROOT)}:{lineno}"
+                shell = self._declared_shell(workflow, lineno)
+                if shell is not None:
+                    self.fail(f"{where}: the step runs under `shell: {shell}`; this test executes only the "
+                              f"runner default, `bash -e {{0}}`")
                 self.assertEqual(
                     self._run_toolchain_check(block, toolchain, toolchain), 0,
                     f"{where}: the toolchain check fails with go.mod's toolchain ({toolchain}) installed",
                 )
-                self.assertNotEqual(
-                    self._run_toolchain_check(block, "go1.0", toolchain), 0,
-                    f"{where}: the toolchain check passes with an older compiler installed; read it "
-                    f"with GOTOOLCHAIN=local in an assertion that runs and fails the step",
+                accepted = [other for other in others if self._run_toolchain_check(block, other, toolchain) == 0]
+                self.assertEqual(
+                    accepted, [],
+                    f"{where}: the toolchain check passes with {', '.join(accepted)} installed; it must "
+                    f"accept exactly {toolchain}, read with GOTOOLCHAIN=local in an assertion that runs "
+                    f"and fails the step",
                 )
                 checks[path.name] = checks.get(path.name, 0) + 1
             for lineno, line in enumerate(text.splitlines(), 1):
@@ -2914,8 +2929,24 @@ class WorkflowIntegrityTests(unittest.TestCase):
             ".github/workflows/pr-gate.yml no longer checks the installed Go toolchain",
         )
 
+    @staticmethod
+    def _declared_shell(workflow: Workflow, lineno: int) -> str | None:
+        """The shell the step holding line `lineno` runs under, when anything sets one."""
+        holder = None
+        for job in workflow.jobs.values():
+            for step in job.steps:
+                if step.line <= lineno and (holder is None or step.line > holder[1].line):
+                    holder = (job, step)
+        if holder is None:
+            return None
+        job, step = holder
+        for declared in (step.shell, job.default_shell, workflow.default_shell):
+            if declared is not None:
+                return declared[0]
+        return None
+
     def _run_toolchain_check(self, block: str, installed: str, module: str) -> int:
-        """Run one `run:` block as the runner does, with stand-in node, npm and go."""
+        """Run one `run:` block as the runner runs a step with no `shell:`, with stand-in node, npm and go."""
         expected = dict(re.findall(r'\$\((node|npm) --version\)" = "([^"]+)"', block))
         with tempfile.TemporaryDirectory() as scratch:
             stubs = {
@@ -2932,7 +2963,7 @@ class WorkflowIntegrityTests(unittest.TestCase):
             script = Path(scratch) / "run.sh"
             script.write_text(block)
             return subprocess.run(
-                [shutil.which("bash") or "/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+                [shutil.which("bash") or "/bin/bash", "-e", str(script)],
                 env={"PATH": f"{scratch}:/usr/bin:/bin", "HOME": scratch},
                 capture_output=True,
             ).returncode
