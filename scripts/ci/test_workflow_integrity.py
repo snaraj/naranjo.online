@@ -251,8 +251,12 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shlex
+import shutil
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1513,6 +1517,23 @@ def lift_instruction(workflow: str, rule: str, where: str) -> str:
 def workflow_paths(workflows: Path = WORKFLOWS) -> list[Path]:
     """Return every workflow extension GitHub accepts."""
     return sorted((*workflows.glob("*.yml"), *workflows.glob("*.yaml")))
+
+
+def run_blocks(text: str) -> list[tuple[int, int, str]]:
+    """Every `run: |` literal block: the line of its key, its length, and its dedented shell."""
+    lines = text.splitlines()
+    blocks = []
+    for index, line in enumerate(lines):
+        key = re.match(r"^(\s*)(?:- )?run:\s*\|[-+]?\s*$", line)
+        if not key:
+            continue
+        body = []
+        for following in lines[index + 1:]:
+            if following.strip() and len(following) - len(following.lstrip()) <= len(key[1]):
+                break
+            body.append(following)
+        blocks.append((index + 1, len(body), textwrap.dedent("\n".join(body)) + "\n"))
+    return blocks
 
 
 def resolve_uses(value: str, path: Path, lineno: int) -> str:
@@ -2847,33 +2868,74 @@ class WorkflowIntegrityTests(unittest.TestCase):
             + lift_instruction(workflow.name, "custom-shell", where)
         )
 
-    def test_the_go_toolchain_check_reads_the_installed_compiler(self):
-        """A toolchain check in auto mode can pass on a compiler no step uses.
+    def test_the_go_toolchain_check_refuses_an_older_installed_compiler(self):
+        """The toolchain check must fail on the compiler the Go steps would use.
 
         go.mod's `toolchain` line makes the default auto mode fetch that
-        release for `go env GOVERSION` alone, so a setup-go pin reverted to an
-        older release still reads the new version there, while every
-        `GOTOOLCHAIN: local` step builds and tests with the older one (#367
-        review). Every such read therefore spells `GOTOOLCHAIN=local` inline,
-        and the release-authorizing gate keeps at least one, so deleting the
-        check is red as well.
+        release for `go env GOVERSION` alone, so a check in auto mode passes
+        while every `GOTOOLCHAIN: local` step builds and tests with an older
+        installed compiler (#367 review). Text cannot show that a check
+        enforces anything: a commented-out or `|| true` assertion reads the
+        same. So every `run:` block that reads GOVERSION is executed against a
+        stand-in `go` that reports the installed compiler in local mode and
+        go.mod's toolchain in auto mode. The block must pass when the installed
+        compiler is that toolchain and fail when it is older, and pr-gate.yml,
+        which the release publisher authorizes against, must keep one.
         """
-        reads: dict[str, int] = {}
+        declared = re.search(r"^toolchain (go\S+)$", (ROOT / "go.mod").read_text(), re.M)
+        if declared is None:
+            self.fail("go.mod names no toolchain")
+        toolchain = declared[1]
+        checks: dict[str, int] = {}
         for path in workflow_paths():
-            for lineno, line in enumerate(path.read_text().splitlines(), 1):
-                for read in re.finditer(r"go env GOVERSION", line):
-                    if not line[: read.start()].endswith("GOTOOLCHAIN=local "):
-                        self.fail(
-                            f"{path.relative_to(ROOT)}:{lineno}: `go env GOVERSION` is read "
-                            f"without `GOTOOLCHAIN=local` in front of it; in auto mode it "
-                            f"reports the go.mod toolchain, not the compiler setup-go "
-                            f"installed and the Go steps run"
-                        )
-                    reads[path.name] = reads.get(path.name, 0) + 1
-        self.assertGreater(
-            reads.get("pr-gate.yml", 0), 0,
+            text = path.read_text()
+            covered: set[int] = set()
+            for lineno, length, block in run_blocks(text):
+                covered.update(range(lineno, lineno + length + 1))
+                if "GOVERSION" not in block:
+                    continue
+                where = f"{path.relative_to(ROOT)}:{lineno}"
+                self.assertEqual(
+                    self._run_toolchain_check(block, toolchain, toolchain), 0,
+                    f"{where}: the toolchain check fails with go.mod's toolchain ({toolchain}) installed",
+                )
+                self.assertNotEqual(
+                    self._run_toolchain_check(block, "go1.0", toolchain), 0,
+                    f"{where}: the toolchain check passes with an older compiler installed; read it "
+                    f"with GOTOOLCHAIN=local in an assertion that runs and fails the step",
+                )
+                checks[path.name] = checks.get(path.name, 0) + 1
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if "GOVERSION" in line and lineno not in covered:
+                    self.fail(f"{path.relative_to(ROOT)}:{lineno}: GOVERSION is read outside a "
+                              f"`run: |` block this test can execute")
+        self.assertTrue(
+            checks.get("pr-gate.yml"),
             ".github/workflows/pr-gate.yml no longer checks the installed Go toolchain",
         )
+
+    def _run_toolchain_check(self, block: str, installed: str, module: str) -> int:
+        """Run one `run:` block as the runner does, with stand-in node, npm and go."""
+        expected = dict(re.findall(r'\$\((node|npm) --version\)" = "([^"]+)"', block))
+        with tempfile.TemporaryDirectory() as scratch:
+            stubs = {
+                "go": f'[ "$*" = "env GOVERSION" ] || exit 97\n'
+                      f'if [ "${{GOTOOLCHAIN:-auto}}" = local ]; then echo {shlex.quote(installed)}; '
+                      f'else echo {shlex.quote(module)}; fi\n',
+                "node": f"echo {shlex.quote(expected.get('node', ''))}\n",
+                "npm": f"echo {shlex.quote(expected.get('npm', ''))}\n",
+            }
+            for name, body in stubs.items():
+                stub = Path(scratch) / name
+                stub.write_text("#!/bin/sh\n" + body)
+                stub.chmod(0o755)
+            script = Path(scratch) / "run.sh"
+            script.write_text(block)
+            return subprocess.run(
+                [shutil.which("bash") or "/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+                env={"PATH": f"{scratch}:/usr/bin:/bin", "HOME": scratch},
+                capture_output=True,
+            ).returncode
 
     # -- allowlist hygiene ---------------------------------------------------
 
