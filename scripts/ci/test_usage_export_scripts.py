@@ -2618,13 +2618,19 @@ class InstallCheckTest(unittest.TestCase):
         config.write_text("".join("%s=%s\n" % pair for pair in values.items()), encoding="utf-8")
         config.chmod(0o600)
 
-    def install(self, label, program, last_exit):
-        (self.agents / ("%s.plist" % label)).write_text(
-            "<plist><dict><key>Label</key><string>%s</string><key>ProgramArguments</key>"
-            "<array><string>/usr/bin/env</string><string>%s</string></array></dict></plist>\n"
-            % (label, program),
-            encoding="utf-8",
-        )
+    def install(self, label, program, last_exit, extra=""):
+        """The agent as the installer renders it from the committed template,
+        with `program` as its script and `extra` keys added to its dict."""
+        text = (TEMPLATE if label == EXPORT_LABEL else SNAPSHOT_TEMPLATE).read_text(encoding="utf-8")
+        for placeholder, value in (
+            ("__PUSH_SCRIPT__", program),
+            ("__SNAPSHOT_SCRIPT__", program),
+            ("__LEDGER_DIR__", self.scratch / "history/ledger"),
+            ("__LOG_DIR__", self.home / "Library/Logs/naranjo-online-usage-export"),
+        ):
+            text = text.replace(placeholder, str(value))
+        text = text.replace("<dict>", "<dict>" + extra, 1)
+        (self.agents / ("%s.plist" % label)).write_text(text, encoding="utf-8")
         if last_exit is not None:
             (self.state / label).write_text(last_exit, encoding="utf-8")
 
@@ -2657,6 +2663,34 @@ class InstallCheckTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 1)
         self.assertIn("check %s installed=yes repo=MISMATCH last-exit=0" % EXPORT_LABEL, result.stdout)
+
+    def test_only_the_program_arguments_can_match(self):
+        # Review F9: the expected path anywhere in the plist's XML matched, so
+        # an agent running another program passed whenever a comment, an
+        # environment value or any other key happened to spell the path.
+        expected = {
+            EXPORT_LABEL: self.checkout / "scripts/usage-export/push-usage-series.sh",
+            SNAPSHOT_LABEL: self.checkout / "scripts/ledger_snapshot.py",
+        }
+        for label, path in expected.items():
+            with self.subTest(label=label):
+                elsewhere = self.scratch / "elsewhere" / path.relative_to(self.checkout)
+                self.install(label, elsewhere, "0", "<key>Comment</key><string>%s</string>" % path)
+                result = self.check()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("check %s installed=yes repo=MISMATCH last-exit=0" % label, result.stdout)
+                self.install(label, path, "0")
+        # The interpreter and its flags are part of what the snapshot runs.
+        plist = self.agents / ("%s.plist" % SNAPSHOT_LABEL)
+        plist.write_text(plist.read_text(encoding="utf-8").replace("<string>-I</string>", "", 1), encoding="utf-8")
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("check %s installed=yes repo=MISMATCH last-exit=0" % SNAPSHOT_LABEL, result.stdout)
+        # And a plist that does not parse matches nothing.
+        plist.write_text("<plist><dict><key>ProgramArguments</key><array><string>%s"
+                         % expected[SNAPSHOT_LABEL], encoding="utf-8")
+        result = self.check()
+        self.assertIn("check %s installed=yes repo=MISMATCH last-exit=0" % SNAPSHOT_LABEL, result.stdout)
 
     def test_a_failed_last_run_fails(self):
         for code, shown in (("1", "1"), ("78: EX_CONFIG", "78")):

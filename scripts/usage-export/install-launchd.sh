@@ -97,8 +97,31 @@ fi
 # writes nothing. "Points at REPO_DIR" means the plist runs the script under
 # the checkout the push script exports from; the snapshot agent is required
 # only when a record is configured. Labels and statuses only, never a path.
+#
+# What runs is the plist's ProgramArguments and nothing else in it: matching
+# the path anywhere in the XML passed an agent running another program
+# whenever a comment or an environment value spelled the path (review F9).
+# The array is parsed, never searched, and its leading elements — the program
+# and, for the snapshot, the interpreter and flags before its script — must
+# equal what the template installs. The parser is python3's plistlib, already
+# the exporter's hard dependency, rather than plutil, so the one parser the
+# check uses also runs under the suite on CI hosts that are not macOS.
+runs_program() {
+    python3 -I -B -c '
+import plistlib, sys
+expected = sys.argv[2:]
+try:
+    with open(sys.argv[1], "rb") as handle:
+        matched = plistlib.load(handle)["ProgramArguments"][: len(expected)] == expected
+except Exception:
+    matched = False
+sys.exit(0 if matched else 1)
+' "$@" 2>/dev/null
+}
+
 check_agent() {
-    label=$1 plist=$2 program=$3 required=$4
+    label=$1 plist=$2 required=$3
+    shift 3
     if [ ! -f "$plist" ]; then
         echo "check $label installed=no"
         if [ "$required" = yes ]; then failed=yes; fi
@@ -106,7 +129,7 @@ check_agent() {
     fi
     if [ -z "$CONFIG_REPO_DIR" ]; then
         repo=unknown
-    elif grep -qF "<string>$CONFIG_REPO_DIR/$program</string>" "$plist"; then
+    elif runs_program "$plist" "$@"; then
         repo=match
     else
         repo=MISMATCH
@@ -127,8 +150,9 @@ if [ "$CHECK" = yes ]; then
     failed=no
     snapshot_required=no
     if [ -n "$LEDGER_DIR" ]; then snapshot_required=yes; fi
-    check_agent "$LABEL" "$AGENT" scripts/usage-export/push-usage-series.sh yes
-    check_agent "$SNAPSHOT_LABEL" "$SNAPSHOT_AGENT" scripts/ledger_snapshot.py "$snapshot_required"
+    check_agent "$LABEL" "$AGENT" yes "$CONFIG_REPO_DIR/scripts/usage-export/push-usage-series.sh"
+    check_agent "$SNAPSHOT_LABEL" "$SNAPSHOT_AGENT" "$snapshot_required" \
+        /usr/bin/env python3 -I -B "$CONFIG_REPO_DIR/scripts/ledger_snapshot.py"
     if [ "$failed" = yes ]; then exit 1; fi
     exit 0
 fi

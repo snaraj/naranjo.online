@@ -178,7 +178,10 @@ rebuilds the ledger's SQLite and CSV views (below).
 
 `scripts/usage-export/install-launchd.sh --check` changes nothing and prints,
 per agent, whether its installed plist runs the configuration's `REPO_DIR` and
-what its last exit status was, exiting 1 unless both are good.
+what its last exit status was, exiting 1 unless both are good. "Runs" is read
+from the plist's parsed `ProgramArguments` alone — the leading elements, the
+snapshot's interpreter and flags included, must equal what the template
+installs — never from the path appearing anywhere else in the file.
 
 ## Security properties, stage by stage
 
