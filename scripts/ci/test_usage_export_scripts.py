@@ -2490,56 +2490,61 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertTrue(lock.is_file())
         self.git(self.checkout, "diff-index", "--cached", "--quiet", commit, index=lock)
 
-    def test_a_refused_ref_update_rolls_the_worktree_back(self):
-        # The transaction fails and a re-read finds main still at OLD and HEAD
-        # still naming it: the worktree the job had advanced goes back, and the
-        # run goes on from the tree it had.
-        self.git_shim("refuse")
-        result = self.push()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=ref-moved", result.stderr)
+    def assert_rolled_back_and_stopped(self, result):
+        """The job undid what it wrote and stopped: a ref moved under it, so
+        HEAD may name a commit whose files the worktree does not hold."""
+        self.assertIn(
+            "usage-export: WARN DRIFT behind=1 ahead=0 action=rolled-back reason=ref-moved", result.stderr
+        )
+        self.assertIn("a ref moved under the update", result.stderr)
         self.assertNotIn("UPDATED", result.stdout)
-        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
-        self.assert_agreement(self.first)
-        self.assertEqual(self.summary_revision(result), self.first[:12])
-
-    def test_head_retargeted_before_the_transaction_is_aborted_and_rolled_back(self):
-        # Plumbing takes no index lock, so it can retarget HEAD before the
-        # transaction prepares. Prepare then holds HEAD's lock, the verify finds
-        # HEAD naming another branch, the transaction is aborted and the
-        # worktree goes back: that branch is never advanced.
-        self.git(self.checkout, "branch", "concurrent-owner-branch")
-        self.git_shim("retarget-head")
-        result = self.push()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=ref-moved", result.stderr)
-        self.assertNotIn("UPDATED", result.stdout)
-        self.assertEqual(self.git(self.checkout, "rev-parse", "concurrent-owner-branch"), self.first)
-        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+        self.assert_stopped_before_export(result)
         self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
         self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"), self.git(self.checkout, "rev-parse", self.first + ":NOTE"))
         self.assert_no_residue()
 
-    def test_main_moved_before_the_transaction_is_refused_and_rolled_back(self):
+    def test_a_refused_ref_update_rolls_the_worktree_back_and_stops(self):
+        # The transaction never prepares: nothing is installed, the worktree the
+        # job had advanced goes back, and the run stops without exporting.
+        self.git_shim("refuse")
+        result = self.push()
+        self.assert_rolled_back_and_stopped(result)
+        self.assert_agreement(self.first)
+
+    def test_head_retargeted_before_the_transaction_is_rolled_back_and_stops(self):
+        # Plumbing takes no index lock, so it can retarget HEAD before the
+        # transaction prepares. Prepare then holds HEAD's lock, the verify finds
+        # HEAD naming another branch, the transaction is aborted and the
+        # worktree goes back: that branch is never advanced, and nothing is
+        # exported under its name.
+        self.git(self.checkout, "branch", "concurrent-owner-branch")
+        self.git_shim("retarget-head")
+        result = self.push()
+        self.assert_rolled_back_and_stopped(result)
+        self.assertEqual(self.git(self.checkout, "symbolic-ref", "HEAD"), "refs/heads/concurrent-owner-branch")
+        self.assertEqual(self.git(self.checkout, "rev-parse", "concurrent-owner-branch"), self.first)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+
+    def test_main_moved_before_the_transaction_is_rolled_back_and_stops(self):
         # Another actor moved main by plumbing before the transaction
         # prepared: the old value refuses it, nothing is installed, and the
-        # worktree goes back to the tree it had. main stays where they put it.
+        # worktree goes back to the tree it had. main stays where they put it,
+        # so its commit and the worktree's files differ, and nothing is
+        # exported.
         for mode in ("move-main", "move-main-elsewhere"):
             with self.subTest(mode=mode):
                 self.git(self.checkout, "update-ref", "refs/heads/main", self.first)
                 (self.history / "repo-update.stamp").unlink(missing_ok=True)
+                self.args_file.unlink(missing_ok=True)
                 self.git_shim(mode, self.second)
                 result = self.push()
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=ref-moved", result.stderr)
-                self.assertNotIn("UPDATED", result.stdout)
+                self.assert_rolled_back_and_stopped(result)
+                self.assertEqual(self.git(self.checkout, "symbolic-ref", "HEAD"), "refs/heads/main")
                 self.assertEqual(self.git(self.checkout, "rev-parse", "main^"), self.first)
                 if mode == "move-main":
                     self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.second)
-                self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
-                self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"),
-                                 self.git(self.checkout, "rev-parse", self.first + ":NOTE"))
-                self.assert_no_residue()
+                else:
+                    self.assertNotIn(self.git(self.checkout, "rev-parse", "main"), (self.first, self.second))
 
     def test_a_rollback_that_cannot_run_keeps_its_recovery_index_and_stops(self):
         # An edit made in that window cannot be rolled back over. It is kept,
@@ -2649,10 +2654,8 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         release.touch()
         out, err = run.communicate(timeout=120)
         self.assertEqual(run.returncode, 1, err)
-        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=ref-moved", err)
         self.assertIn("usage-export: WARN repo-update interrupted signal=TERM", err)
-        self.assertNotIn("SUMMARY", out)
-        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
+        self.assert_rolled_back_and_stopped(subprocess.CompletedProcess(run.args, run.returncode, out, err))
         self.assert_agreement(self.first)
 
     def stop_after_the_commit(self, target):

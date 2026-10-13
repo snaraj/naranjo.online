@@ -238,11 +238,12 @@ fi
 # admits. A checkout on main tracking origin/main is moved by fast-forward
 # ONLY; a local edit the fast-forward would touch, a diverged history, a
 # detached head or another branch is reported and left exactly as it is. An
-# update that stops part-way is reported as action=incomplete and ends the run
-# before anything is exported (see fast_forward_main). A run that moved the
-# tree re-executes the (possibly new) script ONCE: the guard variable skips
-# this whole step in the re-executed run, so it cannot loop. Runs before the
-# scratch exists, because exec does not run the EXIT trap.
+# update that stops part-way (action=incomplete), or one rolled back because a
+# ref moved under it (action=rolled-back), ends the run before anything is
+# exported (see fast_forward_main). A run that moved the tree re-executes the
+# (possibly new) script ONCE: the guard variable skips this whole step in the
+# re-executed run, so it cannot loop. Runs before the scratch exists, because
+# exec does not run the EXIT trap.
 REPO_FETCH="$REPO_DIR/scripts/usage-export/bounded-fetch.py"
 FETCH_INTERVAL_SECONDS=3600
 update_checkout() {
@@ -304,6 +305,13 @@ update_checkout() {
         stage=repo-update
         fail "main moved without git acknowledging the update; the checkout agrees with it, and nothing was exported"
     fi
+    # Another actor moved HEAD or main under the update. The checkout is back
+    # as the job found it, but HEAD may now name a commit whose files are not
+    # the worktree's, so this run exports nothing it would misname.
+    if [ "$action" = rolled-back ]; then
+        stage=repo-update
+        fail "a ref moved under the update; the checkout was put back as it was found, and nothing was exported"
+    fi
     if [ -n "$interrupted" ]; then
         exit 1
     fi
@@ -338,7 +346,7 @@ update_checkout() {
 #   merge-refused         nothing written; the run goes on as it was
 #   ref-moved             nothing was prepared or HEAD no longer named main, so
 #                         the transaction was aborted and the worktree put back
-#                         to OLD; the run goes on
+#                         to OLD (action=rolled-back); the run stops
 #   updated               committed with the index installed; when git never
 #                         acknowledged the commit, the run stops unexported
 #   checkout-partial      git wrote some files before refusing; ref and index
@@ -456,7 +464,8 @@ touched_paths_clean() {
 #                             anything else is ref-uncertain, the installed NEW
 #                             index is kept and the one-line repair is logged
 #   prepared, install failed  aborted: index-install-failed, the lock kept
-#   nothing prepared          aborted: the worktree is rolled back to OLD
+#   nothing prepared          aborted: the worktree is rolled back to OLD and
+#                             the run stops (ref-moved)
 advance_main() {
     verified=no installed=no committed=no
     trap '' PIPE
@@ -503,7 +512,7 @@ advance_main() {
     elif [ "$verified" = yes ]; then
         reason=index-install-failed action=incomplete drop_lock=no
     elif (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then
-        reason=ref-moved
+        reason=ref-moved action=rolled-back
     else
         reason=rollback-failed action=incomplete drop_lock=no
     fi

@@ -159,7 +159,12 @@ either. Inside that window the job verifies that HEAD names `main`, installs
 the new index with one rename (which also releases the index lock), and only
 then sends the commit. An acknowledged commit therefore leaves ref, index and
 worktree in agreement, because nothing could move the refs between the
-verify, the install and the commit.
+verify, the install and the commit. One boundary remains, and it is git's
+own: between the install and the commit the index lock is free while HEAD
+and `main` stay locked, so a command that writes only the index (`read-tree`,
+`update-index`) can run there and lands after the update, exactly as it would
+after the commit or during the export; one that also moves HEAD or `main`
+fails on git's lock.
 
 A child's exit status never decides what state the checkout is in. A git
 killed after it finished its work reports failure too. So after a failed
@@ -173,7 +178,7 @@ signal=<HUP|INT|TERM>` and exits 1 without exporting.
 
 ```
 usage-export: UPDATED exporter <old12>-><new12>
-usage-export: WARN DRIFT behind=<n> ahead=<m> action=<none|incomplete> reason=<code>
+usage-export: WARN DRIFT behind=<n> ahead=<m> action=<none|rolled-back|incomplete> reason=<code>
 usage-export: WARN repo-update repair: git update-ref refs/heads/main <new> <current>
 ```
 
@@ -181,12 +186,17 @@ usage-export: WARN repo-update repair: git update-ref refs/heads/main <new> <cur
 exporting from it: `off`, `detached`, `not-main`, `diverged`, `busy` (another
 git operation holds the index lock, which the job never removes), `none`
 (another actor brought the checkout current meanwhile), `git-too-old` (a git
-whose `update-ref` has no transaction commands), `merge-refused` (a local
+whose `update-ref` has no transaction commands), and `merge-refused` (a local
 change on a path the update touches, or git declining before it wrote
-anything), and `ref-moved` (the transaction never prepared, or HEAD no longer
-named `main` once it had: it was aborted with nothing installed, and the
-worktree was put back). Nothing stashes, resets, rebases, forces, switches a
-branch, or touches an untracked or modified file.
+anything). Nothing stashes, resets, rebases, forces, switches a branch, or
+touches an untracked or modified file.
+
+`action=rolled-back reason=ref-moved` means the transaction never prepared,
+or HEAD no longer named `main` once it had: another actor moved a ref under
+the update. It was aborted with nothing installed and the worktree was put
+back, so the index and worktree are as the job found them, but HEAD may now
+name a commit whose files they do not hold. The run then fails at
+`stage=repo-update` and exports nothing; no lock is kept.
 
 `UPDATED` followed by a FAILED line saying `main moved without git
 acknowledging the update` means the commit was sent with the index already
@@ -1297,7 +1307,8 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `usage-export: WARN served-check unavailable reason=<code>` | the check could not judge, and the push went on regardless: `no-push-state` (no verified push recorded yet, or no `HISTORY_DIR`), `state-unreadable`, `state-outdated` (recorded before per-source instants; the next push replaces it), `bad-site` (`SITE_URL` is not a bare https origin), `unreachable`, `timeout`, `http-<status>`, `redirected`, `host-mismatch`, `over-budget`, `malformed-envelope`, `deadline-exceeded`, `state-unwritable`, `helper-failed` |
 | `usage-export: WARN push-state unrecorded reason=<code>` | the push landed, but what it delivered could not be recorded, so the next check compares against the previous push |
 | `usage-export: UPDATED exporter <old>-><new>` | the checkout was strictly behind `origin/main` and was fast-forwarded; the run re-executed the new script once |
-| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<code>` | the checkout is behind `origin/main` and was left exactly as it is: `off` (`REPO_UPDATE=off`), `detached`, `not-main`, `diverged` (local commits), `merge-refused` (a local edit the fast-forward would overwrite, or git declining before it wrote anything), `busy` (another git operation holds the index lock; the next run tries again), `none` (already current), `ref-moved` (the ref transaction never prepared, or HEAD no longer named `main`; it was aborted and the worktree rolled back), `git-too-old`. The run goes on exporting from that tree. Resolve it by hand |
+| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<code>` | the checkout is behind `origin/main` and was left exactly as it is: `off` (`REPO_UPDATE=off`), `detached`, `not-main`, `diverged` (local commits), `merge-refused` (a local edit the fast-forward would overwrite, or git declining before it wrote anything), `busy` (another git operation holds the index lock; the next run tries again), `none` (already current), `git-too-old`. The run goes on exporting from that tree. Resolve it by hand |
+| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=rolled-back reason=ref-moved` | a ref moved under the update (the transaction never prepared, or HEAD no longer named `main`); it was aborted and the worktree rolled back, so the index and worktree are as found, but HEAD may name a commit whose files they do not hold. The run stopped before exporting; check what moved HEAD or `main` |
 | `usage-export: WARN DRIFT behind=<n> ahead=<m> action=incomplete reason=<code>` | the update stopped part-way and the run failed before exporting: `checkout-partial` (some files were written; `git status` lists them against the old commit), `checkout-uncertain` (the checkout may have finished; `.git/index.lock` is kept), `ref-uncertain` (the new index is installed but `main` did not move; run the logged `repair` line), `rollback-failed` (the worktree could not be put back; `.git/index.lock` keeps the new index), `index-install-failed` (the transaction was aborted, `main` and the index are old; `.git/index.lock` keeps the new index). Resolve it by hand before the next run, which would otherwise export from the tree as it stands |
 | `usage-export: WARN repo-update repair: git update-ref refs/heads/main <new> <current>` | printed with `ref-uncertain`: the one command, in commit ids only, that moves `main` to the index and worktree already installed |
 | `usage-export: FAILED ... main moved without git acknowledging the update` | the commit was sent with the index installed, git never answered, and `main` was found at the new commit; the checkout agrees with `main`, but that run exported nothing. The next run exports normally |
