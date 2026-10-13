@@ -25,13 +25,15 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - Each tool's data carries only its own vendor's models: the Claude Code
   split names Anthropic models and the Codex split OpenAI models, plus the
   residual. The binding is the vendor `internal/panels/config/sources.json`
-  declares for each source. The exporter folds another vendor's model into
-  the residual and counts it (`cross_group`), and the origin and the page
-  refuse one. This is what lets the four models fit the payload ceiling. The
-  largest admissible document is now measured per source group: 122,487
-  bytes at eleven digits against 131,072. Measured as every model on every
-  source it would be 135,028, so the eight-week model window stays. No wire
-  shape changes: absent models were always admissible (#369).
+  declares for each source. The capture folds another vendor's model into
+  the residual and counts it (`cross_group`), and the exporter, the origin
+  and the page refuse one. This is what lets the four models fit the payload
+  ceiling. The capacity check's fixture is now measured per source group:
+  122,487 bytes at eleven digits against 131,072. With every model on every
+  source it would be 135,028, so the eight-week model window stays. The
+  fixture is a measured shape, not a proven maximum; every stage still
+  refuses an over-budget document. No wire shape changes: absent models were
+  always admissible (#369).
 - The entity palette gains slots 8 and 9, an orchid and a cyan (two greys in
   the true dark mode), in every reading mode, because the Anthropic group now
   declares nine members. The slots are tokens the vocabulary rule requires;

@@ -1340,12 +1340,16 @@ func TestDataRootRefusesOversizeBeforeDecryption(t *testing.T) {
 // whose merged envelope would bust the owner's response budget keeps the
 // last good payload: the budget is structural on this path exactly as it is
 // on construction and refresh.
-// maximalDocument is the largest document the ORIGIN'S OWN BOUNDS admit: the
-// full 732-day series on both shipped sources, the complete category
-// partition on the one that reports one, the complete per-model partition at
-// its own day bound on BOTH, and every value at the shared numeric ceiling.
-// Nothing structurally valid can be bigger, which is what makes the
-// measurements below meaningful rather than arbitrary.
+// maximalDocument is a LARGE admissible document built at the origin's own
+// bounds: the full 732-day series on both shipped sources, the complete
+// category partition on the one that reports one, the complete per-model
+// partition at its own day bound on BOTH, and every value at the shared
+// numeric ceiling. It is not proven to be the largest, and the name is older
+// than that finding: giving the second source a category partition too,
+// which admission also accepts, seals to 116,313 bytes against this
+// fixture's 103,844 (measured 2026-10-13). What keeps every admissible
+// document inside the ceilings is refusal at seal and serve time; these
+// measurements say how much room a realistic large document leaves.
 //
 // It is BUILT from the shipped vocabularies and bounds rather than
 // transcribed, so a vocabulary edit or a bound change moves the measurement

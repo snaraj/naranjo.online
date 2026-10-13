@@ -478,8 +478,12 @@ six times. The reasons:
 - issue #267 added the per-model LIFETIME split and the longest-session tile;
 - issue #369 scoped each source to its own vendor's models.
 
-The structural maximum the origin can admit is one document covering both
-shipped snapshot sources. Each source carries:
+The capacity check measures one large document covering both shipped
+snapshot sources. It is a fixed shape, not a proven maximum: larger admissible
+shapes exist, for example derived counts at the numeric ceiling rather than
+the fixture's 732. What holds the ceiling is that every stage refuses an
+over-budget document rather than truncating it. The measurement says how much
+room a realistic large document leaves. Each source carries:
 
 - the 732-day series bound with the complete five-key category vocabulary;
 - every model key THAT SOURCE may carry over the 56-day model window: its
@@ -492,8 +496,8 @@ shipped snapshot sources. Each source carries:
 
 Compact-encoded and sealed, that measures **112,642 bytes** at ten-digit daily
 values, an order of magnitude above the shipped snapshot's own measured peak
-day. 131,072 leaves **18,430 bytes** of headroom. The same maximum still seals
-to 122,487 bytes at eleven-digit values and only crosses the ceiling at twelve,
+day. 131,072 leaves **18,430 bytes** of headroom. The same document seals to
+122,487 bytes at eleven-digit values and only crosses the ceiling at twelve,
 where it reaches 132,332.
 
 The models section spent one decimal digit of the original headroom — it was

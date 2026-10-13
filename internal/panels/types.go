@@ -2130,9 +2130,12 @@ const (
 	// ENVELOPE — payload plus framing, minus the AEAD overhead. At the very
 	// top of the range a file at exactly this ceiling can therefore still be
 	// refused at serve time by the envelope's own bytes. That is refusal,
-	// not truncation, and the measured maxima sit below it: the maximal
-	// admissible document seals to 103,844 bytes and serves at 105,091, and
-	// the structural maximum CapParityTest builds from the shipped
+	// not truncation, and it is the refusal that bounds every document, not
+	// any measurement. The measured fixtures are particular shapes, not
+	// proven maxima: the suite's large admissible document seals to 103,844
+	// bytes and serves at 105,091, and giving its second source a category
+	// partition as well, which admission also accepts, seals to 116,313 and
+	// serves at 117,577. The fixture CapParityTest builds from the shipped
 	// vocabularies, each source scoped to its own vendor group (issue #369),
 	// seals to 112,642.
 	maxSealedSeriesBytes = 128 << 10

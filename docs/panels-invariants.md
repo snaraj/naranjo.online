@@ -44,8 +44,9 @@ exactly as it was when issue #302 cut it from a quarter to ten weeks.
 ### Each source carries only its own vendor's models (issue #369)
 
 Four Anthropic members joined the vocabulary, taking it to sixteen keys. The
-structural maximum had put every member on every source. Measured that way it
-would reach 135,028 sealed bytes at eleven digits, over the 131,072 ceiling.
+capacity check's fixture had put every member on every source. Measured that
+way it would reach 135,028 sealed bytes at eleven digits, over the 131,072
+ceiling.
 
 The owner's ruling was that each tool's data carries only its own vendor's
 models. A source's model keys are now its own vendor group's members plus the
@@ -54,16 +55,21 @@ capture folds any other member to the residual, and the exporter, the origin
 and the page refuse one. The measurement therefore follows the rule: each
 source pays one row per window day for its own group's size plus one.
 
-| Digits | Sealed structural maximum |
+| Digits | Sealed size of the capacity fixture |
 |---|---|
 | 10 | 112,642 bytes |
 | 11 | 122,487 bytes |
 | 12 | 132,332 bytes |
 
 It fits at eleven digits and crosses the ceiling at twelve, the same one-digit
-headroom as before, and the eight-week window did not move. The Go suite's
-maximal admissible document (`TestTheMaximalDocumentFitsTheRaisedBudget`)
-seals to 103,844 bytes and serves at 105,091 under the same rule.
+headroom as before, and the eight-week window did not move. These are
+measurements of one fixed shape, not proven maxima: larger admissible shapes
+exist. The Go suite's large admissible document
+(`TestTheMaximalDocumentFitsTheRaisedBudget`) seals to 103,844 bytes and serves
+at 105,091 under the same rule. Giving its second source a category partition
+as well, which admission also accepts, seals to 116,313 and serves at 117,577.
+Every stage refuses an over-budget document rather than truncating it, and
+that refusal is what bounds a document.
 
 ### The version-control and repository payloads (issues #315, #317)
 
