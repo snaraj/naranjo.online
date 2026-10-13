@@ -7,6 +7,27 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.94] - 2026-10-13
+
+### Changed
+
+- The usage data layer records every model by the identifier its tool
+  reported, whether or not the page names it and whether or not it is still
+  used. The history store (now `usage-history/v2`), the lifelong ledger (new
+  kinds `model-id`, `model-id-category` and `model-id-stat`) and the archived
+  capture documents keep that identifier. What the page shows is decided only
+  when the public document is built, so naming a model in `models.json`
+  re-attributes every remembered day on the next export, with nothing
+  rewritten. Days recorded before this release keep the split they were
+  stored with. An identifier is kept only in identifier shape; anything else
+  is recorded as `~unidentified`. Identifiers never reach the public document
+  (#371).
+- The capture summary names the five most frequent identifiers the
+  vocabulary does not name, so a new model is visible the run it appears
+  (#371).
+- Every line the usage exporter writes to its logs carries a UTC timestamp,
+  so a failed push can be dated (#371).
+
 ## [0.1.93] - 2026-10-13
 
 ### Fixed
