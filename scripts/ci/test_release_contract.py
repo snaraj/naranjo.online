@@ -8530,10 +8530,15 @@ class CoverageBadgeWorkflowShellPathTests(SyntheticRepo, unittest.TestCase):
     """coverage-badges.yml's two run blocks, executed as the runner executes them.
 
     The workflow runs only after a protected-main gate run, so no pull request
-    ever exercises it. Each block runs here with GitHub's default Linux shell,
-    `bash --noprofile --norc -eo pipefail {0}`, in a one-commit checkout, with
-    `gh` and the publisher replaced by stand-ins that record their argv. A
-    block that stops calling either, or swallows its exit status, goes red.
+    ever exercises it. Its steps name no `shell` and it sets no
+    `defaults.run.shell`, so on Linux the runner executes each block as
+    `bash -e {0}`; `bash --noprofile --norc -eo pipefail {0}` is what an
+    explicit `shell: bash` gets (the shell table under
+    https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepsshell).
+    Each block runs here exactly as `bash -e <file>`, in a one-commit
+    checkout, with `gh` and the publisher replaced by stand-ins that record
+    their argv. A block that stops calling either, or swallows its exit
+    status, goes red.
     """
 
     DOWNLOAD = "Download the gate's measured totals"
@@ -8593,13 +8598,18 @@ class CoverageBadgeWorkflowShellPathTests(SyntheticRepo, unittest.TestCase):
                 "STAND_IN_STATUS": str(status),
             }
             result = subprocess.run(
-                [ExistingImageShellPathTests.bash_executable(), "--noprofile", "--norc", "-eo", "pipefail",
-                 str(root / "step.sh")],
+                [ExistingImageShellPathTests.bash_executable(), "-e", str(root / "step.sh")],
                 cwd=checkout, env=environment, check=False, capture_output=True, text=True, timeout=60,
             )
             log = root / "calls.log"
             calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
             return result, calls, sha, runner
+
+    def test_the_workflow_names_no_shell_so_its_steps_run_under_bash_e(self):
+        # The invocation above is the runner's only while nothing reshells.
+        workflow = (ROOT / ".github" / "workflows" / "coverage-badges.yml").read_text(encoding="utf-8")
+        self.assertEqual([line for line in workflow.splitlines()
+                          if normalized_yaml_key(line) in ("shell", "defaults")], [])
 
     def test_the_download_step_fetches_this_runs_totals_and_propagates_a_failure(self):
         result, calls, _, runner = self.execute(self.DOWNLOAD)
