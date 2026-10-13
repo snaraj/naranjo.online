@@ -237,13 +237,17 @@ fi
 # checked out, and three times it has run a tree behind what the origin
 # admits. A checkout on main tracking origin/main is moved by fast-forward
 # ONLY; a local edit the fast-forward would touch, a diverged history, a
-# detached head or another branch is reported and left exactly as it is. A run that
-# moved the tree re-executes the (possibly new) script ONCE: the guard
-# variable skips this whole step in the re-executed run, so it cannot loop.
-# Runs before the scratch exists, because exec does not run the EXIT trap.
+# detached head or another branch is reported and left exactly as it is. An
+# update that stops part-way is reported as action=incomplete and ends the run
+# before anything is exported (see fast_forward_main). A run that moved the
+# tree re-executes the (possibly new) script ONCE: the guard variable skips
+# this whole step in the re-executed run, so it cannot loop. Runs before the
+# scratch exists, because exec does not run the EXIT trap.
 REPO_FETCH="$REPO_DIR/scripts/usage-export/bounded-fetch.py"
 FETCH_INTERVAL_SECONDS=3600
 update_checkout() {
+    action=none
+    interrupted=
     git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
     branch=$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
     upstream=$(git -C "$REPO_DIR" rev-parse --abbrev-ref 'main@{upstream}' 2>/dev/null || true)
@@ -279,7 +283,23 @@ update_checkout() {
     else
         fast_forward_main
     fi
-    echo "usage-export: WARN DRIFT behind=$behind ahead=$ahead action=none reason=$reason" >&2
+    if [ "$reason" = updated ]; then
+        echo "usage-export: UPDATED exporter $(git -C "$REPO_DIR" rev-parse --short=12 "$old")->$(git -C "$REPO_DIR" rev-parse --short=12 "$new")"
+    else
+        echo "usage-export: WARN DRIFT behind=$behind ahead=$ahead action=$action reason=$reason" >&2
+    fi
+    if [ -n "$interrupted" ]; then
+        echo "usage-export: WARN repo-update interrupted signal=$interrupted" >&2
+        exit 1
+    fi
+    if [ "$action" = incomplete ]; then
+        stage=repo-update
+        fail "the checkout update stopped part-way; nothing was exported"
+    fi
+    if [ "$reason" = updated ]; then
+        export NARANJO_USAGE_EXPORT_REEXEC=1
+        exec /bin/sh "$0"
+    fi
 }
 
 # The fast-forward, as ONE critical section under git's own index lock
@@ -291,6 +311,22 @@ update_checkout() {
 # branch or write the index, and everything is re-read inside it. A lock that
 # already exists is another git operation in progress: the job steps aside and
 # never removes a lock it did not create.
+#
+# The lock file IS the job's working index (review F1 r2): the real index is
+# copied into it and git updates it in place (git locks index.lock.lock and
+# renames that over it, so the lock path never disappears). After the ref
+# commits, one rename installs that index and releases the lock together.
+# Every way out leaves ref, index and worktree in agreement, or stops the run
+# with action=incomplete and keeps what recovery needs:
+#   merge-refused         nothing written; the run goes on as it was
+#   ref-moved             the worktree was put back to OLD; the run goes on
+#   checkout-partial      git wrote some files before refusing; ref and index
+#                         are OLD, so git status shows them; the run stops
+#   rollback-failed       the ref did not move and the worktree could not be put
+#                         back; the lock keeps the NEW index; the run stops
+#   index-install-failed  the ref moved and the index could not be installed;
+#                         the lock keeps the NEW index; the run stops
+# A kept lock is git's own recovery state: every git command names it as stale.
 fast_forward_main() {
     # The ref transaction protocol (start/prepare/commit) is what makes the
     # advance verifiable; a git without it is told apart before any write.
@@ -298,12 +334,13 @@ fast_forward_main() {
         || { reason=git-too-old; return 0; }
     gitdir=$(git -C "$REPO_DIR" rev-parse --absolute-git-dir 2>/dev/null) \
         || { reason=merge-refused; return 0; }
+    top=$(git -C "$REPO_DIR" rev-parse --show-toplevel 2>/dev/null) \
+        || { reason=merge-refused; return 0; }
     lock="$gitdir/index.lock"
-    job="$gitdir/index.job"
     (set -C && : >"$lock") 2>/dev/null || { reason=busy; return 0; }
-    held=yes
-    trap release_index_lock EXIT
-    trap 'release_index_lock; exit 1' HUP INT TERM
+    drop_lock=yes
+    trap 'rm -f "$lock"' EXIT
+    trap 'rm -f "$lock"; exit 1' HUP INT TERM
     old=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/heads/main^{commit}' || true)
     new=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' || true)
     if [ "$(git -C "$REPO_DIR" symbolic-ref --quiet HEAD 2>/dev/null || true)" != refs/heads/main ]; then
@@ -312,45 +349,72 @@ fast_forward_main() {
         reason=none
     elif ! git -C "$REPO_DIR" merge-base --is-ancestor "$old" "$new" >/dev/null 2>&1; then
         reason=diverged
-    # The worktree and a PRIVATE copy of the index move together, by git's
-    # own two-tree fast-forward: it refuses when a local change would be
-    # overwritten, and the real index is not touched until the ref has moved.
-    # The checkout is shared, so the files it writes take the repository's
-    # ordinary modes, not this run's private umask.
-    elif ! (umask 022 && cp "$gitdir/index" "$job" \
-        && GIT_INDEX_FILE="$job" git -C "$REPO_DIR" update-index -q --refresh \
-        && GIT_INDEX_FILE="$job" git -C "$REPO_DIR" read-tree -m -u "$old" "$new") >/dev/null 2>&1; then
+    # The checkout is shared, so what git writes takes the repository's
+    # ordinary modes, not this run's private umask. The refresh is the one a
+    # merge does: a file touched but unchanged is not a local change.
+    elif ! (umask 022 && cp "$gitdir/index" "$lock" \
+        && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" update-index -q --refresh) >/dev/null 2>&1; then
         reason=merge-refused
-    elif ! advance_main_ref "$old" "$new"; then
-        if (umask 022 && GIT_INDEX_FILE="$job" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then
-            reason=ref-moved
-        else
-            reason=rollback-failed
-        fi
+    # A local change on a path the update touches is refused before git can
+    # write anything, so that after a failed checkout any difference on those
+    # paths is git's own partial write.
+    elif ! touched_paths_clean "$old" "$new"; then
+        reason=merge-refused
     else
-        # git's own lockfile commit: the new index replaces the lock, and the
-        # rename that installs it is the rename that releases the lock.
-        mv -f "$job" "$lock"
-        held=no
-        mv -f "$lock" "$gitdir/index"
-        trap - EXIT HUP INT TERM
-        echo "usage-export: UPDATED exporter $(git -C "$REPO_DIR" rev-parse --short=12 "$old")->$(git -C "$REPO_DIR" rev-parse --short=12 "$new")"
-        export NARANJO_USAGE_EXPORT_REEXEC=1
-        exec /bin/sh "$0"
+        # From the checkout until the index is installed or rolled back, a
+        # signal is recorded, never acted on: the run ends only once ref,
+        # index and worktree agree, or once a recovery state is kept.
+        trap - EXIT
+        trap 'interrupted=HUP' HUP
+        trap 'interrupted=INT' INT
+        trap 'interrupted=TERM' TERM
+        if ! (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$old" "$new") >/dev/null 2>&1; then
+            # read-tree replaces the lock only on success, so it still holds
+            # the OLD index to compare the worktree against.
+            if touched_paths_clean "$old" "$new"; then
+                reason=merge-refused
+            else
+                reason=checkout-partial action=incomplete
+            fi
+        elif ! advance_main_ref "$old" "$new"; then
+            if (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then
+                reason=ref-moved
+            else
+                reason=rollback-failed action=incomplete drop_lock=no
+            fi
+        # git's own lockfile commit: the rename that installs the new index is
+        # the rename that releases the lock, after which that path is no
+        # longer the job's to remove.
+        elif mv -f "$lock" "$gitdir/index"; then
+            reason=updated drop_lock=no
+        else
+            reason=index-install-failed action=incomplete drop_lock=no
+        fi
     fi
-    release_index_lock
+    if [ "$drop_lock" = yes ]; then
+        rm -f "$lock"
+    fi
     trap - EXIT HUP INT TERM
 }
 
-# Removes the private index copy, and the lock only while it is still this
-# job's: once the new index has been renamed over it, the path is free for
-# any other actor and is never touched again.
-release_index_lock() {
-    rm -f "$job"
-    if [ "${held:-}" = yes ]; then
-        rm -f "$lock"
-        held=no
+# True when every path the update touches is in the worktree as the job's
+# index has it: no tracked one modified or removed, and nothing at a path NEW
+# adds. The paths are git's own NUL-separated list, matched literally.
+touched_paths_clean() {
+    list=$(mktemp) || return 1
+    # shellcheck disable=SC2016 # $path is the inner shell's loop variable.
+    if git -C "$REPO_DIR" diff --no-renames --name-only -z "$1" "$2" >"$list" \
+        && (cd "$top" && GIT_LITERAL_PATHSPECS=1 GIT_INDEX_FILE="$lock" \
+            xargs -0 -r git diff-files --quiet -- <"$list") \
+        && git -C "$REPO_DIR" diff --no-renames --name-only -z --diff-filter=A "$1" "$2" >"$list" \
+        && (cd "$top" && xargs -0 -r sh -c \
+            'for path do if [ -e "$path" ] || [ -h "$path" ]; then exit 1; fi; done' sh <"$list"); then
+        clean=yes
+    else
+        clean=no
     fi
+    rm -f "$list"
+    [ "$clean" = yes ]
 }
 
 # Moves main from $1 to $2 in one ref transaction that commits only while HEAD

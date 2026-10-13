@@ -148,27 +148,50 @@ critical section under git's own index lock, taken exclusively: every
 porcelain checkout, switch, merge, reset and commit takes that lock first, so
 while the job holds it nobody else can switch the branch or write the index.
 Inside it the job re-reads HEAD and both refs — the fetch can take seconds,
-and another actor may have switched the checkout meanwhile — moves the
-worktree and a private copy of the index with git's two-tree fast-forward,
-and moves `main` in one ref transaction committed only while that transaction
-holds HEAD's lock and HEAD still names `main`. Plumbing takes no index lock,
-so a ref moved anyway refuses the transaction and the worktree is put back.
-Everything else is reported and left exactly as it is:
+and another actor may have switched the checkout meanwhile. The lock file
+itself is the job's working index: the real index is copied into it, git's
+two-tree fast-forward moves it and the worktree together (git renames its own
+`index.lock.lock` over it, so the lock path never disappears), and `main`
+moves in one ref transaction committed only while that transaction holds
+HEAD's lock and HEAD still names `main`. One rename then installs the new
+index and releases the lock. A signal that arrives from the checkout until
+that rename is held, not acted on: the run finishes into agreement first,
+then logs `usage-export: WARN repo-update interrupted signal=<HUP|INT|TERM>`
+and exits 1 without exporting.
 
 ```
 usage-export: UPDATED exporter <old12>-><new12>
-usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<off|detached|not-main|diverged|merge-refused|busy|none|ref-moved|rollback-failed|git-too-old>
+usage-export: WARN DRIFT behind=<n> ahead=<m> action=<none|incomplete> reason=<code>
 ```
 
-Nothing stashes, resets, rebases, forces, switches a branch, or touches an
-untracked or modified file: `merge-refused` is git declining a fast-forward
-that would overwrite a local edit; `busy` is another git operation holding
-the index lock, which the job never removes; `none` is a checkout another
-actor brought current meanwhile; `ref-moved` is HEAD or `main` moved during
-the update, with the worktree rolled back (`rollback-failed` when even that
-was refused); `git-too-old` is a git whose `update-ref` has no transaction
-commands. `REPO_UPDATE=off` neither fetches nor moves; it only reports. The
-SUMMARY keeps naming the tree the run exported from.
+`action=none` means the checkout is exactly as it was and the run goes on
+exporting from it: `off`, `detached`, `not-main`, `diverged`, `busy` (another
+git operation holds the index lock, which the job never removes), `none`
+(another actor brought the checkout current meanwhile), `git-too-old` (a git
+whose `update-ref` has no transaction commands), `merge-refused` (a local
+change on a path the update touches, or git declining before it wrote
+anything), and `ref-moved` (plumbing, which takes no index lock, moved HEAD or
+`main`; the transaction refused and the worktree was put back). Nothing
+stashes, resets, rebases, forces, switches a branch, or touches an untracked
+or modified file.
+
+`action=incomplete` means the update stopped part-way. The run then fails at
+`stage=repo-update` and exports nothing, because it would export from a tree
+that matches no commit:
+
+- `checkout-partial`: git wrote some files before refusing (a directory it
+  could not write, say). `main` and the index are still the old commit, so
+  `git status` lists exactly the files that were written.
+- `rollback-failed`: the ref did not move and the worktree could not be put
+  back. The lock keeps the NEW index.
+- `index-install-failed`: `main` moved but the new index could not be put in
+  place. The lock keeps that index; `mv .git/index.lock .git/index` installs
+  it and restores agreement.
+
+A kept lock is git's own recovery state: every git command names it as a
+stale `index.lock` until someone decides. `REPO_UPDATE=off` neither fetches
+nor moves; it only reports. The SUMMARY keeps naming the tree the run
+exported from.
 
 **The nightly snapshot.** A 5xx or a timed-out transport is retried inside the
 night's one run after fixed 30- and 120-second pauses (three attempts at most),
@@ -1243,7 +1266,9 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `usage-export: WARN served-check unavailable reason=<code>` | the check could not judge, and the push went on regardless: `no-push-state` (no verified push recorded yet, or no `HISTORY_DIR`), `state-unreadable`, `state-outdated` (recorded before per-source instants; the next push replaces it), `bad-site` (`SITE_URL` is not a bare https origin), `unreachable`, `timeout`, `http-<status>`, `redirected`, `host-mismatch`, `over-budget`, `malformed-envelope`, `deadline-exceeded`, `state-unwritable`, `helper-failed` |
 | `usage-export: WARN push-state unrecorded reason=<code>` | the push landed, but what it delivered could not be recorded, so the next check compares against the previous push |
 | `usage-export: UPDATED exporter <old>-><new>` | the checkout was strictly behind `origin/main` and was fast-forwarded; the run re-executed the new script once |
-| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<code>` | the checkout is behind `origin/main` and was left exactly as it is: `off` (`REPO_UPDATE=off`), `detached`, `not-main`, `diverged` (local commits), `merge-refused` (a local edit the fast-forward would overwrite), `busy` (another git operation holds the index lock; the next run tries again), `none` (already current), `ref-moved` (HEAD or `main` moved during the update; the worktree was rolled back), `rollback-failed` (it could not be), `git-too-old`. Resolve it by hand |
+| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<code>` | the checkout is behind `origin/main` and was left exactly as it is: `off` (`REPO_UPDATE=off`), `detached`, `not-main`, `diverged` (local commits), `merge-refused` (a local edit the fast-forward would overwrite, or git declining before it wrote anything), `busy` (another git operation holds the index lock; the next run tries again), `none` (already current), `ref-moved` (HEAD or `main` moved during the update; the worktree was rolled back), `git-too-old`. The run goes on exporting from that tree. Resolve it by hand |
+| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=incomplete reason=<code>` | the update stopped part-way and the run failed before exporting: `checkout-partial` (some files were written; `git status` lists them against the old commit), `rollback-failed` (the worktree could not be put back; `.git/index.lock` keeps the new index), `index-install-failed` (`main` moved; `mv .git/index.lock .git/index` installs the kept index). Resolve it by hand before the next run |
+| `usage-export: WARN repo-update interrupted signal=<name>` | a signal arrived during the update; the run finished it into agreement, then exited 1 without exporting |
 | `usage-export: WARN repo-update fetch-failed reason=<code>` | the hourly fetch failed or hit its 30-second deadline; the run continued on the tree it had |
 | `REPO_UPDATE must be ff-only or off` | the configuration names another update mode; nothing ran |
 | `install-launchd.sh --check` exits 1 | an agent is missing, runs a different checkout than `REPO_DIR` (`repo=MISMATCH`), is not loaded, or last exited non-zero |
