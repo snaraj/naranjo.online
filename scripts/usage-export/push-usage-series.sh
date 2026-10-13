@@ -246,6 +246,7 @@ refuse_configuration() {
 # where a setting written `NAME = value` or one naming an unset variable
 # fails.
 stamped /bin/sh -n "$CONFIG" </dev/null || refuse_configuration config-syntax
+# shellcheck disable=SC2016 # $1 is the child shell's own argument.
 stamped /bin/sh -eu -c 'CONFIG=$1; . "$1"' configuration "$CONFIG" </dev/null >/dev/null \
     || refuse_configuration config-error
 . "$CONFIG"
@@ -288,6 +289,7 @@ esac
 # config file supplies one and ssh would otherwise fall back to the LOCAL
 # username — a different account, very possibly one without the forced
 # command (2026-08-24 round-3 review, finding 8).
+# shellcheck disable=SC2153 # set by the configuration; require_configuration proved it.
 case "$PUSH_HOST" in
     *@*) ;;
     *) fail "PUSH_HOST must be user@host; the push reads no ssh config file, so an alias resolves to nothing" ;;
