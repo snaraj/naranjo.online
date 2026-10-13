@@ -57,15 +57,18 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   `origin/main` is fast-forwarded inside git's own index lock, moving `main`
   only and only while the checkout still names it; another git operation in
   progress, another branch or a moved ref is logged as `DRIFT` and left as it
-  is. What an interrupted or failed update did is decided by re-reading
-  `main`, HEAD and the lock's tree, never by a child's exit status: a proven
-  state is brought into agreement, an unproven one keeps `.git/index.lock` as
-  recovery material, and any update that stops part-way, is uncertain or was
-  never acknowledged ends the run before anything is exported. A signal waits
-  until the checkout is settled. It fetches at most hourly under a bounded deadline and the run
-  re-executes once (#358). `install-launchd.sh --check` reports, read-only,
-  whether each installed agent's program and arguments run the configured
-  checkout and whether it exited cleanly.
+  is. The new index is installed while git's prepared ref transaction still
+  locks HEAD and `main`, and the ref commits only after, so neither can move
+  between the check and the commit. What an interrupted or failed update did
+  is decided by re-reading, never by a child's exit status: a proven state is
+  brought into agreement; an unproven one keeps its recovery material (the
+  lock's index, or the installed index and a logged one-line repair); and any
+  update that stops part-way, is uncertain, was never acknowledged or met a
+  moved ref ends the run before anything is exported. A signal waits until
+  the checkout is settled. It fetches at most hourly under a bounded deadline
+  and the run re-executes once (#358). `install-launchd.sh --check` reports,
+  read-only, whether each installed agent's program and arguments run the
+  configured checkout and whether it exited cleanly.
 - `PANELS_CAPTURE=token-usage` refreshes the shipped token-usage snapshot from
   an exported document through the data root's own admission; the snapshot
   now carries both sources through 2026-10-12 (#358).
