@@ -57,10 +57,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   `origin/main` is fast-forwarded inside git's own index lock, moving `main`
   only and only while the checkout still names it; another git operation in
   progress, another branch or a moved ref is logged as `DRIFT` and left as it
-  is. Ref, index and worktree agree on every exit: an update that stops
-  part-way is logged `action=incomplete`, keeps what recovery needs and ends
-  the run before anything is exported, and a signal waits until the checkout
-  agrees. It fetches at most hourly under a bounded deadline and the run
+  is. What an interrupted or failed update did is decided by re-reading
+  `main`, HEAD and the lock's tree, never by a child's exit status: a proven
+  state is brought into agreement, an unproven one keeps `.git/index.lock` as
+  recovery material, and any update that stops part-way, is uncertain or was
+  never acknowledged ends the run before anything is exported. A signal waits
+  until the checkout is settled. It fetches at most hourly under a bounded deadline and the run
   re-executes once (#358). `install-launchd.sh --check` reports, read-only,
   whether each installed agent's program and arguments run the configured
   checkout and whether it exited cleanly.
