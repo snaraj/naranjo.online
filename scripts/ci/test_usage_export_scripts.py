@@ -1802,7 +1802,10 @@ class LogRotationTest(PushFixture, unittest.TestCase):
         logs = self.logs(b"", b"")
         self.write_raw_config(
             "".join("%s=%s\n" % pair for pair in self.config_lines.items())
-            + 'CONFIG_BESIDE="${CONFIG%/*}"\n'
+            # A plain reference: one shell does not apply `set -u` to a
+            # `${CONFIG%/*}` removal, and this must fail on every shell when
+            # the child lacks CONFIG.
+            + 'CONFIG_SEEN="$CONFIG"\n'
         )
         self.assertEqual(self.launchd_run(logs), 0)
 
