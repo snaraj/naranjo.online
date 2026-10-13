@@ -5372,11 +5372,13 @@ def model_line(day, ident, model, **usage):
 class RawIdentityTest(unittest.TestCase):
     """The one normaliser of a recorded model string (issue #371).
 
-    The data layer keeps the string the tool reported, so this is the whole
-    requirement-12 argument for keeping it: an identifier is kept verbatim
-    (trimmed, lower-cased) only in its bounded shape, and everything else —
-    a path, a prompt, an over-long string, a non-string — is one reserved
-    bucket that no real identifier can ever be.
+    The data layer keeps the string the tool reported: an identifier is kept
+    verbatim (trimmed, lower-cased) only in its bounded shape, and everything
+    else — a path, whitespace, a sentence, an over-long string, a non-string
+    — is one reserved bucket that no real identifier can ever be. The shape
+    is not a model check, by owner ruling (2026-10-13): an identifier-shaped
+    value that is not a model is kept as itself, in a record that is
+    machine-local and never published.
     """
 
     BUCKET = capture_usage_series.UNIDENTIFIED_MODEL
@@ -5416,6 +5418,18 @@ class RawIdentityTest(unittest.TestCase):
         ):
             with self.subTest(value=value):
                 self.assertEqual(capture_usage_series.raw_model_identity(value), self.BUCKET)
+
+    def test_an_identifier_shaped_value_that_is_not_a_model_is_kept_as_itself(self):
+        # The DECIDED boundary (owner ruling 2026-10-13, issue #371 review
+        # F1): every model ever used is recorded, so ANY identifier-shaped
+        # value is kept; telling a model from a session-like token is not
+        # this function's job. The end-to-end half — recorded locally, never
+        # published — is pinned through a real export run in
+        # test_export_usage_series.py.
+        for value in ("private-session-1234", "  Private-Session-1234 "):
+            with self.subTest(value=value):
+                self.assertEqual(capture_usage_series.raw_model_identity(value), "private-session-1234")
+        self.assertTrue(capture_usage_series.valid_model_identity("private-session-1234"))
 
     def test_the_bucket_can_never_be_mistaken_for_a_real_identifier(self):
         # Outside the shape, so no record can be kept AS the bucket ...

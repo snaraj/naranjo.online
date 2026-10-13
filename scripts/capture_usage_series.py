@@ -88,8 +88,15 @@ never reach the wire — keeps ONE value more (issue #371): the record's own
 model string, as a raw identity, so a model the vocabulary does not name yet
 is still recorded. It is kept only in the shape `raw_model_identity` admits,
 a short run of lower-case letters, digits, dots, underscores, colons and
-hyphens, which no path, prompt or sentence fits; anything else is recorded as
-one reserved bucket, and every reader of that layer re-admits the same shape.
+hyphens; anything else is recorded as one reserved bucket, and every reader
+of that layer re-admits the same shape. The trust boundary, as the owner
+ruled it (2026-10-13): the model field is written by the tool, and ANY value
+in that shape is kept, so every model ever used is recorded, new families
+included. The shape blocks paths, whitespace, sentences, over-long and
+non-string values; it does NOT block an identifier-shaped value that is not
+a model, which is recorded as itself. That record is machine-local — the
+history store, the ledger block and rows, the raw archives and the exporter's
+log — and never published: the wire guard below refuses any raw identity.
 
 Nothing else is retained past the line that produced it. Message identifiers
 are held only inside an in-memory de-duplication set and are never written or
@@ -114,8 +121,10 @@ values, so it answers to its own guard rather than widening the wire's.
 field is reached by name, every string is a member of a closed set — a model
 key, a category key, this file's schema marker, or an RFC 3339 UTC instant —
 except the raw identity, admitted only under `id` and a session's `modelIds`
-and only in its bounded shape; and a session carries NO identifier, path,
-working directory, branch, title or prompt byte. A record replayed into a
+and only in its bounded shape; and a session carries no session identifier,
+path, working directory, branch, title or prompt byte under a field of its
+own — its one open string is what the tool wrote in the model field, bounded
+as above. A record replayed into a
 second file counts in the file it was first SEEN in, because the message
 shape's de-duplication is global across the walk; the second file's entry
 simply never sees it.
@@ -578,12 +587,20 @@ except CaptureError as error:  # pragma: no cover - proven by the contract test
 #
 # The identity is the record's own string, trimmed and lower-cased, and it is
 # kept ONLY in the shape of a model identifier: a letter or digit, then at
-# most sixty-three letters, digits, dots, underscores, colons or hyphens. That
-# bound is the whole case for keeping a transcript string at all — a path
-# carries a slash, a prompt carries a space, and session text runs past
-# sixty-four characters — so everything else, and anything that is not a
-# string, lands on ONE reserved bucket. Its leading `~` is outside the shape,
-# so no real identifier can ever be read as the bucket or the bucket as one.
+# most sixty-three letters, digits, dots, underscores, colons or hyphens.
+# Everything else — a path (a slash), whitespace, a sentence, a value past
+# sixty-four characters, anything that is not a string — lands on ONE
+# reserved bucket. Its leading `~` is outside the shape, so no real
+# identifier can ever be read as the bucket or the bucket as one.
+#
+# What the shape does NOT do, by owner ruling (2026-10-13): tell a model from
+# any other identifier-shaped value. The model field is written by the tool,
+# ANY value in this shape is kept so that every model ever used is recorded,
+# new families included, and an identifier-shaped value that is not a model
+# (a session-like token, say) is recorded as itself. The record that holds it
+# is machine-local — the history store, the ledger block and rows, the raw
+# archives and the exporter's log — and never published: the wire guard
+# refuses any raw identity.
 MODEL_IDENTITY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
 UNIDENTIFIED_MODEL = "~unidentified"
 
@@ -1833,9 +1850,12 @@ def raw_model_identity(value):
 
     The ONLY normaliser of a recorded model string: trimmed and lower-cased,
     and kept when it has the identifier shape MODEL_IDENTITY_PATTERN states.
-    A path, a prompt, an over-long string, an empty one and anything that is
-    not a string all land on UNIDENTIFIED_MODEL, so nothing but an
-    identifier-shaped string can ever be written down as a model.
+    A path, whitespace, a sentence, an over-long string, an empty one and
+    anything that is not a string all land on UNIDENTIFIED_MODEL, so nothing
+    but an identifier-shaped string can ever be written down as a model. Any
+    identifier-shaped string is kept, including one that is not a model —
+    the trust boundary the owner ruled on 2026-10-13 (see
+    MODEL_IDENTITY_PATTERN): the record is machine-local and never published.
     """
     if isinstance(value, str):
         identity = value.strip().lower()
@@ -1849,7 +1869,10 @@ def valid_model_identity(value):
 
     What every READER of the data layer admits — the history store, the ledger
     block's guard and the ledger rows — so a value the normaliser could not
-    have produced is refused wherever it turns up.
+    have produced is refused wherever it turns up. Like the normaliser, it
+    judges shape only: an identifier-shaped value that is not a model is
+    admitted, by owner ruling (2026-10-13), because this layer is
+    machine-local and never published.
     """
     return value == UNIDENTIFIED_MODEL or (
         isinstance(value, str) and MODEL_IDENTITY_PATTERN.fullmatch(value) is not None
@@ -1878,7 +1901,11 @@ def unattributed_summary(counters):
     Identities and integers only — each identity is one the normaliser
     produced, so it is identifier-shaped or the bucket — most folds first,
     ties by identity, at most UNATTRIBUTED_SHOWN of them; `-` when there are
-    none, a token no identity can spell.
+    none, a token no identity can spell. The line goes to the exporter's
+    machine-local log, never to the wire, and it prints an identifier-shaped
+    value that is not a model as itself, exactly as the record keeps it (owner
+    ruling, 2026-10-13): the shape keeps paths, whitespace and sentences out of
+    it, not every value a tool might write in its model field.
     """
     tally = counters.get("unattributed_ids") or {}
     shown = sorted(tally.items(), key=lambda item: (-item[1], item[0]))[:UNATTRIBUTED_SHOWN]
@@ -3353,7 +3380,10 @@ def assert_ledger_block(block):
     where it belongs — `id` in `modelIdCategories` and `modelIdStats`, and a
     session's `modelIds` — and only in the raw-identity shape or as the
     reserved bucket. Every other field keeps its closed-set rule, so a raw
-    identity in `model`, or free text in `id`, refuses.
+    identity in `model`, or free text in `id`, refuses. The shape is not a
+    model check: whatever identifier-shaped value the tool wrote in its model
+    field is admitted as itself (owner ruling, 2026-10-13), which this block
+    may carry because it is machine-local and stripped before the wire.
     """
     if not isinstance(block, dict) or set(block) - LEDGER_OPTIONAL_SECTIONS != {
         "schema",

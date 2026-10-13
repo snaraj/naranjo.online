@@ -109,7 +109,10 @@ KIND_MODEL_STAT = "model-stat"
 # #371): the model string the tool reported, kept in the capture's bounded
 # identity shape, so a model the vocabulary does not name — or no longer
 # draws — is still recorded by name. The folded kinds above keep being
-# written beside them; these never replace one.
+# written beside them; these never replace one. The shape is not a model
+# check: by owner ruling (2026-10-13) any identifier-shaped value the tool
+# wrote in its model field is recorded as itself, which this record may hold
+# because it is machine-local and never published.
 KIND_MODEL_ID = "model-id"
 KIND_MODEL_ID_CATEGORY = "model-id-category"
 KIND_MODEL_ID_STAT = "model-id-stat"
@@ -239,8 +242,9 @@ SESSION_OPTIONAL = (SESSION_IDENTITIES,)
 
 # The kinds whose key carries a raw identity, and whether it is composite
 # (`<identity>/<class>`). Their keys are admitted by the capture's own
-# identity rule, not as free printable text, so a path or a sentence can
-# never be filed as a model in this record.
+# identity rule, not as free printable text, so a path, whitespace or a
+# sentence can never be filed as a model in this record; an identifier-shaped
+# value that is not a model can, by owner ruling (2026-10-13), see above.
 IDENTITY_KINDS = {
     KIND_MODEL_ID: False,
     KIND_MODEL_ID_CATEGORY: True,
