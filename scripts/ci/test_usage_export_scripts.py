@@ -2294,8 +2294,9 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         `update-ref`: `too-old` answers as a git without the transaction
         protocol; `refuse` and `refuse-and-edit` fail the job's transaction
         without moving a ref (the second also editing NOTE first);
-        `lose-commit` prepares and then dies on the commit without making it;
-        the others
+        `lose-commit` prepares and then dies on the commit without making it
+        (`lose-commit-blind` also fails the read of main once the index is
+        installed); the others
         act as another actor would, just before the job takes the index lock
         (`diverge`, `catch-up`) or while it holds that lock and is about to
         move the ref (`retarget-head`, `move-main`)."""
@@ -2311,6 +2312,10 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
             '  while [ ! -e "$SHIM_TARGET.release" ] && [ "$i" -lt 1200 ]; do sleep 0.05; i=$((i + 1)); done\n'
             '  exit "$status"\n'
             "fi\n"
+            'if [ "$SHIM_MODE" = lose-commit-blind ] && [ "$3" = rev-parse ] && [ "$6" = "refs/heads/main^{commit}" ]'
+            ' && [ ! -e "$2/.git/index.lock" ]; then\n'
+            "  exit 128\n"
+            "fi\n"
             'if [ "$3" = update-ref ]; then\n'
             '  locked=no; [ -f "$2/.git/index.lock" ] && locked=yes\n'
             '  case "$SHIM_MODE-$locked" in\n'
@@ -2324,7 +2329,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
             ' "$("$REAL_GIT" -C "$2" commit-tree -p HEAD -m elsewhere "HEAD^{tree}")" ;;\n'
             "    refuse-yes) exit 128 ;;\n"
             # A git that prepares, then dies on the commit without making it.
-            "    lose-commit-yes)\n"
+            "    lose-commit-yes|lose-commit-blind-yes)\n"
             '      while read -r line; do\n'
             '        case "$line" in start) echo "start: ok" ;; prepare) echo "prepare: ok" ;; commit) exit 1 ;; esac\n'
             "      done\n"
@@ -2732,6 +2737,172 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
         self.assertEqual(sorted(path.name for path in (self.checkout / ".git").rglob("*.lock")), ["index.lock"])
         self.assert_kept_lock_holds(self.second)
+
+    def install_shims(self, mv_mode="", ls_mode=""):
+        """`mv` and `ls` ahead of the real ones. mv records each rename of
+        index.lock to index; `barrier` renames for real, then names itself
+        and holds until released, so a signal can land after the rename;
+        `marker` renames for real and marks that it did; `refuse-marked`
+        marks and refuses without renaming. ls fails `ls -di` on
+        index.lock (`blind-lock`) or on anything once renamed
+        (`blind-after-rename`): the reads that decide the install."""
+        self.mv_calls = self.scratch / "mv-calls"
+        self.mv_ready = self.scratch / "mv-ready"
+        self.mv_release = self.scratch / "mv-release"
+        write_executable(
+            self.stub_dir / "mv",
+            "#!/bin/sh\n"
+            'if [ "${2##*/}" = index.lock ] && [ "${3##*/}" = index ]; then\n'
+            '  echo call >> "$SHIM_MV_CALLS"\n'
+            '  case "$SHIM_MV" in\n'
+            "    barrier)\n"
+            '      /bin/mv "$@" || exit\n'
+            '      echo "$$" > "$SHIM_MV_READY.part" && /bin/mv "$SHIM_MV_READY.part" "$SHIM_MV_READY"\n'
+            "      n=0\n"
+            '      while [ ! -f "$SHIM_MV_RELEASE" ] && [ "$n" -lt 1500 ]; do sleep 0.02; n=$((n + 1)); done\n'
+            "      exit 0 ;;\n"
+            "    marker)\n"
+            '      /bin/mv "$@" || exit\n'
+            '      : > "$SHIM_RENAMED"\n'
+            "      exit 0 ;;\n"
+            "    refuse-marked)\n"
+            '      : > "$SHIM_RENAMED"\n'
+            "      exit 73 ;;\n"
+            "  esac\n"
+            "fi\n"
+            'exec /bin/mv "$@"\n',
+        )
+        write_executable(
+            self.stub_dir / "ls",
+            "#!/bin/sh\n"
+            'if [ "$1" = -di ]; then\n'
+            '  case "$SHIM_LS-$2" in\n'
+            "    blind-lock-*/index.lock) exit 2 ;;\n"
+            '    blind-after-rename-*) [ -e "$SHIM_RENAMED" ] && exit 2 ;;\n'
+            "  esac\n"
+            "fi\n"
+            'exec /bin/ls "$@"\n',
+        )
+        self.env.update(
+            SHIM_MV=mv_mode, SHIM_LS=ls_mode, SHIM_MV_CALLS=str(self.mv_calls), SHIM_MV_READY=str(self.mv_ready),
+            SHIM_MV_RELEASE=str(self.mv_release), SHIM_RENAMED=str(self.scratch / "renamed"),
+        )
+
+    def test_mv_stopped_after_its_rename_still_installs_and_commits(self):
+        # Review F1 r5: mv stopped by a signal after it renamed reports
+        # failure, and that status decided "not installed". The inode decides
+        # now: the index holds the lock's file, git is alive, the commit is
+        # acknowledged, and no signal reached the run itself, so it exports.
+        self.install_shims(mv_mode="barrier")
+        run = self.run_to(self.mv_ready)
+        child = int(self.mv_ready.read_text(encoding="utf-8"))
+        self.assertEqual(os.getpgid(child), run.pid)
+        os.kill(child, signal.SIGTERM)
+        self.mv_release.touch()
+        out, err = run.communicate(timeout=120)
+        self.assertEqual(run.returncode, 0, err)
+        self.assertIn("usage-export: UPDATED exporter %s->%s" % (self.first[:12], self.second[:12]), out)
+        self.assertTrue(out.splitlines()[-1].startswith("usage-export: SUMMARY pushed="), out)
+        self.assertNotIn("DRIFT", err)
+        self.assertNotIn("interrupted", err)
+        self.assert_agreement(self.second)
+
+    def test_the_group_stopped_after_the_rename_logs_the_repair(self):
+        # Review F1 r5: the same rename with the whole group stopped. git dies
+        # with the transaction prepared, so the commit is never answered and
+        # main re-reads OLD while the NEW index is installed: ref-uncertain,
+        # with a compare-and-swap repair that restores agreement as printed.
+        self.install_shims(mv_mode="barrier")
+        run = self.run_to(self.mv_ready)
+        os.killpg(run.pid, signal.SIGTERM)
+        self.mv_release.touch()
+        out, err = run.communicate(timeout=120)
+        self.assertEqual(run.returncode, 1, err)
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=incomplete reason=ref-uncertain", err)
+        self.assertIn(
+            "usage-export: WARN repo-update repair: git update-ref refs/heads/main %s %s\n" % (self.second, self.first), err
+        )
+        self.assertIn("usage-export: WARN repo-update interrupted signal=TERM", err)
+        self.assert_stopped_before_export(subprocess.CompletedProcess(run.args, run.returncode, out, err))
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+        self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"), self.git(self.checkout, "rev-parse", self.second + ":NOTE"))
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
+        self.assertEqual(sorted(path.name for path in (self.checkout / ".git").rglob("*.lock")), [])
+        self.git(self.checkout, "update-ref", "refs/heads/main", self.second, self.first)
+        self.assert_agreement(self.second)
+
+    def test_an_unreadable_lock_identity_tries_no_rename(self):
+        # Without the lock's inode the install could not be judged afterwards,
+        # so no rename is tried: the transaction is aborted and the lock kept.
+        self.install_shims(ls_mode="blind-lock")
+        result = self.push()
+        self.assertIn(
+            "usage-export: WARN DRIFT behind=1 ahead=0 action=incomplete reason=index-install-failed", result.stderr
+        )
+        self.assert_stopped_before_export(result)
+        self.assertFalse(self.mv_calls.exists())
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+        self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"), self.git(self.checkout, "rev-parse", self.first + ":NOTE"))
+        self.assertEqual(sorted(path.name for path in (self.checkout / ".git").rglob("*.lock")), ["index.lock"])
+        self.assert_kept_lock_holds(self.second)
+
+    def test_an_install_neither_path_can_show_is_reported_as_uncertain(self):
+        # The rename ran, but neither path can be shown to hold the lock's file
+        # afterwards: the transaction is aborted and the facts are logged, with
+        # no command to run. They are the facts on disk.
+        self.install_shims(mv_mode="marker", ls_mode="blind-after-rename")
+        result = self.push()
+        self.assertIn(
+            "usage-export: WARN DRIFT behind=1 ahead=0 action=incomplete reason=index-uncertain", result.stderr
+        )
+        self.assertIn(
+            "usage-export: WARN repo-update state: main is %s (the update was aborted), the worktree holds %s,"
+            " and the %s index is at .git/index or .git/index.lock; inspect with git status before the next run\n"
+            % (self.first, self.second, self.second),
+            result.stderr,
+        )
+        self.assertNotIn("update-ref", result.stderr)
+        self.assert_stopped_before_export(result)
+        self.assertEqual(self.mv_calls.read_text(encoding="utf-8"), "call\n")
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
+        self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"), self.git(self.checkout, "rev-parse", self.second + ":NOTE"))
+        self.assertEqual(sorted(path.name for path in (self.checkout / ".git").rglob("*.lock")), [])
+
+    def test_an_unrenamed_index_neither_path_can_show_is_kept_as_the_lock(self):
+        # The same unreadable aftermath when the rename did not happen: the
+        # NEW index is still the lock, and it is kept, as the state line says.
+        self.install_shims(mv_mode="refuse-marked", ls_mode="blind-after-rename")
+        result = self.push()
+        self.assertIn(
+            "usage-export: WARN DRIFT behind=1 ahead=0 action=incomplete reason=index-uncertain", result.stderr
+        )
+        self.assertIn("usage-export: WARN repo-update state: main is %s (the update was aborted)" % self.first, result.stderr)
+        self.assertNotIn("update-ref", result.stderr)
+        self.assert_stopped_before_export(result)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
+        self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"), self.git(self.checkout, "rev-parse", self.first + ":NOTE"))
+        self.assert_kept_lock_holds(self.second)
+
+    def test_an_unreadable_main_after_a_lost_commit_prints_no_blind_overwrite(self):
+        # Review F1 r5: with main unreadable the repair dropped its expected old
+        # value, so as printed it would overwrite whatever main holds by then.
+        # Now it says what to inspect, and carries no runnable update-ref.
+        self.git_shim("lose-commit-blind")
+        result = self.push()
+        self.assertIn(
+            "usage-export: WARN DRIFT behind=1 ahead=0 action=incomplete reason=ref-uncertain", result.stderr
+        )
+        self.assertNotRegex(result.stderr, re.compile(r"update-ref refs/heads/main %s$" % self.second, re.M))
+        self.assertIn(
+            "usage-export: WARN repo-update repair: main could not be read; inspect it (git rev-parse refs/heads/main),"
+            " then run git update-ref refs/heads/main %s <that value>\n" % self.second,
+            result.stderr,
+        )
+        self.assert_stopped_before_export(result)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+        self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"), self.git(self.checkout, "rev-parse", self.second + ":NOTE"))
 
     def start_push(self):
         """The run in a process group of its own, so a test can stop it whole."""

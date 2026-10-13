@@ -251,6 +251,7 @@ update_checkout() {
     interrupted=
     acknowledged=yes
     repair=
+    facts=
     git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
     branch=$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
     upstream=$(git -C "$REPO_DIR" rev-parse --abbrev-ref 'main@{upstream}' 2>/dev/null || true)
@@ -293,6 +294,9 @@ update_checkout() {
     fi
     if [ -n "$repair" ]; then
         echo "usage-export: WARN repo-update repair: $repair" >&2
+    fi
+    if [ -n "$facts" ]; then
+        echo "usage-export: WARN repo-update state: $facts" >&2
     fi
     if [ -n "$interrupted" ]; then
         echo "usage-export: WARN repo-update interrupted signal=$interrupted" >&2
@@ -338,9 +342,10 @@ update_checkout() {
 # the prepared ref transaction holds HEAD's and main's locks (advance_main).
 #
 # A child's exit status never decides what state the checkout is in (review
-# F1 r3): a git killed after it finished reports failure too. After a failed
-# checkout the lock's tree is read again; after a commit git never
-# acknowledged, main is. Where a state is proven, ref, index and worktree are
+# F1 r3): a git killed after it finished reports failure too, and so does an
+# mv stopped after it renamed. After a failed checkout the lock's tree is read
+# again; the install is decided by the lock's inode (advance_main); after a
+# commit git never acknowledged, main is read again. Where a state is proven, ref, index and worktree are
 # brought into agreement; where it is not, recovery material is kept and the
 # run stops:
 #   merge-refused         nothing written; the run goes on as it was
@@ -354,13 +359,20 @@ update_checkout() {
 #   checkout-uncertain    the checkout failed, yet the lock no longer holds the
 #                         index it held before; the lock is kept; the run stops
 #   ref-uncertain         the NEW index was installed but the commit was never
-#                         acknowledged and main is not NEW; the one-line repair
-#                         is logged; the run stops
+#                         acknowledged and main is not NEW; the repair is
+#                         logged as a compare-and-swap update-ref, or, when main
+#                         cannot be read, as what to inspect first; the run
+#                         stops
 #   rollback-failed       nothing was prepared and the worktree could not be
 #                         put back; the lock keeps the NEW index; the run stops
-#   index-install-failed  prepared, but the index could not be installed; the
-#                         transaction was aborted, main is OLD, the lock keeps
-#                         the NEW index; the run stops
+#   index-install-failed  prepared, but the lock still holds the index (or its
+#                         identity could not be read, so no rename was tried);
+#                         the transaction was aborted, main is OLD, the lock
+#                         keeps the NEW index; the run stops
+#   index-uncertain       prepared and renamed, but neither path holds the
+#                         lock's file afterwards; the transaction was aborted,
+#                         main is OLD, the worktree holds NEW, and the NEW
+#                         index is at index or index.lock; the run stops
 # A kept lock is git's own recovery state: every git command names it as stale.
 fast_forward_main() {
     # The ref transaction protocol (start/prepare/commit) is what makes the
@@ -458,16 +470,25 @@ touched_paths_clean() {
 # installed by the one rename (git's own lockfile commit, which also releases
 # the index lock); only then is the commit sent. A state re-read after the
 # commit would be a snapshot plumbing could change before the install.
+#
+# Whether the rename happened is decided by the file's identity, never by
+# mv's exit status (review F1 r5): mv stopped by a signal after renaming
+# reports failure too. A rename moves the inode, and no git command renames
+# index.lock away (they refuse while it exists), so the inode recorded just
+# before the mv says where the index went.
 #   commit acknowledged       updated: nothing could move the refs between the
 #                             verify, the install and the commit
 #   installed, no answer      main re-read: NEW is updated but unacknowledged;
 #                             anything else is ref-uncertain, the installed NEW
-#                             index is kept and the one-line repair is logged
-#   prepared, install failed  aborted: index-install-failed, the lock kept
+#                             index is kept and the repair is logged
+#   lock still holds it       aborted: index-install-failed, the lock kept (also
+#                             when its identity could not be read, and then no
+#                             rename is tried)
+#   neither path holds it     aborted: index-uncertain; the facts are logged
 #   nothing prepared          aborted: the worktree is rolled back to OLD and
 #                             the run stops (ref-moved)
 advance_main() {
-    verified=no installed=no committed=no
+    verified=no installed=no committed=no install_unknown=no
     trap '' PIPE
     channel=$(mktemp -d) || channel=
     if [ -n "$channel" ] && mkfifo "$channel/in" "$channel/out"; then
@@ -480,11 +501,17 @@ advance_main() {
             && read -r line <&4 && [ "$line" = 'prepare: ok' ] \
             && [ "$(git -C "$REPO_DIR" symbolic-ref --quiet HEAD 2>/dev/null || true)" = refs/heads/main ]; then
             verified=yes
-            if mv -f "$lock" "$gitdir/index"; then
-                installed=yes
-                printf 'commit\n' >&3 2>/dev/null || true
-                if read -r line <&4 && [ "$line" = 'commit: ok' ]; then
-                    committed=yes
+            held=$(inode_of "$lock")
+            if [ -n "$held" ]; then
+                mv -f "$lock" "$gitdir/index" || true
+                if [ "$(inode_of "$gitdir/index")" = "$held" ]; then
+                    installed=yes
+                    printf 'commit\n' >&3 2>/dev/null || true
+                    if read -r line <&4 && [ "$line" = 'commit: ok' ]; then
+                        committed=yes
+                    fi
+                elif [ "$(inode_of "$lock")" != "$held" ]; then
+                    install_unknown=yes
                 fi
             fi
         fi
@@ -502,13 +529,20 @@ advance_main() {
         reason=updated drop_lock=no
     elif [ "$installed" = yes ]; then
         drop_lock=no
-        main=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/heads/main^{commit}' 2>/dev/null || true)
-        if [ "$main" = "$new" ]; then
+        if ! main=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/heads/main^{commit}' 2>/dev/null) || [ -z "$main" ]; then
+            # An update-ref without the value it expects would overwrite
+            # whatever main holds by then, so none is printed.
+            reason=ref-uncertain action=incomplete
+            repair="main could not be read; inspect it (git rev-parse refs/heads/main), then run git update-ref refs/heads/main $new <that value>"
+        elif [ "$main" = "$new" ]; then
             reason=updated acknowledged=no
         else
             reason=ref-uncertain action=incomplete
-            repair="git update-ref refs/heads/main $new${main:+ $main}"
+            repair="git update-ref refs/heads/main $new $main"
         fi
+    elif [ "$install_unknown" = yes ]; then
+        reason=index-uncertain action=incomplete drop_lock=no
+        facts="main is $old (the update was aborted), the worktree holds $new, and the $new index is at .git/index or .git/index.lock; inspect with git status before the next run"
     elif [ "$verified" = yes ]; then
         reason=index-install-failed action=incomplete drop_lock=no
     elif (umask 022 && GIT_INDEX_FILE="$lock" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then
@@ -516,6 +550,13 @@ advance_main() {
     else
         reason=rollback-failed action=incomplete drop_lock=no
     fi
+}
+
+# The inode number at a path, or nothing when it cannot be read (`ls -i` is
+# POSIX).
+inode_of() {
+    # shellcheck disable=SC2012 # one known path; only the leading inode field is read.
+    ls -di "$1" 2>/dev/null | awk '{ print $1 }'
 }
 
 if [ -z "${NARANJO_USAGE_EXPORT_REEXEC:-}" ]; then
