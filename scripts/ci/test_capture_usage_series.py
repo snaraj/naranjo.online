@@ -2785,6 +2785,33 @@ class SourceScopeTest(unittest.TestCase):
                     with self.assertRaises(CaptureError):
                         capture_usage_series.load_source_vocabulary(path, groups)
 
+    def test_the_source_vocabulary_admits_its_size_bound_and_refuses_one_byte_past_it(self):
+        # The loader reads one byte PAST its 64 KiB bound, so the bound itself
+        # is admitted and anything larger refuses — the model file's rule. Both
+        # sides are pinned at the literal byte count on one otherwise valid
+        # document, padded with whitespace JSON ignores, so the refusal can only
+        # be the bound's: the same bytes one shorter load.
+        groups = {"alpha": "Alpha"}
+        document = json.dumps(
+            {
+                "schema": "usage-sources/v1",
+                "sources": [{"key": "alpha-tool", "name": "Alpha Tool", "vendor": "alpha"}],
+            }
+        ).encode("utf-8")
+        with tempfile.TemporaryDirectory() as root:
+            path = pathlib.Path(root) / "sources.json"
+            path.write_bytes(document.ljust(65_536, b" "))
+            self.assertEqual(path.stat().st_size, 65_536)
+            self.assertEqual(
+                capture_usage_series.load_source_vocabulary(path, groups),
+                {"alpha-tool": "alpha"},
+            )
+            path.write_bytes(document.ljust(65_537, b" "))
+            self.assertEqual(path.stat().st_size, 65_537)
+            with self.assertRaises(CaptureError) as raised:
+                capture_usage_series.load_source_vocabulary(path, groups)
+            self.assertIn("over its size bound", str(raised.exception))
+
     def test_every_shipped_source_is_scoped_to_its_own_group(self):
         # Re-derived from the two files rather than transcribed, and checked in
         # both directions: every member of the group is in, nothing else is.
@@ -2804,6 +2831,182 @@ class SourceScopeTest(unittest.TestCase):
                     want.update(member["key"] for member in group["members"])
             self.assertGreater(len(want), 1, source["key"])
             self.assertEqual(capture_usage_series.model_scope(source["key"]), want, source["key"])
+
+
+class EveryFoldPathAppliesTheScopeTest(unittest.TestCase):
+    """Every production path that folds a model identifier applies the scope (issue #369).
+
+    The walk is one of FOUR ways a model key reaches the emission: the
+    activity cache's per-day roll-up, its per-model lifetime accounting and
+    the history store's remembered days each fold at a call site of their
+    own. The final guard catches a path that forgets the scope, and that is
+    exactly why a test of the guard alone cannot see such a regression: the
+    capture stays safe, but it REFUSES where it should fold, and every run
+    whose cache or store remembers another vendor's model stops pushing —
+    the outage issue #322 recorded for retired keys. So each case below
+    stages a member of the OTHER vendor group on exactly one path, drives
+    `capture` itself, and proves the run succeeds, the member reaches
+    nothing, its tokens land on the residual and the fold is counted. The
+    last case undoes the fold altogether, with a reader that forgot the
+    scope, and proves the guard itself refuses.
+    """
+
+    OWN = capture_usage_series.MODEL_KEYS[1]
+    # A member the vocabulary names for the OTHER group, with the raw
+    # identifier the vocabulary attributes to it exactly, so the scope is the
+    # only thing between that member and the wire.
+    FOREIGN_ID, FOREIGN = next(
+        (raw, member)
+        for raw, member in capture_usage_series.MODEL_IDS.items()
+        if member not in MESSAGES_SCOPE
+    )
+    WALKED_DAY = "2026-08-12"
+
+    def setUp(self):
+        # Non-vacuity: the foreign member IS a vocabulary member, so the
+        # emission's closed-vocabulary guard would admit it and only the scope
+        # refuses it; and both identifiers resolve through the vocabulary, so
+        # the `unattributed` fallback can never stand in for `cross_group`.
+        self.assertIn(self.FOREIGN, capture_usage_series.MODEL_KEYS)
+        self.assertNotIn(self.FOREIGN, MESSAGES_SCOPE)
+        self.assertIn(self.OWN, MESSAGES_SCOPE)
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.tree = self.scratch / "tree"
+        self.tree.mkdir()
+        record = json.loads(transcript_line(timestamp=self.WALKED_DAY + "T12:00:00.000Z"))
+        record["message"]["model"] = "avendor-%s" % self.OWN
+        (self.tree / "session.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+        self.cache = self.scratch / "cache.json"
+        self.store = self.scratch / "store.json"
+
+    @staticmethod
+    def usage(tokens):
+        return {
+            "inputTokens": tokens,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+        }
+
+    def write_cache(self, daily=(), lifetime=None):
+        self.cache.write_text(
+            json.dumps(
+                {
+                    capture_usage_series.ACTIVITY_CACHE_DAILY_KEY: [
+                        {
+                            capture_usage_series.ACTIVITY_CACHE_DATE_KEY: day,
+                            capture_usage_series.ACTIVITY_CACHE_MODELS_KEY: amounts,
+                        }
+                        for day, amounts in daily
+                    ],
+                    capture_usage_series.ACTIVITY_CACHE_USAGE_KEY: lifetime
+                    or {"avendor-%s" % self.OWN: self.usage(3)},
+                    capture_usage_series.ACTIVITY_CACHE_SESSIONS_KEY: 1,
+                    # As of the walked day, so nothing accrues past the cache
+                    # and every lifetime figure is the cache's own.
+                    capture_usage_series.ACTIVITY_CACHE_COMPUTED_KEY: self.WALKED_DAY,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def capture(self, cache=False, store=False):
+        return capture_usage_series.capture(
+            self.tree,
+            capture_usage_series.FORMAT_MESSAGES,
+            self.cache if cache else None,
+            datetime.date.fromisoformat(self.WALKED_DAY),
+            history_store=self.store if store else None,
+            source=MESSAGES_SOURCE,
+        )
+
+    def test_another_vendors_member_in_the_daily_roll_up_folds_to_the_residual(self):
+        self.write_cache(
+            daily=[("2026-08-10", {"avendor-%s" % self.OWN: 40, self.FOREIGN_ID: 60})]
+        )
+        section, counters = self.capture(cache=True)
+        # The day keeps its whole, 40 + 60, with the foreign share on the
+        # residual: folding moved the tokens and lost none.
+        self.assertEqual(section["series"]["totals"], [100, 0, 135])
+        self.assertEqual(
+            section["models"],
+            {capture_usage_series.MODEL_OTHER: [60, 0, 0], self.OWN: [40, 0, 135]},
+        )
+        self.assertNotIn(self.FOREIGN, json.dumps(section))
+        self.assertEqual(counters["cross_group"], 1)
+        self.assertEqual(counters["unattributed"], 0)
+
+    def test_another_vendors_member_in_the_lifetime_accounting_folds_to_the_residual(self):
+        self.write_cache(
+            lifetime={"avendor-%s" % self.OWN: self.usage(3), self.FOREIGN_ID: self.usage(4)}
+        )
+        section, counters = self.capture(cache=True)
+        self.assertEqual(
+            section["modelStats"],
+            [
+                {"key": capture_usage_series.MODEL_OTHER, "totals": {"input": 4}},
+                {"key": self.OWN, "totals": {"input": 3}},
+            ],
+        )
+        # The class tile counts every identifier whatever its group, so the
+        # per-model split still sums to it.
+        self.assertEqual(section["stats"]["input"], 7)
+        self.assertNotIn(self.FOREIGN, json.dumps(section))
+        self.assertEqual(counters["cross_group"], 1)
+        self.assertEqual(counters["unattributed"], 0)
+
+    def test_another_vendors_member_remembered_by_the_store_folds_to_the_residual(self):
+        self.store.write_text(
+            json.dumps(
+                {
+                    capture_usage_series.HISTORY_SCHEMA_KEY: capture_usage_series.HISTORY_SCHEMA,
+                    capture_usage_series.HISTORY_DAYS_KEY: {
+                        "2026-08-10": {"total": 100, "models": {self.OWN: 40, self.FOREIGN: 60}},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        section, counters = self.capture(store=True)
+        self.assertEqual(section["series"]["totals"], [100, 0, 135])
+        self.assertEqual(
+            section["models"],
+            {capture_usage_series.MODEL_OTHER: [60, 0, 0], self.OWN: [40, 0, 135]},
+        )
+        self.assertNotIn(self.FOREIGN, json.dumps(section))
+        self.assertEqual(counters["cross_group"], 1)
+        # Written back folded, so the next run reads a store with nothing left
+        # to fold and the fold is counted once.
+        written = self.store.read_text(encoding="utf-8")
+        self.assertEqual(
+            json.loads(written)[capture_usage_series.HISTORY_DAYS_KEY]["2026-08-10"]["models"],
+            {capture_usage_series.MODEL_OTHER: 60, self.OWN: 40},
+        )
+        self.assertNotIn(self.FOREIGN, written)
+
+    def test_a_reader_that_forgets_the_scope_is_refused_by_the_emission(self):
+        # The control first: the same tree, read by the shipped reader,
+        # captures, so the refusal below is the leak's and nothing else's.
+        section, _counters = self.capture()
+        self.assertEqual(section["models"], {self.OWN: [135]})
+        shipped = capture_usage_series.read_records
+        foreign = self.FOREIGN
+
+        def unscoped(root, counters, sessions=None, *, scope):
+            # The shipped reader with its fold undone: every row is billed to
+            # the other group's member, as a future path that skipped
+            # `scoped_key` would bill it.
+            for day, total, parts, _member in shipped(root, counters, sessions, scope=scope):
+                yield day, total, parts, foreign
+
+        capture_usage_series.read_records = unscoped
+        try:
+            with self.assertRaises(CaptureError) as raised:
+                self.capture()
+        finally:
+            capture_usage_series.read_records = shipped
+        self.assertIn("vendor group", str(raised.exception))
 
 
 class CaptureFormatTest(unittest.TestCase):
