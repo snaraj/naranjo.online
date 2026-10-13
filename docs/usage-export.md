@@ -202,9 +202,11 @@ rebuilds the ledger's SQLite and CSV views (below).
 `scripts/usage-export/install-launchd.sh --check` changes nothing and prints,
 per agent, whether its installed plist runs the configuration's `REPO_DIR` and
 what its last exit status was, exiting 1 unless both are good. "Runs" is read
-from the plist's parsed `ProgramArguments` alone — the leading elements, the
+from the two keys launchd executes, parsed: `Program`, which when present
+selects the executable, must be absent (the template sets none) or exactly
+the expected first argument, and the leading `ProgramArguments`, the
 snapshot's interpreter and flags included, must equal what the template
-installs — never from the path appearing anywhere else in the file.
+installs. The path appearing anywhere else in the file counts for nothing.
 
 ## Security properties, stage by stage
 

@@ -98,21 +98,29 @@ fi
 # the checkout the push script exports from; the snapshot agent is required
 # only when a record is configured. Labels and statuses only, never a path.
 #
-# What runs is the plist's ProgramArguments and nothing else in it: matching
-# the path anywhere in the XML passed an agent running another program
-# whenever a comment or an environment value spelled the path (review F9).
-# The array is parsed, never searched, and its leading elements — the program
+# What runs is decided by two keys of the plist and nothing else in it:
+# matching the path anywhere in the XML passed an agent running another
+# program whenever a comment or an environment value spelled the path (review
+# F9). launchd(5): `Program`, when present, is the executable, and
+# ProgramArguments[0] names it only when `Program` is absent (review F9 r2).
+# So the plist is parsed, never searched: `Program` must be absent or exactly
+# the expected first argument, and the leading ProgramArguments — the program
 # and, for the snapshot, the interpreter and flags before its script — must
-# equal what the template installs. The parser is python3's plistlib, already
-# the exporter's hard dependency, rather than plutil, so the one parser the
-# check uses also runs under the suite on CI hosts that are not macOS.
+# equal what the template installs, which sets no `Program`. The parser is
+# python3's plistlib, already the exporter's hard dependency, rather than
+# plutil, so the one parser the check uses also runs under the suite on CI
+# hosts that are not macOS.
 runs_program() {
     python3 -I -B -c '
 import plistlib, sys
 expected = sys.argv[2:]
 try:
     with open(sys.argv[1], "rb") as handle:
-        matched = plistlib.load(handle)["ProgramArguments"][: len(expected)] == expected
+        agent = plistlib.load(handle)
+    matched = (
+        agent.get("Program", expected[0]) == expected[0]
+        and agent["ProgramArguments"][: len(expected)] == expected
+    )
 except Exception:
     matched = False
 sys.exit(0 if matched else 1)

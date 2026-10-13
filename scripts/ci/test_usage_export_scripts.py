@@ -2840,6 +2840,21 @@ class InstallCheckTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 1)
         self.assertIn("check %s installed=yes repo=MISMATCH last-exit=0" % SNAPSHOT_LABEL, result.stdout)
+        # launchd runs `Program`, when present, in place of argv[0]: an agent
+        # naming another program there runs it, whatever its arguments say
+        # (review F9 r2). The same path in both places still matches.
+        for label, path in expected.items():
+            with self.subTest(label=label, program="/usr/bin/false"):
+                self.install(label, path, "0", "<key>Program</key><string>/usr/bin/false</string>")
+                result = self.check()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("check %s installed=yes repo=MISMATCH last-exit=0" % label, result.stdout)
+        first = {EXPORT_LABEL: expected[EXPORT_LABEL], SNAPSHOT_LABEL: "/usr/bin/env"}
+        for label, path in expected.items():
+            self.install(label, path, "0", "<key>Program</key><string>%s</string>" % first[label])
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(result.stdout.count("repo=match"), 2)
         # And a plist that does not parse matches nothing.
         plist.write_text("<plist><dict><key>ProgramArguments</key><array><string>%s"
                          % expected[SNAPSHOT_LABEL], encoding="utf-8")
