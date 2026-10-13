@@ -268,11 +268,14 @@ export function tokenUsageSources(data: unknown): TokenUsageSource[] {
     if (insights === null) {
       return [];
     }
-    const series = admitSeries(candidate.series);
+    /* The model keys this source may carry: its own vendor group's members
+       plus the residual (issue #369). */
+    const scope = modelScopeOf(candidate.label);
+    const series = admitSeries(candidate.series, scope);
     if (series === null) {
       return [];
     }
-    const modelStats = admitModelStats(candidate.modelStats);
+    const modelStats = admitModelStats(candidate.modelStats, scope);
     if (modelStats === null) {
       return [];
     }
@@ -411,7 +414,10 @@ function admitInsights(value: unknown): TokenUsageInsight[] | null {
  * three spellings of the vocabulary to one list (PR #312 review, rounds 1
  * and 2): before them this boundary required exactly the four stat tiles and
  * refused the WHOLE payload over a member the origin had served truthfully. */
-function admitModelStats(value: unknown): TokenUsageModelStat[] | null {
+function admitModelStats(
+  value: unknown,
+  scope: ReadonlyMap<string, number>
+): TokenUsageModelStat[] | null {
   if (value === undefined) {
     return [];
   }
@@ -419,13 +425,13 @@ function admitModelStats(value: unknown): TokenUsageModelStat[] | null {
      it a bound on WORK rather than a second spelling of the duplicate rule
      below: closed membership already means an over-long section must repeat a
      key, but only after the walk has run over every entry in it. */
-  if (!Array.isArray(value) || value.length > modelSlots.size) {
+  if (!Array.isArray(value) || value.length > scope.size) {
     return null;
   }
   const seen = new Set<string>();
   const stats: TokenUsageModelStat[] = [];
   for (const entry of value) {
-    if (!isRecord(entry) || typeof entry.key !== 'string' || !modelSlots.has(entry.key)) {
+    if (!isRecord(entry) || typeof entry.key !== 'string' || !scope.has(entry.key)) {
       return null;
     }
     /* No key twice: two rows for one model are two answers to one question,
@@ -483,10 +489,10 @@ function admitClassTotals(value: unknown): TokenUsageClassTotals | null {
 
 /* How many rows ONE breakdown of a series may carry. The category bound is
  * the structural guard the Go boundary states as maxSeriesCategories; the
- * model bound is the model vocabulary's own size, exactly as maxSeriesModels
- * is, so a payload naming more model rows than the file has members is
- * refused before a single key is looked up. Neither can inflate the render
- * with hundreds of entries. */
+ * model bound is the size of the source's own scope — its vendor group plus
+ * the residual (issue #369), exactly as the origin bounds it — so a payload
+ * naming more model rows than its source may carry is refused before a single
+ * key is looked up. Neither can inflate the render with hundreds of entries. */
 const maxCategoryRows = 8;
 
 /* maxModelDays bounds how many trailing days the model breakdown may cover —
@@ -495,8 +501,8 @@ const maxCategoryRows = 8;
  * a refusal before rendering. It was a quarter until the vocabulary gained
  * its second vendor group (issue #302), and ten weeks until the sealed
  * ceiling needed its further digit (issue #267): the section costs one
- * integer per day per member, and the ceiling is never the lever; the window
- * is. The categories breakdown carries no separate day bound on either side,
+ * integer per day per member of the source's own vendor group (issue #369),
+ * and the ceiling is never the lever. The categories breakdown carries no separate day bound on either side,
  * exactly as in Go. */
 const maxModelDays = 56;
 
@@ -508,7 +514,10 @@ const maxModelDays = 56;
  * malformed corner — a non-array, a bad key, a length that disagrees with
  * the series, a negative count, a duplicate key — refuses the whole payload
  * rather than rendering a half-true breakdown. */
-function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
+function admitSeries(
+  value: unknown,
+  scope: ReadonlyMap<string, number>
+): TokenUsageSeries | null | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
@@ -549,8 +558,8 @@ function admitSeries(value: unknown): TokenUsageSeries | null | undefined {
       value.models,
       totals,
       value.startDate,
-      modelSlots,
-      modelSlots.size,
+      scope,
+      scope.size,
       maxModelDays,
       true
     );
@@ -880,6 +889,35 @@ const modelSlots: ReadonlyMap<string, number> = new Map([
 
 export function modelSlot(key: string): number {
   return modelSlots.get(key) ?? modelResidual.slot;
+}
+
+/* EACH SOURCE CARRIES ONLY ITS OWN VENDOR'S MODELS (issue #369). The source
+ * file binds every source to a vendor group of the model file, and a source's
+ * model keys are that group's members plus the residual: the capture folds
+ * every other member to the residual, and the origin admits by the same rule
+ * from the same two files. Admission here mirrors the origin, so a payload
+ * whose source names another group's member is refused exactly as one naming
+ * an unknown key is. A source the file does not bind belongs to no group, and
+ * the residual is the only model key it may carry. Each scope is also that
+ * source's row bound, as the vocabulary's size used to be for every source. */
+const residualScope: ReadonlyMap<string, number> = new Map([
+  [modelResidual.key, modelResidual.slot]
+]);
+
+const sourceModelScopes: ReadonlyMap<string, ReadonlyMap<string, number>> = new Map(
+  sourceVocabulary.sources.map((entry): [string, ReadonlyMap<string, number>] => [
+    entry.key,
+    new Map([
+      [modelResidual.key, modelResidual.slot],
+      ...modelMembers
+        .filter((member) => member.group === entry.vendor)
+        .map((member): [string, number] => [member.key, member.slot])
+    ])
+  ])
+);
+
+function modelScopeOf(label: string): ReadonlyMap<string, number> {
+  return sourceModelScopes.get(label) ?? residualScope;
 }
 
 /* Display copy, and the reason it is a table rather than a transformation: a

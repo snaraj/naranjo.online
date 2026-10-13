@@ -32,6 +32,17 @@ const sourceVocabulary = JSON.parse(
 const sourceName = (key) =>
   sourceVocabulary.sources.find((entry) => entry.key === key)?.name ?? key;
 
+/* The model group a served source belongs to (issue #369). A source may carry
+   only its own vendor's models plus the residual, so a lane that stages model
+   rows on a source takes them from that source's group, resolved through the
+   same two vocabulary files the page reads. */
+const ownGroup = (label) => {
+  const vendor = sourceVocabulary.sources.find((entry) => entry.key === label)?.vendor;
+  const group = modelVocabulary.groups.find((entry) => entry.key === vendor);
+  expect(group, `the served source "${label}" belongs to no vendor group`).toBeTruthy();
+  return group;
+};
+
 // The narrowest viewport this site supports, and the sizes it must fit
 // between there and a large phone. 320 is the floor named in AGENTS.md;
 // 360/390/412 are widths ordinary Android and iPhone screens report.
@@ -1555,8 +1566,6 @@ async function stageUsagePayload(page, edit) {
  * Every key comes from the vocabulary files rather than from a list typed
  * here, so the staged payload is one the origin could actually serve. */
 async function stageSixCards(page) {
-  const [group] = modelVocabulary.groups;
-  const [first, second, third] = group.members.map((member) => member.key);
   await stageUsagePayload(page, (envelope) => {
     const sources = envelope?.data?.sources ?? [];
     expect(
@@ -1564,6 +1573,9 @@ async function stageSixCards(page) {
       'the origin serves fewer than two usage sources; this lane cannot lay out six cards'
     ).toBeGreaterThan(1);
     const [lead, follower] = sources;
+    /* Each source's rows come from its OWN vendor group (issue #369). */
+    const [first, second] = ownGroup(lead.label).members.map((member) => member.key);
+    const [third, fourth] = ownGroup(follower.label).members.map((member) => member.key);
     lead.windows = [{ period: 'today', inputTokens: 12_900_000, outputTokens: 49_500 }];
     lead.stats = [
       ...(lead.stats ?? []),
@@ -1584,7 +1596,7 @@ async function stageSixCards(page) {
       recorded: true,
       models: [
         { key: third, totals: [4, 6, 4, 7, 9, 5, 4] },
-        { key: first, totals: [1, 2, 1, 2, 3, 2, 1] },
+        { key: fourth, totals: [1, 2, 1, 2, 3, 2, 1] },
       ],
     };
   });
@@ -1801,8 +1813,9 @@ test('every set draws ONE calendar, and coverage moves the data rather than the 
  * half of THAT: what the engine actually drew for the rows that survived.
  */
 test('every model row the card draws is a real member with a real rule', async ({ page }) => {
-  const [group] = modelVocabulary.groups;
-  const [big, small] = group.members.map((member) => member.key);
+  /* The rows are staged on the first served source, so they are members of
+     that source's own vendor group (issue #369). */
+  let group = null;
   const classes = (count) => ({ input: count, output: 0, 'cache-read': 0, 'cache-write': 0 });
   /* BOTH kinds of card, because they are two quantities (issue #267): a
      source that reports its LIFETIME split per model (`modelStats`) shows
@@ -1815,6 +1828,8 @@ test('every model row the card draws is a real member with a real rule', async (
       const sources = envelope?.data?.sources ?? [];
       expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
       envelope.data.sources = [sources[0]];
+      group = ownGroup(sources[0].label);
+      const [big, small] = group.members.map((member) => member.key);
       sources[0].series = {
         startDate: '2026-06-01',
         totals: [5, 5, 5],

@@ -267,8 +267,15 @@ def admit_breakdown(document, name, start_key, vocabulary, totals, series_start,
     return admitted, declared
 
 
-def load_merge_source(path, now):
+def load_merge_source(path, now, source):
     """Load and structurally validate one merged source file.
+
+    `source` is the key the file is merged under, and it decides which model
+    keys the file may carry: that source's own vendor group plus the residual
+    (issue #369), the rule the capture that wrote the file already applied. A
+    member of another group is REFUSED here rather than folded, because the
+    capture never emits one — a file carrying one was edited, or written by
+    something that disagrees with this pipeline and with the origin.
 
     The shape is the capture tool's stdout — {"generatedAt": ..., "series":
     ..., "derived": ...} — extended with "categories" and "windows". Every
@@ -332,9 +339,11 @@ def load_merge_source(path, now):
     ):
         raise capture.CaptureError("a merge source series carries malformed totals")
     section = {"series": {"startDate": series["startDate"], "totals": totals, "recorded": True}}
+    scope = capture.model_scope(source)
+    scoped_models = tuple(key for key in capture.MODEL_KEYS if key in scope)
     for name, start_key, vocabulary, max_days in (
         ("categories", "categoriesStartDate", capture.CATEGORY_KEYS, None),
-        ("models", "modelsStartDate", capture.MODEL_KEYS, capture.MAX_MODEL_DAYS),
+        ("models", "modelsStartDate", scoped_models, capture.MAX_MODEL_DAYS),
     ):
         admitted, declared = admit_breakdown(
             document, name, start_key, vocabulary, totals, series["startDate"], max_days
@@ -401,13 +410,13 @@ def load_merge_source(path, now):
         section["stats"] = stats
     members = document.get("modelStats")
     if members is not None:
-        section["modelStats"] = admit_model_stats(members)
+        section["modelStats"] = admit_model_stats(members, scope)
     if capture.LEDGER_KEY in document:
         capture.assert_ledger_block(document[capture.LEDGER_KEY])
     return section, captured, document
 
 
-def admit_model_stats(members):
+def admit_model_stats(members, scope):
     """Admit one merge source's per-model lifetime classes, or refuse.
 
     The origin's own rules, checked here so a broken producer cannot push a
@@ -429,6 +438,10 @@ def admit_model_stats(members):
         if key not in capture.MODEL_KEYS:
             raise capture.CaptureError(
                 "a merge source modelStats member is outside the model vocabulary"
+            )
+        if key not in scope:
+            raise capture.CaptureError(
+                "a merge source modelStats member belongs to another source's vendor group"
             )
         if key in seen:
             raise capture.CaptureError("a merge source modelStats member is declared twice")
@@ -589,6 +602,7 @@ def export(
         now.astimezone().date(),
         history_store,
         verified_readings,
+        source=source_key,
     )
     sources = {source_key: section}
     # The walked tree is captured by THIS run, so its instant is this run's.
@@ -605,7 +619,7 @@ def export(
     for key, path in merge_files:
         if key in sources:
             raise capture.CaptureError("two sources claim one key")
-        sources[key], captured[key], document = load_merge_source(path, now)
+        sources[key], captured[key], document = load_merge_source(path, now, key)
         material[key] = {
             "capture": document,
             "ledgerBlock": document.get(capture.LEDGER_KEY),
@@ -936,7 +950,7 @@ def main(argv=None):
         return 1
     print(
         "files=%d unreadable=%d symlinks=%d oversized=%d lines=%d counted=%d "
-        "duplicates=%d unpartitioned=%d unattributed=%d sources=%d"
+        "duplicates=%d unpartitioned=%d unattributed=%d cross_group=%d sources=%d"
         % (
             counters.get("files", 0),
             counters.get("unreadable", 0),
@@ -947,6 +961,7 @@ def main(argv=None):
             counters.get("duplicates", 0),
             counters.get("unpartitioned", 0),
             counters.get("unattributed", 0),
+            counters.get("cross_group", 0),
             len(sources),
         ),
         file=sys.stderr,

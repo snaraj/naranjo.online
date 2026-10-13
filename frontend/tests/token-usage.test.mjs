@@ -96,6 +96,19 @@ const sourceVocabulary = JSON.parse(
 );
 const [firstSource, secondSource] = sourceVocabulary.sources;
 
+/* The shipped source a vendor group belongs to, and the one a model key's
+   group belongs to (issue #369). A source may carry only its own vendor's
+   models plus the residual, so a fixture that names members labels its source
+   with the one that may carry them — read from the two vocabulary files,
+   never typed. */
+const groupSource = (groupKey) => {
+  const source = sourceVocabulary.sources.find((entry) => entry.vendor === groupKey);
+  assert.ok(source, `no shipped source belongs to ${groupKey}`);
+  return source.key;
+};
+const sourceOf = (key) =>
+  groupSource(vocabularyMembers.find((member) => member.key === key)?.group);
+
 /* One envelope carrying the shipped payload plus a token series, for driving
  * the commits block's own adapter the way its multi-panel host does: the
  * calendar reads the version-control panel first and the token panel second,
@@ -851,11 +864,12 @@ describe('the board of cards: live surface', () => {
     // live figures yields rows that carry no mark at all — not `false`, no
     // such field — so a component could not render one even by accident.
     const [member] = vocabulary.groups[0].members;
+    const owner = groupSource(vocabulary.groups[0].key);
     const rows = tokenBoardProps(
       envelopeFor({
         sources: [
           {
-            label: 's',
+            label: owner,
             windows: [],
             series: {
               startDate: '2026-08-10',
@@ -866,7 +880,7 @@ describe('the board of cards: live surface', () => {
           }
         ]
       })
-    ).cards.find((card) => card.key === 'models-s').models;
+    ).cards.find((card) => card.key === `models-${owner}`).models;
     assert.deepEqual(Object.keys(rows[0]).sort(), ['detail', 'fillPct', 'key', 'label', 'reading']);
     assert.equal(rows[0].detail, undefined);
     // A figure the payload does not carry is the dash on the card's face,
@@ -1324,7 +1338,7 @@ describe('the model breakdown (token-usage/v2)', () => {
   const withModels = (models, overrides = {}) => ({
     sources: [
       {
-        label: 'alpha',
+        label: sourceOf('opus-5'),
         windows: [],
         series: { startDate: '2026-08-10', totals: [10, 20, 30], models, ...overrides }
       }
@@ -1380,7 +1394,7 @@ describe('the model breakdown (token-usage/v2)', () => {
     const series = (extra) => ({
       sources: [
         {
-          label: 'alpha',
+          label: sourceOf('opus-5'),
           windows: [],
           series: { startDate: '2026-01-01', totals, ...extra }
         }
@@ -1476,7 +1490,7 @@ describe('the model breakdown (token-usage/v2)', () => {
       tokenUsageSources({
         sources: [
           {
-            label: 'alpha',
+            label: sourceOf('opus-5'),
             windows: [],
             series: {
               startDate: '2026-08-10',
@@ -1656,6 +1670,8 @@ describe('the model vocabulary is one data file', () => {
 });
 
 describe('the models card is one card per source', () => {
+  const ownLabel = groupSource(vocabulary.groups[0].key);
+
   /* Issues #302 and #311. A models card draws ONE SOURCE'S split, headed by
      that source's written name from the vocabulary file. It used to be headed
      by the VENDOR GROUP, on the reasoning that a group names whose models the
@@ -1693,7 +1709,7 @@ describe('the models card is one card per source', () => {
   const weighted = (rows) => ({
     sources: [
       {
-        label: 'a-capture-tool',
+        label: ownLabel,
         windows: [],
         series: {
           startDate: '2026-08-10',
@@ -1777,7 +1793,7 @@ describe('the models card is one card per source', () => {
     const [card] = modelCards({
       sources: [
         {
-          label: 'a-capture-tool',
+          label: ownLabel,
           windows: [],
           series: {
             startDate: '2026-08-10',
@@ -1810,7 +1826,7 @@ describe('the models card is one card per source', () => {
     const [card] = modelCards({
       sources: [
         {
-          label: 'a-capture-tool',
+          label: ownLabel,
           windows: [],
           modelStats: [
             stat(big, { input: 1, output: 2, 'cache-read': 60, 'cache-write': 7 }),
@@ -1836,7 +1852,7 @@ describe('the models card is one card per source', () => {
     const both = modelCards({
       sources: [
         {
-          label: 'a-capture-tool',
+          label: ownLabel,
           windows: [],
           modelStats: [stat(big, { input: 0, output: 0, 'cache-read': 1, 'cache-write': 0 })],
           series: {
@@ -1863,7 +1879,7 @@ describe('the models card is one card per source', () => {
        to draw. */
     const [group] = vocabulary.groups;
     const keys = [vocabulary.residual.key, ...keysOf(group).slice(0, 1)];
-    const [card] = modelCards(carrying([{ label: 'a-capture-tool', keys }]));
+    const [card] = modelCards(carrying([{ label: ownLabel, keys }]));
     assert.deepEqual(
       card.models.map((row) => row.label),
       [modelLabel(keys[1])],
@@ -1877,7 +1893,7 @@ describe('the models card is one card per source', () => {
       modelCards({
         sources: [
           {
-            label: 'a-capture-tool',
+            label: ownLabel,
             windows: [],
             modelStats: [
               { key: keys[1], totals: { input: 1, output: 0, 'cache-read': 0, 'cache-write': 0 } },
@@ -1909,7 +1925,7 @@ describe('the models card is one card per source', () => {
     const [group] = vocabulary.groups;
     const named = keysOf(group).slice(0, 2);
     const payload = carrying([
-      { label: 'a-capture-tool', keys: [vocabulary.residual.key, ...named] }
+      { label: ownLabel, keys: [vocabulary.residual.key, ...named] }
     ]);
     const cards = cardsOf(payload);
     const [card] = cards.filter((entry) => entry.key.startsWith('models-'));
@@ -1926,7 +1942,7 @@ describe('the models card is one card per source', () => {
        residual included: `carrying` sums one row per key into each day, so a
        fold that was DROPPED rather than folded would show here as a shorter
        total. */
-    const source = cards.find((entry) => entry.key === 'source-a-capture-tool');
+    const source = cards.find((entry) => entry.key === `source-${ownLabel}`);
     assert.deepEqual(source.spark.totals, [3, 6, 9]);
     assert.deepEqual(
       source.spark.dayFigures,
@@ -1938,7 +1954,7 @@ describe('the models card is one card per source', () => {
     /* A card saying "all of it was something we cannot name" is the aggregate
        above it with extra steps, and the producer already omits the section
        for exactly this case. */
-    const cards = cardsOf(carrying([{ label: 'a-capture-tool', keys: [vocabulary.residual.key] }]));
+    const cards = cardsOf(carrying([{ label: ownLabel, keys: [vocabulary.residual.key] }]));
     assert.deepEqual(cards.filter((card) => card.key.startsWith('models-')), []);
     /* The rest of the board is untouched: this is a missing card, never a
        missing panel. */
@@ -1967,7 +1983,7 @@ describe('the models card is one card per source', () => {
       tokenUsageSources({
         sources: [
           {
-            label: 'a-capture-tool',
+            label: ownLabel,
             windows: [],
             series: {
               startDate: '2026-08-10',
@@ -1994,14 +2010,101 @@ describe('the models card is one card per source', () => {
   });
 });
 
+describe('each source carries only its own vendor\u2019s models', () => {
+  /* Issue #369. A source's model keys are its own vendor group's members plus
+     the residual: the capture folds every other member to the residual, the
+     origin refuses a document naming one, and this admission mirrors the
+     origin, so a payload whose source names another vendor's model is refused
+     exactly as one naming an unknown key is. Every fixture resolves sources
+     and members through the two vocabulary files rather than typing them. */
+  const added = ['opus-5-5', 'mythos-5-1', 'haiku-5-5', 'sonnet-5-5'];
+
+  it('refuses another vendor\u2019s model on a source, in the partition and in the lifetime split', () => {
+    assert.ok(sourceVocabulary.sources.length > 1, 'one source cannot say anything about another');
+    for (const source of sourceVocabulary.sources) {
+      const own = vocabularyMembers.filter((member) => member.group === source.vendor);
+      const foreign = vocabularyMembers.find((member) => member.group !== source.vendor);
+      assert.ok(own.length > 0 && foreign, source.key);
+      const partition = (keys) => ({
+        sources: [
+          {
+            label: source.key,
+            windows: [],
+            series: {
+              startDate: '2026-08-10',
+              totals: [keys.length],
+              recorded: true,
+              models: keys.map((key) => ({ key, totals: [1] }))
+            }
+          }
+        ]
+      });
+      const split = (keys) => ({
+        sources: [
+          { label: source.key, windows: [], modelStats: keys.map((key) => ({ key, totals: { input: 1 } })) }
+        ]
+      });
+      /* The controls: the same source naming its OWN members is admitted, so
+         every refusal below is about the vendor and nothing else. */
+      assert.equal(tokenUsageSources(partition([own[0].key, vocabulary.residual.key])).length, 1, source.key);
+      assert.equal(tokenUsageSources(split([own[0].key])).length, 1, source.key);
+      assert.deepEqual(tokenUsageSources(partition([own[0].key, foreign.key])), [], `${source.key} partition`);
+      assert.deepEqual(tokenUsageSources(split([own[0].key, foreign.key])), [], `${source.key} split`);
+    }
+    /* A source the file does not bind belongs to no vendor group, so the
+       residual is the only model key it may carry. */
+    const unbound = (key) => ({
+      sources: [
+        { label: 'a-source-nobody-declared', windows: [], modelStats: [{ key, totals: { input: 1 } }] }
+      ]
+    });
+    assert.equal(tokenUsageSources(unbound(vocabulary.residual.key)).length, 1);
+    assert.deepEqual(tokenUsageSources(unbound(vocabularyMembers[0].key)), []);
+  });
+
+  it('admits Opus 5.5, Mythos 5.1, Haiku 5.5 and Sonnet 5.5 on their own source and draws each by name', () => {
+    const group = vocabularyMembers.find((member) => member.key === added[0])?.group;
+    const owner = sourceVocabulary.sources.find((entry) => entry.vendor === group);
+    assert.ok(owner, `no shipped source carries ${added[0]}`);
+    /* Usage rises through the list, so the card's largest-first order is the
+       list reversed and a row that went missing cannot hide in the order. */
+    const payload = {
+      sources: [
+        {
+          label: owner.key,
+          windows: [],
+          modelStats: added.map((key, index) => ({ key, totals: { input: index + 1 } }))
+        }
+      ]
+    };
+    const [card] = tokenBoardProps(envelopeFor(payload)).cards.filter(
+      (entry) => entry.key === `models-${owner.key}`
+    );
+    assert.ok(card, 'the four members drew no card on their own source');
+    assert.deepEqual(
+      card.models.map((row) => row.label),
+      ['Sonnet 5.5', 'Haiku 5.5', 'Mythos 5.1', 'Opus 5.5']
+    );
+    /* Every share is a share of the four, now that none folds to the
+       residual the card drops: 4, 3, 2 and 1 of 10. */
+    assert.deepEqual(
+      card.models.map((row) => row.reading),
+      [40, 30, 20, 10].map((pct) => formatShare(pct))
+    );
+    assert.deepEqual(added.map(modelSlot), [6, 7, 8, 9]);
+  });
+});
+
 describe('the lifetime model accounting is admitted strictly', () => {
+  const statsLabel = groupSource(vocabulary.groups[0].key);
+  const ownMembers = vocabularyMembers.filter((entry) => entry.group === vocabulary.groups[0].key);
   /* The optional modelStats section (issue #311), held to the same
      three-state contract every other section takes and to the same closed
      membership the daily partition takes. */
   const [member, other] = vocabulary.groups[0].members;
   const full = { input: 1, output: 2, 'cache-read': 3, 'cache-write': 4 };
   const withStats = (modelStats) => ({
-    sources: [{ label: 's', windows: [], modelStats }]
+    sources: [{ label: statsLabel, windows: [], modelStats }]
   });
 
   it('admits a well-formed section and carries it onto the source', () => {
@@ -2019,7 +2122,7 @@ describe('the lifetime model accounting is admitted strictly', () => {
     const [source] = tokenUsageSources(withStats([{ key: member.key, totals: { output: 5, reasoning: 3 } }]));
     assert.deepEqual(source.modelStats[0].totals, { input: 0, output: 5, 'cache-read': 0, 'cache-write': 0, reasoning: 3 });
     const [card] = tokenCards(tokenUsageSources(withStats([{ key: member.key, totals: { output: 5, reasoning: 3 } }])))
-      .filter((entry) => entry.key === 'models-s');
+      .filter((entry) => entry.key === `models-${statsLabel}`);
     assert.ok(card, 'the split card did not render for a source whose only split carries reasoning');
     assert.equal(card.models[0].detail, 'in 0 · out 5 · reasoning 3 · cache 0 / 0');
     assert.equal(card.models[0].reading, formatShare(100));
@@ -2033,7 +2136,7 @@ describe('the lifetime model accounting is admitted strictly', () => {
           { key: other.key, totals: { output: 4 } }
         ])
       )
-    ).filter((entry) => entry.key === 'models-s');
+    ).filter((entry) => entry.key === `models-${statsLabel}`);
     assert.deepEqual(
       shared.models.map((row) => [row.key, row.reading, row.fillPct]),
       [
@@ -2044,7 +2147,7 @@ describe('the lifetime model accounting is admitted strictly', () => {
     /* And a member that spent no reasoning prints none: the other tool's
        models never do, and a row of noughts would say nothing. */
     const [quiet] = tokenCards(tokenUsageSources(withStats([{ key: member.key, totals: full }])))
-      .filter((entry) => entry.key === 'models-s');
+      .filter((entry) => entry.key === `models-${statsLabel}`);
     assert.equal(quiet.models[0].detail, 'in 1 · out 2 · cache 3 / 4');
   });
 
@@ -2105,9 +2208,9 @@ describe('the lifetime model accounting is admitted strictly', () => {
   });
 
   it('admits a payload written before the section existed', () => {
-    const [source] = tokenUsageSources({ sources: [{ label: 's', windows: [] }] });
+    const [source] = tokenUsageSources({ sources: [{ label: statsLabel, windows: [] }] });
     assert.equal(source.modelStats, undefined);
-    assert.deepEqual(tokenUsageSources(withStats([])), [{ label: 's', windows: [] }]);
+    assert.deepEqual(tokenUsageSources(withStats([])), [{ label: statsLabel, windows: [] }]);
   });
 
   it('refuses every malformed corner rather than rendering part of it', () => {
@@ -2136,17 +2239,18 @@ describe('the lifetime model accounting is admitted strictly', () => {
     for (const [why, payload] of refusals) {
       assert.deepEqual(tokenUsageSources(payload), [], why);
     }
-    // ...and the row count is bounded by the vocabulary's own size, exactly as
-    // the daily partition's is.
-    const every = [vocabulary.residual, ...vocabularyMembers].map((entry) => ({
+    // ...and the row count is bounded by the SOURCE'S scope, exactly as the
+    // daily partition's is: its own vendor group's members plus the residual
+    // (issue #369), never every member of the file.
+    const every = [vocabulary.residual, ...ownMembers].map((entry) => ({
       key: entry.key,
       totals: full
     }));
-    assert.equal(tokenUsageSources(withStats(every)).length, 1, 'the whole vocabulary must fit');
+    assert.equal(tokenUsageSources(withStats(every)).length, 1, 'the source\u2019s whole scope must fit');
     assert.deepEqual(
       tokenUsageSources(withStats([...every, { key: other.key, totals: full }])),
       [],
-      'a section longer than the vocabulary is a section carrying a repeat'
+      'a section longer than the scope is a section carrying a repeat'
     );
   });
 
@@ -2167,7 +2271,7 @@ describe('the lifetime model accounting is admitted strictly', () => {
         throw new Error('a bounded section must be refused before its rows are read');
       }
     });
-    const overlong = Array.from({ length: vocabularyMembers.length + 2 }, unreadable);
+    const overlong = Array.from({ length: ownMembers.length + 2 }, unreadable);
     assert.deepEqual(tokenUsageSources(withStats(overlong)), []);
     assert.equal(reads, 0, 'the section was walked before its length was weighed');
     // The control: a section INSIDE the bound really is walked, so the
@@ -2485,7 +2589,11 @@ describe('no card prints a provenance sentence or the days-tracked line', () => 
  * out of a drawing.
  * ------------------------------------------------------------------------ */
 describe('the six-card board', () => {
-  const member = (index) => vocabulary.groups[0].members[index];
+  /* Each source names members of its OWN vendor group (issue #369). */
+  const member = (index) =>
+    vocabularyMembers.filter((entry) => entry.group === firstSource.vendor)[index];
+  const theirs = (index) =>
+    vocabularyMembers.filter((entry) => entry.group === secondSource.vendor)[index];
 
   /* One payload that exercises every card: two sources, both with lifetimes,
      both with a daily series, one with the lifetime model accounting and one
@@ -2527,7 +2635,7 @@ describe('the six-card board', () => {
           startDate: '2026-08-11',
           totals: [10, 20, 30],
           recorded: true,
-          models: [{ key: member(2).key, totals: [10, 20, 30] }]
+          models: [{ key: theirs(0).key, totals: [10, 20, 30] }]
         }
       }
     ]

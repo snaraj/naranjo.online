@@ -2026,6 +2026,13 @@ type Registry struct {
 	// holds whichever capability starts first: a loop already running exits
 	// at its next wake rather than racing the claim.
 	dataRootOwnsPanel atomic.Bool
+	// modelScopes binds each source label to the closed model vocabulary a
+	// pushed document may carry under it (issue #369). Construction sets it to
+	// sourceModelScopes, the binding the embedded vocabularies declare, and no
+	// runtime input can reach it; a label it does not bind may carry only the
+	// residual, so an empty or missing binding narrows admission rather than
+	// widening it.
+	modelScopes map[string][]string
 }
 
 // dataRootPanelID is the one panel the sealed data-root path serves. It is a
@@ -2392,28 +2399,32 @@ const maxSourceNameBytes = 40
 // bytes are compiled in and no runtime input can reach them, so the load
 // panics rather than degrading to an empty vocabulary that would silently
 // refuse every models section for the life of the process.
-// modelGroupOrder rides beside it: the set of vendor groups the file
-// declares, which the SOURCE vocabulary below must name a member of. One
-// reading of one file produces both, so the two can never be measured from
-// different bytes.
-var modelServeOrder, modelGroupOrder = mustLoadModelVocabulary(modelsConfigBytes)
+// modelGroups rides beside it: each vendor group the file declares, mapped to
+// its members in serve order. The SOURCE vocabulary below must name one of
+// these groups for every source, and a source may carry only its group's
+// members (issue #369). One reading of one file produces both, so the two can
+// never be measured from different bytes.
+var modelServeOrder, modelGroups = mustLoadModelVocabulary(modelsConfigBytes)
 
-// sourceVocabulary is the source key to written name map, validated at init
-// exactly as the model vocabulary is and for exactly its reasons: the bytes
-// are compiled in, a fault is a build defect, and a half-loaded vocabulary
-// would leave a source the page cannot name. The ORIGIN never prints a name —
-// the page resolves it from the same file — so what this var buys the binary
-// is the validation, and what it buys the pipeline is the guarantee that a
-// pushed source label always has a name waiting for it.
-var sourceVocabulary = mustLoadSourceVocabulary(sourcesConfigBytes, modelGroupOrder)
+// sourceVocabulary maps every declared source key to its vendor group,
+// validated at init exactly as the model vocabulary is and for exactly its
+// reasons: the bytes are compiled in, a fault is a build defect, and a
+// half-loaded vocabulary would leave a source the page cannot name. The
+// ORIGIN never prints a name — the page resolves it from the same file — so
+// what this var buys the binary is the validation and the one binding the
+// origin acts on: which vendor's models a source may carry.
+var sourceVocabulary = mustLoadSourceVocabulary(sourcesConfigBytes, modelGroups)
 
-// maxSeriesModels bounds the per-model breakdown the way maxSeriesCategories
-// bounds the category one, and it is the vocabulary's own size: the file
-// declares every key a document may carry, so a document naming more rows
-// than the file has members is refused before a single key is looked up.
-// Raising it means adding a member to the file, which is a reviewed data
-// edit — never a widening of this bound on its own.
-var maxSeriesModels = len(modelServeOrder)
+// sourceModelScopes is the closed model vocabulary each declared source may
+// carry, and it is also that source's row bound (issue #369): the residual
+// plus its own vendor group's members, in serve order. A pushed per-model
+// partition or lifetime split is admitted against its source's scope rather
+// than against the whole file, so another vendor's member is refused exactly
+// as an unknown key is, and a document naming more rows than its source's
+// group has members plus one is refused before a single key is looked up.
+// Widening a scope means adding a member to that group in the file, which is
+// a reviewed data edit — never a widening of a bound on its own.
+var sourceModelScopes = scopeModelVocabularies(modelServeOrder, modelGroups, sourceVocabulary)
 
 // usageSeriesDocument is the strict on-disk shape of the sealed series file
 // (schema usage-series/v1). Sources are keyed by the SAME label the embedded
