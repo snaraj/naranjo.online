@@ -720,7 +720,10 @@ def build_dataset(sources, history_dir, now):
         "sources": {},
     }
     for key, section in sources.items():
-        stored = capture.read_history_store(history_dir / ("%s.json" % key))
+        # Projected, not merely read: a day the store keeps by raw identity
+        # carries its folded split only once the current vocabulary has
+        # folded it (issue #371).
+        stored = capture.remembered_history(history_dir / ("%s.json" % key), key)
         verified = capture.read_verified_readings(history_dir / ("%s.verified.json" % key))
         series = section["series"]
         start = datetime.date.fromisoformat(series["startDate"])
@@ -966,6 +969,8 @@ def main(argv=None):
         ),
         file=sys.stderr,
     )
+    # The walked source's unattributed folds by raw identity (issue #371).
+    print(capture.unattributed_summary(counters), file=sys.stderr)
     # One coverage line per run — the newest day each source reaches, which
     # is what a stale panel is measured against — so the scheduler's log says
     # how far the data reached, not only that a push happened (issue #267).

@@ -73,6 +73,8 @@ TODAY = "2026-09-11"
 YESTERDAY = "2026-09-10"
 SOURCE = "alpha"
 EXPORTER = "abc123def456"
+# A raw model identity no vocabulary names (issue #371).
+UNNAMED = "sentinel-unnamed-9.1"
 
 
 def row(**overrides):
@@ -311,6 +313,29 @@ class AppendRuleTest(LedgerTestCase):
                             self.append(*self.session_block_rows(given), stream="sessions")
         self.assertFalse((self.ledger / "sessions").exists())
 
+    def test_a_session_first_recorded_without_identities_is_recorded_once_with_them(self):
+        # Issue #371: a row written before sessions carried their raw
+        # identities stays a valid reading; the first run that knows them
+        # records the session once more WITH them, and then never again while
+        # they hold. A malformed list refuses like any other session field.
+        settled = self.running_session("2026-09-10T11:00:00Z", "2026-09-10T10:00:00Z", 100)
+        self.assertEqual(self.append(settled, stream="sessions"), (1, 0))
+        known = dict(settled, capturedAt="2026-09-10T11:30:00Z", modelIds=[UNNAMED, "~unidentified"])
+        self.assertEqual(self.append(known, stream="sessions"), (1, 0))
+        again = dict(known, capturedAt="2026-09-10T12:00:00Z")
+        self.assertEqual(self.append(again, stream="sessions"), (0, 1))
+        for bad in ([UNNAMED, UNNAMED], ["a sentence nobody may read"], UNNAMED, [17]):
+            with self.subTest(bad=bad), self.assertRaises(ledger.LedgerError):
+                self.append(dict(known, modelIds=bad), stream="sessions")
+
+    def test_sessions_sharing_a_start_merge_their_identities(self):
+        entries = self.collided()
+        entries[0]["modelIds"] = [UNNAMED]
+        entries[1]["modelIds"] = ["avendor-one", UNNAMED]
+        (merged,) = self.session_block_rows(entries)
+        self.assertEqual(sorted(merged["modelIds"]), sorted(["avendor-one", UNNAMED]))
+        self.assertEqual(len(merged["modelIds"]), 2)
+
     def test_the_window_is_the_sessions_stream_alone(self):
         # A day's running usage figure is not a session and is never deferred.
         first = row(capturedAt="2026-09-10T10:00:00Z", value=10)
@@ -487,6 +512,30 @@ class MalformedLineTest(LedgerTestCase):
         # hold on read and not on write.
         with self.assertRaises(ledger.LedgerError):
             self.append(row(value=-5))
+
+    def test_a_raw_identity_kind_admits_only_an_identity_key(self):
+        # Issue #371: the raw-identity kinds carry the tool's own model string,
+        # so their key is held to the capture's identity shape rather than to
+        # bounded printable text — a sentence or a path is never a model here.
+        for kind, key in (
+            ("model-id", UNNAMED),
+            ("model-id", "~unidentified"),
+            ("model-id-category", UNNAMED + "/input"),
+            ("model-id-stat", "~unidentified/cache-read"),
+        ):
+            with self.subTest(kind=kind, key=key):
+                ledger.admit_row(row(kind=kind, key=key), "usage")
+        for kind, key in (
+            ("model-id", "a sentence nobody may read"),
+            ("model-id", "Upper-Case"),
+            ("model-id", UNNAMED + "/input"),
+            ("model-id-category", UNNAMED),
+            ("model-id-category", "/home/someone/x/input"),
+            ("model-id-category", UNNAMED + "/private-class"),
+            ("model-id-stat", "a sentence/input"),
+        ):
+            with self.subTest(kind=kind, key=key):
+                self.refuses(json.dumps(row(kind=kind, key=key)), "not a raw model identity")
 
 
 class AdmissionVerdictTest(unittest.TestCase):
@@ -806,6 +855,66 @@ class RecordRunTest(RecordRunCase):
         self.assertEqual(sessions[0]["unit"], "seconds")
         self.assertEqual(sessions[0]["day"], YESTERDAY)
 
+    def test_the_raw_identity_kinds_are_recorded_beside_the_folded_ones(self):
+        # Issue #371: every model ever used is recorded by the identity the
+        # tool reported — from the store, from the block's joint and lifetime
+        # split, and on the session — and the folded kinds keep being written
+        # beside them, untouched.
+        (self.history / ("%s.json" % SOURCE)).write_text(
+            json.dumps(
+                {
+                    "schema": "usage-history/v2",
+                    "days": {
+                        "2026-09-09": {"total": 10, "models": {"other": 10}},
+                        YESTERDAY: {"total": 10, "modelIds": {UNNAMED: 6, "~unidentified": 4}},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        block = dict(
+            LEDGER_BLOCK,
+            modelIdCategories={
+                "startDate": YESTERDAY,
+                "members": [
+                    {"id": UNNAMED, "category": "input", "totals": [4]},
+                    {"id": UNNAMED, "category": "output", "totals": [6]},
+                ],
+            },
+            modelIdStats=[{"id": UNNAMED, "totals": {"input": 40, "output": 2}}],
+            sessions=[dict(LEDGER_BLOCK["sessions"][0], modelIds=[UNNAMED])],
+        )
+        self.record({SOURCE: {"capture": capture_document(), "ledgerBlock": block}})
+        readings = {
+            (entry["day"], entry["kind"], entry["key"], entry["value"]) for entry in self.rows()
+        }
+        for expected in (
+            # The store: the legacy day keeps its folded split; the day kept
+            # by identity is recorded by identity AND projected, here onto a
+            # source no vocabulary group declares, whose only member is the
+            # residual.
+            ("2026-09-09", "model", "other", 10),
+            (YESTERDAY, "model", "other", 10),
+            (YESTERDAY, "model-id", UNNAMED, 6),
+            (YESTERDAY, "model-id", "~unidentified", 4),
+            # The block: the joint per identity and class on the days it
+            # covers, beside the folded joint, and the lifetime split by
+            # identity on the capture day.
+            (YESTERDAY, "model-category", "member-one/input", 4),
+            (YESTERDAY, "model-id-category", UNNAMED + "/input", 4),
+            (YESTERDAY, "model-id-category", UNNAMED + "/output", 6),
+            (TODAY, "model-id-stat", UNNAMED + "/input", 40),
+            (TODAY, "model-id-stat", UNNAMED + "/output", 2),
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, readings)
+        self.assertNotIn("2026-09-09", {day for day, kind, _, _ in readings if kind == "model-id"})
+        (session,) = self.rows("sessions")
+        self.assertEqual(session["modelIds"], [UNNAMED])
+        declared = json.loads((self.ledger / "schema.json").read_text(encoding="utf-8"))
+        for kind in ("model-id", "model-id-category", "model-id-stat"):
+            self.assertIn(kind, declared["streams"]["usage"])
+
     def test_no_ledger_block_produces_no_rows_that_need_one(self):
         # The absent case is a real producer state, never an error: a capture
         # that cannot split its days that way simply says nothing about them.
@@ -1062,14 +1171,17 @@ class ExportTest(LedgerTestCase):
         ledger.export_ledger(self.ledger, out)
         connection = sqlite3.connect(out / "ledger.sqlite")
         try:
-            total, categories, models = connection.execute(
-                "SELECT total, categories, models FROM sessions_current"
+            total, categories, models, identities = connection.execute(
+                "SELECT total, categories, models, modelIds FROM sessions_current"
             ).fetchone()
         finally:
             connection.close()
         self.assertEqual(total, 500)
         self.assertEqual(json.loads(categories), {"input": 500})
         self.assertEqual(json.loads(models), ["member-one"])
+        # A row written before sessions carried raw identities (issue #371)
+        # has none, and says so with a NULL rather than an invented list.
+        self.assertIsNone(identities)
 
     @unittest.skipIf(os.geteuid() == 0, "a superuser writes through any directory mode")
     def test_a_database_fault_is_the_records_own_refusal(self):

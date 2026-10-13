@@ -1395,16 +1395,19 @@ class MainTest(unittest.TestCase):
             document["generatedAt"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
         )
         self.assertEqual(set(document["sources"]), {"alpha"})
-        # Diagnostics are counts, never paths; the second line is the run's
-        # coverage, calendar days only (issue #267).
+        # Diagnostics are counts, never paths; the second line names the
+        # unattributed folds by raw identity (issue #371) — the fixture names
+        # no model, so its tokens fold from the reserved bucket — and the
+        # third is the run's coverage, calendar days only (issue #267).
         lines = stderr.strip().splitlines()
-        self.assertEqual(len(lines), 2, stderr)
+        self.assertEqual(len(lines), 3, stderr)
         self.assertRegex(
             lines[0],
             r"^files=\d+ unreadable=\d+ symlinks=\d+ oversized=\d+ lines=\d+ counted=\d+ "
             r"duplicates=\d+ unpartitioned=\d+ unattributed=\d+ cross_group=\d+ sources=\d+$",
         )
-        self.assertRegex(lines[1], r"^coverage alpha=\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$")
+        self.assertEqual(lines[1], "unattributed-ids ~unidentified=1")
+        self.assertRegex(lines[2], r"^coverage alpha=\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$")
 
     def test_the_dataset_is_built_from_the_history_stores_or_not_at_all(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -1795,6 +1798,31 @@ class MaterialSeamTest(unittest.TestCase):
                 export_usage_series.export(root, "alpha", [("beta", merge)], MERGE_NOW)
         self.assertIn("outside its declared shape", str(caught.exception))
         self.assertNotIn("a-private-project", str(caught.exception))
+
+    def test_a_raw_model_identity_is_recorded_out_of_band_and_never_sent(self):
+        # Issue #371: the data layer keeps the model string the tool reported,
+        # and the wire keeps only the vocabulary's members. Both halves of one
+        # run are read here, for an identity no vocabulary names.
+        unnamed = "sentinel-unnamed-9.1"
+        with tempfile.TemporaryDirectory() as root:
+            write_tree(
+                root,
+                {
+                    "p/one.jsonl": [
+                        transcript_line(
+                            message={"id": "msg_a", "model": unnamed, "usage": {"input_tokens": 9}}
+                        )
+                    ]
+                },
+            )
+            sources, counters, material = export_usage_series.export(root, "alpha", [], MERGE_NOW)
+        self.assertNotIn("sentinel", json.dumps(sources))
+        block = material["alpha"]["ledgerBlock"]
+        self.assertEqual(block["sessions"][0]["modelIds"], [unnamed])
+        self.assertEqual(
+            {row["id"] for row in block["modelIdCategories"]["members"]}, {unnamed}
+        )
+        self.assertEqual(counters["unattributed_ids"], {unnamed: 1})
 
     def test_the_wire_document_can_never_carry_the_block(self):
         # The guard is the proof, not the strip: a section that somehow

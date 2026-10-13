@@ -270,10 +270,12 @@ class ReduceLineTest(unittest.TestCase):
         return capture_usage_series.reduce_line(line, self.seen, self.counters, scope=MESSAGES_SCOPE)
 
     def test_reduces_a_record_to_a_day_an_instant_a_total_a_partition_and_a_member(self):
-        # Five values, and the last three are what make the breakdown sections
+        # Six values, and the last four are what make the breakdown sections
         # a MEASUREMENT of the same records the total is measured from: the
-        # partition is the record's own disjoint usage fields, and the member
-        # is the closed vocabulary's, resolved from the record's own model.
+        # partition is the record's own disjoint usage fields, the member is
+        # the closed vocabulary's, resolved from the record's own model, and
+        # the identity is that model string as the data layer records it
+        # (issue #371) — the bucket here, because the fixture names no model.
         # The INSTANT is the ledger's (issue #267) and is UTC where the day
         # beside it is local — a day is a bucket, a span is a duration.
         self.assertEqual(
@@ -284,11 +286,32 @@ class ReduceLineTest(unittest.TestCase):
                 135,
                 {"input": 10, "output": 5, "cache-read": 100, "cache-write": 20},
                 "other",
+                capture_usage_series.UNIDENTIFIED_MODEL,
             ),
         )
         # The partition IS the total, checked rather than described.
-        _day, _instant, total, parts, _member = self.reduce(transcript_line(requestId="req_2"))
+        _day, _instant, total, parts, _member, _identity = self.reduce(
+            transcript_line(requestId="req_2")
+        )
         self.assertEqual(sum(parts.values()), total)
+
+    def test_a_record_keeps_its_own_model_string_beside_the_member(self):
+        # The member is what the page may draw; the identity is what was used
+        # (issue #371). A string the vocabulary does not name folds to the
+        # residual AND is kept verbatim, lower-cased, so naming it later can
+        # re-attribute the day.
+        member = capture_usage_series.MODEL_KEYS[1]
+        for spelled, member_expected, identity in (
+            ("avendor-%s" % member, member, "avendor-%s" % member),
+            ("  AVendor-Unnamed-9.1  ", capture_usage_series.MODEL_OTHER, "avendor-unnamed-9.1"),
+            ("a model string with spaces", capture_usage_series.MODEL_OTHER,
+             capture_usage_series.UNIDENTIFIED_MODEL),
+        ):
+            with self.subTest(spelled=spelled):
+                record = json.loads(transcript_line(requestId="req_%s" % spelled))
+                record["message"]["model"] = spelled
+                reduced = self.reduce(json.dumps(record))
+                self.assertEqual(reduced[4:], (member_expected, identity))
 
     def test_a_record_names_its_model_and_an_unknown_one_becomes_the_residual(self):
         # Membership, not shape. A vendor-qualified identifier whose model
@@ -452,7 +475,7 @@ class RunningTotalsWalkTest(unittest.TestCase):
 
     @staticmethod
     def days(rows):
-        return [(day, total) for day, total, _parts, _member in rows]
+        return [(day, total) for day, total, _parts, _member, _identity in rows]
 
     def test_a_repeated_accounting_bills_nothing(self):
         # 100, then 300, then THE SAME 300 emitted a second time for one
@@ -470,7 +493,7 @@ class RunningTotalsWalkTest(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual(sum(total for _day, total, _p, _m in pairs), 600)
+        self.assertEqual(sum(total for _day, total, _p, _m, _identity in pairs), 600)
         self.assertEqual(counters["duplicates"], 1)
         self.assertEqual(counters["restarts"], 0)
 
@@ -489,7 +512,7 @@ class RunningTotalsWalkTest(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual(sum(total for _day, total, _p, _m in pairs), 420)
+        self.assertEqual(sum(total for _day, total, _p, _m, _identity in pairs), 420)
         self.assertEqual(counters["restarts"], 1)
 
     def test_each_file_opens_its_own_accounting(self):
@@ -501,7 +524,7 @@ class RunningTotalsWalkTest(unittest.TestCase):
                 "day/second.jsonl": [running_line(100), running_line(250)],
             }
         )
-        self.assertEqual(sum(total for _day, total, _p, _m in pairs), 650)
+        self.assertEqual(sum(total for _day, total, _p, _m, _identity in pairs), 650)
 
     def test_a_session_that_crosses_midnight_splits_across_its_two_days(self):
         # The directory a journal lives in is the LOCAL day it started on, so
@@ -576,10 +599,10 @@ class OversizedLineTest(unittest.TestCase):
         # The records on BOTH sides of it are still read: the tail of the
         # oversized line is drained to its own newline, so the next record
         # starts at a real boundary rather than mid-string.
-        self.assertEqual([day for day, _t, _p, _m in rows], ["2026-08-10", "2026-08-11"])
-        self.assertEqual([total for _d, total, _p, _m in rows], [135, 7])
+        self.assertEqual([day for day, _t, _p, _m, _identity in rows], ["2026-08-10", "2026-08-11"])
+        self.assertEqual([total for _d, total, _p, _m, _identity in rows], [135, 7])
         # And the skipped record contributes nothing rather than a guess.
-        self.assertNotIn(999_999, [total for _d, total, _p, _m in rows])
+        self.assertNotIn(999_999, [total for _d, total, _p, _m, _identity in rows])
 
     def test_the_bound_still_bounds_what_is_held_in_memory(self):
         # Non-vacuity in the direction that matters: the yielded lines are
@@ -627,7 +650,7 @@ class OversizedLineTest(unittest.TestCase):
             + "\n"
         )
         self.assertEqual(counters["oversized"], 1)
-        self.assertEqual([total for _d, total, _p, _m in rows], [7])
+        self.assertEqual([total for _d, total, _p, _m, _identity in rows], [7])
 
     def test_the_other_record_shape_skips_it_the_same_way(self):
         fat = json.loads(running_line(500))
@@ -639,7 +662,7 @@ class OversizedLineTest(unittest.TestCase):
             capture_usage_series.FORMAT_RUNNING_TOTALS,
         )
         self.assertEqual(counters["oversized"], 1)
-        self.assertEqual([total for _d, total, _p, _m in rows], [100])
+        self.assertEqual([total for _d, total, _p, _m, _identity in rows], [100])
 
     def test_terminated_oversized_lines_still_count_against_the_tree_byte_bound(self):
         # 2026-08-27 review of PR #230, INFO-6: the terminated-oversized
@@ -798,7 +821,7 @@ class PreFilterTest(unittest.TestCase):
         rows, counters, _sessions = shipped
         # Non-vacuity: every spelling of the key was COUNTED, so agreement is
         # not two walks that both missed the same records.
-        self.assertEqual([total for _d, total, _p, _m in rows], [135, 3, 4, 5])
+        self.assertEqual([total for _d, total, _p, _m, _identity in rows], [135, 3, 4, 5])
         self.assertEqual(counters["duplicates"], 1)
         self.assertEqual(counters["lines"], len(self.MESSAGE_LINES))
 
@@ -811,7 +834,7 @@ class PreFilterTest(unittest.TestCase):
         # Both declarations and all three advances were read, whichever way
         # their keys were spelled.
         self.assertEqual(
-            [(total, member) for _d, total, _p, member in rows],
+            [(total, member) for _d, total, _p, member, _identity in rows],
             [
                 (100, self.MEMBER),
                 (150, capture_usage_series.MODEL_OTHER),
@@ -876,7 +899,7 @@ class RunningTotalsAttributionTest(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             rows = list(capture_usage_series.read_running_totals(root, counters, scope=RUNNING_SCOPE))
-        return [(total, member) for _day, total, _parts, member in rows], counters
+        return [(total, member) for _day, total, _parts, member, _identity in rows], counters
 
     def identifier(self, key):
         """The raw identifier the vocabulary says folds to one member."""
@@ -989,7 +1012,7 @@ class RunningTotalsAttributionTest(unittest.TestCase):
             )
             rows = list(capture_usage_series.read_running_totals(root, counters, scope=RUNNING_SCOPE))
         self.assertEqual(
-            sorted((total, member) for _day, total, _p, member in rows),
+            sorted((total, member) for _day, total, _p, member, _identity in rows),
             [(100, self.MEMBER), (400, capture_usage_series.MODEL_OTHER)],
         )
 
@@ -2179,7 +2202,7 @@ class HistoryStoreTest(unittest.TestCase):
             "not json",
             json.dumps([]),
             json.dumps({"days": {}}),
-            json.dumps({"schema": "usage-history/v2", "days": {}}),
+            json.dumps({"schema": "usage-history/v3", "days": {}}),
             json.dumps({"schema": schema, "days": {}, "extra": 1}),
             json.dumps({"schema": schema, "days": []}),
             json.dumps({"schema": schema, "days": {"not-a-day": {"total": 1}}}),
@@ -2359,14 +2382,18 @@ class VerifiedReadingsTest(unittest.TestCase):
         section, _ = self.run_capture()
         self.assertEqual(section["series"]["totals"], [20, 40, 60])
         self.assertNotIn("categoriesStartDate", section)
+        # The split kept is the RAW one (issue #371): the folded split of a
+        # day kept by identity is derived on read, so it is not stored — and
+        # the section still draws the member it folds to.
         self.assertEqual(
             self.stored_days()["2026-08-11"],
             {
                 "total": 40,
                 "categories": {"input": 20, "output": 20},
-                "models": {capture_usage_series.MODEL_KEYS[1]: 40},
+                "modelIds": {"avendor-%s" % capture_usage_series.MODEL_KEYS[1]: 40},
             },
         )
+        self.assertEqual(section["models"][capture_usage_series.MODEL_KEYS[1]], [20, 40, 60])
 
     def test_a_reading_before_the_record_extends_it(self):
         # A day the walk never held but the surface reports joins the record
@@ -2603,12 +2630,13 @@ class ModelWindowTest(unittest.TestCase):
                 1,
                 {"input": 1},
                 member,
+                "avendor-one",
             )
             for offset in range(span)
         ]
         with tempfile.TemporaryDirectory() as root:
             (pathlib.Path(root) / "session.jsonl").write_text("", encoding="utf-8")
-            series, categories, models, partitioned, _joint = capture_usage_series.daily_series(rows)
+            series, categories, models, partitioned, *_joints = capture_usage_series.daily_series(rows)
         self.assertEqual(len(models[member]), span)
         # The window the emission takes, and the partition it must satisfy.
         offset = span - capture_usage_series.MAX_MODEL_DAYS
@@ -2921,6 +2949,18 @@ class EveryFoldPathAppliesTheScopeTest(unittest.TestCase):
             source=MESSAGES_SOURCE,
         )
 
+    @staticmethod
+    def wire(section):
+        """The section as the export seals it: everything but the ledger block.
+
+        The block is the machine-local data layer, which RECORDS the foreign
+        identifier by its raw identity (issue #371); what may never carry the
+        foreign member is the half that travels.
+        """
+        return json.dumps(
+            {key: value for key, value in section.items() if key != capture_usage_series.LEDGER_KEY}
+        )
+
     def test_another_vendors_member_in_the_daily_roll_up_folds_to_the_residual(self):
         self.write_cache(
             daily=[("2026-08-10", {"avendor-%s" % self.OWN: 40, self.FOREIGN_ID: 60})]
@@ -2933,7 +2973,7 @@ class EveryFoldPathAppliesTheScopeTest(unittest.TestCase):
             section["models"],
             {capture_usage_series.MODEL_OTHER: [60, 0, 0], self.OWN: [40, 0, 135]},
         )
-        self.assertNotIn(self.FOREIGN, json.dumps(section))
+        self.assertNotIn(self.FOREIGN, self.wire(section))
         self.assertEqual(counters["cross_group"], 1)
         self.assertEqual(counters["unattributed"], 0)
 
@@ -2952,7 +2992,13 @@ class EveryFoldPathAppliesTheScopeTest(unittest.TestCase):
         # The class tile counts every identifier whatever its group, so the
         # per-model split still sums to it.
         self.assertEqual(section["stats"]["input"], 7)
-        self.assertNotIn(self.FOREIGN, json.dumps(section))
+        self.assertNotIn(self.FOREIGN, self.wire(section))
+        # And the data layer kept what the cache reported, by raw identity:
+        # the fold is a projection for the page, never a loss (issue #371).
+        self.assertIn(
+            {"id": self.FOREIGN_ID, "totals": {"input": 4}},
+            section[capture_usage_series.LEDGER_KEY]["modelIdStats"],
+        )
         self.assertEqual(counters["cross_group"], 1)
         self.assertEqual(counters["unattributed"], 0)
 
@@ -2974,7 +3020,7 @@ class EveryFoldPathAppliesTheScopeTest(unittest.TestCase):
             section["models"],
             {capture_usage_series.MODEL_OTHER: [60, 0, 0], self.OWN: [40, 0, 135]},
         )
-        self.assertNotIn(self.FOREIGN, json.dumps(section))
+        self.assertNotIn(self.FOREIGN, self.wire(section))
         self.assertEqual(counters["cross_group"], 1)
         # Written back folded, so the next run reads a store with nothing left
         # to fold and the fold is counted once.
@@ -2997,8 +3043,8 @@ class EveryFoldPathAppliesTheScopeTest(unittest.TestCase):
             # The shipped reader with its fold undone: every row is billed to
             # the other group's member, as a future path that skipped
             # `scoped_key` would bill it.
-            for day, total, parts, _member in shipped(root, counters, sessions, scope=scope):
-                yield day, total, parts, foreign
+            for day, total, parts, _member, identity in shipped(root, counters, sessions, scope=scope):
+                yield day, total, parts, foreign, identity
 
         capture_usage_series.read_records = unscoped
         try:
@@ -3298,12 +3344,12 @@ class DailySeriesTest(unittest.TestCase):
         produce.
         """
         return [
-            (day, total, {"input": total}, capture_usage_series.MODEL_KEYS[1])
+            (day, total, {"input": total}, capture_usage_series.MODEL_KEYS[1], "avendor-one")
             for day, total in entries
         ]
 
     def test_fills_the_span_contiguously_and_sums_repeated_days(self):
-        series, categories, models, partitioned, _joint = capture_usage_series.daily_series(
+        series, categories, models, partitioned, *_joints = capture_usage_series.daily_series(
             self.rows(("2026-08-10", 5), ("2026-08-12", 7), ("2026-08-10", 5))
         )
         self.assertEqual(series["startDate"], "2026-08-10")
@@ -3320,16 +3366,16 @@ class DailySeriesTest(unittest.TestCase):
         # is the DAY's claim to a breakdown, and losing it loudly is the whole
         # point: a partition that silently omits a record is a hole wearing a
         # partition's label.
-        series, categories, _models, partitioned, _joint = capture_usage_series.daily_series(
-            [("2026-08-10", 5, None, "other"), ("2026-08-11", 7, {"input": 7}, "other")]
+        series, categories, _models, partitioned, *_joints = capture_usage_series.daily_series(
+            [("2026-08-10", 5, None, "other", "x"), ("2026-08-11", 7, {"input": 7}, "other", "x")]
         )
         self.assertEqual(series["totals"], [5, 7])
         self.assertEqual(categories, {"input": [0, 7]})
         self.assertEqual(partitioned, ["2026-08-11"])
 
     def test_a_breakdown_row_that_is_zero_every_day_is_not_emitted(self):
-        _series, categories, _models, _partitioned, _joint = capture_usage_series.daily_series(
-            [("2026-08-10", 5, {"input": 5, "output": 0}, "other")]
+        _series, categories, _models, _partitioned, *_joints = capture_usage_series.daily_series(
+            [("2026-08-10", 5, {"input": 5, "output": 0}, "other", "x")]
         )
         self.assertEqual(categories, {"input": [5]})
 
@@ -3337,7 +3383,7 @@ class DailySeriesTest(unittest.TestCase):
         # The window never extends past the days the record covers, which is
         # what keeps the interior zeros honest: they say the record has
         # nothing for that day, not that the day did not exist.
-        series, _c, _m, _p, _joint = capture_usage_series.daily_series(
+        series, _c, _m, _p, *_joints = capture_usage_series.daily_series(
             self.rows(("2026-08-10", 1), ("2026-08-11", 2))
         )
         self.assertEqual(len(series["totals"]), 2)
@@ -4646,6 +4692,7 @@ class LedgerBlockTest(unittest.TestCase):
                 "total": 10,
                 "categories": {"input": 4, "output": 6},
                 "models": [self.first],
+                "modelIds": ["avendor-%s" % self.first],
             },
         )
 
@@ -4742,6 +4789,7 @@ class LedgerBlockTest(unittest.TestCase):
                     "total": 30,
                     "categories": {"input": 30},
                     "models": [self.first],
+                    "modelIds": ["avendor-%s" % self.first],
                 }
             ],
         )
@@ -5300,6 +5348,737 @@ class ModelStatsTest(unittest.TestCase):
                 {"modelStats": [{"key": [self.member], "totals": {"input": 1}}]},
                 "section",
             )
+
+
+# An identifier no vocabulary names, spelled so it can be searched for in any
+# document; it has the raw-identity shape, so the data layer keeps it verbatim.
+UNNAMED_IDENTITY = "sentinel-unnamed-9.1"
+
+
+def wire_of(section):
+    """The section as the export seals it: everything but the ledger block."""
+    return {key: value for key, value in section.items() if key != capture_usage_series.LEDGER_KEY}
+
+
+def model_line(day, ident, model, **usage):
+    """One message record on `day` billed to `model`, usage as given."""
+    record = json.loads(transcript_line(timestamp=day + "T12:00:00Z", requestId="req_%s" % ident))
+    record["message"]["id"] = "msg_%s" % ident
+    record["message"]["model"] = model
+    record["message"]["usage"] = usage
+    return json.dumps(record)
+
+
+class RawIdentityTest(unittest.TestCase):
+    """The one normaliser of a recorded model string (issue #371).
+
+    The data layer keeps the string the tool reported, so this is the whole
+    requirement-12 argument for keeping it: an identifier is kept verbatim
+    (trimmed, lower-cased) only in its bounded shape, and everything else —
+    a path, a prompt, an over-long string, a non-string — is one reserved
+    bucket that no real identifier can ever be.
+    """
+
+    BUCKET = capture_usage_series.UNIDENTIFIED_MODEL
+
+    def test_a_real_identifier_is_kept_verbatim_and_lower_cased(self):
+        for raw, kept in (
+            ("claude-opus-4-8", "claude-opus-4-8"),
+            ("gpt-6.1-sol", "gpt-6.1-sol"),
+            ("codex-auto-review", "codex-auto-review"),
+            ("claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"),
+            ("  Claude-Opus-4-8\n", "claude-opus-4-8"),
+            ("GPT-6.1-SOL", "gpt-6.1-sol"),
+            ("vendor:model_v2", "vendor:model_v2"),
+            ("9" * 64, "9" * 64),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(capture_usage_series.raw_model_identity(raw), kept)
+                self.assertTrue(capture_usage_series.valid_model_identity(kept))
+
+    def test_anything_that_is_not_an_identifier_lands_on_the_bucket(self):
+        for value in (
+            "/home/someone/work/a-private-project",
+            "path/like",
+            "a sentence nobody outside this machine may read",
+            "a" * 65,
+            "",
+            "   ",
+            "<synthetic>",
+            "-leading-hyphen",
+            ".leading-dot",
+            "name@host",
+            "line\nbreak",
+            "caf" + chr(0xE9),
+            None,
+            17,
+            ["claude-opus-4-8"],
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(capture_usage_series.raw_model_identity(value), self.BUCKET)
+
+    def test_the_bucket_can_never_be_mistaken_for_a_real_identifier(self):
+        # Outside the shape, so no record can be kept AS the bucket ...
+        self.assertIsNone(capture_usage_series.MODEL_IDENTITY_PATTERN.fullmatch(self.BUCKET))
+        # ... and the identifier spelled like it is kept as itself, never
+        # folded into it.
+        spelled = self.BUCKET.lstrip("~")
+        self.assertNotEqual(
+            capture_usage_series.raw_model_identity(spelled),
+            capture_usage_series.raw_model_identity(None),
+        )
+        # Every reader admits the bucket by name and nothing else outside the
+        # shape.
+        self.assertTrue(capture_usage_series.valid_model_identity(self.BUCKET))
+        for value in ("~other", "~", "Upper", " padded", "a/b", None, 3):
+            with self.subTest(value=value):
+                self.assertFalse(capture_usage_series.valid_model_identity(value))
+
+    def test_the_fold_is_taken_from_the_identity(self):
+        # One string, one member: the member a fresh record is billed to is
+        # the member its recorded identity re-projects to.
+        member = capture_usage_series.MODEL_KEYS[1]
+        for raw in ("avendor-%s" % member, "  AVENDOR-%s " % member.upper()):
+            with self.subTest(raw=raw):
+                counters = capture_usage_series.new_counters()
+                folded, identity = capture_usage_series.attributed_model(raw, counters, MESSAGES_SCOPE)
+                self.assertEqual(folded, member)
+                again, same = capture_usage_series.attributed_model(identity, counters, MESSAGES_SCOPE)
+                self.assertEqual((again, same), (member, identity))
+
+
+class UnattributedSummaryTest(unittest.TestCase):
+    """The summary names the identities the vocabulary does not (issue #371)."""
+
+    def test_the_tally_is_kept_by_identity(self):
+        counters = capture_usage_series.new_counters()
+        for raw in ("Avendor-Not-A-Member", "avendor-not-a-member", "/home/someone/x"):
+            capture_usage_series.model_key(raw, counters)
+        self.assertEqual(counters["unattributed"], 3)
+        self.assertEqual(
+            counters["unattributed_ids"],
+            {"avendor-not-a-member": 2, capture_usage_series.UNIDENTIFIED_MODEL: 1},
+        )
+
+    def test_the_line_names_the_five_most_folded_identities(self):
+        counters = capture_usage_series.new_counters()
+        counters["unattributed_ids"].update(
+            {"f": 1, "c": 5, "a": 9, "b": 5, "d": 2, "e": 1, "g": 1}
+        )
+        self.assertEqual(
+            capture_usage_series.unattributed_summary(counters),
+            "unattributed-ids a=9 b=5 c=5 d=2 e=1",
+        )
+
+    def test_no_fold_is_a_dash_and_an_unshaped_key_is_never_printed(self):
+        counters = capture_usage_series.new_counters()
+        self.assertEqual(capture_usage_series.unattributed_summary(counters), "unattributed-ids -")
+        counters["unattributed_ids"].update({"/home/someone/x": 7, "ok-1": 1})
+        self.assertEqual(capture_usage_series.unattributed_summary(counters), "unattributed-ids ok-1=1")
+
+    def test_the_capture_prints_it_beside_the_counts(self):
+        script = pathlib.Path(__file__).resolve().parents[1] / "capture_usage_series.py"
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "one.jsonl").write_text(
+                "\n".join(
+                    [
+                        model_line("2026-08-10", "a", UNNAMED_IDENTITY, input_tokens=4),
+                        model_line("2026-08-10", "b", UNNAMED_IDENTITY.upper(), input_tokens=4),
+                        model_line("2026-08-10", "c", "a prompt is no model", input_tokens=4),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            done = subprocess.run(
+                [sys.executable, "-I", "-B", str(script), "--transcripts", root,
+                 "--source", MESSAGES_SOURCE],
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        lines = done.stderr.splitlines()
+        self.assertIn(" unattributed=3 ", lines[0])
+        self.assertEqual(
+            lines[1],
+            "unattributed-ids %s=2 %s=1" % (UNNAMED_IDENTITY, capture_usage_series.UNIDENTIFIED_MODEL),
+        )
+        for leak in ("a prompt", "a-private-project", "someone", "nobody outside this machine"):
+            self.assertNotIn(leak, done.stderr)
+
+
+class HistoryStoreV2Test(unittest.TestCase):
+    """The store keeps a day's model split by raw identity (issue #371)."""
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.tree = self.scratch / "tree"
+        self.tree.mkdir()
+        self.store = self.scratch / "store.json"
+        self.member = capture_usage_series.MODEL_KEYS[1]
+
+    def write_store(self, days, schema=None):
+        self.store.write_text(
+            json.dumps({"schema": schema or capture_usage_series.HISTORY_SCHEMA, "days": days}),
+            encoding="utf-8",
+        )
+
+    def read(self):
+        return capture_usage_series.read_history_store(self.store)
+
+    def run_capture(self, *lines):
+        (self.tree / "session.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return capture_usage_series.capture(
+            self.tree,
+            capture_usage_series.FORMAT_MESSAGES,
+            today=datetime.date(2026, 8, 12),
+            history_store=self.store,
+            source=MESSAGES_SOURCE,
+        )
+
+    def stored_days(self):
+        document = json.loads(self.store.read_text(encoding="utf-8"))
+        self.assertEqual(document["schema"], "usage-history/v2")
+        return document["days"]
+
+    def test_both_markers_read(self):
+        self.write_store(
+            {"2026-08-10": {"total": 5, "models": {capture_usage_series.MODEL_OTHER: 5}}},
+            schema="usage-history/v1",
+        )
+        self.assertEqual(self.read()["2026-08-10"]["models"], {capture_usage_series.MODEL_OTHER: 5})
+        self.write_store({"2026-08-10": {"total": 5, "modelIds": {UNNAMED_IDENTITY: 5}}})
+        entry = self.read()["2026-08-10"]
+        self.assertEqual(entry["modelIds"], {UNNAMED_IDENTITY: 5})
+        self.assertIsNone(entry["models"])
+
+    def test_a_v1_day_never_carries_identities(self):
+        self.write_store(
+            {"2026-08-10": {"total": 5, "modelIds": {UNNAMED_IDENTITY: 5}}},
+            schema="usage-history/v1",
+        )
+        with self.assertRaisesRegex(CaptureError, "unknown day field"):
+            self.read()
+
+    def test_every_malformed_identity_split_refuses(self):
+        for name, entry, needle in (
+            ("empty", {"total": 5, "modelIds": {}}, "malformed breakdown"),
+            ("a list", {"total": 5, "modelIds": [UNNAMED_IDENTITY]}, "malformed breakdown"),
+            ("a sentence", {"total": 5, "modelIds": {"a sentence nobody may read": 5}}, "raw-identity shape"),
+            ("a path", {"total": 5, "modelIds": {"/home/someone/x": 5}}, "raw-identity shape"),
+            ("not normalised", {"total": 5, "modelIds": {"Upper-Case": 5}}, "raw-identity shape"),
+            ("a zero", {"total": 5, "modelIds": {"x": 0, "y": 5}}, "malformed breakdown count"),
+            ("a flag", {"total": 5, "modelIds": {"x": True, "y": 4}}, "malformed breakdown count"),
+            ("short of the day", {"total": 5, "modelIds": {"x": 2, "y": 2}}, "different figure"),
+            ("past the day", {"total": 5, "modelIds": {"x": 6}}, "different figure"),
+            (
+                "beside a folded split",
+                {"total": 5, "modelIds": {"x": 5}, "models": {capture_usage_series.MODEL_OTHER: 5}},
+                "both a raw and a folded",
+            ),
+        ):
+            with self.subTest(case=name):
+                self.write_store({"2026-08-10": entry})
+                with self.assertRaisesRegex(CaptureError, needle):
+                    self.read()
+
+    def test_a_retired_identity_and_the_bucket_are_kept_as_recorded(self):
+        # Retirement is a decision about what the page draws; the record of
+        # what was used keeps the identity, and the projection folds it.
+        retired = next(iter(capture_usage_series.RETIRED_MODEL_KEYS))
+        bucket = capture_usage_series.UNIDENTIFIED_MODEL
+        self.write_store({"2026-08-10": {"total": 9, "modelIds": {retired: 4, bucket: 5}}})
+        stored = self.read()
+        self.assertEqual(stored["2026-08-10"]["modelIds"], {retired: 4, bucket: 5})
+        counters = capture_usage_series.new_counters()
+        projected = capture_usage_series.scoped_history(stored, MESSAGES_SCOPE, counters)
+        self.assertEqual(projected["2026-08-10"]["models"], {capture_usage_series.MODEL_OTHER: 9})
+        self.assertEqual(counters["unattributed_ids"], {retired: 1, bucket: 1})
+
+    def test_the_writer_keeps_identities_and_never_the_projection(self):
+        section, _ = self.run_capture(
+            model_line("2026-08-11", "a", "avendor-%s" % self.member, input_tokens=6),
+            model_line("2026-08-11", "b", UNNAMED_IDENTITY, input_tokens=4),
+        )
+        self.assertEqual(
+            self.stored_days()["2026-08-11"],
+            {
+                "total": 10,
+                "categories": {"input": 10},
+                "modelIds": {"avendor-%s" % self.member: 6, UNNAMED_IDENTITY: 4},
+            },
+        )
+        # The section still draws the members those identities fold to.
+        self.assertEqual(
+            section["models"], {capture_usage_series.MODEL_OTHER: [4], self.member: [6]}
+        )
+        # And the next read projects the remembered day to the same split.
+        projected = capture_usage_series.scoped_history(
+            self.read(), MESSAGES_SCOPE, capture_usage_series.new_counters()
+        )
+        self.assertEqual(
+            projected["2026-08-11"]["models"], {capture_usage_series.MODEL_OTHER: 4, self.member: 6}
+        )
+
+    def test_a_day_travels_whole_through_the_merge(self):
+        # The STORE wins a day it remembers larger, and keeps the identities
+        # it measured that figure with — never the fresh walk's.
+        self.write_store({"2026-08-11": {"total": 999, "modelIds": {UNNAMED_IDENTITY: 999}}})
+        section, _ = self.run_capture(
+            model_line("2026-08-11", "a", "avendor-%s" % self.member, input_tokens=30),
+            model_line("2026-08-12", "b", "avendor-%s" % self.member, input_tokens=5),
+        )
+        self.assertEqual(self.stored_days()["2026-08-11"], {"total": 999, "modelIds": {UNNAMED_IDENTITY: 999}})
+        self.assertEqual(section["models"][capture_usage_series.MODEL_OTHER], [999, 0])
+        # The FRESH walk wins a day it measures at least as large, and its
+        # identities come with it.
+        self.write_store({"2026-08-11": {"total": 3, "modelIds": {UNNAMED_IDENTITY: 3}}})
+        self.run_capture(model_line("2026-08-11", "a", "avendor-%s" % self.member, input_tokens=30))
+        self.assertEqual(
+            self.stored_days()["2026-08-11"]["modelIds"], {"avendor-%s" % self.member: 30}
+        )
+
+    def test_the_writer_refuses_what_the_reader_would_and_keeps_the_last_store(self):
+        self.write_store({"2026-08-10": {"total": 5, "modelIds": {UNNAMED_IDENTITY: 5}}})
+        before = self.store.read_bytes()
+        for remembered in (
+            {"2026-08-10": {"total": 5, "categories": None, "models": None, "modelIds": {"x": 4}}},
+            {"2026-08-10": {"total": 5, "categories": None, "models": None, "modelIds": {"A Path/x": 5}}},
+        ):
+            with self.subTest(remembered=remembered):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.write_history_store(self.store, remembered)
+                self.assertEqual(self.store.read_bytes(), before)
+
+    def test_a_store_past_the_bound_is_never_written(self):
+        self.write_store({"2026-08-10": {"total": 5, "modelIds": {UNNAMED_IDENTITY: 5}}})
+        before = self.store.read_bytes()
+        start = datetime.date(2025, 1, 1)
+        remembered = {}
+        for offset in range(capture_usage_series.MAX_SERIES_DAYS):
+            identities = {("%02d" % index) + "x" * 62: 10**12 for index in range(30)}
+            remembered[(start + datetime.timedelta(days=offset)).isoformat()] = {
+                "total": sum(identities.values()),
+                "categories": None,
+                "models": None,
+                "modelIds": identities,
+            }
+        with self.assertRaisesRegex(CaptureError, "byte bound"):
+            capture_usage_series.write_history_store(self.store, remembered)
+        self.assertEqual(self.store.read_bytes(), before)
+
+    def test_a_realistic_store_at_the_day_bound_fits_with_room(self):
+        # Eight identities a day, every day of the series bound, twelve-digit
+        # counts: measured at about a third of the 1 MiB bound the reader
+        # enforces (docs/usage-export.md records the figure).
+        names = (
+            "claude-opus-4-8", "claude-sonnet-5-20260101", "claude-haiku-4-5-20251001",
+            "codex-auto-review", "gpt-6.1-sol", "gpt-5.6-terra", "gpt-6-astra",
+            capture_usage_series.UNIDENTIFIED_MODEL,
+        )
+        start = datetime.date(2024, 10, 13)
+        remembered = {}
+        for offset in range(capture_usage_series.MAX_SERIES_DAYS):
+            identities = {name: 999_999_999_999 for name in names}
+            total = sum(identities.values())
+            share, rest = divmod(total, len(capture_usage_series.CATEGORY_KEYS))
+            categories = {key: share for key in capture_usage_series.CATEGORY_KEYS}
+            categories["input"] += rest
+            remembered[(start + datetime.timedelta(days=offset)).isoformat()] = {
+                "total": total, "categories": categories, "models": None, "modelIds": identities,
+            }
+        capture_usage_series.write_history_store(self.store, remembered)
+        size = self.store.stat().st_size
+        self.assertLess(size, capture_usage_series.MAX_HISTORY_STORE_BYTES // 2, size)
+        self.assertEqual(len(self.read()), capture_usage_series.MAX_SERIES_DAYS)
+
+
+class ReattributionTest(unittest.TestCase):
+    """Naming a model re-attributes every remembered day (issue #371).
+
+    The vocabulary is swapped the way VocabularyRefusalIsAProgramRefusalTest
+    swaps it: a COPY of the program beside a models.json of the test's own,
+    which the copy reads because the file is resolved from its own location.
+    The shipped vocabulary is never edited.
+    """
+
+    SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "capture_usage_series.py"
+    CONFIG = pathlib.Path(__file__).resolve().parents[2] / "internal" / "panels" / "config"
+    NAMED = "sentinel-named"
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.tree = self.scratch / "tree"
+        self.tree.mkdir()
+        (self.scratch / "history").mkdir()
+        self.store = self.scratch / "history" / "store.json"
+        self.member = capture_usage_series.MODEL_KEYS[1]
+
+    def shipped(self):
+        return json.loads((self.CONFIG / "models.json").read_text(encoding="utf-8"))
+
+    def naming(self):
+        """The shipped vocabulary plus one member that names UNNAMED_IDENTITY."""
+        document = self.shipped()
+        group = next(
+            group
+            for group in document["groups"]
+            if group["key"] == capture_usage_series.MODEL_GROUPS[self.member]
+        )
+        group["members"].append(
+            {
+                "key": self.NAMED,
+                "label": "Sentinel Named",
+                "slot": max(member["slot"] for member in group["members"]) + 1,
+                "ids": [UNNAMED_IDENTITY.replace(".", "-")],
+                "prefixStrip": False,
+            }
+        )
+        return document
+
+    def checkout(self, name, vocabulary):
+        """A copy of the program that reads `vocabulary` as its models.json."""
+        tree = self.scratch / name
+        (tree / "scripts").mkdir(parents=True)
+        config = tree / "internal" / "panels" / "config"
+        config.mkdir(parents=True)
+        shutil.copy(self.SCRIPT, tree / "scripts" / self.SCRIPT.name)
+        shutil.copy(self.CONFIG / "sources.json", config / "sources.json")
+        (config / "models.json").write_text(json.dumps(vocabulary), encoding="utf-8")
+        return tree / "scripts" / self.SCRIPT.name
+
+    def run_capture(self, script, *lines):
+        (self.tree / "session.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        done = subprocess.run(
+            [
+                sys.executable, "-I", "-B", str(script), "--transcripts", str(self.tree),
+                "--source", MESSAGES_SOURCE, "--history-store", str(self.store),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return json.loads(done.stdout), done.stderr
+
+    def remembered(self):
+        return json.loads(self.store.read_text(encoding="utf-8"))["days"]
+
+    def test_naming_a_model_re_attributes_a_remembered_day_with_no_rewrite(self):
+        shipped = self.checkout("shipped", self.shipped())
+        first, stderr = self.run_capture(
+            shipped,
+            model_line("2026-08-10", "a", UNNAMED_IDENTITY, input_tokens=40),
+            model_line("2026-08-11", "b", "avendor-%s" % self.member, input_tokens=30),
+        )
+        # Under a vocabulary that does not name it, the day is the residual's
+        # on the page, the summary names the identity, and the store keeps it.
+        self.assertEqual(
+            first["models"], {capture_usage_series.MODEL_OTHER: [40, 0], self.member: [0, 30]}
+        )
+        self.assertIn("unattributed-ids %s=1" % UNNAMED_IDENTITY, stderr)
+        kept = self.remembered()["2026-08-10"]
+        self.assertEqual(kept, {"total": 40, "categories": {"input": 40}, "modelIds": {UNNAMED_IDENTITY: 40}})
+        # The day's journal is pruned, and the vocabulary now names the model.
+        naming = self.checkout("naming", self.naming())
+        second, stderr = self.run_capture(
+            naming, model_line("2026-08-11", "b", "avendor-%s" % self.member, input_tokens=30)
+        )
+        self.assertEqual(second["models"], {self.NAMED: [40, 0], self.member: [0, 30]})
+        self.assertIn("unattributed-ids -", stderr)
+        # Nothing about the remembered day was rewritten to get there.
+        self.assertEqual(self.remembered()["2026-08-10"], kept)
+
+    def test_the_same_stored_day_projects_through_either_vocabulary(self):
+        # In process, through each program's own projection: the stored day
+        # is the residual's under the shipped vocabulary and the named
+        # member's under the one that names it.
+        self.store.write_text(
+            json.dumps(
+                {"schema": "usage-history/v2",
+                 "days": {"2026-08-10": {"total": 7, "modelIds": {UNNAMED_IDENTITY: 7}}}}
+            ),
+            encoding="utf-8",
+        )
+        naming = self.checkout("naming", self.naming())
+        spec = importlib.util.spec_from_file_location("capture_usage_series_naming", naming)
+        renamed = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(renamed)
+        for module, expected in (
+            (capture_usage_series, capture_usage_series.MODEL_OTHER),
+            (renamed, self.NAMED),
+        ):
+            with self.subTest(expected=expected):
+                stored = module.read_history_store(self.store)
+                projected = module.scoped_history(
+                    stored, module.model_scope(MESSAGES_SOURCE), module.new_counters()
+                )
+                self.assertEqual(projected["2026-08-10"]["models"], {expected: 7})
+
+
+class LedgerIdentityTest(unittest.TestCase):
+    """The ledger block's raw-identity sections (issue #371)."""
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.tree = self.scratch / "tree"
+        self.tree.mkdir()
+        self.member = capture_usage_series.MODEL_KEYS[1]
+        self.named = "avendor-%s" % self.member
+
+    def capture(self, lines, cache=None):
+        (self.tree / "one.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path = None
+        if cache is not None:
+            path = self.scratch / "cache.json"
+            path.write_text(json.dumps(cache), encoding="utf-8")
+        section, _ = capture_usage_series.capture(
+            self.tree,
+            capture_usage_series.FORMAT_MESSAGES,
+            path,
+            datetime.date(2026, 8, 11),
+            source=MESSAGES_SOURCE,
+        )
+        return section
+
+    def test_the_identity_joint_refines_the_class_split_and_folds_to_the_member_joint(self):
+        section = self.capture(
+            [
+                model_line("2026-08-10", "a", self.named, input_tokens=10, output_tokens=1),
+                model_line("2026-08-10", "b", UNNAMED_IDENTITY, cache_read_input_tokens=100),
+                model_line("2026-08-11", "c", self.named, cache_read_input_tokens=7),
+            ]
+        )
+        block = section[capture_usage_series.LEDGER_KEY]
+        raw = block["modelIdCategories"]
+        self.assertEqual(raw["startDate"], "2026-08-10")
+        cells = {(row["id"], row["category"]): row["totals"] for row in raw["members"]}
+        self.assertEqual(
+            cells,
+            {
+                (self.named, "input"): [10, 0],
+                (self.named, "output"): [1, 0],
+                (self.named, "cache-read"): [0, 7],
+                (UNNAMED_IDENTITY, "cache-read"): [100, 0],
+            },
+        )
+        # Folding the raw joint through the vocabulary gives the folded one:
+        # the two indexes are one set of records read once.
+        folded = {}
+        for (identity, key), totals in cells.items():
+            member, _ = capture_usage_series.attributed_model(
+                identity, capture_usage_series.new_counters(), MESSAGES_SCOPE
+            )
+            row = folded.setdefault((member, key), [0, 0])
+            for index, value in enumerate(totals):
+                row[index] += value
+        self.assertEqual(
+            folded,
+            {
+                (row["model"], row["category"]): row["totals"]
+                for row in block["modelCategories"]["members"]
+            },
+        )
+
+    def test_the_identity_marginal_guard_refuses_a_joint_that_does_not_refine(self):
+        members = [{"id": UNNAMED_IDENTITY, "category": "input", "totals": [5]}]
+        capture_usage_series.assert_joint_marginals(
+            members, [0], {"input": [5]}, {UNNAMED_IDENTITY: [5]}, "id"
+        )
+        with self.assertRaises(CaptureError):
+            capture_usage_series.assert_joint_marginals(
+                members, [0], {"input": [5]}, {UNNAMED_IDENTITY: [6]}, "id"
+            )
+
+    def test_a_session_records_its_identities_in_first_appearance_order(self):
+        section = self.capture(
+            [
+                model_line("2026-08-10", "a", UNNAMED_IDENTITY, input_tokens=1),
+                model_line("2026-08-10", "b", self.named, input_tokens=1),
+                model_line("2026-08-10", "c", UNNAMED_IDENTITY.upper(), input_tokens=1),
+                model_line("2026-08-10", "d", "a prompt is no model", input_tokens=1),
+            ]
+        )
+        (session,) = section[capture_usage_series.LEDGER_KEY]["sessions"]
+        self.assertEqual(
+            session["modelIds"],
+            [UNNAMED_IDENTITY, self.named, capture_usage_series.UNIDENTIFIED_MODEL],
+        )
+        self.assertEqual(session["models"], [capture_usage_series.MODEL_OTHER, self.member])
+
+    def test_the_cache_lifetime_split_is_kept_by_identity(self):
+        def usage(tokens):
+            return {"inputTokens": tokens, "outputTokens": 0,
+                    "cacheReadInputTokens": tokens, "cacheCreationInputTokens": 0}
+
+        section = self.capture(
+            [model_line("2026-08-11", "a", self.named, input_tokens=1)],
+            cache={
+                "dailyModelTokens": [],
+                "modelUsage": {
+                    self.named: usage(3),
+                    UNNAMED_IDENTITY: usage(4),
+                    UNNAMED_IDENTITY.upper(): usage(1),
+                },
+                "totalSessions": 1,
+                "lastComputedDate": "2026-08-11",
+            },
+        )
+        self.assertEqual(
+            section[capture_usage_series.LEDGER_KEY]["modelIdStats"],
+            [
+                {"id": self.named, "totals": {"input": 3, "cache-read": 3}},
+                {"id": UNNAMED_IDENTITY, "totals": {"input": 5, "cache-read": 5}},
+            ],
+        )
+        # The folded split beside it is unchanged, and the wire never sees
+        # the identities.
+        self.assertEqual(
+            section["modelStats"],
+            [
+                {"key": capture_usage_series.MODEL_OTHER, "totals": {"input": 5, "cache-read": 5}},
+                {"key": self.member, "totals": {"input": 3, "cache-read": 3}},
+            ],
+        )
+        self.assertNotIn(UNNAMED_IDENTITY, json.dumps(wire_of(section)))
+
+    def test_a_raw_identifier_never_reaches_the_wire(self):
+        section = self.capture(
+            [
+                model_line("2026-08-10", "a", UNNAMED_IDENTITY, input_tokens=10),
+                model_line("2026-08-11", "b", self.named, input_tokens=5),
+            ]
+        )
+        wire = wire_of(section)
+        # Recorded, and only where it belongs.
+        self.assertIn(UNNAMED_IDENTITY, json.dumps(section[capture_usage_series.LEDGER_KEY]))
+        self.assertNotIn("sentinel", json.dumps(wire))
+        capture_usage_series.assert_only_dates_and_integers(wire, "section")
+        # The wire guard refuses a raw identity by name AND by value.
+        for hostile in (
+            dict(wire, modelIds={UNNAMED_IDENTITY: [10, 0]}),
+            dict(wire, models={UNNAMED_IDENTITY: [10, 5]}),
+            dict(wire, modelStats=[{"key": UNNAMED_IDENTITY, "totals": {"input": 1}}]),
+        ):
+            with self.subTest(hostile=sorted(hostile)):
+                with self.assertRaises(CaptureError):
+                    capture_usage_series.assert_only_dates_and_integers(hostile, "section")
+
+
+class LedgerIdentityGuardTest(unittest.TestCase):
+    """`id` is admitted only in its own fields and only in its shape (issue #371)."""
+
+    BUCKET = capture_usage_series.UNIDENTIFIED_MODEL
+    FREE_TEXT = (
+        "a sentence nobody outside this machine may read",
+        "/home/someone/work/a-private-project",
+        "Upper-Case",
+        "",
+        17,
+        None,
+    )
+
+    def block(self, **overrides):
+        member = capture_usage_series.MODEL_KEYS[1]
+        document = {
+            "schema": capture_usage_series.LEDGER_SCHEMA,
+            "modelCategories": {
+                "startDate": "2026-08-10",
+                "members": [{"model": member, "category": "input", "totals": [3]}],
+            },
+            "modelIdCategories": {
+                "startDate": "2026-08-10",
+                "members": [
+                    {"id": UNNAMED_IDENTITY, "category": "input", "totals": [2]},
+                    {"id": self.BUCKET, "category": "input", "totals": [1]},
+                ],
+            },
+            "modelIdStats": [
+                {"id": UNNAMED_IDENTITY, "totals": {"input": 2}},
+                {"id": self.BUCKET, "totals": {"input": 1}},
+            ],
+            "sessions": [
+                {
+                    "startedAt": "2026-08-10T09:00:00Z",
+                    "endedAt": "2026-08-10T10:00:00Z",
+                    "total": 3,
+                    "categories": {"input": 3},
+                    "models": [member],
+                    "modelIds": [UNNAMED_IDENTITY, self.BUCKET],
+                }
+            ],
+        }
+        document.update(overrides)
+        return document
+
+    def refuses(self, block, needle):
+        with self.assertRaises(CaptureError) as raised:
+            capture_usage_series.assert_ledger_block(block)
+        self.assertIn(needle, str(raised.exception))
+
+    def test_the_template_is_admitted_and_so_is_a_block_without_the_new_sections(self):
+        capture_usage_series.assert_ledger_block(self.block())
+        older = self.block()
+        del older["modelIdCategories"], older["modelIdStats"], older["sessions"][0]["modelIds"]
+        capture_usage_series.assert_ledger_block(older)
+
+    def test_free_text_in_an_id_refuses_wherever_an_id_rides(self):
+        for value in self.FREE_TEXT:
+            with self.subTest(value=value):
+                block = self.block()
+                block["modelIdCategories"]["members"][0]["id"] = value
+                self.refuses(block, "raw-identity shape")
+                block = self.block()
+                block["modelIdStats"][0]["id"] = value
+                self.refuses(block, "raw-identity shape")
+                block = self.block()
+                block["sessions"][0]["modelIds"] = [value]
+                self.refuses(block, "raw-identity shape")
+
+    def test_a_raw_identity_outside_its_own_fields_refuses(self):
+        block = self.block()
+        block["modelCategories"]["members"][0]["model"] = UNNAMED_IDENTITY
+        self.refuses(block, "model outside the vocabulary")
+        block = self.block()
+        block["sessions"][0]["models"] = [UNNAMED_IDENTITY]
+        self.refuses(block, "model outside the vocabulary")
+        block = self.block()
+        block["modelCategories"]["members"][0] = {"id": UNNAMED_IDENTITY, "category": "input", "totals": [3]}
+        self.refuses(block, "outside its declared shape")
+
+    def test_every_identity_section_rule_has_an_input_that_breaks_it(self):
+        cases = []
+        block = self.block()
+        block["modelIdCategories"]["members"].append(dict(block["modelIdCategories"]["members"][0]))
+        cases.append((block, "declared twice"))
+        block = self.block()
+        block["modelIdCategories"]["members"][0]["category"] = "private-class"
+        cases.append((block, "class outside the vocabulary"))
+        block = self.block()
+        block["modelIdStats"].append(dict(block["modelIdStats"][0]))
+        cases.append((block, "declared twice"))
+        block = self.block()
+        block["modelIdStats"][0]["totals"] = {"private-class": 1}
+        cases.append((block, "class outside the vocabulary"))
+        block = self.block()
+        block["modelIdStats"][0]["totals"] = {"input": -1}
+        cases.append((block, "not a count"))
+        block = self.block()
+        block["modelIdStats"][0]["sessionId"] = "11111111"
+        cases.append((block, "outside its declared shape"))
+        block = self.block(modelIdStats={"id": UNNAMED_IDENTITY})
+        cases.append((block, "no identity stats list"))
+        block = self.block()
+        block["sessions"][0]["modelIds"] = [UNNAMED_IDENTITY, UNNAMED_IDENTITY]
+        cases.append((block, "names an identity twice"))
+        block = self.block()
+        block["sessions"][0]["modelIds"] = UNNAMED_IDENTITY
+        cases.append((block, "raw-identity shape"))
+        for block, needle in cases:
+            with self.subTest(needle=needle):
+                self.refuses(block, needle)
 
 
 if __name__ == "__main__":

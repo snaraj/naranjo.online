@@ -76,12 +76,20 @@ WHAT LEAVES THE WALK — this is the whole security argument, and requirement 12
 of AGENTS.md is absolute about it. The transcripts contain prompts, responses,
 file names, project directory names, session identifiers and machine-local
 paths. NONE of that may reach the repository, and the git index is public.
-So the only values this program is capable of emitting are:
+So the only values this program is capable of emitting ON THE WIRE are:
 
   * calendar dates, as YYYY-MM-DD, derived from a timestamp;
   * non-negative integers; and
   * members of a CLOSED vocabulary this repository already ships — a model
     key, an accounting-class key, or this file's own schema marker.
+
+The machine-local data layer — the history store and the ledger block, which
+never reach the wire — keeps ONE value more (issue #371): the record's own
+model string, as a raw identity, so a model the vocabulary does not name yet
+is still recorded. It is kept only in the shape `raw_model_identity` admits,
+a short run of lower-case letters, digits, dots, underscores, colons and
+hyphens, which no path, prompt or sentence fits; anything else is recorded as
+one reserved bucket, and every reader of that layer re-admits the same shape.
 
 Nothing else is retained past the line that produced it. Message identifiers
 are held only inside an in-memory de-duplication set and are never written or
@@ -105,10 +113,12 @@ values, so it answers to its own guard rather than widening the wire's.
 `assert_ledger_block` is a structural walk, not a recursive shape test: every
 field is reached by name, every string is a member of a closed set — a model
 key, a category key, this file's schema marker, or an RFC 3339 UTC instant —
-and a session carries NO identifier, path, working directory, branch, title or
-prompt byte. A record replayed into a second file counts in the file it was
-first SEEN in, because the message shape's de-duplication is global across the
-walk; the second file's entry simply never sees it.
+except the raw identity, admitted only under `id` and a session's `modelIds`
+and only in its bounded shape; and a session carries NO identifier, path,
+working directory, branch, title or prompt byte. A record replayed into a
+second file counts in the file it was first SEEN in, because the message
+shape's de-duplication is global across the walk; the second file's entry
+simply never sees it.
 
 WHAT IT COMPUTES, and why it matches the live mapper exactly. Under the
 `messages` shape a day's total is `input_tokens + output_tokens +
@@ -556,6 +566,30 @@ except CaptureError as error:  # pragma: no cover - proven by the contract test
     print(str(error), file=sys.stderr)
     raise SystemExit(1)
 
+# THE RAW IDENTITY every model string is RECORDED under (issue #371).
+#
+# The vocabulary fold decides what the PAGE draws; this decides what the DATA
+# LAYER keeps, and the two are separate on purpose (owner ruling, 2026-10-13):
+# the history store, the ledger block and the ledger rows record usage per raw
+# identity, and the fold to a member happens where the wire document is built,
+# on every run, from that record. A model the vocabulary names later therefore
+# re-attributes every remembered day on the next export, and a model the page
+# stops drawing is still kept.
+#
+# The identity is the record's own string, trimmed and lower-cased, and it is
+# kept ONLY in the shape of a model identifier: a letter or digit, then at
+# most sixty-three letters, digits, dots, underscores, colons or hyphens. That
+# bound is the whole case for keeping a transcript string at all — a path
+# carries a slash, a prompt carries a space, and session text runs past
+# sixty-four characters — so everything else, and anything that is not a
+# string, lands on ONE reserved bucket. Its leading `~` is outside the shape,
+# so no real identifier can ever be read as the bucket or the bucket as one.
+MODEL_IDENTITY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
+UNIDENTIFIED_MODEL = "~unidentified"
+
+# How many unattributed identities the summary line names, most folds first.
+UNATTRIBUTED_SHOWN = 5
+
 # Every field name the emission may legitimately contain, CLOSED. The guard
 # refuses any dictionary key outside this set (plus the caller's explicitly
 # declared extra keys — the operator-typed source labels, which the origin
@@ -627,6 +661,19 @@ LEDGER_MODEL_KEY = "model"
 LEDGER_CATEGORY_KEY = "category"
 LEDGER_STARTED_KEY = "startedAt"
 LEDGER_ENDED_KEY = "endedAt"
+
+# The raw-identity sections the block gained (issue #371), all optional so a
+# block written before them still reads: the joint by raw identity, the
+# cache's lifetime classes by raw identity, and — beside a session's members
+# — the raw identities it billed. `id` is the ONE field that carries a raw
+# identity, and assert_ledger_block admits it nowhere else.
+LEDGER_MODEL_ID_CATEGORIES_KEY = "modelIdCategories"
+LEDGER_MODEL_ID_STATS_KEY = "modelIdStats"
+LEDGER_ID_KEY = "id"
+
+# The field a raw-identity split is kept under, in a history-store day and in
+# a ledger session alike.
+MODEL_IDENTITIES_KEY = "modelIds"
 
 # The per-model lifetime-class section's field names (issue #267). It rides
 # the WIRE beside `stats`, so its shape is admitted by the emission guard and
@@ -837,7 +884,16 @@ MILLISECONDS_PER_SECOND = 1000
 # holding, per calendar day, the best figure a real capture has measured, so
 # a day survives its sources. It preserves measurements only — a day no
 # capture ever measured is absent from it forever, never zero-filled.
-HISTORY_SCHEMA = "usage-history/v1"
+#
+# v2 (issue #371) keeps a day's model split by RAW IDENTITY (`modelIds`) and
+# no longer stores the folded split for such a day: the fold is a projection
+# of the record, made on every read through the current vocabulary, so naming
+# a model re-attributes every remembered day. The reader admits both markers
+# and the writer writes v2; a day written under v1 keeps the folded split it
+# has, because the identity behind it was never recorded.
+HISTORY_SCHEMA_V1 = "usage-history/v1"
+HISTORY_SCHEMA = "usage-history/v2"
+HISTORY_SCHEMAS = (HISTORY_SCHEMA_V1, HISTORY_SCHEMA)
 HISTORY_SCHEMA_KEY = "schema"
 HISTORY_DAYS_KEY = "days"
 HISTORY_TOTAL_KEY = "total"
@@ -934,8 +990,13 @@ def new_counters():
         "unpartitioned": 0,
         # Records whose model identifier is outside the closed vocabulary, and
         # therefore contributed to the reserved residual member instead of
-        # minting a label nobody reviewed.
+        # minting a label nobody reviewed — and, since issue #371, remembered
+        # history days kept by such an identity, which are folded on read.
         "unattributed": 0,
+        # The same folds by RAW IDENTITY, so the summary can say WHICH model
+        # the vocabulary does not name the run it first appears (issue #371).
+        # Keys are raw identities or the reserved bucket, values fold counts.
+        "unattributed_ids": {},
         # Records whose model the vocabulary DOES name, for another vendor
         # group than the source's own (issue #369), and history-store entries
         # remembered under such a member. They fold to the residual too, and
@@ -1330,7 +1391,11 @@ def may_carry(line, tokens):
 
 
 def read_records(root, counters, sessions=None, *, scope):
-    """Yield (day, total, parts, model) rows from every message-shaped record.
+    """Yield (day, total, parts, model, identity) rows from every message record.
+
+    `model` is the member the record is billed to on the wire and `identity`
+    the raw identity the data layer records (issue #371); both come out of the
+    one fold, so they can never describe two different records.
 
     Every value this generator produces is already reduced to a date and an
     integer; the parsed record itself never escapes the loop body. Files that
@@ -1361,14 +1426,14 @@ def read_records(root, counters, sessions=None, *, scope):
                 if reduced is None:
                     continue
                 counters["counted"] += 1
-                day, instant, total, parts, model = reduced
-                note_session(opened, instant, total, parts, model)
-                yield day, total, parts, model
+                day, instant, total, parts, model, identity = reduced
+                note_session(opened, instant, total, parts, model, identity)
+                yield day, total, parts, model, identity
         close_session(sessions, opened)
 
 
 def read_running_totals(root, counters, sessions=None, *, scope):
-    """Yield (day, advance, parts, model) rows from every running-totals record.
+    """Yield (day, advance, parts, model, identity) rows from running-totals records.
 
     The running total is per FILE — every journal in the owner's tree opens
     its own accounting at zero — so the high-water mark resets at each file
@@ -1391,7 +1456,10 @@ def read_running_totals(root, counters, sessions=None, *, scope):
     advances before any declaration fold to the residual — the honest answer
     for tokens whose model this file never named. The declaration itself is
     the only thing that folds, so an identifier the vocabulary does not name
-    is counted once where it is declared rather than once per advance.
+    is counted once where it is declared rather than once per advance. The
+    raw identity is carried beside the member the same way (issue #371), and
+    advances before any declaration record the reserved bucket: the file
+    named no model for them.
 
     Each line is decoded ONCE and offered to both readers; the decoded record
     never leaves this loop, exactly as in the message shape.
@@ -1406,7 +1474,7 @@ def read_running_totals(root, counters, sessions=None, *, scope):
         if handle is None:
             continue
         previous = {field: 0 for field in RUNNING_FIELDS}
-        member = MODEL_OTHER
+        member, identity = MODEL_OTHER, UNIDENTIFIED_MODEL
         opened = new_session()
         with handle:
             for line in bounded_lines(handle, counters):
@@ -1417,7 +1485,7 @@ def read_running_totals(root, counters, sessions=None, *, scope):
                     continue
                 declared = declared_model_of(decoded)
                 if declared is not None:
-                    member = scoped_key(declared, counters, scope)
+                    member, identity = attributed_model(declared, counters, scope)
                     continue
                 reduced = running_totals_of(decoded)
                 if reduced is None:
@@ -1441,19 +1509,20 @@ def read_running_totals(root, counters, sessions=None, *, scope):
                     continue
                 counters["counted"] += 1
                 parts = running_parts(advances, advance, counters)
-                note_session(opened, instant, advance, parts, member)
-                yield day, advance, parts, member
+                note_session(opened, instant, advance, parts, member, identity)
+                yield day, advance, parts, member, identity
         close_session(sessions, opened)
 
 
 def new_session():
     """The per-file accumulator one ledger session entry is built from.
 
-    Four fields and NOTHING ELSE, and the omissions are the design (issue
+    Five fields and NOTHING ELSE, and the omissions are the design (issue
     #267). The record carries a session identifier, a working directory, a
     git branch, a title and the prompt text itself; a session entry carries
-    the span, the total, the class partition and the members in first
-    appearance order, because those four are the only things the workstation
+    the span, the total, the class partition, the members in first
+    appearance order and — since issue #371 — the raw identities beside them
+    in the same order, because those are the only things the workstation
     tracker asks of it and every other field is a requirement-12 leak with a
     plausible reason attached. `assert_ledger_block` re-proves the shape
     before anything is written, so a future edit that starts carrying a title
@@ -1465,10 +1534,11 @@ def new_session():
         HISTORY_TOTAL_KEY: 0,
         "categories": {},
         "models": [],
+        MODEL_IDENTITIES_KEY: [],
     }
 
 
-def note_session(opened, instant, total, parts, model):
+def note_session(opened, instant, total, parts, model, identity):
     """Fold one ADMITTED record into the session its file is accumulating.
 
     Admitted is the operative word: the message shape's de-duplication runs
@@ -1488,6 +1558,8 @@ def note_session(opened, instant, total, parts, model):
             opened["categories"][key] = opened["categories"].get(key, 0) + value
     if model not in opened["models"]:
         opened["models"].append(model)
+    if identity not in opened[MODEL_IDENTITIES_KEY]:
+        opened[MODEL_IDENTITIES_KEY].append(identity)
     if instant is None:
         return
     if opened[LEDGER_STARTED_KEY] is None or instant < opened[LEDGER_STARTED_KEY]:
@@ -1515,7 +1587,7 @@ def close_session(sessions, opened):
 
 
 def reduce_line(line, seen, counters, *, scope):
-    """Reduce one transcript line to (day, instant, total, parts, model), or None.
+    """Reduce one line to (day, instant, total, parts, model, identity), or None.
 
     De-duplication is load-bearing rather than tidy. The tool replays earlier
     assistant messages into later transcript files when a session is resumed
@@ -1553,13 +1625,8 @@ def reduce_line(line, seen, counters, *, scope):
     if day is None:
         return None
     parts = usage_parts(usage)
-    return (
-        day,
-        utc_instant(stamp),
-        sum(parts.values()),
-        parts,
-        scoped_key(message.get(MESSAGE_MODEL_FIELD), counters, scope),
-    )
+    member, identity = attributed_model(message.get(MESSAGE_MODEL_FIELD), counters, scope)
+    return (day, utc_instant(stamp), sum(parts.values()), parts, member, identity)
 
 
 def reduce_running_line(line):
@@ -1752,19 +1819,84 @@ def model_key(value, counters):
         if separator and remainder in MODEL_PREFIX_KEYS:
             return remainder
     counters["unattributed"] += 1
+    # Tallied by raw identity too (issue #371), so the summary can name the
+    # model nobody has named yet. The identity is shape-bounded, so a path or
+    # a sentence passed here is tallied as the bucket, never as itself.
+    identity = raw_model_identity(value)
+    tally = counters["unattributed_ids"]
+    tally[identity] = tally.get(identity, 0) + 1
     return MODEL_OTHER
 
 
+def raw_model_identity(value):
+    """The raw identity one model string is recorded under (issue #371).
+
+    The ONLY normaliser of a recorded model string: trimmed and lower-cased,
+    and kept when it has the identifier shape MODEL_IDENTITY_PATTERN states.
+    A path, a prompt, an over-long string, an empty one and anything that is
+    not a string all land on UNIDENTIFIED_MODEL, so nothing but an
+    identifier-shaped string can ever be written down as a model.
+    """
+    if isinstance(value, str):
+        identity = value.strip().lower()
+        if MODEL_IDENTITY_PATTERN.fullmatch(identity):
+            return identity
+    return UNIDENTIFIED_MODEL
+
+
+def valid_model_identity(value):
+    """True for a recorded raw identity: the identifier shape or the bucket.
+
+    What every READER of the data layer admits — the history store, the ledger
+    block's guard and the ledger rows — so a value the normaliser could not
+    have produced is refused wherever it turns up.
+    """
+    return value == UNIDENTIFIED_MODEL or (
+        isinstance(value, str) and MODEL_IDENTITY_PATTERN.fullmatch(value) is not None
+    )
+
+
+def attributed_model(value, counters, scope):
+    """(member, raw identity) for one model string: the one production fold.
+
+    The identity is taken FIRST and the member is folded from it, so the
+    member a fresh record is billed to and the member a remembered identity
+    re-projects to are one function of one string under one vocabulary
+    (issue #371). Every fold site — the record walk, the running-totals
+    declaration, the cache's daily roll-up and lifetime classes, and the
+    history store's projection — calls this and keeps both answers in the
+    same pass, so the folded index and the raw one are never built from
+    different records.
+    """
+    identity = raw_model_identity(value)
+    return scoped_key(identity, counters, scope), identity
+
+
+def unattributed_summary(counters):
+    """The summary line naming the identities the vocabulary does not name.
+
+    Identities and integers only — each identity is one the normaliser
+    produced, so it is identifier-shaped or the bucket — most folds first,
+    ties by identity, at most UNATTRIBUTED_SHOWN of them; `-` when there are
+    none, a token no identity can spell.
+    """
+    tally = counters.get("unattributed_ids") or {}
+    shown = sorted(tally.items(), key=lambda item: (-item[1], item[0]))[:UNATTRIBUTED_SHOWN]
+    return "unattributed-ids %s" % (
+        " ".join("%s=%d" % pair for pair in shown if valid_model_identity(pair[0])) or "-"
+    )
+
+
 def scoped_key(value, counters, scope):
-    """One record's model identifier reduced to a member THIS source may carry.
+    """One model string reduced to a member THIS source may carry.
 
     `model_key` answers which member the vocabulary names; this answers whether
     the source being captured is allowed to carry it (issue #369). A member of
     another vendor group folds to the residual and is counted apart from the
     unattributed tally, so a cross-vendor identifier can never put a member on
     the wire that the origin would refuse for this source. Every production
-    path that folds an identifier goes through here; `model_key` stays the
-    pure vocabulary fold its own tests pin.
+    path that folds an identifier reaches here through `attributed_model`;
+    `model_key` stays the pure vocabulary fold its own tests pin.
     """
     member = model_key(value, counters)
     if member in scope:
@@ -1874,17 +2006,22 @@ def usage_total(usage):
 def daily_series(rows):
     """Build the contiguous day-indexed series from reduced record rows.
 
-    A row is (day, total, parts, model): the day's own arithmetic, the
-    record's category partition (None when the record could not be
-    partitioned) and the vocabulary member its tokens belong to. All three
-    day indexes are built in ONE walk over ONE stream, so the aggregate, the
-    breakdown, and the attribution are the same records read once — a second
-    walk would be a second chance to disagree.
+    A row is (day, total, parts, model, identity): the day's own arithmetic,
+    the record's category partition (None when the record could not be
+    partitioned), the vocabulary member its tokens belong to and the raw
+    identity they were recorded under. Every day index is built in ONE walk
+    over ONE stream, so the aggregate, the breakdown, the attribution and the
+    raw record are the same records read once — a second walk would be a
+    second chance to disagree.
 
-    Returns (series, categories, models, partitioned days, joint), where
-    `categories` and `models` map a vocabulary key to a day-indexed list over
-    the same contiguous window the series covers, and `joint` maps a
-    (model, category) pair to {day: count}. The caller windows them.
+    Returns (series, categories, models, partitioned days, joint, identities,
+    identity joint), where `categories` and `models` map a vocabulary key to
+    a day-indexed list over the same contiguous window the series covers,
+    `joint` maps a (model, category) pair to {day: count}, `identities` maps a
+    day to its {raw identity: count} split — which sums to the day's total
+    exactly as the model split does — and the identity joint maps a
+    (raw identity, category) pair to {day: count} (issue #371). The caller
+    windows them.
 
     THE JOINT IS THE THIRD ACCUMULATOR IN THIS ONE LOOP (issue #267), and it
     has to be: a marginal cannot be recovered from two other marginals, so
@@ -1901,12 +2038,16 @@ def daily_series(rows):
     totals_by_day = {}
     parts_by_day = {}
     models_by_day = {}
+    identities_by_day = {}
     joint = {}
+    identity_joint = {}
     uncategorised = set()
-    for day, total, parts, model in rows:
+    for day, total, parts, model, identity in rows:
         totals_by_day[day] = totals_by_day.get(day, 0) + total
         bucket = models_by_day.setdefault(day, {})
         bucket[model] = bucket.get(model, 0) + total
+        recorded = identities_by_day.setdefault(day, {})
+        recorded[identity] = recorded.get(identity, 0) + total
         if parts is None:
             uncategorised.add(day)
             continue
@@ -1914,6 +2055,8 @@ def daily_series(rows):
         for key, value in parts.items():
             carried[key] = carried.get(key, 0) + value
             cell = joint.setdefault((model, key), {})
+            cell[day] = cell.get(day, 0) + value
+            cell = identity_joint.setdefault((identity, key), {})
             cell[day] = cell.get(day, 0) + value
     if not totals_by_day:
         raise CaptureError("no usage records found under the transcript root")
@@ -1935,7 +2078,23 @@ def daily_series(rows):
     categories = day_indexed(parts_by_day, window, CATEGORY_KEYS)
     models = day_indexed(models_by_day, window, MODEL_KEYS)
     partitioned = [day for day in window if day not in uncategorised]
-    return series, categories, models, partitioned, joint
+    identities = carrying_split(identities_by_day)
+    return series, categories, models, partitioned, joint, identities, identity_joint
+
+
+def carrying_split(by_day):
+    """A {day: {key: count}} split with every zero count and empty day dropped.
+
+    A record that billed nothing still names its model, and a zero is not a
+    reading of that model: the store and the ledger keep only what a day
+    measured, exactly as `day_indexed` drops an all-zero row.
+    """
+    kept = {}
+    for day, split in by_day.items():
+        carried = {key: value for key, value in split.items() if value > 0}
+        if carried:
+            kept[day] = carried
+    return kept
 
 
 def day_indexed(by_day, window, vocabulary):
@@ -2149,7 +2308,7 @@ def read_activity_cache(path):
 
 
 def activity_days(document, counters, *, scope):
-    """The cache's per-day, per-model roll-up: {day: {member: count}}.
+    """The cache's per-day roll-up: ({day: {member: count}}, {day: {identity: count}}).
 
     WHY THIS EXISTS. The transcript journals are RETENTION-PRUNED — the tool
     deletes them on its own schedule — so a walk of the tree measures only as
@@ -2167,14 +2326,16 @@ def activity_days(document, counters, *, scope):
     What this supplies is the days the walk has LOST, and the per-model split
     on them.
 
-    Nothing but calendar dates, vocabulary members and integers leaves this
-    function; an identifier outside the vocabulary becomes the residual
-    member exactly as it does on the walk's own path.
+    Nothing but calendar dates, vocabulary members, raw identities and
+    integers leaves this function; an identifier outside the vocabulary
+    becomes the residual member exactly as it does on the walk's own path,
+    and is recorded by its raw identity beside it (issue #371).
     """
     rows = document.get(ACTIVITY_CACHE_DAILY_KEY)
     if not isinstance(rows, list):
         raise CaptureError("the activity cache carries no daily model roll-up")
     by_day = {}
+    identities = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -2183,12 +2344,14 @@ def activity_days(document, counters, *, scope):
         if not valid_calendar_day(day) or not isinstance(amounts, dict):
             continue
         bucket = by_day.setdefault(day, {})
+        recorded = identities.setdefault(day, {})
         for identifier, value in amounts.items():
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 continue
-            key = scoped_key(identifier, counters, scope)
+            key, identity = attributed_model(identifier, counters, scope)
             bucket[key] = bucket.get(key, 0) + value
-    return by_day
+            recorded[identity] = recorded.get(identity, 0) + value
+    return by_day, carrying_split(identities)
 
 
 def admitted_lifetime_usage(document):
@@ -2360,13 +2523,19 @@ def model_stats(document, counters, *, scope):
     a zero class: a zero here is not the reading "no cache reads", it is a
     row the cache carried for a model it holds no accounting for. Placeholder
     rows draw a named entity at nought beside entities that were used.
+
+    Returns (by member, by raw identity): the second is the same accounting
+    kept by the identity the cache reported (issue #371), built in the same
+    pass, for the ledger block's `modelIdStats`.
     """
     folded = {}
+    identities = {}
     for identifier, row in admitted_lifetime_usage(document).items():
-        member = folded.setdefault(scoped_key(identifier, counters, scope), {})
-        for key, value in row.items():
-            member[key] = member.get(key, 0) + value
-    return folded
+        member, identity = attributed_model(identifier, counters, scope)
+        for split in (folded.setdefault(member, {}), identities.setdefault(identity, {})):
+            for key, value in row.items():
+                split[key] = split.get(key, 0) + value
+    return folded, identities
 
 
 def accrue_model_stats(folded, document, joint, owned):
@@ -2385,6 +2554,10 @@ def accrue_model_stats(folded, document, joint, owned):
     the walk's and carry no joint, so they accrue onto the class tiles and
     not onto the members — which is precisely why the invariant the origin
     enforces is `Σ members ≤ the class tile` rather than equality.
+
+    The raw-identity accounting accrues by exactly this rule through the
+    identity joint (issue #371): the function is indifferent to whether a
+    joint's first coordinate is a member or a raw identity.
     """
     as_of = document.get(ACTIVITY_CACHE_COMPUTED_KEY)
     if not valid_calendar_day(as_of):
@@ -2413,6 +2586,29 @@ def model_stats_section(folded):
     return section
 
 
+def identity_stats_section(identities):
+    """The ledger form of the raw-identity lifetime classes (issue #371).
+
+    `modelStats`' own rules — no nought class, no empty row, the shared count
+    bound — keyed by raw identity under `id`, in identity order so two runs
+    over one cache emit identical bytes. It rides the ledger block only: a raw
+    identity never reaches the wire.
+    """
+    section = []
+    for identity in sorted(identities):
+        totals = {
+            key: identities[identity][key]
+            for key in CATEGORY_KEYS
+            if identities[identity].get(key, 0) > 0
+        }
+        if not totals:
+            continue
+        if sum(totals.values()) > MAX_COUNT:
+            raise CaptureError("a per-identity lifetime figure exceeds the shared count bound")
+        section.append({LEDGER_ID_KEY: identity, MODEL_STATS_TOTALS_KEY: totals})
+    return section
+
+
 def ledger_days(window, owned):
     """The contiguous run of walk-owned partitioned days the joint indexes.
 
@@ -2435,8 +2631,12 @@ def ledger_days(window, owned):
     return list(range(first, last + 1))
 
 
-def ledger_model_categories(joint, window, indexes):
+def ledger_model_categories(joint, window, indexes, keys=MODEL_KEYS, field=LEDGER_MODEL_KEY):
     """The day-indexed joint of model key against accounting class.
+
+    The same builder lays the raw-identity joint (issue #371): `keys` is then
+    the identities in sorted order and `field` is `id`, so the two sections
+    differ in their first coordinate and in nothing else.
 
     NOT WINDOWED BY THE PAYLOAD BUDGET, and that is the point of putting it
     here rather than on the wire (issue #267): the served model breakdown
@@ -2452,7 +2652,7 @@ def ledger_model_categories(joint, window, indexes):
     """
     days = [window[index] for index in indexes]
     members = []
-    for member in MODEL_KEYS:
+    for member in keys:
         for key in CATEGORY_KEYS:
             by_day = joint.get((member, key))
             if not by_day:
@@ -2462,7 +2662,7 @@ def ledger_model_categories(joint, window, indexes):
                 continue
             members.append(
                 {
-                    LEDGER_MODEL_KEY: member,
+                    field: member,
                     LEDGER_CATEGORY_KEY: key,
                     "totals": row,
                 }
@@ -2470,7 +2670,16 @@ def ledger_model_categories(joint, window, indexes):
     return {"startDate": days[0], LEDGER_MEMBERS_KEY: members}
 
 
-def assert_joint_marginals(members, indexes, categories, models):
+def identity_rows(identities, window):
+    """A {day: {identity: count}} split laid onto the window, one row per identity."""
+    named = sorted({identity for split in identities.values() for identity in split})
+    return {
+        identity: [identities.get(day, {}).get(identity, 0) for day in window]
+        for identity in named
+    }
+
+
+def assert_joint_marginals(members, indexes, categories, models, field=LEDGER_MODEL_KEY):
     """Refuse a joint whose two marginals are not the day's own splits.
 
     The whole claim of a joint is that it refines two partitions the document
@@ -2485,13 +2694,17 @@ def assert_joint_marginals(members, indexes, categories, models):
     workstation ledger is built from these bytes, and a joint that disagrees
     with the series printed beside it is a tracker quietly disagreeing with
     the panel.
+
+    The raw-identity joint answers to the same check with `field` set to `id`
+    and `models` the day's raw-identity split (issue #371), so it too refines
+    exactly the class split the document publishes.
     """
     for position, index in enumerate(indexes):
         by_model = {}
         by_category = {}
         for member in members:
             value = member["totals"][position]
-            key = member[LEDGER_MODEL_KEY]
+            key = member[field]
             by_model[key] = by_model.get(key, 0) + value
             key = member[LEDGER_CATEGORY_KEY]
             by_category[key] = by_category.get(key, 0) + value
@@ -2512,7 +2725,9 @@ def assert_joint_marginals(members, indexes, categories, models):
                     )
 
 
-def ledger_block(joint, window, owned, categories, models, sessions):
+def ledger_block(
+    joint, identity_joint, window, owned, categories, models, identities, sessions, identity_stats
+):
     """The machine-local material block, proven before it is returned.
 
     It never reaches the wire: `assert_only_dates_and_integers` refuses the
@@ -2527,6 +2742,13 @@ def ledger_block(joint, window, owned, categories, models, sessions):
     still a measurement worth keeping, and failing a panel push because the
     tracker's cross-tabulation is empty would be a machine-local concern
     breaking a public one.
+
+    THE RAW RECORD RIDES HERE TOO (issue #371): `modelIdCategories`, the same
+    joint by raw identity over the same days and checked against the same
+    class split; each session's raw identities; and `modelIdStats`, the
+    cache's lifetime classes by raw identity. The folded sections are kept
+    beside them unchanged, so a reader of either never has to know the other
+    exists.
     """
     block = {"schema": LEDGER_SCHEMA}
     indexes = ledger_days(window, owned)
@@ -2534,7 +2756,19 @@ def ledger_block(joint, window, owned, categories, models, sessions):
         section = ledger_model_categories(joint, window, indexes)
         assert_joint_marginals(section[LEDGER_MEMBERS_KEY], indexes, categories, models)
         block[LEDGER_MODEL_CATEGORIES_KEY] = section
+        named = sorted({identity for identity, _ in identity_joint})
+        section = ledger_model_categories(identity_joint, window, indexes, named, LEDGER_ID_KEY)
+        assert_joint_marginals(
+            section[LEDGER_MEMBERS_KEY],
+            indexes,
+            categories,
+            identity_rows(identities, window),
+            LEDGER_ID_KEY,
+        )
+        block[LEDGER_MODEL_ID_CATEGORIES_KEY] = section
     block[LEDGER_SESSIONS_KEY] = [ledger_session(entry) for entry in sessions]
+    if identity_stats:
+        block[LEDGER_MODEL_ID_STATS_KEY] = identity_stats
     assert_ledger_block(block)
     return block
 
@@ -2549,10 +2783,13 @@ def ledger_session(entry):
             key: entry["categories"][key] for key in CATEGORY_KEYS if key in entry["categories"]
         },
         "models": list(entry["models"]),
+        MODEL_IDENTITIES_KEY: list(entry[MODEL_IDENTITIES_KEY]),
     }
 
 
-def extend_with_cache(series, categories, models, partitioned, cached):
+def extend_with_cache(
+    series, categories, models, partitioned, cached, identities, cached_identities
+):
     """Union the walked series with the cache's days; the WALK wins a conflict.
 
     The union is by DATE, and the rule is one sentence: a day the walk covers
@@ -2568,9 +2805,13 @@ def extend_with_cache(series, categories, models, partitioned, cached):
     fact forward — the categories section is windowed to the trailing run of
     days that really do have one, so the breakdown never claims a day it
     cannot measure.
+
+    The raw-identity split (issue #371) is unioned by the same rule: a day in
+    the walked window keeps the walk's, and only a day the walk has lost takes
+    the cache's. Returns the four inputs extended, then the identities.
     """
     if not cached:
-        return series, categories, models, partitioned
+        return series, categories, models, partitioned, identities
     start = datetime.date.fromisoformat(series["startDate"])
     walked = {
         (start + datetime.timedelta(days=offset)).isoformat(): offset
@@ -2618,7 +2859,11 @@ def extend_with_cache(series, categories, models, partitioned, cached):
         ]
     ordered_models = {key: merged_models[key] for key in MODEL_KEYS if key in merged_models}
     extended = {"startDate": window[0], "totals": totals, "recorded": True}
-    return extended, merged_categories, ordered_models, partitioned
+    merged_identities = dict(identities)
+    for day in window:
+        if day not in walked and day in cached_identities:
+            merged_identities[day] = cached_identities[day]
+    return extended, merged_categories, ordered_models, partitioned, merged_identities
 
 
 def read_history_store(path):
@@ -2636,6 +2881,13 @@ def read_history_store(path):
     days, positive integers under the shared count bound, breakdown keys
     inside their closed vocabularies, and each breakdown summing exactly to
     its day's total. Refusals name the store, never a path.
+
+    Both markers read (issue #371). A v2 day may keep its model split by RAW
+    IDENTITY under `modelIds` — identities in the raw-identity shape or the
+    reserved bucket, positive counts summing to the day — and then carries no
+    folded split: the entry comes back with `models` None, and the folded
+    split is derived from the identities on read (`scoped_history`). A day
+    with only the folded split, under either marker, keeps it as written.
     """
     try:
         with open(path, "r", encoding="utf-8") as handle:
@@ -2652,9 +2904,21 @@ def read_history_store(path):
         document = json.loads(text)
     except (ValueError, RecursionError):
         raise CaptureError("the history store is not a parsable JSON document")
+    return admitted_history(document)
+
+
+def admitted_history(document):
+    """The store document's day index, admitted by the reader's every rule.
+
+    One function for both directions: `read_history_store` admits what it
+    read through it, and `write_history_store` proves what it is about to
+    write through it, so the writer can never leave a store the next run
+    refuses.
+    """
     if not isinstance(document, dict):
         raise CaptureError("the history store must be a JSON object")
-    if document.get(HISTORY_SCHEMA_KEY) != HISTORY_SCHEMA:
+    schema = document.get(HISTORY_SCHEMA_KEY)
+    if schema not in HISTORY_SCHEMAS:
         raise CaptureError("the history store does not declare the expected schema")
     if set(document) != {HISTORY_SCHEMA_KEY, HISTORY_DAYS_KEY}:
         raise CaptureError("the history store carries an unknown section")
@@ -2662,13 +2926,16 @@ def read_history_store(path):
     if not isinstance(rows, dict):
         raise CaptureError("the history store carries no day index")
     vocabularies = {"categories": CATEGORY_KEYS, "models": MODEL_KEYS}
+    fields = {HISTORY_TOTAL_KEY} | set(vocabularies)
+    if schema == HISTORY_SCHEMA:
+        fields.add(MODEL_IDENTITIES_KEY)
     stored = {}
     for day, entry in rows.items():
         if not valid_calendar_day(day):
             raise CaptureError("the history store carries a key that is not a calendar day")
         if not isinstance(entry, dict) or HISTORY_TOTAL_KEY not in entry:
             raise CaptureError("the history store carries a malformed day entry")
-        if set(entry) - ({HISTORY_TOTAL_KEY} | set(vocabularies)):
+        if set(entry) - fields:
             raise CaptureError("the history store carries an unknown day field")
         total = entry[HISTORY_TOTAL_KEY]
         if not isinstance(total, int) or isinstance(total, bool) or total <= 0:
@@ -2677,7 +2944,19 @@ def read_history_store(path):
             raise CaptureError("the history store carries a day without a positive total")
         if total > MAX_COUNT:
             raise CaptureError("the history store carries a total above the shared count bound")
-        admitted = {HISTORY_TOTAL_KEY: total, "categories": None, "models": None}
+        admitted = {
+            HISTORY_TOTAL_KEY: total,
+            "categories": None,
+            "models": None,
+            MODEL_IDENTITIES_KEY: admitted_identities(entry.get(MODEL_IDENTITIES_KEY), total),
+        }
+        if admitted[MODEL_IDENTITIES_KEY] is not None and entry.get("models") is not None:
+            # The folded split of such a day is a projection of its
+            # identities, made on read; a stored one beside them is a second
+            # answer that can disagree with the first.
+            raise CaptureError(
+                "the history store carries a day with both a raw and a folded model split"
+            )
         for name, vocabulary in vocabularies.items():
             values = entry.get(name)
             if values is None:
@@ -2704,7 +2983,29 @@ def read_history_store(path):
     return stored
 
 
-def merge_history(series, categories, models, partitioned, stored):
+def admitted_identities(values, total):
+    """One day's raw-identity split, admitted, or None when the day has none.
+
+    RETIRED_MODEL_KEYS never applies here: a retirement is a decision about
+    what the page draws, and this is the record of what was used.
+    """
+    if values is None:
+        return None
+    if not isinstance(values, dict) or not values:
+        raise CaptureError("the history store carries a malformed breakdown")
+    for identity, value in values.items():
+        if not valid_model_identity(identity):
+            raise CaptureError(
+                "the history store carries a model identity outside the raw-identity shape"
+            )
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise CaptureError("the history store carries a malformed breakdown count")
+    if sum(values.values()) != total:
+        raise CaptureError("a history store breakdown sums to a different figure than its day")
+    return dict(values)
+
+
+def merge_history(series, categories, models, partitioned, stored, identities):
     """Union the derived series with the store; evidence, once seen, survives.
 
     THE RULE, one sentence per direction. A day the fresh capture measures at
@@ -2726,6 +3027,12 @@ def merge_history(series, categories, models, partitioned, stored):
     Those days are the fresh walk's no longer, so the ledger's joint (issue
     #267) drops them: a joint measured from records the emission then
     replaced would sum to a figure this document does not serve.
+
+    A DAY TRAVELS WHOLE (issue #371). The rule picks an entry — its total,
+    its class split, its folded split and its raw-identity split together —
+    so `modelIds` always rides with the total it sums to, and a remembered
+    day can never be re-attributed from identities measured on another
+    figure. `identities` is the fresh {day: {identity: count}} split.
     """
     start = datetime.date.fromisoformat(series["startDate"])
     window = [
@@ -2740,6 +3047,7 @@ def merge_history(series, categories, models, partitioned, stored):
             continue
         parts = {key: categories[key][offset] for key in categories if categories[key][offset] > 0}
         amounts = {key: models[key][offset] for key in models if models[key][offset] > 0}
+        recorded = identities.get(day) or {}
         merged[day] = {
             HISTORY_TOTAL_KEY: total,
             # A breakdown is remembered only when it is a PARTITION of the
@@ -2747,6 +3055,9 @@ def merge_history(series, categories, models, partitioned, stored):
             # figures that must never resurface later claiming to be whole.
             "categories": parts if day in partitioned_in and sum(parts.values()) == total else None,
             "models": amounts if amounts and sum(amounts.values()) == total else None,
+            MODEL_IDENTITIES_KEY: (
+                dict(recorded) if recorded and sum(recorded.values()) == total else None
+            ),
         }
     overridden = set()
     for day, entry in stored.items():
@@ -2802,20 +3113,36 @@ def write_history_store(path, remembered):
     killed mid-write leaves the previous store intact rather than a truncated
     document the next run would refuse. The emission is deterministic (sorted
     days, sorted keys) so two identical merges write identical bytes.
+
+    Always the v2 marker (issue #371). A day with a raw-identity split keeps
+    THAT and not the folded one, which is a projection the reader derives;
+    a day without one keeps its folded split exactly as before. The document
+    is proven through the reader's own admission and its byte bound before
+    anything is replaced, so a store the next run would refuse is never
+    written — the previous one stays in place and this run refuses instead.
     """
     document = {HISTORY_SCHEMA_KEY: HISTORY_SCHEMA, HISTORY_DAYS_KEY: {}}
     for day in sorted(remembered):
         entry = remembered[day]
         row = {HISTORY_TOTAL_KEY: entry[HISTORY_TOTAL_KEY]}
-        for name in ("categories", "models"):
-            if entry.get(name):
-                row[name] = entry[name]
+        if entry.get("categories"):
+            row["categories"] = entry["categories"]
+        if entry.get(MODEL_IDENTITIES_KEY):
+            row[MODEL_IDENTITIES_KEY] = entry[MODEL_IDENTITIES_KEY]
+        elif entry.get("models"):
+            row["models"] = entry["models"]
         document[HISTORY_DAYS_KEY][day] = row
+    admitted_history(document)
+    text = json.dumps(document, sort_keys=True) + "\n"
+    if len(text) > MAX_HISTORY_STORE_BYTES:
+        raise CaptureError(
+            "the history store would be larger than the %d byte bound; the previous one is kept"
+            % MAX_HISTORY_STORE_BYTES
+        )
     temporary = path.with_name(path.name + ".tmp")
     try:
         with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(document, handle, sort_keys=True)
-            handle.write("\n")
+            handle.write(text)
         temporary.replace(path)
     except OSError:
         raise CaptureError("the history store could not be written")
@@ -2906,7 +3233,13 @@ def apply_verified_readings(series, categories, models, partitioned, remembered,
                 "figures need that day's split, so verify it once a later day is measured"
             )
         series["totals"][offset] = total
-        entry = {HISTORY_TOTAL_KEY: total, "categories": None, "models": None}
+        recorded = (remembered.get(day) or {}).get(MODEL_IDENTITIES_KEY)
+        entry = {
+            HISTORY_TOTAL_KEY: total,
+            "categories": None,
+            "models": None,
+            MODEL_IDENTITIES_KEY: None,
+        }
         for name, rows in (("categories", categories), ("models", models)):
             kept = {key: values[offset] for key, values in rows.items() if values[offset] > 0}
             whole = day in partitioned if name == "categories" else bool(kept)
@@ -2917,6 +3250,11 @@ def apply_verified_readings(series, categories, models, partitioned, remembered,
                 values[offset] = 0
             if name == "categories":
                 partitioned.discard(day)
+        # The raw-identity split goes WITH the folded one (issue #371): both
+        # partition the figure the day had, so the corrected day keeps the
+        # pair or neither.
+        if entry["models"] is not None and recorded and sum(recorded.values()) == total:
+            entry[MODEL_IDENTITIES_KEY] = recorded
         remembered[day] = entry
     return series, categories, models, sorted(partitioned), remembered
 
@@ -3009,8 +3347,15 @@ def assert_ledger_block(block):
     a model key, an accounting-class key, a calendar date, or an RFC 3339 UTC
     second. Every integer is a count under the shared bound. Requirement 12
     is answered by construction — a path, an id or a prompt is none of those.
+
+    ONE OPEN STRING, AND ONE PLACE FOR IT (issue #371). The raw-identity
+    sections carry the record's own model string, and it is admitted only
+    where it belongs — `id` in `modelIdCategories` and `modelIdStats`, and a
+    session's `modelIds` — and only in the raw-identity shape or as the
+    reserved bucket. Every other field keeps its closed-set rule, so a raw
+    identity in `model`, or free text in `id`, refuses.
     """
-    if not isinstance(block, dict) or set(block) - {LEDGER_MODEL_CATEGORIES_KEY} != {
+    if not isinstance(block, dict) or set(block) - LEDGER_OPTIONAL_SECTIONS != {
         "schema",
         LEDGER_SESSIONS_KEY,
     }:
@@ -3019,6 +3364,10 @@ def assert_ledger_block(block):
         raise CaptureError("the ledger block does not declare the expected schema")
     if LEDGER_MODEL_CATEGORIES_KEY in block:
         assert_ledger_joint(block[LEDGER_MODEL_CATEGORIES_KEY])
+    if LEDGER_MODEL_ID_CATEGORIES_KEY in block:
+        assert_ledger_joint(block[LEDGER_MODEL_ID_CATEGORIES_KEY], LEDGER_ID_KEY)
+    if LEDGER_MODEL_ID_STATS_KEY in block:
+        assert_ledger_identity_stats(block[LEDGER_MODEL_ID_STATS_KEY])
     sessions = block[LEDGER_SESSIONS_KEY]
     if not isinstance(sessions, list):
         raise CaptureError("the ledger block carries no session list")
@@ -3026,8 +3375,54 @@ def assert_ledger_block(block):
         assert_ledger_session(session)
 
 
-def assert_ledger_joint(joint):
-    """Refuse a joint section that is not exactly a start date and members."""
+# The block's optional sections: the folded joint (issue #267) and the three
+# raw-identity sections (issue #371) — absent is always a state, never a fault.
+LEDGER_OPTIONAL_SECTIONS = frozenset(
+    {LEDGER_MODEL_CATEGORIES_KEY, LEDGER_MODEL_ID_CATEGORIES_KEY, LEDGER_MODEL_ID_STATS_KEY}
+)
+
+
+def ledger_value_admitted(field, value):
+    """Whether one joint coordinate is admitted under its field name.
+
+    `model` is the closed vocabulary; `id` is the raw-identity shape or the
+    bucket, and nothing else in the block may carry one.
+    """
+    if field == LEDGER_ID_KEY:
+        return valid_model_identity(value)
+    return isinstance(value, str) and value in MODEL_KEYS
+
+
+def assert_ledger_identity_stats(rows):
+    """Refuse a `modelIdStats` section that is not a list of {id, totals}."""
+    if not isinstance(rows, list):
+        raise CaptureError("the ledger block carries no identity stats list")
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {LEDGER_ID_KEY, MODEL_STATS_TOTALS_KEY}:
+            raise CaptureError("a ledger identity stat carries a field outside its declared shape")
+        if not ledger_value_admitted(LEDGER_ID_KEY, row[LEDGER_ID_KEY]):
+            raise CaptureError(
+                "a ledger identity stat names an identity outside the raw-identity shape"
+            )
+        if row[LEDGER_ID_KEY] in seen:
+            raise CaptureError("a ledger identity stat is declared twice")
+        seen.add(row[LEDGER_ID_KEY])
+        totals = row[MODEL_STATS_TOTALS_KEY]
+        if not isinstance(totals, dict) or not totals:
+            raise CaptureError("a ledger identity stat carries no class totals")
+        for key in totals:
+            if key not in CATEGORY_KEYS:
+                raise CaptureError("a ledger identity stat names a class outside the vocabulary")
+        assert_ledger_counts(list(totals.values()), "a ledger identity stat")
+
+
+def assert_ledger_joint(joint, field=LEDGER_MODEL_KEY):
+    """Refuse a joint section that is not exactly a start date and members.
+
+    `field` names the first coordinate: `model` for the folded joint, `id`
+    for the raw-identity one (issue #371), each admitted by its own rule.
+    """
     if not isinstance(joint, dict) or set(joint) != {"startDate", LEDGER_MEMBERS_KEY}:
         raise CaptureError("the ledger joint carries a field outside its declared shape")
     if not valid_calendar_day(joint["startDate"]):
@@ -3038,16 +3433,20 @@ def assert_ledger_joint(joint):
     seen = set()
     for member in members:
         if not isinstance(member, dict) or set(member) != {
-            LEDGER_MODEL_KEY,
+            field,
             LEDGER_CATEGORY_KEY,
             "totals",
         }:
             raise CaptureError("a ledger joint member carries a field outside its declared shape")
-        if member[LEDGER_MODEL_KEY] not in MODEL_KEYS:
+        if not ledger_value_admitted(field, member[field]):
+            if field == LEDGER_ID_KEY:
+                raise CaptureError(
+                    "a ledger joint member names an identity outside the raw-identity shape"
+                )
             raise CaptureError("a ledger joint member names a model outside the vocabulary")
         if member[LEDGER_CATEGORY_KEY] not in CATEGORY_KEYS:
             raise CaptureError("a ledger joint member names a class outside the vocabulary")
-        pair = (member[LEDGER_MODEL_KEY], member[LEDGER_CATEGORY_KEY])
+        pair = (member[field], member[LEDGER_CATEGORY_KEY])
         if pair in seen:
             raise CaptureError("a ledger joint member is declared twice")
         seen.add(pair)
@@ -3055,8 +3454,13 @@ def assert_ledger_joint(joint):
 
 
 def assert_ledger_session(session):
-    """Refuse one session entry that is not exactly a span and a partition."""
-    if not isinstance(session, dict) or set(session) != {
+    """Refuse one session entry that is not exactly a span and a partition.
+
+    `modelIds` is optional, so a block written before issue #371 still reads,
+    and when present it is the session's raw identities, each once, each in
+    the raw-identity shape or the bucket.
+    """
+    if not isinstance(session, dict) or set(session) - {MODEL_IDENTITIES_KEY} != {
         LEDGER_STARTED_KEY,
         LEDGER_ENDED_KEY,
         HISTORY_TOTAL_KEY,
@@ -3064,6 +3468,14 @@ def assert_ledger_session(session):
         "models",
     }:
         raise CaptureError("a ledger session carries a field outside its declared shape")
+    if MODEL_IDENTITIES_KEY in session:
+        identities = session[MODEL_IDENTITIES_KEY]
+        if not isinstance(identities, list) or not all(
+            ledger_value_admitted(LEDGER_ID_KEY, identity) for identity in identities
+        ):
+            raise CaptureError("a ledger session names an identity outside the raw-identity shape")
+        if len(set(identities)) != len(identities):
+            raise CaptureError("a ledger session names an identity twice")
     for key in (LEDGER_STARTED_KEY, LEDGER_ENDED_KEY):
         if not valid_instant(session[key]):
             raise CaptureError("a ledger session carries no RFC 3339 instant for its span")
@@ -3207,7 +3619,7 @@ def capture(
     scope = model_scope(source)
     reader = read_records if record_format == FORMAT_MESSAGES else read_running_totals
     sessions = []
-    series, categories, models, partitioned, joint = daily_series(
+    series, categories, models, partitioned, joint, identities, identity_joint = daily_series(
         reader(root, counters, sessions, scope=scope)
     )
     # The days whose emitted split is still the WALK's own, which is what the
@@ -3221,8 +3633,9 @@ def capture(
     cache_document = None
     if activity_cache is not None:
         cache_document = read_activity_cache(activity_cache)
-        series, categories, models, partitioned = extend_with_cache(
-            series, categories, models, partitioned, activity_days(cache_document, counters, scope=scope)
+        cached, cached_identities = activity_days(cache_document, counters, scope=scope)
+        series, categories, models, partitioned, identities = extend_with_cache(
+            series, categories, models, partitioned, cached, identities, cached_identities
         )
         stats = lifetime_stats(cache_document)
     if history_store is not None:
@@ -3236,9 +3649,17 @@ def capture(
         for day, total in readings.items():
             # Seeded so the union window reaches every verified day; the
             # figure itself is imposed after the merge, in both directions.
-            stored.setdefault(day, {HISTORY_TOTAL_KEY: total, "categories": None, "models": None})
+            stored.setdefault(
+                day,
+                {
+                    HISTORY_TOTAL_KEY: total,
+                    "categories": None,
+                    "models": None,
+                    MODEL_IDENTITIES_KEY: None,
+                },
+            )
         series, categories, models, partitioned, remembered, overridden = merge_history(
-            series, categories, models, partitioned, stored
+            series, categories, models, partitioned, stored, identities
         )
         series, categories, models, partitioned, remembered = apply_verified_readings(
             series, categories, models, partitioned, remembered, readings, today
@@ -3264,10 +3685,31 @@ def capture(
     start = datetime.date.fromisoformat(series["startDate"])
     window = [(start + datetime.timedelta(days=offset)).isoformat() for offset in range(len(totals))]
 
+    # The per-model lifetime classes and their raw-identity twin, from ONE
+    # pass over the cache's accounting, each accrued through its own joint
+    # over the same owned days (issues #267 and #371).
+    members = identity_stats = None
+    if cache_document is not None:
+        folded, recorded = model_stats(cache_document, counters, scope=scope)
+        members = model_stats_section(accrue_model_stats(folded, cache_document, joint, owned))
+        identity_stats = identity_stats_section(
+            accrue_model_stats(recorded, cache_document, identity_joint, owned)
+        )
+
     # Built BEFORE the wire sections are windowed, from the full-depth day
     # indexes, because the ledger pays no payload ceiling and must not
     # inherit a window that exists to pay one.
-    ledger = ledger_block(joint, window, owned, categories, models, sessions)
+    ledger = ledger_block(
+        joint,
+        identity_joint,
+        window,
+        owned,
+        categories,
+        models,
+        identities,
+        sessions,
+        identity_stats,
+    )
 
     offset = trailing_offset(window, set(partitioned)) if categories else None
     if offset is None:
@@ -3315,14 +3757,8 @@ def capture(
     section["windows"] = windows_from(series, categories, offset, today)
     section["derived"] = derived_figures(series)
     section["stats"] = stats
-    if cache_document is not None:
-        members = model_stats_section(
-            accrue_model_stats(
-                model_stats(cache_document, counters, scope=scope), cache_document, joint, owned
-            )
-        )
-        if members:
-            section[MODEL_STATS_KEY] = members
+    if members:
+        section[MODEL_STATS_KEY] = members
     # Proven clean before anything is printed, written, or spliced. The ledger
     # is attached AFTER it, because the guard refuses the key by name — that
     # refusal is what keeps the block off the wire, so the block cannot be
@@ -3334,15 +3770,32 @@ def capture(
 
 
 def scoped_history(stored, scope, counters):
-    """Fold every remembered model key outside the source's scope to the residual.
+    """Project every remembered day onto the members its source may carry.
 
-    A history store written before issue #369 may remember a day under a member
-    of another vendor group, and refusing it would end every capture over the
-    pipeline's own memory (the trap issue #322 recorded for retired keys). The
-    fold is the one `scoped_key` applies to a fresh record, it is counted, and
-    the store is written back folded, so it happens once.
+    A DAY KEPT BY RAW IDENTITY IS FOLDED HERE, ON EVERY READ (issue #371):
+    its identities go through `attributed_model` — the very fold a fresh
+    record takes, under the CURRENT vocabulary and the source's scope — and
+    the result is the day's folded split. It is never written back, so a model
+    named after the day was recorded re-attributes that day on the next
+    export with nothing in the store rewritten. The folds are counted like
+    any other.
+
+    A day with only a folded split (written before identities were kept)
+    keeps it. A store written before issue #369 may remember such a day under
+    a member of another vendor group, and refusing it would end every capture
+    over the pipeline's own memory (the trap issue #322 recorded for retired
+    keys). That fold is the one `scoped_key` applies to a fresh record, it is
+    counted, and the day is written back folded, so it happens once.
     """
     for entry in stored.values():
+        identities = entry.get(MODEL_IDENTITIES_KEY)
+        if identities:
+            projected = {}
+            for identity, value in identities.items():
+                member, _ = attributed_model(identity, counters, scope)
+                projected[member] = projected.get(member, 0) + value
+            entry["models"] = projected
+            continue
         models = entry.get("models")
         if not models:
             continue
@@ -3354,6 +3807,18 @@ def scoped_history(stored, scope, counters):
             folded[key] = folded.get(key, 0) + value
         entry["models"] = folded
     return stored
+
+
+def remembered_history(path, source):
+    """One source's store as every reader beside the capture reads it.
+
+    The graphing dataset and the ledger read the stores the capture just
+    wrote, and a day kept by raw identity has no folded split until it is
+    projected (issue #371), so both read through here: the store, then the
+    projection onto the source's own scope. The folds are counted into a tally
+    nobody prints, because the capture already reported this run's.
+    """
+    return scoped_history(read_history_store(path), model_scope(source), new_counters())
 
 
 def assert_scoped(section, scope):
@@ -3527,6 +3992,9 @@ def main(argv=None):
         ),
         file=sys.stderr,
     )
+    # Which identities those unattributed folds were (issue #371): a model the
+    # vocabulary does not name is visible the run it first appears.
+    print(unattributed_summary(counters), file=sys.stderr)
     generated_at = (
         datetime.datetime.now(datetime.timezone.utc)
         .replace(microsecond=0)
