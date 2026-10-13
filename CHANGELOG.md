@@ -12,13 +12,14 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 ### Fixed
 
 - The Claude Code model split names Opus 5.5, Mythos 5.1, Haiku 5.5 and
-  Sonnet 5.5. They were folded into the residual `other` row, which the card
-  drops before computing shares, so every named share was overstated. With
-  `other` no longer swallowing Opus 5.5 and the others, the Claude Code
-  shares are correct. They are recomputed from the tool's own per-model
-  accounting on the first export after deploy. A day the history store
-  remembers but no transcript or cache still holds keeps its old split in
-  the daily window (#369).
+  Sonnet 5.5. They were folded into the residual `other` row, and the card
+  divided each share by the rows it drew, so every named share was
+  overstated. A share is now of everything the source spent: the residual
+  and any model the card does not draw stay in the total, so the drawn
+  shares sum to less than 100% whenever something is left out. The shares
+  are recomputed from the tool's own per-model accounting on the first
+  export after deploy. A day the history store remembers but no transcript
+  or cache still holds keeps its old split in the daily window (#369).
 
 ### Changed
 
@@ -38,6 +39,11 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   the true dark mode), in every reading mode, because the Anthropic group now
   declares nine members. The slots are tokens the vocabulary rule requires;
   the model bars still paint one ink (#369).
+- A models card draws the largest models first, at most five, and only as
+  many whole rows as its box fits: four at the current card size, on phones
+  and desktops alike. The list no longer sets the card's height, so a long
+  split never stretches its grid row. Every model stays in the payload and
+  in the total; this is only what the card draws (#369).
 - Frontend toolchain: svelte 5.57.2, vite 8.3.4, @playwright/test 1.64.0;
   CodeQL init and analyze pinned to github/codeql-action v4.38.3 (supersedes
   #362, #363, #364, #365).
