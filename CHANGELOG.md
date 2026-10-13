@@ -31,8 +31,8 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   vocabulary does not name, so a new model is visible the run it appears
   (#371).
 - Every line the usage exporter writes itself carries a UTC timestamp, and
-  every failure, a configuration refusal included, ends with a dated
-  `FAILED` line naming its stage, so a failed push can be dated. The only
+  every failure it reports, a configuration refusal included, ends with a
+  dated `FAILED` line naming its stage, so a failed push can be dated. The only
   undated lines are diagnostics a child program prints while the checkout is
   fast-forwarded (#371).
 

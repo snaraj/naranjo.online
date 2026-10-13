@@ -130,7 +130,8 @@
 #     `stamped_out`) — the shell's own diagnostic about the configuration
 #     included;
 #   * every failure, configuration included, ends with a dated
-#     `FAILED stage=<stage>` line naming its stage;
+#     `FAILED stage=<stage>` line naming its stage (a run killed outright by
+#     a signal stops where it is);
 #   * the only undated lines are diagnostics a child (git, mv, mktemp, mkfifo)
 #     prints inside the fast-forward critical section (fast_forward_main and
 #     the helpers it calls), and a dated line always follows them.
@@ -392,8 +393,11 @@ update_checkout() {
         stage=repo-update
         fail "a ref moved under the update; the checkout was put back as it was found, and nothing was exported"
     fi
+    # The signal held through the update is honoured now that the checkout
+    # agrees, and like every failure it ends with a FAILED line (issue #371).
     if [ -n "$interrupted" ]; then
-        exit 1
+        stage=repo-update
+        fail "the run was stopped by a signal once the checkout agreed; nothing was exported"
     fi
     if [ "$reason" = updated ]; then
         export NARANJO_USAGE_EXPORT_REEXEC=1

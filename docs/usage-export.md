@@ -131,7 +131,8 @@ section: the recapture's and the export's summaries, the ledger's, the served
 check's, the ssh runner's and the fetch's, and the shell's own diagnostic
 when it cannot read the configuration, which is parsed and then sourced in a
 child before the run sources it. Every failure, configuration included, ends
-with a dated `FAILED stage=<stage>` line naming its stage. The only undated
+with a dated `FAILED stage=<stage>` line naming its stage; a run killed
+outright by a signal stops where it is. The only undated
 lines are diagnostics a child (git, mv, mktemp, mkfifo) prints inside that
 critical section, and a dated line always follows them. A program whose
 standard output is DATA (the capture's document, the sealed bytes, the host's
@@ -195,7 +196,8 @@ worktree are brought into agreement; where it is not, the run keeps its
 recovery material and stops. A signal that arrives from the checkout until
 the index is installed or rolled back is held, not acted on: the run first
 settles, then logs `usage-export: WARN repo-update interrupted
-signal=<HUP|INT|TERM>` and exits 1 without exporting.
+signal=<HUP|INT|TERM>` and fails (`FAILED stage=repo-update`) without
+exporting.
 
 ```
 usage-export: UPDATED exporter <old12>-><new12>
@@ -1483,7 +1485,7 @@ Every symptom below is the text AFTER the UTC instant its log line opens with.
 | `usage-export: WARN repo-update repair: main could not be read; inspect it ...` | printed with `ref-uncertain` when `main` could not be read: no command is given, because one without the expected old value would overwrite whatever `main` holds; read it with `git rev-parse refs/heads/main` and pass that value as `<that value>` |
 | `usage-export: WARN repo-update state: main is <old> (the update was aborted), ...` | printed with `index-uncertain`: the facts on disk and no command; inspect with `git status` before the next run |
 | `usage-export: FAILED ... main moved without git acknowledging the update` | the commit was sent with the index installed, git never answered, and `main` was found at the new commit; the checkout agrees with `main`, but that run exported nothing. The next run exports normally |
-| `usage-export: WARN repo-update interrupted signal=<name>` | a signal arrived during the update; the run settled it first (agreement, or a kept lock and a stop), then exited 1 without exporting |
+| `usage-export: WARN repo-update interrupted signal=<name>` | a signal arrived during the update; the run settled it first (agreement, or a kept lock and a stop), then failed with `FAILED stage=repo-update` without exporting |
 | `usage-export: WARN repo-update fetch-failed reason=<code>` | the hourly fetch failed or hit its 30-second deadline; the run continued on the tree it had |
 | `REPO_UPDATE must be ff-only or off` | the configuration names another update mode; nothing ran |
 | `install-launchd.sh --check` exits 1 | an agent is missing, runs a different checkout than `REPO_DIR` (`repo=MISMATCH`), is not loaded, or last exited non-zero |

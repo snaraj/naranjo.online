@@ -3134,6 +3134,9 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         out, err = run.communicate(timeout=120)
         self.assertEqual(run.returncode, 1, err)
         self.assertIn("usage-export: WARN repo-update interrupted signal=TERM", err)
+        # Like every failure, the honoured signal ends with a FAILED line
+        # naming its stage (issue #371).
+        self.assertRegex(err, r"usage-export: FAILED stage=repo-update elapsed=\d+s\n\Z")
         self.assertIn("usage-export: UPDATED exporter", out)
         self.assertNotIn("FIXTURE second-generation", out)
         self.assertNotIn("SUMMARY", out)
