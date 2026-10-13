@@ -235,8 +235,8 @@ fi
 # Checkout drift (issue #358). The job runs whatever commit REPO_DIR has
 # checked out, and three times it has run a tree behind what the origin
 # admits. A checkout on main tracking origin/main is moved by fast-forward
-# ONLY; a local edit the merge would touch, a diverged history, a detached
-# head or another branch is reported and left exactly as it is. A run that
+# ONLY; a local edit the fast-forward would touch, a diverged history, a
+# detached head or another branch is reported and left exactly as it is. A run that
 # moved the tree re-executes the (possibly new) script ONCE: the guard
 # variable skips this whole step in the re-executed run, so it cannot loop.
 # Runs before the scratch exists, because exec does not run the EXIT trap.
@@ -276,18 +276,114 @@ update_checkout() {
     elif [ "$ahead" -gt 0 ]; then
         reason=diverged
     else
-        old=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD)
-        # The checkout is shared, so the files the merge writes take the
-        # repository's ordinary modes, not this run's private umask.
-        if (umask 022 && git -C "$REPO_DIR" merge --ff-only --quiet refs/remotes/origin/main </dev/null >/dev/null 2>&1); then
-            echo "usage-export: UPDATED exporter $old->$(git -C "$REPO_DIR" rev-parse --short=12 HEAD)"
-            export NARANJO_USAGE_EXPORT_REEXEC=1
-            exec /bin/sh "$0"
-        fi
-        reason=merge-refused
+        fast_forward_main
     fi
     echo "usage-export: WARN DRIFT behind=$behind ahead=$ahead action=none reason=$reason" >&2
 }
+
+# The fast-forward, as ONE critical section under git's own index lock
+# (review F1). Everything read above was read before a fetch that can take
+# seconds, and another actor may have switched the checkout meanwhile; a merge
+# then advances whatever HEAD names by the time it runs. Every porcelain
+# checkout, switch, merge, reset and commit takes the index lock before it
+# touches anything, so while this job holds it nobody else can switch the
+# branch or write the index, and everything is re-read inside it. A lock that
+# already exists is another git operation in progress: the job steps aside and
+# never removes a lock it did not create.
+fast_forward_main() {
+    # The ref transaction protocol (start/prepare/commit) is what makes the
+    # advance verifiable; a git without it is told apart before any write.
+    printf 'start\nabort\n' | git -C "$REPO_DIR" update-ref --stdin >/dev/null 2>&1 \
+        || { reason=git-too-old; return 0; }
+    gitdir=$(git -C "$REPO_DIR" rev-parse --absolute-git-dir 2>/dev/null) \
+        || { reason=merge-refused; return 0; }
+    lock="$gitdir/index.lock"
+    job="$gitdir/index.job"
+    (set -C && : >"$lock") 2>/dev/null || { reason=busy; return 0; }
+    held=yes
+    trap release_index_lock EXIT
+    trap 'release_index_lock; exit 1' HUP INT TERM
+    old=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/heads/main^{commit}' || true)
+    new=$(git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' || true)
+    if [ "$(git -C "$REPO_DIR" symbolic-ref --quiet HEAD 2>/dev/null || true)" != refs/heads/main ]; then
+        reason=not-main
+    elif [ -n "$old" ] && [ "$old" = "$new" ]; then
+        reason=none
+    elif ! git -C "$REPO_DIR" merge-base --is-ancestor "$old" "$new" >/dev/null 2>&1; then
+        reason=diverged
+    # The worktree and a PRIVATE copy of the index move together, by git's
+    # own two-tree fast-forward: it refuses when a local change would be
+    # overwritten, and the real index is not touched until the ref has moved.
+    # The checkout is shared, so the files it writes take the repository's
+    # ordinary modes, not this run's private umask.
+    elif ! (umask 022 && cp "$gitdir/index" "$job" \
+        && GIT_INDEX_FILE="$job" git -C "$REPO_DIR" update-index -q --refresh \
+        && GIT_INDEX_FILE="$job" git -C "$REPO_DIR" read-tree -m -u "$old" "$new") >/dev/null 2>&1; then
+        reason=merge-refused
+    elif ! advance_main_ref "$old" "$new"; then
+        if (umask 022 && GIT_INDEX_FILE="$job" git -C "$REPO_DIR" read-tree -m -u "$new" "$old") >/dev/null 2>&1; then
+            reason=ref-moved
+        else
+            reason=rollback-failed
+        fi
+    else
+        # git's own lockfile commit: the new index replaces the lock, and the
+        # rename that installs it is the rename that releases the lock.
+        mv -f "$job" "$lock"
+        held=no
+        mv -f "$lock" "$gitdir/index"
+        trap - EXIT HUP INT TERM
+        echo "usage-export: UPDATED exporter $(git -C "$REPO_DIR" rev-parse --short=12 "$old")->$(git -C "$REPO_DIR" rev-parse --short=12 "$new")"
+        export NARANJO_USAGE_EXPORT_REEXEC=1
+        exec /bin/sh "$0"
+    fi
+    release_index_lock
+    trap - EXIT HUP INT TERM
+}
+
+# Removes the private index copy, and the lock only while it is still this
+# job's: once the new index has been renamed over it, the path is free for
+# any other actor and is never touched again.
+release_index_lock() {
+    rm -f "$job"
+    if [ "${held:-}" = yes ]; then
+        rm -f "$lock"
+        held=no
+    fi
+}
+
+# Moves main from $1 to $2 in one ref transaction that commits only while HEAD
+# provably still names main. `symref-verify HEAD refs/heads/main` cannot share
+# a transaction with an update of HEAD's own branch — git refuses "multiple
+# updates for 'HEAD'" — so the update is made THROUGH HEAD instead: prepare
+# then holds HEAD's lock and the lock of the branch HEAD names, nothing can
+# retarget HEAD until commit or abort, and HEAD is read in between. The old
+# value refuses a branch that moved since it was read.
+advance_main_ref() (
+    trap '' PIPE
+    channel=$(mktemp -d) || exit 1
+    trap 'rm -rf "$channel"' EXIT
+    trap 'exit 1' HUP INT TERM
+    mkfifo "$channel/in" "$channel/out" || exit 1
+    git -C "$REPO_DIR" update-ref -m 'usage-export: fast-forward' --stdin \
+        <"$channel/in" >"$channel/out" 2>/dev/null &
+    transaction=$!
+    exec 3>"$channel/in" 4<"$channel/out"
+    printf 'start\nupdate HEAD %s %s\nprepare\n' "$2" "$1" >&3
+    answer=abort
+    if read -r line <&4 && [ "$line" = 'start: ok' ] \
+        && read -r line <&4 && [ "$line" = 'prepare: ok' ] \
+        && [ "$(git -C "$REPO_DIR" symbolic-ref --quiet HEAD 2>/dev/null || true)" = refs/heads/main ]; then
+        answer=commit
+    fi
+    printf '%s\n' "$answer" >&3 2>/dev/null || true
+    exec 3>&-
+    line=
+    read -r line <&4 || true
+    wait "$transaction" || true
+    [ "$answer" = commit ] && [ "$line" = 'commit: ok' ]
+)
+
 if [ -z "${NARANJO_USAGE_EXPORT_REEXEC:-}" ]; then
     update_checkout
 fi

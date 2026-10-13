@@ -2139,7 +2139,54 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
     def summary_revision(self, result):
         return result.stdout.splitlines()[-1].split("exporter=")[1].split()[0]
 
+    def stand_in_fetch(self, *commands):
+        """The checkout's bounded fetch, replaced by one that fetches and then
+        runs `commands` in the checkout: another actor at work there while the
+        job waits on the network."""
+        (self.checkout / "scripts/usage-export/bounded-fetch.py").write_text(
+            "import subprocess, sys\n"
+            "subprocess.run(['git', '-C', sys.argv[1], 'fetch', '--quiet', 'origin', 'main'], check=True)\n"
+            "for command in %r:\n"
+            "    subprocess.run(['git', '-C', sys.argv[1], *command], check=True)\n" % (commands,),
+            encoding="utf-8",
+        )
+
+    def git_shim(self, mode, target=""):
+        """A `git` ahead of the real one on the job's PATH. Its one act is on
+        `update-ref`: `too-old` answers as a git without the transaction
+        protocol; the others first act as another actor would, just before
+        the job takes the index lock (`diverge`, `catch-up`) or while it holds
+        that lock and is about to move the ref (`retarget-head`, `move-main`)."""
+        write_executable(
+            self.stub_dir / "git",
+            "#!/bin/sh\n"
+            'if [ "$3" = update-ref ]; then\n'
+            '  locked=no; [ -f "$2/.git/index.lock" ] && locked=yes\n'
+            '  case "$SHIM_MODE-$locked" in\n'
+            "    too-old-*) echo 'fatal: unknown command: start' >&2; exit 128 ;;\n"
+            '    diverge-no) "$REAL_GIT" -C "$2" update-ref refs/heads/main'
+            ' "$("$REAL_GIT" -C "$2" commit-tree -p HEAD -m local "HEAD^{tree}")" ;;\n'
+            '    catch-up-no) "$REAL_GIT" -C "$2" merge --ff-only --quiet refs/remotes/origin/main ;;\n'
+            '    retarget-head-yes) "$REAL_GIT" -C "$2" symbolic-ref HEAD refs/heads/concurrent-owner-branch ;;\n'
+            '    move-main-yes) "$REAL_GIT" -C "$2" update-ref refs/heads/main "$SHIM_TARGET" ;;\n'
+            '    retarget-and-edit-yes) "$REAL_GIT" -C "$2" symbolic-ref HEAD refs/heads/concurrent-owner-branch\n'
+            '      echo edited > "$2/NOTE" ;;\n'
+            "  esac\n"
+            "fi\n"
+            'exec "$REAL_GIT" "$@"\n',
+        )
+        self.env.update(REAL_GIT=shutil.which("git"), SHIM_MODE=mode, SHIM_TARGET=target)
+
+    def assert_no_residue(self):
+        gitdir = self.checkout / ".git"
+        self.assertEqual(sorted(path.name for path in gitdir.glob("*.lock")), [])
+        self.assertEqual(sorted(path.name for path in gitdir.glob("index.*")), [])
+
     def test_a_checkout_strictly_behind_is_fast_forwarded_and_re_executed_once(self):
+        # A file touched but not changed leaves the index's stat data stale;
+        # like a merge, the fast-forward refreshes it rather than refusing.
+        an_hour_ago = time.time() - 3600
+        os.utime(self.checkout / "NOTE", (an_hour_ago, an_hour_ago))
         result = self.push()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.head(), self.second)
@@ -2155,8 +2202,13 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         # The checkout is shared: what the merge rewrites keeps the ordinary
         # mode rather than the run's private umask.
         self.assertEqual((self.checkout / "NOTE").stat().st_mode & 0o777, 0o644)
+        self.assertEqual((self.checkout / ".git/index").stat().st_mode & 0o777, 0o644)
         self.assertRegex((self.history / "repo-update.stamp").read_text(encoding="utf-8"), r"^\d+\n$")
         self.assertNotIn("DRIFT", result.stderr)
+        # The index the job installed is the one git reads: nothing staged,
+        # nothing modified, and no lock or private copy left behind.
+        self.assertEqual(self.git(self.checkout, "status", "--porcelain", "--untracked-files=no"), "")
+        self.assert_no_residue()
 
     def test_the_re_executed_run_never_updates_again(self):
         # The guard the re-exec sets: with it present the whole step is
@@ -2229,6 +2281,98 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=not-main", result.stderr)
         self.assertEqual(self.head(), self.first)
         self.assertEqual(self.git(self.checkout, "rev-parse", "--abbrev-ref", "HEAD"), "other")
+
+    def test_a_branch_switched_during_the_fetch_is_never_advanced(self):
+        # Review F1: the branch was read before the fetch, and the merge then
+        # advanced whatever HEAD named once the fetch returned.
+        self.stand_in_fetch(["checkout", "--quiet", "-b", "concurrent-owner-branch"])
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("UPDATED", result.stdout)
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=not-main", result.stderr)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "concurrent-owner-branch"), self.first)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main"), self.first)
+        self.assertEqual(self.git(self.checkout, "symbolic-ref", "HEAD"), "refs/heads/concurrent-owner-branch")
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
+        self.assertEqual(self.summary_revision(result), self.first[:12])
+        self.assert_no_residue()
+
+    def test_another_git_operation_in_progress_is_left_alone(self):
+        lock = self.checkout / ".git/index.lock"
+        lock.write_bytes(b"another operation\n")
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=busy", result.stderr)
+        self.assertNotIn("UPDATED", result.stdout)
+        # Never deleted or rewritten: it is another operation's, not the job's.
+        self.assertTrue(lock.is_file())
+        self.assertEqual(lock.read_bytes(), b"another operation\n")
+        self.assertEqual(self.head(), self.first)
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
+        self.assertFalse((self.checkout / ".git/index.job").exists())
+
+    def test_a_ref_moved_inside_the_lock_rolls_the_worktree_back(self):
+        # Plumbing takes no index lock, so it can still move HEAD or main
+        # while the job holds that lock. The ref transaction refuses, and the
+        # worktree the job had already advanced goes back to what it was.
+        # An edit made in that same window cannot be rolled back over; it is
+        # kept, and the log says the worktree is not what it was.
+        self.git(self.checkout, "branch", "concurrent-owner-branch")
+        for mode, main_after, reason, note in (
+            ("retarget-head", self.first, "ref-moved", "one\n"),
+            ("move-main", self.second, "ref-moved", "one\n"),
+            ("retarget-and-edit", self.first, "rollback-failed", "edited\n"),
+        ):
+            with self.subTest(mode=mode):
+                self.git(self.checkout, "symbolic-ref", "HEAD", "refs/heads/main")
+                self.git(self.checkout, "update-ref", "refs/heads/main", self.first)
+                self.git(self.checkout, "checkout", "--quiet", "--", "NOTE")
+                (self.history / "repo-update.stamp").unlink(missing_ok=True)
+                self.git_shim(mode, self.second)
+                result = self.push()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=%s" % reason, result.stderr)
+                self.assertNotIn("UPDATED", result.stdout)
+                self.assertEqual(self.git(self.checkout, "rev-parse", "concurrent-owner-branch"), self.first)
+                self.assertEqual(self.git(self.checkout, "rev-parse", "main"), main_after)
+                self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), note)
+                # The index is the job's untouched original, not its copy.
+                self.assertEqual(self.git(self.checkout, "rev-parse", ":NOTE"),
+                                 self.git(self.checkout, "rev-parse", self.first + ":NOTE"))
+                self.assert_no_residue()
+
+    def test_main_moved_before_the_lock_is_judged_inside_it(self):
+        # The counts above are read before the lock, so main is read again
+        # inside it: a commit made meanwhile is never thrown away, and a
+        # checkout another actor already brought current is left as it is.
+        self.git_shim("diverge")
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=diverged", result.stderr)
+        self.assertNotIn("UPDATED", result.stdout)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "main^"), self.first)
+        self.assertNotEqual(self.git(self.checkout, "rev-parse", "main"), self.second)
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
+        self.assert_no_residue()
+        self.git(self.checkout, "update-ref", "refs/heads/main", self.first)
+        self.git_shim("catch-up")
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=none", result.stderr)
+        self.assertNotIn("UPDATED", result.stdout)
+        self.assertEqual(self.head(), self.second)
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "two\n")
+        self.assert_no_residue()
+
+    def test_a_git_without_ref_transactions_changes_nothing(self):
+        self.git_shim("too-old")
+        result = self.push()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage-export: WARN DRIFT behind=1 ahead=0 action=none reason=git-too-old", result.stderr)
+        self.assertNotIn("UPDATED", result.stdout)
+        self.assertEqual(self.head(), self.first)
+        self.assertEqual((self.checkout / "NOTE").read_text(encoding="utf-8"), "one\n")
+        self.assert_no_residue()
 
     def test_the_fetch_runs_at_most_hourly_and_a_stamp_ahead_of_the_clock_is_due(self):
         self.history.mkdir()

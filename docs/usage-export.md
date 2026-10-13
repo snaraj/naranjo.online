@@ -129,19 +129,32 @@ once an hour — `scripts/usage-export/bounded-fetch.py`, the push runner's
 lifecycle with a 30-second deadline, stamped in `$HISTORY_DIR/repo-update.stamp`
 (a stamp ahead of the clock is due) — and, when strictly behind,
 fast-forwarded, after which the script re-executes once; a guard variable
-makes a second update in the same run impossible. Everything else is reported
-and left exactly as it is:
+makes a second update in the same run impossible. The fast-forward is one
+critical section under git's own index lock, taken exclusively: every
+porcelain checkout, switch, merge, reset and commit takes that lock first, so
+while the job holds it nobody else can switch the branch or write the index.
+Inside it the job re-reads HEAD and both refs — the fetch can take seconds,
+and another actor may have switched the checkout meanwhile — moves the
+worktree and a private copy of the index with git's two-tree fast-forward,
+and moves `main` in one ref transaction committed only while that transaction
+holds HEAD's lock and HEAD still names `main`. Plumbing takes no index lock,
+so a ref moved anyway refuses the transaction and the worktree is put back.
+Everything else is reported and left exactly as it is:
 
 ```
 usage-export: UPDATED exporter <old12>-><new12>
-usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<off|detached|not-main|diverged|merge-refused>
+usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<off|detached|not-main|diverged|merge-refused|busy|none|ref-moved|rollback-failed|git-too-old>
 ```
 
 Nothing stashes, resets, rebases, forces, switches a branch, or touches an
 untracked or modified file: `merge-refused` is git declining a fast-forward
-that would overwrite a local edit. `REPO_UPDATE=off` neither fetches nor
-moves; it only reports. The SUMMARY keeps naming the tree the run exported
-from.
+that would overwrite a local edit; `busy` is another git operation holding
+the index lock, which the job never removes; `none` is a checkout another
+actor brought current meanwhile; `ref-moved` is HEAD or `main` moved during
+the update, with the worktree rolled back (`rollback-failed` when even that
+was refused); `git-too-old` is a git whose `update-ref` has no transaction
+commands. `REPO_UPDATE=off` neither fetches nor moves; it only reports. The
+SUMMARY keeps naming the tree the run exported from.
 
 **The nightly snapshot.** A 5xx or a timed-out transport is retried inside the
 night's one run after fixed 30- and 120-second pauses (three attempts at most),
@@ -1213,7 +1226,7 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `usage-export: WARN served-check unavailable reason=<code>` | the check could not judge, and the push went on regardless: `no-push-state` (no verified push recorded yet, or no `HISTORY_DIR`), `state-unreadable`, `bad-site` (`SITE_URL` is not a bare https origin), `unreachable`, `timeout`, `http-<status>`, `redirected`, `host-mismatch`, `over-budget`, `malformed-envelope`, `deadline-exceeded`, `state-unwritable`, `helper-failed` |
 | `usage-export: WARN push-state unrecorded reason=<code>` | the push landed, but what it delivered could not be recorded, so the next check compares against the previous push |
 | `usage-export: UPDATED exporter <old>-><new>` | the checkout was strictly behind `origin/main` and was fast-forwarded; the run re-executed the new script once |
-| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<code>` | the checkout is behind `origin/main` and was left exactly as it is: `off` (`REPO_UPDATE=off`), `detached`, `not-main`, `diverged` (local commits), `merge-refused` (a local edit the fast-forward would overwrite). Resolve it by hand |
+| `usage-export: WARN DRIFT behind=<n> ahead=<m> action=none reason=<code>` | the checkout is behind `origin/main` and was left exactly as it is: `off` (`REPO_UPDATE=off`), `detached`, `not-main`, `diverged` (local commits), `merge-refused` (a local edit the fast-forward would overwrite), `busy` (another git operation holds the index lock; the next run tries again), `none` (already current), `ref-moved` (HEAD or `main` moved during the update; the worktree was rolled back), `rollback-failed` (it could not be), `git-too-old`. Resolve it by hand |
 | `usage-export: WARN repo-update fetch-failed reason=<code>` | the hourly fetch failed or hit its 30-second deadline; the run continued on the tree it had |
 | `REPO_UPDATE must be ff-only or off` | the configuration names another update mode; nothing ran |
 | `install-launchd.sh --check` exits 1 | an agent is missing, runs a different checkout than `REPO_DIR` (`repo=MISMATCH`), is not loaded, or last exited non-zero |
