@@ -364,8 +364,16 @@
      measures 10.1 to normal vision and the 6-7 pair 0.8 under deuteranopia
      at their worst. Those two colours are left where they are, because
      repainting a slot moves a member's colour, and the gap is recorded here
-     rather than restated as a pass. The bars on the board paint one ink
-     rather than these slots, so no reader is shown either colour today.
+     rather than restated as a pass.
+
+     What these slots are today, plainly: TOKENS THE VOCABULARY RULE REQUIRES,
+     not colours a reader sees. models.json gives every member a slot unique
+     within its group, and the swatch pin in tests/token-usage.test.mjs
+     demands a declared token in every reading mode for every slot the file
+     hands out, so a member whose slot had none could not ship. The model bars
+     on the board paint a SINGLE ink (--board-ink, .board-fill below), and no
+     component reads --usage-cat-* at all, so no reader is shown any of these
+     colours. A card that one day paints by entity reads them from here.
 
      The true dark mode is the DELIBERATE exception, exactly as its grid
      ramp is: the mode's whole design is that the brand mark stays its only

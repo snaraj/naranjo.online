@@ -781,7 +781,9 @@ WEEK_DAYS = 7
 # wire, seventy no longer did either, and it fell to fifty-six. The ceiling is
 # one number five stages agree on and is not a lever, so the window moves
 # instead — and CapParityTest measures the result rather than trusting this
-# comment.
+# comment. Since issue #369 the members are each source's OWN vendor group plus
+# the residual (model_scope), so a member added to one group costs the sources
+# of that group alone.
 MAX_MODEL_DAYS = 56
 
 # The tool's own per-day roll-up, named for what it contains. `activity_days`

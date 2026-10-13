@@ -467,29 +467,44 @@ admitted, and an oversized one was truncated, atomically installed over the
 last good file, and only then reported as a checksum mismatch.
 
 The ceiling is measured, not guessed, and the measurement has been REDONE
-five times — at the 2026-08-24 round-3 review, when a required per-source
-`capturedAt` and mandatory window and derived sections made the printed
-figures stale; again for issue #170, which added the per-model
-partition; again for issue #276, which grew the derived set to five and
-added the captured-stats section; again for issue #302, which more than
-doubled the model vocabulary; and again for issue #267, which added the
-per-model LIFETIME split and the longest-session tile. The structural maximum
-the origin can admit is one document
-covering both shipped snapshot sources, each at the 732-day series bound with
-the complete five-key category vocabulary, the complete thirteen-key model
-vocabulary over its own 56-day window, the complete seven-key captured-stats
-vocabulary, the per-model lifetime split at every member times every
-accounting class, and every required section present.
-Compact-encoded and sealed, that measures **119,664 bytes** at ten-digit daily
-values — an order of magnitude above the shipped snapshot's own measured peak
-day. 131,072 leaves **11,408 bytes** of headroom: the same maximum still seals
-to 130,058 bytes at eleven-digit values and only crosses the ceiling at twelve,
-where it reaches 140,452.
+six times. The reasons:
+
+- the 2026-08-24 round-3 review: a required per-source `capturedAt` and
+  mandatory window and derived sections made the printed figures stale;
+- issue #170 added the per-model partition;
+- issue #276 grew the derived set to five and added the captured-stats
+  section;
+- issue #302 more than doubled the model vocabulary;
+- issue #267 added the per-model LIFETIME split and the longest-session tile;
+- issue #369 scoped each source to its own vendor's models.
+
+The structural maximum the origin can admit is one document covering both
+shipped snapshot sources. Each source carries:
+
+- the 732-day series bound with the complete five-key category vocabulary;
+- every model key THAT SOURCE may carry over the 56-day model window: its
+  own vendor group's members plus the residual, the group
+  `internal/panels/config/sources.json` binds it to;
+- the complete seven-key captured-stats vocabulary;
+- the per-model lifetime split for each of those members times every
+  accounting class;
+- every required section.
+
+Compact-encoded and sealed, that measures **112,642 bytes** at ten-digit daily
+values, an order of magnitude above the shipped snapshot's own measured peak
+day. 131,072 leaves **18,430 bytes** of headroom. The same maximum still seals
+to 122,487 bytes at eleven-digit values and only crosses the ceiling at twelve,
+where it reaches 132,332.
 
 The models section spent one decimal digit of the original headroom — it was
-three before #170 — and the sixth model member (issue #299) spent the second:
-every member costs one integer per window day on every source, so a member is
-a measured decision, not a free edit. Issue #302 paid that price the other
+three before #170 — and the sixth model member (issue #299) spent the second.
+Every member costs one integer per window day on each source of its OWN vendor
+group, so a member is a measured decision, not a free edit. Issue #369 is the
+first time that phrase was "its own group" rather than "every source". With
+four Anthropic members added, every member on every source would have sealed to
+135,028 bytes at eleven digits, over the ceiling. Scoping each source to its own
+vendor (the capture folds, and the exporter, the origin and the page refuse)
+paid for them without moving the window. Issue #302 paid that price the other
 way round. Seven named members joined at once, which at the old 92-day window
 put the eleven-digit maximum over the ceiling; the ceiling is one number five
 stages agree on and moving it would move all five, so the WINDOW was cut to
@@ -549,8 +564,8 @@ is the ONLY place a model key, a written name, a palette slot, a vendor group
 or a raw model identifier is spelled, and
 `internal/panels/config/sources.json` (`usage-sources/v1`) is the ONLY place a
 reporting tool's key and written name are. The origin embeds both,
-`capture_usage_series.py` reads the model file from the repository beside
-itself, and the page imports both at build time;
+`capture_usage_series.py` reads both from the repository beside itself, and
+the page imports both at build time;
 before this the model vocabulary was three hand-kept tables held together by a
 regex test that compared them, and adding a model meant editing three files in
 step. Adding a
@@ -567,7 +582,14 @@ graph, and the model-vocabulary GROUP the source belongs to. Keys are
 label-shaped and unique, names are non-empty, bounded and unique — two
 sources that rendered identically would be a defect nobody could see — and
 every vendor must be a group the model file declares, so the two files cannot
-come to disagree about who exists. The ORIGIN reads none of the names: it
+come to disagree about who exists. The group is also a RULE (issue #369): a
+source's model keys are its own group's members plus the residual. The capture
+folds an identifier the vocabulary names for another group to the residual and
+counts it as `cross_group` on its summary line, beside `unattributed`. A merge
+file, a pushed document or a served payload naming another group's member
+under a source is refused by the exporter, the origin and the page alike. A
+source the file does not declare belongs to no group and may carry only the
+residual. The ORIGIN reads none of the names: it
 validates the file at init and a test proves every snapshot and fetch-config
 source label is a key of it, so a push can never name a source the page has no
 written name for. Printing the name is the page's job, from the same bytes.

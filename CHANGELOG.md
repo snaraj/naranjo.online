@@ -7,6 +7,36 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.93] - 2026-10-13
+
+### Fixed
+
+- The Claude Code model split names Opus 5.5, Mythos 5.1, Haiku 5.5 and
+  Sonnet 5.5. They were folded into the residual `other` row, which the card
+  drops before computing shares, so every named share was overstated. With
+  `other` no longer swallowing Opus 5.5 and the others, the Claude Code
+  shares are correct. They are recomputed from the tool's own per-model
+  accounting on the first export after deploy. A day the history store
+  remembers but no transcript or cache still holds keeps its old split in
+  the daily window (#369).
+
+### Changed
+
+- Each tool's data carries only its own vendor's models: the Claude Code
+  split names Anthropic models and the Codex split OpenAI models, plus the
+  residual. The binding is the vendor `internal/panels/config/sources.json`
+  declares for each source. The exporter folds another vendor's model into
+  the residual and counts it (`cross_group`), and the origin and the page
+  refuse one. This is what lets the four models fit the payload ceiling. The
+  largest admissible document is now measured per source group: 122,487
+  bytes at eleven digits against 131,072. Measured as every model on every
+  source it would be 135,028, so the eight-week model window stays. No wire
+  shape changes: absent models were always admissible (#369).
+- The entity palette gains slots 8 and 9, an orchid and a cyan (two greys in
+  the true dark mode), in every reading mode, because the Anthropic group now
+  declares nine members. The slots are tokens the vocabulary rule requires;
+  the model bars still paint one ink (#369).
+
 ## [0.1.92] - 2026-10-12
 
 ### Security

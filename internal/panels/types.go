@@ -2131,9 +2131,10 @@ const (
 	// top of the range a file at exactly this ceiling can therefore still be
 	// refused at serve time by the envelope's own bytes. That is refusal,
 	// not truncation, and the measured maxima sit below it: the maximal
-	// admissible document seals to 103,633 bytes and serves at 104,508, and
+	// admissible document seals to 103,844 bytes and serves at 105,091, and
 	// the structural maximum CapParityTest builds from the shipped
-	// vocabularies seals to 109,280.
+	// vocabularies, each source scoped to its own vendor group (issue #369),
+	// seals to 112,642.
 	maxSealedSeriesBytes = 128 << 10
 
 	// dataRootFutureSkew is how far ahead of the local clock a series
@@ -2171,7 +2172,9 @@ const (
 	// lifetime split joined the wire, seventy no longer did either, and it
 	// fell to fifty-six. The ceiling itself is not a lever — it is one number
 	// five stages agree on — so the WINDOW moves instead, and CapParityTest
-	// measures the result rather than trusting this comment.
+	// measures the result rather than trusting this comment. Since issue #369
+	// the members are each source's OWN vendor group plus the residual, so a
+	// member added to one group costs the sources of that group alone.
 	//
 	// The categories breakdown has no separate day bound: it answers to
 	// maxSeriesDays like the series it partitions, because it costs the same
