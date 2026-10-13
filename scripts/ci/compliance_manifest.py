@@ -156,9 +156,14 @@ QUOTED = {
 }
 REGEX_LITERAL = re.compile(r"/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n\[])+/")
 # A `/` starts a regular expression where an operand may begin: after one of
-# these characters, after one of these words, or at the very start.
-REGEX_AFTER = frozenset("(,=:[!&|?{};+-*%<>~^")
-REGEX_AFTER_WORDS = frozenset("return typeof case do else in of new delete void throw instanceof yield await".split())
+# these characters, after one of these words, or at the very start. After a
+# name, a property (whatever it is called), a number, `]` or a closing quote
+# it divides. After `)`, `}`, `++`, `--` or `of`, or a `!` that follows one of
+# them, it can do either, and only a parser knows which, so `storage_writes`
+# reads the file both ways.
+REGEX_AFTER = frozenset("(,=:[!&|?{;+-*%<>~^")
+REGEX_AFTER_WORDS = frozenset("return typeof case do else in new delete void throw instanceof yield await".split())
+OPERAND_OR_KEYWORD = frozenset(("of",))
 SVELTE_ELEMENT = re.compile(r"<(script|style)\b[^>]*>", re.IGNORECASE)
 HSTS_FLOOR_SECONDS = 31_536_000
 REFERRER_POLICIES = {"no-referrer", "same-origin", "strict-origin", "strict-origin-when-cross-origin"}
@@ -344,6 +349,13 @@ def storage_writes(source_root: Path) -> tuple[dict[tuple[str, str], str], list[
     else is refused. Only code counts (`code_only`): reads, literals however
     write-shaped, comments, markup and test files are not writes, so none of
     them keeps a declaration alive.
+
+    Each file is read twice, every ambiguous `/` taken first as a division
+    and then as a regular expression. The file counts only when both
+    readings find the same writes and refusals and neither meets more than
+    one ambiguous `/` that could open a regular expression: with one, the
+    real reading is one of the two; with more, it can be a mix of them that
+    neither shows. Otherwise the file is refused until it is rewritten.
     """
     writes: dict[tuple[str, str], str] = {}
     unread: list[str] = []
@@ -354,37 +366,65 @@ def storage_writes(source_root: Path) -> tuple[dict[tuple[str, str], str], list[
             continue
         where = path.relative_to(source_root).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
-        code = code_only(text, svelte=path.suffix == ".svelte")
-        for match in COOKIE_WRITE.finditer(code):
-            name = COOKIE_NAME.match(text, match.end())
-            if name:
-                writes.setdefault(("cookie", name.group(1)), where)
-        # A store is named by code, not by a sentence or a string about it.
-        stores = set(STORE_NAME.findall(code))
-        for match in STORE_WRITE.finditer(code):
-            receiver, literal, identifier = match.group(1), match.group(2), match.group(4)
-            if literal is not None:
-                literal = text[match.start(2) + 1 : match.end(2) - 1]
-            elif identifier is not None:
-                bound = re.search(BOUND_CONSTANT.format(re.escape(identifier)), code)
-                literal = text[bound.start(1) + 1 : bound.end(1) - 1] if bound else None
-            if not literal or "${" in literal:
-                literal = None
-            kinds = {receiver} if receiver else stores
-            if literal is None or not kinds:
-                missing = "key this gate cannot read" if literal is None else "storage this gate cannot name"
-                unread.append(f"frontend/src/{where} makes a storage write whose {missing} "
-                              f"({text[match.start() : match.end()]!r}); "
-                              "write it with a literal key, or a constant bound to one, on a named store")
-                continue
-            for kind in kinds:
-                writes.setdefault((kind, literal), where)
+        (found, refused, slashes), (other, other_refused, other_slashes) = (
+            file_writes(text, where, path.suffix == ".svelte", regex) for regex in (False, True)
+        )
+        if (found, refused) != (other, other_refused) or max(len(slashes), len(other_slashes)) > 1:
+            lines = ", ".join(str(text.count("\n", 0, at) + 1) for at in sorted(set(slashes + other_slashes)))
+            unread.append(
+                f"frontend/src/{where}: the storage scan cannot tell whether the `/` on line {lines} divides or "
+                "opens a regular expression (after `)`, `}`, `++`, `--` or `of`, or a `!` that follows one, it "
+                "can do either), and what this file writes may depend on it, so its writes are not counted; "
+                "write it unambiguously, for example by wrapping a regular expression in parentheses or putting "
+                "a division's operands in variables"
+            )
+            continue
+        for key, value in found.items():
+            writes.setdefault(key, value)
+        unread.extend(refused)
     return writes, unread
 
 
-def code_only(text: str, svelte: bool = False) -> str:
+def file_writes(
+    text: str, where: str, svelte: bool, ambiguous_regex: bool
+) -> tuple[dict[tuple[str, str], str], list[str], list[int]]:
+    """One reading of one file: its writes, its refusals, and its ambiguous slashes."""
+    writes: dict[tuple[str, str], str] = {}
+    unread: list[str] = []
+    code, slashes = code_only(text, svelte, ambiguous_regex)
+    for match in COOKIE_WRITE.finditer(code):
+        name = COOKIE_NAME.match(text, match.end())
+        if name:
+            writes.setdefault(("cookie", name.group(1)), where)
+    # A store is named by code, not by a sentence or a string about it.
+    stores = set(STORE_NAME.findall(code))
+    for match in STORE_WRITE.finditer(code):
+        receiver, literal, identifier = match.group(1), match.group(2), match.group(4)
+        if literal is not None:
+            literal = text[match.start(2) + 1 : match.end(2) - 1]
+        elif identifier is not None:
+            bound = re.search(BOUND_CONSTANT.format(re.escape(identifier)), code)
+            literal = text[bound.start(1) + 1 : bound.end(1) - 1] if bound else None
+        if not literal or "${" in literal:
+            literal = None
+        kinds = {receiver} if receiver else stores
+        if literal is None or not kinds:
+            missing = "key this gate cannot read" if literal is None else "storage this gate cannot name"
+            unread.append(f"frontend/src/{where} makes a storage write whose {missing} "
+                          f"({text[match.start() : match.end()]!r}); "
+                          "write it with a literal key, or a constant bound to one, on a named store")
+            continue
+        for kind in kinds:
+            writes.setdefault((kind, literal), where)
+    return writes, unread, slashes
+
+
+def code_only(text: str, svelte: bool = False, ambiguous_regex: bool = False) -> tuple[str, list[int]]:
     """`text` with every comment, and the contents of every string, template
-    and regular-expression literal, blanked to spaces.
+    and regular-expression literal, blanked to spaces; and the offset of
+    every ambiguous `/` (see REGEX_AFTER) that could open a
+    regular expression, which this reading takes as one when
+    `ambiguous_regex` is set and as a division otherwise.
 
     Delimiters, newlines and the code inside a template's `${...}` are kept, so
     an offset here is the same offset in `text`. In a Svelte component only
@@ -393,6 +433,7 @@ def code_only(text: str, svelte: bool = False) -> str:
     open a string that hides the code after it.
     """
     out = list(text)
+    ambiguous: list[int] = []
 
     def blank(start: int, end: int) -> None:
         for at in range(start, end):
@@ -405,19 +446,39 @@ def code_only(text: str, svelte: bool = False) -> str:
         blank(at, close)
         return close
 
-    def regex_or_division(at: int, end: int) -> int:
+    def ends_operand(at: int) -> bool | None:
+        """Whether the code before `at` ends an operand, begins one, or None: either."""
         before = at - 1
         while before >= 0 and out[before].isspace():
             before -= 1
+        if before < 0:
+            return False
         word = before
         while word >= 0 and (out[word].isalnum() or out[word] in "_$"):
             word -= 1
-        previous = "".join(out[word + 1 : before + 1]) or (out[before] if before >= 0 else "")
-        if previous and previous not in REGEX_AFTER and previous not in REGEX_AFTER_WORDS:
-            return at + 1  # division
+        name = "".join(out[word + 1 : before + 1])
+        if name:
+            dot = word
+            while dot >= 0 and out[dot].isspace():
+                dot -= 1
+            if dot >= 0 and out[dot] == ".":
+                return True  # a property, whatever it is called
+            return None if name in OPERAND_OR_KEYWORD else name not in REGEX_AFTER_WORDS
+        last = out[before]
+        if last in ")}" or (before > 0 and out[before - 1] + last in ("++", "--")):
+            return None
+        if last == "!":
+            return ends_operand(before)  # `x!` asserts non-null; `!x` negates
+        return last not in REGEX_AFTER
+
+    def regex_or_division(at: int, end: int) -> int:
         literal = REGEX_LITERAL.match(text, at, end)
-        if literal is None:
-            return at + 1
+        ends = ends_operand(at)
+        if ends is None and literal is not None:
+            ambiguous.append(at)
+        regex = ambiguous_regex if ends is None else not ends
+        if not regex or literal is None:
+            return at + 1  # division
         blank(at + 1, literal.end() - 1)
         return literal.end()
 
@@ -501,7 +562,7 @@ def code_only(text: str, svelte: bool = False) -> str:
         markup(0, len(text))
     else:
         scan(0, len(text), nested=False)
-    return "".join(out)
+    return "".join(out), ambiguous
 
 
 # ----------------------------------------------------------------- live mode

@@ -409,6 +409,100 @@ class ValidateTests(unittest.TestCase):
         self.assertTrue(any("cookie 'theme', which no file" in r for r in refusals), refusals)
         self.assertTrue(any("localStorage 'width', which no file" in r for r in refusals), refusals)
 
+    # A script file, a component's script, and a component's markup expression.
+    PLACES = (
+        ("probe.js", "", "\n"),
+        ("Probe.svelte", "<script>\n", "\n</script>\n"),
+        ("Handler.svelte", "<button onclick={() => {\n", "\n}}>x</button>\n"),
+    )
+
+    def ambiguous(self, name: str, refusals: list[str]) -> bool:
+        return any(f"frontend/src/{name}: the storage scan cannot tell whether the `/`" in r for r in refusals)
+
+    def test_a_slash_that_can_divide_or_open_a_regex_refuses_when_the_reading_matters(self) -> None:
+        # After `)`, `}`, `++`, `--` or `of` a `/` can divide or open a regular
+        # expression; only a parser knows which. Each file is read both ways,
+        # and a file whose writes depend on the reading is refused.
+        for line in (
+            # The review's: a division read as a regex hides a write, and a
+            # regex read as a division opens a string that hides one.
+            "const a = {} / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            "if (true) /'/.test('x'); localStorage.setItem('undeclared','1');",
+            # The same after a block, and after a postfix increment or decrement.
+            "{}\n/'/.test('x'); localStorage.setItem('undeclared', '1');",
+            "let i = 0; const a = i++ / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            "let i = 0; const a = i-- / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            # The readings differ only in a key neither can read.
+            "const a = {} / 2; localStorage.setItem(key, '1'); const b = 3 / 4;",
+            # Read all one way or all the other, neither finds the write; the
+            # mixed reading, which is the real one, does. Each reading meets
+            # two such slashes in one of these, and only one in the other.
+            "if (x) /`/.test(s);\nconst a = {} / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            "for (const k of (a) / (b)) /'/.test(k); localStorage.setItem('undeclared', '1');",
+            # `of` is a name as often as it is a keyword, and `)!` can end a
+            # call TypeScript asserts non-null or begin a negated regex.
+            "const of = 4; const a = of / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            "const a = f()! / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+        ):
+            for name, before, after in self.PLACES:
+                with self.subTest(place=name, line=line):
+                    (self.source / name).write_text(before + line + after)
+                    refusals = self.refusals(manifest())
+                    self.assertTrue(self.ambiguous(name, refusals), refusals)
+                    (self.source / name).unlink()
+        # The review's third: no write executes, so nothing it holds keeps a
+        # declaration alive.
+        (self.source / "theme.ts").write_text("export {};\n")
+        for name, before, after in self.PLACES:
+            with self.subTest(place=name):
+                (self.source / name).write_text(
+                    before + "if (true) /document.cookie = 'theme=1'; localStorage.setItem('width', value)/.test('x');" + after
+                )
+                refusals = self.refusals(manifest())
+                self.assertTrue(self.ambiguous(name, refusals), refusals)
+                self.assertTrue(any("cookie 'theme', which no file" in r for r in refusals), refusals)
+                self.assertTrue(any("localStorage 'width', which no file" in r for r in refusals), refusals)
+                (self.source / name).unlink()
+
+    def test_a_division_after_a_property_or_a_non_null_assertion_hides_no_write(self) -> None:
+        # A property may be called anything, and TypeScript's `x!` ends an
+        # operand where `!x` begins one: each `/` here can only divide.
+        for line in (
+            "const a = map.delete / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            "const a = map. delete / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+            "const a = el.offsetWidth! / 2; localStorage.setItem('undeclared', '1'); const b = 3 / 4;",
+        ):
+            for name, before, after in self.PLACES:
+                with self.subTest(place=name, line=line):
+                    (self.source / name).write_text(before + line + after)
+                    refusals = self.refusals(manifest())
+                    self.assertTrue(any(f"{name} writes localStorage 'undeclared'" in r for r in refusals), refusals)
+                    self.assertFalse(self.ambiguous(name, refusals), refusals)
+                    (self.source / name).unlink()
+
+    def test_a_slash_whose_reading_changes_nothing_passes(self) -> None:
+        # The fixture's theme.ts writes only the cookie here, so each case
+        # passes only if its own width write is found.
+        (self.source / "theme.ts").write_text("document.cookie = 'theme=' + id;\n")
+        for line in (
+            # No regular expression can start there, so both readings are one.
+            "const o = {} / 2;\nconst m = (a + b) / 2;\nlet i = 0; const n = i++ / 2;\n"
+            "window.localStorage.setItem('width', v);",
+            # One can, and both readings find the same write after it.
+            "const c = (a - b) / 2 - w / 2; window.localStorage.setItem('width', v);",
+            # A regular expression made unambiguous, after a negation, after a
+            # keyword, or at the very start, then a write.
+            "if (true) (/'/).test('x'); window.localStorage.setItem('width', v);",
+            "if (!/'/.test(s)) window.localStorage.setItem('width', v);",
+            "function f(s) { return /'/.test(s); } window.localStorage.setItem('width', v);",
+            "/'/.test(s); window.localStorage.setItem('width', v);",
+        ):
+            for name, before, after in self.PLACES:
+                with self.subTest(place=name, line=line):
+                    (self.source / name).write_text(before + line + after)
+                    self.assertEqual(self.refusals(manifest()), [])
+                    (self.source / name).unlink()
+
     def test_an_undeclared_write_is_refused_with_its_lift(self) -> None:
         with (self.source / "theme.ts").open("a") as source:
             source.write("window.sessionStorage.setItem('draft', v);\ndocument.cookie = 'seen=1';\n")
