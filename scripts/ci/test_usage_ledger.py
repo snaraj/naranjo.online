@@ -295,6 +295,22 @@ class AppendRuleTest(LedgerTestCase):
             with self.subTest(field=field, bad=bad), self.assertRaises(ledger.LedgerError):
                 self.session_block_rows(entries)
 
+    def test_a_member_the_merge_would_hide_is_refused_on_its_own(self):
+        # Each member alone never reaches the record, so it does not merged
+        # either: summing would absorb a negative count into a positive one,
+        # and the other member's later end would cover an earlier or
+        # malformed one.
+        for field, bad in (("total", -100), ("categories", {"input": -100, "output": 200}),
+                           ("endedAt", "2026-09-10T08:30:00Z"), ("endedAt", "2026-09-10T09:30:00+00:00")):
+            for member in (0, 1):
+                entries = self.collided()
+                entries[member][field] = bad
+                for given in ([entries[member]], entries):
+                    with self.subTest(field=field, bad=bad, member=member, merged=len(given) > 1):
+                        with self.assertRaises(ledger.LedgerError):
+                            self.append(*self.session_block_rows(given), stream="sessions")
+        self.assertFalse((self.ledger / "sessions").exists())
+
     def test_the_window_is_the_sessions_stream_alone(self):
         # A day's running usage figure is not a session and is never deferred.
         first = row(capturedAt="2026-09-10T10:00:00Z", value=10)

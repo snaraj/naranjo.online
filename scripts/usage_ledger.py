@@ -348,7 +348,9 @@ def make_row(
     builds is handed to: the same admission the reader applies to a line it
     did not write, so a rule can never hold on read and not on write. A second
     admission here was decorative — no input told it apart from the one
-    downstream (PR #312 review, finding 5).
+    downstream (PR #312 review, finding 5). Session entries are also admitted
+    one by one before session_rows merges them, because a merged row no
+    longer shows its members.
     """
     row = {
         "schema": SCHEMA,
@@ -1110,79 +1112,66 @@ def merge_sessions(entries):
 
 
 def session_rows(key, entries, stamp, exporter, digest):
-    """One row per session, identified by the instant it began."""
+    """One row per session, identified by the instant it began.
+
+    Every entry is admitted as its own row first, on exactly the terms an
+    entry that shares its start with nothing is, and only then are entries
+    sharing a start merged. A merge sums counts and keeps the latest end, so a
+    negative count or a backwards or malformed end in one member would
+    otherwise vanish into a merged row that looks valid.
+    """
     if not isinstance(entries, list):
         raise LedgerError("a capture ledger block carries a malformed session list")
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != {
-            "startedAt",
-            "endedAt",
-            "total",
-            "categories",
-            "models",
-        }:
-            raise LedgerError("a capture ledger block carries a malformed session")
-        # Merging adds totals and orders instants, so the types it touches are
-        # held before it runs; bounds and vocabularies are admit_row's, after.
-        if (
-            not isinstance(entry["startedAt"], str)
-            or not isinstance(entry["endedAt"], str)
-            or not isinstance(entry["models"], list)
-            or not all(isinstance(model, str) for model in entry["models"])
-            or not isinstance(entry["categories"], dict)
-            or not all(
-                type(count) is int for count in [entry["total"], *entry["categories"].values()]
-            )
-        ):
-            raise LedgerError("a capture ledger block carries a malformed session")
-    rows = []
-    for entry in merge_sessions(entries):
-        if not isinstance(entry, dict) or set(entry) != {
-            "startedAt",
-            "endedAt",
-            "total",
-            "categories",
-            "models",
-        }:
-            raise LedgerError("a capture ledger block carries a malformed session")
-        started = entry["startedAt"]
-        ended = entry["endedAt"]
-        if not valid_instant(started) or not valid_instant(ended):
-            raise LedgerError("a capture ledger block carries a malformed session instant")
-        began = datetime.datetime.strptime(started, INSTANT_FORMAT).replace(
-            tzinfo=datetime.timezone.utc
-        )
-        finished = datetime.datetime.strptime(ended, INSTANT_FORMAT).replace(
-            tzinfo=datetime.timezone.utc
-        )
-        seconds = int((finished - began).total_seconds())
-        if seconds < 0:
-            raise LedgerError("a capture ledger block carries a session that ends before it starts")
-        rows.append(
-            make_row(
-                # The day a session belongs to is the LOCAL day it began, the
-                # same clock every other day in this pipeline is bucketed by.
-                began.astimezone().date().isoformat(),
-                STREAM_SESSIONS,
-                key,
-                KIND_SESSION,
-                started,
-                seconds,
-                UNIT_SECONDS,
-                stamp,
-                METHOD_CAPTURE,
-                exporter,
-                digest,
-                extra={
-                    "startedAt": started,
-                    "endedAt": ended,
-                    "total": entry["total"],
-                    "categories": entry["categories"],
-                    "models": entry["models"],
-                },
-            )
-        )
-    return rows
+        admit_row(session_row(key, entry, stamp, exporter, digest), STREAM_SESSIONS)
+    return [session_row(key, entry, stamp, exporter, digest) for entry in merge_sessions(entries)]
+
+
+def session_row(key, entry, stamp, exporter, digest):
+    """One session entry as its row; bounds and vocabularies are admit_row's."""
+    if not isinstance(entry, dict) or set(entry) != {
+        "startedAt",
+        "endedAt",
+        "total",
+        "categories",
+        "models",
+    }:
+        raise LedgerError("a capture ledger block carries a malformed session")
+    started = entry["startedAt"]
+    ended = entry["endedAt"]
+    if not valid_instant(started) or not valid_instant(ended):
+        raise LedgerError("a capture ledger block carries a malformed session instant")
+    began = datetime.datetime.strptime(started, INSTANT_FORMAT).replace(
+        tzinfo=datetime.timezone.utc
+    )
+    finished = datetime.datetime.strptime(ended, INSTANT_FORMAT).replace(
+        tzinfo=datetime.timezone.utc
+    )
+    seconds = int((finished - began).total_seconds())
+    if seconds < 0:
+        raise LedgerError("a capture ledger block carries a session that ends before it starts")
+    return make_row(
+        # The day a session belongs to is the LOCAL day it began, the
+        # same clock every other day in this pipeline is bucketed by.
+        began.astimezone().date().isoformat(),
+        STREAM_SESSIONS,
+        key,
+        KIND_SESSION,
+        started,
+        seconds,
+        UNIT_SECONDS,
+        stamp,
+        METHOD_CAPTURE,
+        exporter,
+        digest,
+        extra={
+            "startedAt": started,
+            "endedAt": ended,
+            "total": entry["total"],
+            "categories": entry["categories"],
+            "models": entry["models"],
+        },
+    )
 
 
 def store_rows(key, history_dir, stamp, exporter):
