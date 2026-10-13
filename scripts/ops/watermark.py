@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -174,8 +175,9 @@ def parse(argv: list[str]) -> argparse.Namespace:
     for name in ("fill", "shadow"):
         if not 0 < getattr(arguments, name) <= 1:
             parser.error(f"--{name} is an opacity in (0, 1]")
-    if arguments.size <= 0 or arguments.row <= 0 or arguments.gap < 0:
-        parser.error("--size and --row must be positive and --gap non-negative")
+    # Chained comparisons are false for NaN, so it is refused with infinity.
+    if not (0 < arguments.size < math.inf and 0 < arguments.row < math.inf and 0 <= arguments.gap < math.inf):
+        parser.error("--size and --row must be positive and --gap non-negative, all finite")
     return arguments
 
 

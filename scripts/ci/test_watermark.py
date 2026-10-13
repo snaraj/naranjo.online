@@ -15,6 +15,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import math
 import os
 import pathlib
 import shutil
@@ -81,6 +82,55 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(command.count("rgba(0,0,0,0.07)"), 4)
         self.assertEqual(command[:2], ["-size", "700x134"])
         self.assertEqual(command[-1], "t.png")
+
+    def test_each_row_sits_mid_band_staggered_and_wraps_one_period_left(self):
+        # A 700 x 400 tile is two 200 px bands, offsets measured from its top
+        # left. Row one sits half a band down at the left edge; row two half a
+        # band into the lower band, half a period right. Each is drawn again
+        # one period left, so text running off the right edge re-enters on the
+        # left, and every white draw lies over a shadow 2 px down-right.
+        command = watermark.tile_command("t.png", "credit", "f.ttf", 23.0, 700, 200, 2, 0.22, 0.07)
+        self.assertEqual(command[:9], ["-size", "700x400", "xc:none", "-font", "f.ttf",
+                                       "-pointsize", "23.00", "-gravity", "NorthWest"])
+        draws = [(command[at - 1], command[at + 1], command[at + 2])
+                 for at, argument in enumerate(command) if argument == "-annotate"]
+        shadow, white = "rgba(0,0,0,0.07)", "rgba(255,255,255,0.22)"
+        self.assertEqual(draws, [
+            (shadow, "+2+102", "credit"), (white, "+0+100", "credit"),
+            (shadow, "-698+102", "credit"), (white, "-700+100", "credit"),
+            (shadow, "+352+302", "credit"), (white, "+350+300", "credit"),
+            (shadow, "-348+302", "credit"), (white, "-350+300", "credit"),
+        ])
+
+
+class ArgumentTests(unittest.TestCase):
+    def accepts(self, *extra):
+        try:
+            with redirect_stderr(io.StringIO()):
+                watermark.parse(["in.png", "out.png", *extra])
+        except SystemExit:
+            return False
+        return True
+
+    def test_each_numeric_argument_is_refused_just_past_its_boundary(self):
+        # Each refused value beside the nearest one accepted. Non-finite
+        # values are refused too: NaN compares false with everything, so a
+        # bare `<= 0` admits it, and a NaN size marks at the floor size.
+        least = repr(math.nextafter(0.0, 1.0))
+        cases = {
+            "--size": (("0", "-1", "nan", "inf"), (least, "23")),
+            "--row": (("0", "-1", "nan", "inf"), (least, "200")),
+            "--gap": ((repr(math.nextafter(0.0, -1.0)), "-1", "nan", "inf"), ("0", "0.4")),
+            "--fill": (("0", repr(math.nextafter(1.0, 2.0)), "nan"), (least, "1")),
+            "--shadow": (("0", repr(math.nextafter(1.0, 2.0)), "nan"), (least, "1")),
+        }
+        for flag, (refused, accepted) in cases.items():
+            for value in refused:
+                with self.subTest(flag=flag, value=value):
+                    self.assertFalse(self.accepts(flag, value))
+            for value in accepted:
+                with self.subTest(flag=flag, value=value):
+                    self.assertTrue(self.accepts(flag, value))
 
 
 class CreditTests(unittest.TestCase):
