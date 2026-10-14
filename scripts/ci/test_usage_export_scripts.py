@@ -50,6 +50,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -159,6 +160,24 @@ def run_script(script, args=(), env=None, cwd=None):
         # block the whole suite on the test runner's own terminal.
         stdin=subprocess.DEVNULL,
     )
+
+
+# The UTC instant every line the push run writes to its logs opens with
+# (issue #371), and one space before the line's own tokens.
+LOG_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z ")
+
+
+def unstamped(text):
+    """The run's log text with each line's opening UTC instant removed.
+
+    The tests that read a log line's TOKENS read them through here, so a
+    reason, a stage name or a SUMMARY field is asserted exactly as before.
+    Whether every line carries the instant at all is its own pin in
+    LogRotationTest, run the way the agent runs, because a fixture may inject
+    an unstamped line of its own into a script copy and this reader has to
+    tolerate that.
+    """
+    return "".join(LOG_STAMP.sub("", line, count=1) for line in text.splitlines(keepends=True))
 
 
 # The fixture record's calendar day, named once so a test that needs a day
@@ -636,7 +655,7 @@ class PushTransportHardeningTest(PushFixture, unittest.TestCase):
         self.write_config(MERGE_CAPTURES="beta=messages=%s" % second)
         result = run_script(PUSH, env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        lines = result.stdout.splitlines()
+        lines = unstamped(result.stdout).splitlines()
         self.assertEqual(
             [line for line in lines if line.startswith("usage-export: START ")],
             [
@@ -808,8 +827,19 @@ class PushTransportHardeningTest(PushFixture, unittest.TestCase):
             self.assertTrue(any(line.startswith("[ -f ") for line in invocations))
             run_line = [line for line in invocations if not line.startswith("[ -f ")][0]
             self.assertIn("python3", run_line)
+        # Each walker starts through `stamped` (issue #371), which only
+        # stamps what the program writes to stderr: its body must run the
+        # command it is handed exactly as handed, or the wrapper would be a
+        # place to swap the sandboxed command for an unconfined one.
+        wrapper = required_match(
+            r"\nstamped\(\) \{\n(.*?)\n\}\n", source, "the push script defines no stamped()", re.S
+        ).group(1)
+        self.assertIn('{ "$@" 2>&1 1>&3 3>&- 4>&- && echo 0 >&4 || echo $? >&4; }', wrapper)
+        self.assertEqual(wrapper.count('"$@"'), 1, wrapper)
         sandbox_lines = [
-            line for line in lines if line.strip().startswith("sandbox-exec ")
+            line
+            for line in lines
+            if line.strip().removeprefix("stamped ").startswith("sandbox-exec ")
         ]
         # One per walker, and each one carrying the profile: a count alone
         # would pass if both lines started the same program.
@@ -826,12 +856,12 @@ class PushTransportHardeningTest(PushFixture, unittest.TestCase):
         for helper, assignment in (
             ('python3 -I -B "$PUSH_WATCHDOG" ssh -F /dev/null \\',
              'PUSH_WATCHDOG="$REPO_DIR/scripts/usage-export/bounded-ssh.py"'),
-            ('GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true',
+            ('stamped env GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true',
              'REPO_FETCH="$REPO_DIR/scripts/usage-export/bounded-fetch.py"'),
-            ('python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state '
+            ('stamped stamped_out python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state '
              '"${HISTORY_DIR:+$HISTORY_DIR/push-state.json}" --exporter "$exporter_revision" </dev/null \\',
              'SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"'),
-            ('python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" '
+            ('stamped python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" '
              '--document "$PLAIN" --sha256 "$local_sum" </dev/null \\',
              'SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"'),
         ):
@@ -1632,7 +1662,7 @@ class LogRotationTest(PushFixture, unittest.TestCase):
         # its stream on the fresh path.
         self.assertEqual((logs / "usage-export.log.1").stat().st_ino, inode)
         self.assertEqual((logs / "usage-export.log.1").read_bytes(), old_out)
-        fresh = (logs / "usage-export.log").read_text(encoding="utf-8")
+        fresh = unstamped((logs / "usage-export.log").read_text(encoding="utf-8"))
         self.assertTrue(fresh.startswith("usage-export: START export\n"), fresh[:80])
         self.assertIn("usage-export: SUMMARY pushed=", fresh)
         # Exactly at the bound is not past it.
@@ -1647,6 +1677,378 @@ class LogRotationTest(PushFixture, unittest.TestCase):
         self.assertIn("coverage alpha=", (logs / "usage-export.err.log").read_text(encoding="utf-8"))
         self.assertFalse((logs / "usage-export.log.1").exists())
         self.assertTrue((logs / "usage-export.log").read_text(encoding="utf-8").startswith("small\n"))
+
+    def test_every_line_written_to_either_log_opens_with_a_utc_instant(self):
+        # Issue #371: the push failures of 2026-10-13 could not be dated from
+        # the log. Every line the run writes to the agent's two log files —
+        # its own, the recapture's, the export's and the ledger's summaries,
+        # and the served check's — opens with the instant it was written.
+        logs = self.logs(b"", b"")
+        history = self.scratch / "history"
+        second = self.scratch / "second-transcripts"
+        transcript_fixture(second)
+        self.write_config(
+            MERGE_CAPTURES="beta=messages=%s" % second,
+            HISTORY_DIR=str(history),
+            SITE_URL="https://127.0.0.1:1",
+        )
+        before = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        self.assertEqual(self.launchd_run(logs), 0)
+        after = datetime.datetime.now(datetime.timezone.utc)
+        out = (logs / "usage-export.log").read_text(encoding="utf-8").splitlines()
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        # Non-vacuity: both logs carry the lines this pins, from the script
+        # and from the programs it runs.
+        self.assertTrue(any("usage-export: SUMMARY pushed=" in line for line in out), out)
+        for needle in ("unattributed-ids ", "coverage alpha=", "ledger appended=", "reason=no-push-state"):
+            self.assertTrue(any(needle in line for line in err), (needle, err))
+        for line in out + err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
+                written = datetime.datetime.strptime(line[:20], "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=datetime.timezone.utc
+                )
+                self.assertTrue(before <= written <= after, (before, written, after))
+
+    def test_a_failed_run_dates_its_failure(self):
+        # The case the rule exists for: the refusal and the FAILED line both
+        # carry the instant, beside the producer's own refusal text.
+        logs = self.logs(b"", b"")
+        empty = self.scratch / "empty"
+        empty.mkdir()
+        self.write_config(MERGE_CAPTURES="beta=messages=%s" % empty)
+        self.assertNotEqual(self.launchd_run(logs), 0)
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(any("FAILED stage=recapture-beta" in line for line in err), err)
+        self.assertTrue(any("no usage records found" in line for line in err), err)
+        for line in err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
+
+    def write_raw_config(self, text):
+        """The configuration file exactly as given, private."""
+        self.config.write_text(text, encoding="utf-8")
+        self.config.chmod(0o600)
+
+    def refused_configuration(self, status=1):
+        """Run as the agent does and return the error log's lines, after
+        proving the run exited with `status` (any non-zero status when None;
+        either way kept as `self.refused_status`), wrote nothing to the output
+        log, and dated every line it wrote to the error log."""
+        logs = self.logs(b"", b"")
+        self.refused_status = self.launchd_run(logs)
+        if status is None:
+            self.assertNotEqual(self.refused_status, 0)
+        else:
+            self.assertEqual(self.refused_status, status)
+        self.assertEqual((logs / "usage-export.log").read_bytes(), b"")
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(err)
+        for line in err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
+        return [LOG_STAMP.sub("", line, count=1) for line in err]
+
+    def test_a_configuration_missing_a_setting_is_dated_and_names_only_the_setting(self):
+        # Issue #371 review F2: `: "${REPO_DIR:?...}"` made the shell print one
+        # undated line of its own and exit with no FAILED line, so the
+        # commonest misconfiguration could not be dated from the log.
+        values = dict(self.config_lines)
+        del values["REPO_DIR"]
+        self.write_raw_config("".join("%s=%s\n" % pair for pair in values.items()))
+        lines = self.refused_configuration()
+        self.assertEqual(lines[0], "usage-export: REPO_DIR missing from configuration")
+        self.assertRegex(
+            lines[1],
+            r"^usage-export: FAILED stage=configure reason=config-incomplete missing=REPO_DIR elapsed=\d+s$",
+        )
+        self.assertEqual(len(lines), 2, lines)
+        # The setting is named, never a value: not one configured value
+        # reaches the log.
+        for name, value in values.items():
+            with self.subTest(name=name):
+                self.assertNotIn(value, "\n".join(lines))
+        # An empty configuration names every required setting, in order, each
+        # on its own dated line, and one FAILED line names them all.
+        required = ("REPO_DIR", "USAGESEAL_BIN", "KEY_FILE", "SSH_IDENTITY", "PUSH_HOST",
+                    "SSH_KNOWN_HOSTS", "SOURCE_LABEL", "TRANSCRIPTS")
+        self.write_raw_config("")
+        shutil.rmtree(self.scratch / "logs")
+        lines = self.refused_configuration()
+        self.assertEqual(lines[:-1], ["usage-export: %s missing from configuration" % name for name in required])
+        self.assertRegex(
+            lines[-1],
+            r"^usage-export: FAILED stage=configure reason=config-incomplete missing=%s elapsed=\d+s$"
+            % ",".join(required),
+        )
+
+    def test_a_configuration_that_does_not_parse_is_dated_and_refused(self):
+        # Sourced as it was, a syntax error killed the shell with its own
+        # undated line. It is parsed first now, in a child, through `stamped`.
+        lines = self.refused_configuration_with("SOURCE_LABEL=(alpha\n")
+        self.assertRegex(lines[-1], r"^usage-export: FAILED stage=configure reason=config-syntax elapsed=\d+s$")
+        # The shell's own diagnostic is kept, dated, above the FAILED line.
+        self.assertGreaterEqual(len(lines), 2, lines)
+
+    def test_a_configuration_that_parses_but_fails_when_read_is_dated_and_refused(self):
+        # A setting written with spaces around `=` parses, and then runs as a
+        # command that does not exist; a reference to an unset variable parses
+        # and then fails under `set -u`. Both end the shell while the run
+        # sources the configuration, and the EXIT trap dates the shell's own
+        # line and names the status the run ends with. That status is the
+        # shell's, so it differs by shell (127, and 1 or 2); bash 3.2 reports
+        # 0 for the `set -u` refusal under a trap, which the run reports as 1.
+        for broken in ("PUSH_PORT = 22\n", "PUSH_PORT=$NARANJO_TEST_UNSET_SETTING\n"):
+            with self.subTest(broken=broken):
+                lines = self.refused_configuration_with(broken, status=None)
+                self.assertRegex(
+                    lines[-1],
+                    r"^usage-export: FAILED stage=configure reason=config-error status=%d elapsed=\d+s$"
+                    % self.refused_status,
+                )
+                self.assertGreaterEqual(len(lines), 2, lines)
+
+    def test_a_configuration_naming_its_own_path_is_still_read(self):
+        # The run sources the configuration itself, with CONFIG set, so a
+        # setting derived from it is no false refusal. A plain reference: one
+        # shell does not apply `set -u` to a `${CONFIG%/*}` removal, and this
+        # must fail on every shell wherever CONFIG is unset.
+        logs = self.logs(b"", b"")
+        self.write_raw_config(self.complete_configuration() + 'CONFIG_SEEN="$CONFIG"\n')
+        self.assertEqual(self.launchd_run(logs), 0)
+
+    def complete_configuration(self):
+        """The fixture's complete configuration, as text."""
+        return "".join("%s=%s\n" % pair for pair in self.config_lines.items())
+
+    def refused_configuration_with(self, broken, status=1):
+        """The fixture's complete configuration with one broken line after it."""
+        shutil.rmtree(self.scratch / "logs", ignore_errors=True)
+        self.write_raw_config(self.complete_configuration() + broken)
+        return self.refused_configuration(status)
+
+    def evaluation_counter(self, fails_from):
+        """One valid configuration line that counts its own evaluations in the
+        test's scratch and, from evaluation `fails_from` on, prints one line to
+        stderr and fails with status 9. Returns (counter file, line)."""
+        counter = self.scratch / "evaluations"
+        line = (
+            'EVALUATED=$(n=$(cat %(c)s 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >%(c)s; '
+            'if [ "$n" -ge %(f)d ]; then echo "evaluation $n failed" >&2; exit 9; fi; printf "%%s" "$n")\n'
+            % {"c": shlex.quote(str(counter)), "f": fails_from}
+        )
+        return counter, line
+
+    def mktemp_in_front(self, name, body):
+        """A mktemp in its own directory in front of the fixture PATH: `body`
+        runs first, and the real mktemp ($REAL) after it unless `body` exits."""
+        real = shutil.which("mktemp")
+        self.assertIsNotNone(real, "no mktemp on PATH")
+        front = self.scratch / name
+        front.mkdir()
+        write_executable(front / "mktemp", "#!/bin/sh\nREAL=%s\n%s" % (shlex.quote(real), body))
+        self.env["PATH"] = "%s:%s" % (front, self.env["PATH"])
+
+    def record_temporaries(self):
+        """Record every path mktemp makes for the run; returns the record."""
+        record = self.scratch / "temporaries"
+        self.mktemp_in_front(
+            "recording",
+            'made=$("$REAL" "$@") || exit\nprintf \'%%s\\n\' "$made" >>%s\nprintf \'%%s\\n\' "$made"\n'
+            % shlex.quote(str(record)),
+        )
+        return record
+
+    def assert_temporaries_removed(self, record):
+        """Every path the run had mktemp make is gone once it ends."""
+        made = record.read_text(encoding="utf-8").splitlines()
+        self.assertTrue(made, "the run made no temporary through mktemp")
+        for path in made:
+            with self.subTest(temporary=path):
+                self.assertFalse(os.path.lexists(path), path)
+
+    def test_a_configuration_diagnostic_is_printed_once_and_dated(self):
+        # Review of 4ba57f0: the configuration was read in a child, dated, and
+        # then sourced AGAIN by this shell with bare stderr, so a valid
+        # setting whose command prints a diagnostic printed it twice, the
+        # second time undated. Sourced once, it prints once, dated, and the
+        # value it set reaches the push.
+        record = self.record_temporaries()
+        logs = self.logs(b"", b"")
+        self.write_raw_config(
+            self.complete_configuration() + "PUSH_PORT=$(echo 'assignment diagnostic' >&2; printf 2222)\n"
+        )
+        self.assertEqual(self.launchd_run(logs), 0)
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        said = [line for line in err if "assignment diagnostic" in line]
+        self.assertEqual(len(said), 1, err)
+        self.assertRegex(said[0], LOG_STAMP)
+        self.assertEqual(LOG_STAMP.sub("", said[0], count=1), "assignment diagnostic")
+        self.assertIn("Port=2222", self.args_file.read_text(encoding="utf-8").splitlines())
+        self.assert_temporaries_removed(record)
+
+    def test_a_configuration_line_on_stdout_is_printed_once_and_dated(self):
+        # The configuration's stdout joins its captured stderr: a setting
+        # whose command writes to stdout would otherwise land undated in the
+        # output log, outside the fast-forward exception the dating contract
+        # names. It is printed once, dated, with the configuration's other
+        # diagnostics, and the output log never sees it.
+        logs = self.logs(b"", b"")
+        self.write_raw_config(
+            self.complete_configuration() + "PUSH_PORT=2222; echo 'configuration stdout line'\n"
+        )
+        self.assertEqual(self.launchd_run(logs), 0)
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        said = [line for line in err if "configuration stdout line" in line]
+        self.assertEqual(len(said), 1, err)
+        self.assertRegex(said[0], LOG_STAMP)
+        self.assertEqual(LOG_STAMP.sub("", said[0], count=1), "configuration stdout line")
+        out = (logs / "usage-export.log").read_text(encoding="utf-8")
+        self.assertNotIn("configuration stdout line", out)
+
+    def test_a_configuration_that_changes_path_still_ends_dated(self):
+        # Review of d8b4a89: the cleanup after the read looked up a bare `rm`
+        # through the PATH the configuration had just set, so a configuration
+        # ending `PATH=/definitely-missing` ended the run with one bare
+        # "rm: command not found" line and no FAILED line. The cleanup names
+        # /bin/rm, so the run goes on to fail where a missing PATH first
+        # matters, every line dated and a FAILED line last.
+        logs = self.logs(b"", b"")
+        self.write_raw_config(self.complete_configuration() + "PATH=/definitely-missing\n")
+        status = self.launchd_run(logs)
+        self.assertNotEqual(status, 0)
+        self.assertNotEqual(status, 127)
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(err)
+        for line in err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
+        self.assertRegex(LOG_STAMP.sub("", err[-1], count=1), r"^usage-export: FAILED stage=")
+        self.assertFalse([line for line in err if "rm: command not found" in line], err)
+
+    def test_a_configuration_file_that_cannot_be_removed_is_a_dated_refusal(self):
+        # After a successful read the private file holding what the
+        # configuration printed is removed; if it cannot be, the run is
+        # refused, dated, rather than going on with a file left behind. The
+        # file is made in a fixture directory the configuration then makes
+        # read-only, so the removal fails for a reason the test controls.
+        if os.geteuid() == 0:
+            self.skipTest("root removes a file from a read-only directory")
+        held = self.scratch / "held"
+        held.mkdir()
+        self.addCleanup(os.chmod, held, 0o700)
+        self.mktemp_in_front(
+            "holding", 'if [ "$#" -eq 0 ]; then exec "$REAL" %s; fi\nexec "$REAL" "$@"\n'
+            % shlex.quote(str(held / "diagnostics.XXXXXX"))
+        )
+        lines = self.refused_configuration_with("chmod a-w %s\n" % shlex.quote(str(held)), status=1)
+        # rm names itself the way its platform does: BSD's as `rm:`, GNU's
+        # (the Linux gate's) by the path it was run as, `/bin/rm:`.
+        self.assertTrue([line for line in lines if re.match(r"(?:/bin/)?rm: ", line)], lines)
+        self.assertRegex(
+            lines[-1], r"^usage-export: FAILED stage=configure reason=config-cleanup elapsed=\d+s$"
+        )
+
+    def test_a_configuration_is_evaluated_exactly_once(self):
+        # Review of 4ba57f0: a command that succeeded on the child's
+        # evaluation and failed (status 9) on the second, this shell's,
+        # ended the run with a bare line and no FAILED line. Read once, there
+        # is no second evaluation to fail.
+        counter, line = self.evaluation_counter(fails_from=2)
+        record = self.record_temporaries()
+        logs = self.logs(b"", b"")
+        self.write_raw_config(self.complete_configuration() + line)
+        self.assertEqual(self.launchd_run(logs), 0)
+        self.assertEqual(counter.read_text(encoding="utf-8"), "1\n")
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        self.assertFalse([line for line in err if "stage=configure" in line or "evaluation" in line], err)
+        for line in err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
+        self.assert_temporaries_removed(record)
+
+    def test_a_configuration_that_fails_on_its_first_evaluation_is_dated_and_refused(self):
+        # The one read fails: the shell exits from inside the source, and the
+        # EXIT trap prints what the configuration said, dated, then a dated
+        # FAILED line naming the status the run ends with.
+        counter, line = self.evaluation_counter(fails_from=1)
+        record = self.record_temporaries()
+        lines = self.refused_configuration_with(line, status=9)
+        self.assertEqual(lines[:-1], ["evaluation 1 failed"])
+        self.assertRegex(
+            lines[-1], r"^usage-export: FAILED stage=configure reason=config-error status=9 elapsed=\d+s$"
+        )
+        self.assertEqual(counter.read_text(encoding="utf-8"), "1\n")
+        self.assert_temporaries_removed(record)
+
+    def test_a_configuration_that_exits_0_is_still_a_dated_refusal(self):
+        # Reaching the EXIT trap at all means the configuration was not read
+        # to its end, so a status of 0 is reported, and ends the run, as 1.
+        # The same rule covers bash 3.2, which reports 0 for a `set -u`
+        # refusal under a trap; this case pins it on every shell.
+        lines = self.refused_configuration_with("exit 0\n", status=1)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertRegex(
+            lines[0], r"^usage-export: FAILED stage=configure reason=config-error status=1 elapsed=\d+s$"
+        )
+
+    def test_a_file_for_the_configurations_diagnostics_that_cannot_be_created_is_dated(self):
+        # Refused before the configuration is sourced: it is never read
+        # without somewhere to put what it prints.
+        counter, line = self.evaluation_counter(fails_from=1)
+        self.mktemp_in_front(
+            "refusing", "if [ \"$#\" -eq 0 ]; then echo 'mktemp: refused by the fixture' >&2; exit 1; fi\n"
+            'exec "$REAL" "$@"\n'
+        )
+        self.write_raw_config(self.complete_configuration() + line)
+        lines = self.refused_configuration()
+        self.assertEqual(
+            lines[-3:-1],
+            ["mktemp: refused by the fixture", "usage-export: cannot create a file for the configuration's diagnostics"],
+        )
+        self.assertRegex(lines[-1], r"^usage-export: FAILED stage=configure elapsed=\d+s$")
+        self.assertFalse(counter.exists(), "the configuration was read without its boundary")
+
+    def test_a_history_directory_that_cannot_be_created_is_dated(self):
+        # mkdir's own diagnostic is a child's line outside the fast-forward
+        # critical section, so it is dated too.
+        blocker = self.scratch / "a-file"
+        blocker.write_text("not a directory\n", encoding="utf-8")
+        self.write_config(HISTORY_DIR=str(blocker / "history"))
+        lines = self.refused_configuration()
+        self.assertTrue(lines[-3].startswith("mkdir: "), lines)
+        self.assertEqual(lines[-2], "usage-export: the history directory cannot be created")
+        self.assertRegex(lines[-1], r"^usage-export: FAILED stage=configure elapsed=\d+s$")
+
+    def test_a_scratch_directory_that_cannot_be_created_is_dated(self):
+        # A refusing mktemp in front of the fixture PATH, because a missing
+        # TMPDIR is not a refusal everywhere (one mktemp falls back to another
+        # directory). The scratch is the first DIRECTORY this run asks mktemp
+        # for, so only `-d` is refused: the file the configuration's
+        # diagnostics go to, made before it, comes from the real one.
+        self.mktemp_in_front(
+            "refusing", "if [ \"${1:-}\" = -d ]; then echo 'mktemp: refused by the fixture' >&2; exit 1; fi\n"
+            'exec "$REAL" "$@"\n'
+        )
+        lines = self.refused_configuration()
+        self.assertEqual(
+            lines[-3:-1], ["mktemp: refused by the fixture", "usage-export: cannot create scratch directory"]
+        )
+        self.assertRegex(lines[-1], r"^usage-export: FAILED stage=configure elapsed=\d+s$")
+
+    @unittest.skipIf(os.geteuid() == 0, "root renames through a read-only directory")
+    def test_a_rotation_that_cannot_rename_is_dated(self):
+        logs = self.logs(b"o" * (MAX_LOG_BYTES + 1), b"")
+        logs.chmod(0o500)
+        self.addCleanup(logs.chmod, 0o700)
+        self.assertEqual(self.launchd_run(logs), 0)
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(any("WARN log-rotation failed" in line for line in err), err)
+        warned = next(index for index, line in enumerate(err) if "WARN log-rotation failed" in line)
+        self.assertGreaterEqual(warned, 1, "mv's own diagnostic is missing above the warning")
+        for line in err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
 
     def test_a_run_without_the_agents_environment_rotates_nothing(self):
         big = b"o" * (MAX_LOG_BYTES + 1)
@@ -2141,7 +2543,7 @@ class ServedCheckPipelineTest(PushFixture, unittest.TestCase):
         state_file = history / "push-state.json"
         self.assertEqual(stat.S_IMODE(state_file.stat().st_mode), 0o600)
         state = json.loads(state_file.read_text(encoding="utf-8"))
-        summary = first.stdout.splitlines()[-1]
+        summary = unstamped(first.stdout).splitlines()[-1]
         self.assertTrue(summary.startswith("usage-export: SUMMARY pushed="), summary)
         self.assertEqual(state["sha256"][:12], summary.split("sha256=")[1].split()[0])
         self.assertLessEqual(state["oldestCapturedAt"], state["generatedAt"])
@@ -2154,7 +2556,7 @@ class ServedCheckPipelineTest(PushFixture, unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("usage-export: WARN served-check unavailable reason=unreachable", second.stderr)
         # The check happens first, and the push still happens after it.
-        self.assertTrue(second.stdout.splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
+        self.assertTrue(unstamped(second.stdout).splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
 
     def test_no_configured_site_runs_no_check_but_still_records(self):
         history = self.scratch / "history"
@@ -2189,7 +2591,7 @@ class ServedCheckPipelineTest(PushFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("usage-export: WARN served-check unavailable reason=helper-failed", result.stderr)
         self.assertIn("usage-export: WARN push-state unrecorded reason=helper-failed", result.stderr)
-        self.assertTrue(result.stdout.splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
+        self.assertTrue(unstamped(result.stdout).splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
 
 
 # A pinned, private git for the throwaway repositories: no user or system
@@ -2369,7 +2771,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.head(), self.second)
         self.assertEqual(
-            [line for line in result.stdout.splitlines() if "UPDATED" in line],
+            [line for line in unstamped(result.stdout).splitlines() if "UPDATED" in line],
             ["usage-export: UPDATED exporter %s->%s" % (self.first[:12], self.second[:12])],
         )
         # The NEW script ran, exactly once, and the run it finished reports
@@ -2636,7 +3038,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         out, err = run.communicate(timeout=120)
         self.assertEqual(run.returncode, 0, err)
         self.assertIn("usage-export: UPDATED exporter %s->%s" % (self.first[:12], self.second[:12]), out)
-        self.assertTrue(out.splitlines()[-1].startswith("usage-export: SUMMARY pushed="), out)
+        self.assertTrue(unstamped(out).splitlines()[-1].startswith("usage-export: SUMMARY pushed="), out)
         self.assertNotIn("DRIFT", err)
         self.assertEqual(self.git(self.checkout, "symbolic-ref", "HEAD"), "refs/heads/main")
         self.assertEqual(self.git(self.checkout, "rev-parse", "other"), self.first)
@@ -2802,7 +3204,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         out, err = run.communicate(timeout=120)
         self.assertEqual(run.returncode, 0, err)
         self.assertIn("usage-export: UPDATED exporter %s->%s" % (self.first[:12], self.second[:12]), out)
-        self.assertTrue(out.splitlines()[-1].startswith("usage-export: SUMMARY pushed="), out)
+        self.assertTrue(unstamped(out).splitlines()[-1].startswith("usage-export: SUMMARY pushed="), out)
         self.assertNotIn("DRIFT", err)
         self.assertNotIn("interrupted", err)
         self.assert_agreement(self.second)
@@ -2926,6 +3328,9 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         out, err = run.communicate(timeout=120)
         self.assertEqual(run.returncode, 1, err)
         self.assertIn("usage-export: WARN repo-update interrupted signal=TERM", err)
+        # Like every failure, the honoured signal ends with a FAILED line
+        # naming its stage (issue #371).
+        self.assertRegex(err, r"usage-export: FAILED stage=repo-update elapsed=\d+s\n\Z")
         self.assertIn("usage-export: UPDATED exporter", out)
         self.assertNotIn("FIXTURE second-generation", out)
         self.assertNotIn("SUMMARY", out)
@@ -3091,7 +3496,7 @@ class RepoUpdateTest(PushFixture, unittest.TestCase):
         self.assertRegex(result.stderr, r"usage-export: WARN repo-update fetch-failed reason=[a-z-]+\n")
         self.assertEqual(self.head(), self.first)
         self.assertNotIn(str(self.origin), result.stdout + result.stderr)
-        self.assertTrue(result.stdout.splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
+        self.assertTrue(unstamped(result.stdout).splitlines()[-1].startswith("usage-export: SUMMARY pushed="))
 
 
 class BoundedFetchTest(unittest.TestCase):

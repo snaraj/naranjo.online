@@ -121,6 +121,22 @@
 # sealed size and checksum prefix, and the revision of the checkout the
 # exporter ran from — the fault class where a scheduled job silently ran a
 # tree nine commits behind what the origin admits (issue #288).
+#
+# What is dated (issue #371; the push failures of 2026-10-13 could not be
+# dated from the log), and exactly no more than this:
+#   * every line this script writes itself opens with the UTC instant it was
+#     written (`log`), and so does every line a program it runs writes to the
+#     logs outside the fast-forward critical section (`stamped`,
+#     `stamped_out`), and every line the configuration writes to stdout or stderr while
+#     it is sourced, once — the shell's own diagnostic about it included;
+#   * every failure, configuration included, ends with a dated
+#     `FAILED stage=<stage>` line naming its stage (a run killed outright by
+#     a signal stops where it is);
+#   * the only undated lines are diagnostics a child (git, mv, mktemp, mkfifo)
+#     prints inside the fast-forward critical section (fast_forward_main and
+#     the helpers it calls), and a dated line always follows them.
+# The tokens after the instant are unchanged, so every existing grep still
+# matches.
 
 set -eu
 
@@ -130,9 +146,43 @@ elapsed() {
     echo $(( $(/bin/date +%s) - run_started ))
 }
 
+# The instant a log line opens with: RFC 3339, UTC, to the second.
+utc_now() {
+    /bin/date -u +%Y-%m-%dT%H:%M:%SZ
+}
+
+# Copy stdin to stdout, each line opened with the instant it was read. A
+# final line with no newline is still a line.
+stamp() {
+    while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s %s\n' "$(utc_now)" "$line"
+    done
+}
+
+# One line of this script's own, stamped, on stdout (`>&2` for stderr).
+log() {
+    printf '%s usage-export: %s\n' "$(utc_now)" "$*"
+}
+
+# Run "$@" with every line it writes to stderr stamped on the way to this
+# run's stderr; its stdout goes wherever the caller sent it, untouched,
+# because for some programs that is DATA (the capture's document, the sealed
+# bytes, the host's checksum line). The command's own exit status is
+# returned, so `stamped cmd || fail ...` reads exactly as `cmd || fail ...`.
+stamped() {
+    { stamped_status=$( { { "$@" 2>&1 1>&3 3>&- 4>&- && echo 0 >&4 || echo $? >&4; } | stamp >&2; } 4>&1 ); } 3>&1
+    return "${stamped_status:-1}"
+}
+
+# The same for a program whose stdout is LOG lines rather than data.
+stamped_out() {
+    { stamped_status=$( { { "$@" 3>&- 4>&- && echo 0 >&4 || echo $? >&4; } | stamp >&3; } 4>&1 ); } 3>&1
+    return "${stamped_status:-1}"
+}
+
 fail() {
-    echo "usage-export: $1" >&2
-    echo "usage-export: FAILED stage=$stage elapsed=$(elapsed)s" >&2
+    log "$1" >&2
+    log "FAILED stage=$stage elapsed=$(elapsed)s" >&2
     exit 1
 }
 
@@ -143,7 +193,7 @@ stage_started=0
 begin() {
     stage=$1
     stage_started=$(/bin/date +%s)
-    echo "usage-export: START $stage"
+    log "START $stage"
 }
 finish() {
     timings="$timings $stage=$(( $(/bin/date +%s) - stage_started ))s"
@@ -158,7 +208,7 @@ if [ -n "${NARANJO_USAGE_EXPORT_LOG_DIR:-}" ]; then
     for log in usage-export.log usage-export.err.log; do
         log="$NARANJO_USAGE_EXPORT_LOG_DIR/$log"
         if [ -f "$log" ] && [ "$(wc -c < "$log" | tr -d ' ')" -gt "$MAX_LOG_BYTES" ]; then
-            mv -f "$log" "$log.1" || { echo "usage-export: WARN log-rotation failed" >&2; continue; }
+            stamped mv -f "$log" "$log.1" || { log "WARN log-rotation failed" >&2; continue; }
             case "$log" in
                 *.err.log) exec 2>>"$log" ;;
                 *) exec >>"$log" ;;
@@ -181,16 +231,84 @@ case "$config_mode" in
     600|400|0600|0400) ;;
     *) fail "configuration must be private (chmod 600)" ;;
 esac
-. "$CONFIG"
+[ -r "$CONFIG" ] || fail "configuration is not readable"
 
-: "${REPO_DIR:?REPO_DIR missing from configuration}"
-: "${USAGESEAL_BIN:?USAGESEAL_BIN missing from configuration}"
-: "${KEY_FILE:?KEY_FILE missing from configuration}"
-: "${SSH_IDENTITY:?SSH_IDENTITY missing from configuration}"
-: "${PUSH_HOST:?PUSH_HOST missing from configuration}"
-: "${SSH_KNOWN_HOSTS:?SSH_KNOWN_HOSTS missing from configuration}"
-: "${SOURCE_LABEL:?SOURCE_LABEL missing from configuration}"
-: "${TRANSCRIPTS:?TRANSCRIPTS missing from configuration}"
+# A configuration refusal names its reason in the FAILED line itself.
+refuse_configuration() {
+    log "FAILED stage=configure reason=$1 elapsed=$(elapsed)s" >&2
+    exit 1
+}
+
+# The configuration is shell, and a shell that cannot read it dies with a
+# line of its own, undated, and no FAILED line after it (issue #371). It is
+# parsed first in a child (`-n` runs nothing), through `stamped`, so a syntax
+# error is dated and refused.
+stamped /bin/sh -n "$CONFIG" </dev/null || refuse_configuration config-syntax
+
+# Then this shell sources it EXACTLY ONCE, under this run's own `set -eu`: a
+# second read could print its diagnostics again or fail where the first did
+# not. The variables it sets must stay in this shell, so the source cannot
+# run in a child, and its stdout and stderr go to a private file instead. That file is
+# printed, every line dated, once the read ends, so the configuration's
+# diagnostics follow its read, in order, rather than interleaving with it.
+# A read that ends the shell (a command that fails, a setting written
+# `NAME = value`, one naming an unset variable, an `exit`) runs the EXIT trap
+# instead: the same lines, then a dated FAILED line, and the run ends with the
+# shell's status, or with 1 when that reads 0 — bash 3.2 (macOS's /bin/sh)
+# reports 0 for a `set -u` refusal whenever an EXIT trap is set, and a
+# configuration that runs `exit 0` was not read to its end either. bash 3.2
+# also keeps the source's redirection in force while that trap runs, so the
+# run's own stderr waits on descriptor 9, open only during the read, and the
+# trap puts it back before it writes. The file is stamped whole before a line
+# is written, so even a stderr still pointing at it can never be read back
+# into itself without end.
+configuration_diagnostics=$(stamped mktemp) \
+    || fail "cannot create a file for the configuration's diagnostics"
+# The file is removed by /bin/rm, never by a PATH lookup: the configuration
+# has just run in this shell and may have changed PATH, and a cleanup that
+# could not even find rm would end the run with a bare line. rm runs through
+# `stamped`, so its own complaint is dated too. The function reports whether
+# the file is gone; after a successful read, a file that could not be removed
+# is a dated refusal of its own.
+configuration_kept=
+configuration_said() {
+    configuration_lines=$(stamp <"$configuration_diagnostics")
+    stamped /bin/rm -f "$configuration_diagnostics" || configuration_kept=1
+    if [ -n "$configuration_lines" ]; then
+        printf '%s\n' "$configuration_lines" >&2
+    fi
+    [ -z "$configuration_kept" ]
+}
+configuration_ended() {
+    configuration_status=$1
+    exec 2>&9 9>&-
+    configuration_said || :
+    [ "$configuration_status" -ne 0 ] || configuration_status=1
+    log "FAILED stage=configure reason=config-error status=$configuration_status elapsed=$(elapsed)s" >&2
+    exit "$configuration_status"
+}
+exec 9>&2
+trap 'configuration_ended "$?"' EXIT
+. "$CONFIG" 2>"$configuration_diagnostics" >&2
+trap - EXIT
+exec 9>&-
+configuration_said || refuse_configuration config-cleanup
+
+# Every required setting that is unset or empty is named on a dated line of
+# its own — the NAME, never a value, which this function never reads into a
+# variable — and one FAILED line names them all.
+require_configuration() {
+    missing=
+    for name in "$@"; do
+        if eval "[ -z \"\${$name:-}\" ]"; then
+            log "$name missing from configuration" >&2
+            missing="${missing:+$missing,}$name"
+        fi
+    done
+    [ -z "$missing" ] || refuse_configuration "config-incomplete missing=$missing"
+}
+require_configuration REPO_DIR USAGESEAL_BIN KEY_FILE SSH_IDENTITY PUSH_HOST \
+    SSH_KNOWN_HOSTS SOURCE_LABEL TRANSCRIPTS
 MERGE_SOURCES="${MERGE_SOURCES:-}"
 MERGE_CAPTURES="${MERGE_CAPTURES:-}"
 ACTIVITY_CACHE="${ACTIVITY_CACHE:-}"
@@ -214,6 +332,7 @@ esac
 # config file supplies one and ssh would otherwise fall back to the LOCAL
 # username — a different account, very possibly one without the forced
 # command (2026-08-24 round-3 review, finding 8).
+# shellcheck disable=SC2153 # set by the configuration; require_configuration proved it.
 case "$PUSH_HOST" in
     *@*) ;;
     *) fail "PUSH_HOST must be user@host; the push reads no ssh config file, so an alias resolves to nothing" ;;
@@ -230,7 +349,7 @@ umask 077
 # private as the configuration that names them. Unlike the scratch, it is
 # never wiped: surviving runs is its entire purpose.
 if [ -n "$HISTORY_DIR" ]; then
-    mkdir -p "$HISTORY_DIR" || fail "the history directory cannot be created"
+    stamped mkdir -p "$HISTORY_DIR" || fail "the history directory cannot be created"
 fi
 
 # Checkout drift (issue #358). The job runs whatever commit REPO_DIR has
@@ -269,7 +388,7 @@ update_checkout() {
         now=$(/bin/date +%s)
         if [ $((now - last)) -ge "$FETCH_INTERVAL_SECONDS" ] || [ "$now" -lt "$last" ]; then
             { echo "$now" > "$stamp"; } 2>/dev/null || true
-            GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true
+            stamped env GIT_TERMINAL_PROMPT=0 python3 -I -B "$REPO_FETCH" "$REPO_DIR" </dev/null || true
         fi
     fi
     git -C "$REPO_DIR" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' >/dev/null 2>&1 || return 0
@@ -288,18 +407,18 @@ update_checkout() {
         fast_forward_main
     fi
     if [ "$reason" = updated ]; then
-        echo "usage-export: UPDATED exporter $(git -C "$REPO_DIR" rev-parse --short=12 "$old")->$(git -C "$REPO_DIR" rev-parse --short=12 "$new")"
+        log "UPDATED exporter $(git -C "$REPO_DIR" rev-parse --short=12 "$old")->$(git -C "$REPO_DIR" rev-parse --short=12 "$new")"
     else
-        echo "usage-export: WARN DRIFT behind=$behind ahead=$ahead action=$action reason=$reason" >&2
+        log "WARN DRIFT behind=$behind ahead=$ahead action=$action reason=$reason" >&2
     fi
     if [ -n "$repair" ]; then
-        echo "usage-export: WARN repo-update repair: $repair" >&2
+        log "WARN repo-update repair: $repair" >&2
     fi
     if [ -n "$facts" ]; then
-        echo "usage-export: WARN repo-update state: $facts" >&2
+        log "WARN repo-update state: $facts" >&2
     fi
     if [ -n "$interrupted" ]; then
-        echo "usage-export: WARN repo-update interrupted signal=$interrupted" >&2
+        log "WARN repo-update interrupted signal=$interrupted" >&2
     fi
     if [ "$action" = incomplete ]; then
         stage=repo-update
@@ -316,8 +435,11 @@ update_checkout() {
         stage=repo-update
         fail "a ref moved under the update; the checkout was put back as it was found, and nothing was exported"
     fi
+    # The signal held through the update is honoured now that the checkout
+    # agrees, and like every failure it ends with a FAILED line (issue #371).
     if [ -n "$interrupted" ]; then
-        exit 1
+        stage=repo-update
+        fail "the run was stopped by a signal once the checkout agreed; nothing was exported"
     fi
     if [ "$reason" = updated ]; then
         export NARANJO_USAGE_EXPORT_REEXEC=1
@@ -599,8 +721,8 @@ exporter_revision=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD 2>/dev/null || 
 SERVED_CHECK="$REPO_DIR/scripts/usage-export/served-check.py"
 [ -f "$SERVED_CHECK" ] || fail "served-check helper not found under REPO_DIR"
 if [ -n "$SITE_URL" ]; then
-    python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state "${HISTORY_DIR:+$HISTORY_DIR/push-state.json}" --exporter "$exporter_revision" </dev/null \
-        || echo "usage-export: WARN served-check unavailable reason=helper-failed" >&2
+    stamped stamped_out python3 -I -B "$SERVED_CHECK" check --site "$SITE_URL" --state "${HISTORY_DIR:+$HISTORY_DIR/push-state.json}" --exporter "$exporter_revision" </dev/null \
+        || log "WARN served-check unavailable reason=helper-failed" >&2
 fi
 
 # The producer's capability boundary, and the reason it lives HERE rather than
@@ -625,7 +747,7 @@ command -v sandbox-exec >/dev/null 2>&1 \
     || fail "the producer sandbox is unavailable; raw records are never walked unconfined"
 
 # Private scratch, wiped on every exit path.
-SCRATCH=$(mktemp -d) || fail "cannot create scratch directory"
+SCRATCH=$(stamped mktemp -d) || fail "cannot create scratch directory"
 trap 'rm -rf "$SCRATCH"' EXIT INT TERM
 
 PLAIN="$SCRATCH/usage.json"
@@ -671,7 +793,7 @@ for triple in $MERGE_CAPTURES; do
         fi
     fi
     begin "recapture-$key"
-    sandbox-exec -f "$PRODUCER_PROFILE" \
+    stamped sandbox-exec -f "$PRODUCER_PROFILE" \
         /usr/bin/env python3 -I -B "$CAPTURE_SCRIPT" "$@" \
         > "$SCRATCH/$key.json" \
         || fail "a merge source could not be recaptured; nothing was pushed"
@@ -719,13 +841,13 @@ for pair in $MERGE_SOURCES; do
     set -- "$@" --merge-source "$pair"
 done
 begin export
-sandbox-exec -f "$PRODUCER_PROFILE" \
+stamped sandbox-exec -f "$PRODUCER_PROFILE" \
     /usr/bin/env python3 -I -B "$EXPORT_SCRIPT" "$@" || fail "export refused"
 finish
 
 # 3. Seal on this machine, before anything leaves it.
 begin seal
-"$USAGESEAL_BIN" -mode seal -key-file "$KEY_FILE" < "$PLAIN" > "$SEALED" \
+stamped "$USAGESEAL_BIN" -mode seal -key-file "$KEY_FILE" < "$PLAIN" > "$SEALED" \
     || fail "sealing refused"
 finish
 
@@ -921,7 +1043,7 @@ check_resolved serveralivecountmax 2
 check_resolved loglevel ERROR
 
 begin push
-remote_line=$(push_ssh "$PUSH_HOST" usage-export-receive < "$SEALED") || fail "push refused"
+remote_line=$(stamped push_ssh "$PUSH_HOST" usage-export-receive < "$SEALED") || fail "push refused"
 
 remote_sum=$(echo "$remote_line" | head -n 1 | cut -d' ' -f1)
 [ "$remote_sum" = "$local_sum" ] || fail "checksum mismatch after push"
@@ -933,9 +1055,9 @@ finish
 # sealed checksum, and the push time. Instants and a digest only, private,
 # beside the stores.
 if [ -n "$HISTORY_DIR" ]; then
-    python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" --document "$PLAIN" --sha256 "$local_sum" </dev/null \
-        || echo "usage-export: WARN push-state unrecorded reason=helper-failed" >&2
+    stamped python3 -I -B "$SERVED_CHECK" record --state "$HISTORY_DIR/push-state.json" --document "$PLAIN" --sha256 "$local_sum" </dev/null \
+        || log "WARN push-state unrecorded reason=helper-failed" >&2
 fi
 
 # One line per healthy run, printed only once the host's checksum matched.
-echo "usage-export: SUMMARY pushed=${sealed_bytes}B sha256=$(echo "$local_sum" | cut -c1-12) exporter=$exporter_revision elapsed=$(elapsed)s stages:$timings"
+log "SUMMARY pushed=${sealed_bytes}B sha256=$(echo "$local_sum" | cut -c1-12) exporter=$exporter_revision elapsed=$(elapsed)s stages:$timings"

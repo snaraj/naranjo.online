@@ -36,6 +36,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import datetime
+import gzip
 import importlib.util
 import io
 import json
@@ -1395,16 +1396,19 @@ class MainTest(unittest.TestCase):
             document["generatedAt"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
         )
         self.assertEqual(set(document["sources"]), {"alpha"})
-        # Diagnostics are counts, never paths; the second line is the run's
-        # coverage, calendar days only (issue #267).
+        # Diagnostics are counts, never paths; the second line names the
+        # unattributed folds by raw identity (issue #371) — the fixture names
+        # no model, so its tokens fold from the reserved bucket — and the
+        # third is the run's coverage, calendar days only (issue #267).
         lines = stderr.strip().splitlines()
-        self.assertEqual(len(lines), 2, stderr)
+        self.assertEqual(len(lines), 3, stderr)
         self.assertRegex(
             lines[0],
             r"^files=\d+ unreadable=\d+ symlinks=\d+ oversized=\d+ lines=\d+ counted=\d+ "
             r"duplicates=\d+ unpartitioned=\d+ unattributed=\d+ cross_group=\d+ sources=\d+$",
         )
-        self.assertRegex(lines[1], r"^coverage alpha=\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$")
+        self.assertEqual(lines[1], "unattributed-ids ~unidentified=1")
+        self.assertRegex(lines[2], r"^coverage alpha=\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$")
 
     def test_the_dataset_is_built_from_the_history_stores_or_not_at_all(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -1430,6 +1434,81 @@ class MainTest(unittest.TestCase):
             self.assertEqual(document["schema"], export_usage_series.DATASET_SCHEMA)
             self.assertEqual([row["date"] for row in document["sources"]["alpha"]["days"]], ["2026-08-10"])
             self.assertNotIn(scratch, json.dumps(document))
+
+    def test_an_identifier_shaped_non_model_is_recorded_locally_and_never_published(self):
+        # The DECIDED trust boundary (owner ruling 2026-10-13, issue #371,
+        # review F1), pinned through one real export run. The model field is
+        # written by the tool, and the data layer keeps ANY value in
+        # identifier shape, so every model ever used is recorded, new
+        # families included. The shape blocks paths, whitespace, sentences,
+        # over-long and non-string values; it does NOT block an
+        # identifier-shaped value that is not a model. Such a value is
+        # recorded as itself in the machine-local record — the ledger block
+        # archived with the capture, the ledger rows, the history store and
+        # the summary line — and it never reaches the published document,
+        # whose guard refuses any raw identity.
+        hostile = "private-session-1234"
+        unshaped = ("a private sentence", "private/path", "private\nline")
+        with tempfile.TemporaryDirectory() as scratch:
+            root = os.path.join(scratch, "transcripts")
+            lines = [
+                transcript_line(
+                    message={"id": "msg_h", "model": hostile, "usage": {"input_tokens": 9}}
+                )
+            ]
+            for index, value in enumerate(unshaped):
+                lines.append(
+                    transcript_line(
+                        requestId="req_u%d" % index,
+                        message={"id": "msg_u%d" % index, "model": value, "usage": {"input_tokens": 1}},
+                    )
+                )
+            write_tree(root, {"p/one.jsonl": lines})
+            history = pathlib.Path(scratch) / "history"
+            history.mkdir()
+            ledger = history / "ledger"
+            out = os.path.join(scratch, "usage.json")
+            code, stdout, stderr = self.run_main(
+                ["--transcripts", root, "--source", "alpha", "--out", out,
+                 "--history-store", str(history / "alpha.json"), "--ledger", str(ledger)]
+            )
+            self.assertEqual(code, 0, stderr)
+            self.assertEqual(stdout, "")
+            wire = pathlib.Path(out).read_text(encoding="utf-8")
+            store = json.loads((history / "alpha.json").read_text(encoding="utf-8"))
+            archives = sorted((ledger / "raw").rglob("alpha.last.json.gz"))
+            self.assertEqual(len(archives), 1, archives)
+            archived = json.loads(gzip.decompress(archives[0].read_bytes()))
+            rows = export_usage_series.usage_ledger.read_stream(ledger, "usage")
+            sessions = export_usage_series.usage_ledger.read_stream(ledger, "sessions")
+            local = [stderr, json.dumps(store), json.dumps(archived), json.dumps(rows), json.dumps(sessions)]
+        bucket = capture.UNIDENTIFIED_MODEL
+        # Recorded as itself: the ledger block ...
+        block = archived[capture.LEDGER_KEY]
+        self.assertEqual(block["sessions"][0]["modelIds"], [hostile, bucket])
+        self.assertEqual({row["id"] for row in block["modelIdCategories"]["members"]}, {hostile, bucket})
+        # ... the ledger rows, by raw identity and on the session ...
+        self.assertIn(
+            ("model-id-category", hostile + "/input", 9),
+            {(row["kind"], row["key"], row["value"]) for row in rows},
+        )
+        self.assertEqual([row.get("modelIds") for row in sessions], [[hostile, bucket]])
+        # ... the history store ...
+        self.assertEqual(store["days"]["2026-08-10"]["modelIds"], {hostile: 9, bucket: 3})
+        # ... and the summary line, folds per identity.
+        self.assertIn("unattributed-ids %s=3 %s=1" % (bucket, hostile), stderr.splitlines())
+        # Never published: not the identity, and not one unshaped value.
+        self.assertEqual(json.loads(wire)["schema"], "usage-series/v1")
+        self.assertNotIn(hostile, wire)
+        self.assertNotIn("private", wire)
+        self.assertNotIn(bucket, wire)
+        # A value with a space, a slash or a newline is the bucket wherever it
+        # is recorded, never itself.
+        for value in unshaped:
+            for text in local:
+                with self.subTest(value=value):
+                    self.assertNotIn(value, text)
+                    self.assertNotIn(json.dumps(value)[1:-1], text)
 
     def test_the_baselines_argument_reaches_the_accrual(self):
         # Issue #276, end to end through the CLI: a committed table naming
@@ -1795,6 +1874,31 @@ class MaterialSeamTest(unittest.TestCase):
                 export_usage_series.export(root, "alpha", [("beta", merge)], MERGE_NOW)
         self.assertIn("outside its declared shape", str(caught.exception))
         self.assertNotIn("a-private-project", str(caught.exception))
+
+    def test_a_raw_model_identity_is_recorded_out_of_band_and_never_sent(self):
+        # Issue #371: the data layer keeps the model string the tool reported,
+        # and the wire keeps only the vocabulary's members. Both halves of one
+        # run are read here, for an identity no vocabulary names.
+        unnamed = "sentinel-unnamed-9.1"
+        with tempfile.TemporaryDirectory() as root:
+            write_tree(
+                root,
+                {
+                    "p/one.jsonl": [
+                        transcript_line(
+                            message={"id": "msg_a", "model": unnamed, "usage": {"input_tokens": 9}}
+                        )
+                    ]
+                },
+            )
+            sources, counters, material = export_usage_series.export(root, "alpha", [], MERGE_NOW)
+        self.assertNotIn("sentinel", json.dumps(sources))
+        block = material["alpha"]["ledgerBlock"]
+        self.assertEqual(block["sessions"][0]["modelIds"], [unnamed])
+        self.assertEqual(
+            {row["id"] for row in block["modelIdCategories"]["members"]}, {unnamed}
+        )
+        self.assertEqual(counters["unattributed_ids"], {unnamed: 1})
 
     def test_the_wire_document_can_never_carry_the_block(self):
         # The guard is the proof, not the strip: a section that somehow

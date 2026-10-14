@@ -121,6 +121,27 @@ logs `usage-export: WARN served-check unavailable reason=<code>` and nothing
 else happens: the check never fails, delays or skips the push. Instants, one
 status word and closed codes only; no payload content and no upstream text.
 
+**What is dated (issue #371).** Every line the exporter writes itself opens
+with the UTC instant it was written, `YYYY-MM-DDTHH:MM:SSZ` and one space, and
+the line's own tokens follow unchanged — so every `reason=`, `START`,
+`SUMMARY` and `FAILED` grep below still matches, and the examples in this
+document show the tokens after the instant. So does every line a program it
+runs writes to the logs outside the checkout update's fast-forward critical
+section: the recapture's and the export's summaries, the ledger's, the served
+check's, the ssh runner's and the fetch's. The configuration is parsed in a
+child, then sourced by the run exactly once with its stderr held in a private
+file, printed dated as soon as the read ends: whatever it writes there, the
+shell's own diagnostic when it cannot read it included, appears once, after
+the read rather than interleaved with it. Every failure, configuration
+included, ends with a dated `FAILED stage=<stage>` line naming its stage; a
+run killed outright by a signal stops where it is. The only undated lines are
+diagnostics a child (git, mv, mktemp, mkfifo) prints inside that critical
+section, and a dated line always follows them. A program whose
+standard output is DATA (the capture's document, the sealed bytes, the host's
+checksum line) keeps it untouched; only its diagnostics are dated. The push
+failures of 2026-10-13 could not be dated from the log, which is the fault
+this closes.
+
 **Log hygiene and rotation.** The push runs ssh at `LogLevel=ERROR`, because
 OpenSSH prints the receiving host's pre-auth banner at INFO and above — about
 nine lines on every run. Errors still print. One class does not: a connection
@@ -177,7 +198,8 @@ worktree are brought into agreement; where it is not, the run keeps its
 recovery material and stops. A signal that arrives from the checkout until
 the index is installed or rolled back is held, not acted on: the run first
 settles, then logs `usage-export: WARN repo-update interrupted
-signal=<HUP|INT|TERM>` and exits 1 without exporting.
+signal=<HUP|INT|TERM>` and fails (`FAILED stage=repo-update`) without
+exporting.
 
 ```
 usage-export: UPDATED exporter <old12>-><new12>
@@ -623,6 +645,40 @@ had before the file existed. Anything else folds to the residual and is
 COUNTED, because model churn is constant and the two alternatives are worse:
 minting a label nobody reviewed puts unreviewed copy on a public page, and
 refusing the document freezes the panel until a human edits the vocabulary.
+Both rules are applied to the record's RAW IDENTITY below, so the member a
+fresh record is billed to and the member a remembered identity re-projects to
+are one function of one string.
+
+**The data layer keeps every model; the wire shows what the vocabulary names
+(issue #371).** The owner's rule is that the record of what was used and the
+choice of what the page draws are separate: a model no longer drawn is still
+recorded, and a model not named yet is recorded too. So every fold site — the
+record walk, the running-totals declaration, the cache's daily roll-up and
+lifetime classes — keeps the record's model string beside the member it folds
+to, in the same pass, and the history store, the ledger block and the ledger
+rows record usage by that RAW IDENTITY. The fold to a member happens where the
+wire document is built, on every run, from that record; adding a member to
+`models.json` therefore re-attributes every remembered day on the next export
+with nothing in the store rewritten. The raw identity is the string trimmed
+and lower-cased and kept only in the shape `^[a-z0-9][a-z0-9._:-]{0,63}$`;
+anything else — a path (a slash), whitespace, a sentence, a value past
+sixty-four characters, a value that is not a string — and a record that names
+no model, is recorded as the one reserved bucket `~unidentified`, whose
+leading `~` no real identifier can carry. Every reader of the data layer
+re-admits exactly that shape.
+
+**The trust boundary (owner ruling, 2026-10-13).** The model field is written
+by the tool, and ANY value in that shape is kept, so every model ever used is
+recorded, new families included. The shape blocks paths, whitespace,
+sentences, over-long and non-string values; it does NOT block an
+identifier-shaped value that is not a model — a session-like token a tool
+wrote in its model field is recorded as itself. That record is machine-local
+— the history store, the ledger block and rows, the raw capture archives and
+the exporter's log, whose `unattributed-ids` line prints it — and it is never
+published. The wire is untouched: its guard still refuses any raw identifier
+by name or value, the export still strips the ledger block before it, and the
+closed-vocabulary admission, the per-source scope and the byte ceiling stay
+as they are.
 
 **Attribution in the running-totals shape.** Those journals put the model and
 the token counts in DIFFERENT records: one kind declares the model a turn
@@ -712,7 +768,13 @@ walk that reaches every field by name and admits only closed sets: this
 file's schema marker, a model key, an accounting-class key, a calendar date,
 an RFC 3339 UTC second, and bounded counts. A session identifier, a working
 directory, a git branch, a title or a prompt byte cannot ride under a
-friendly key, because a key nobody reached for is a key nobody copies.
+friendly key, because a key nobody reached for is a key nobody copies. The
+one open string it carries is the raw model identity (issue #371), admitted
+only under `id` in `modelIdCategories` and `modelIdStats` and in a session's
+`modelIds`, and only in the raw-identity shape or as the bucket: free text in
+`id`, or a raw identity in `model`, refuses. The shape is not a model check:
+an identifier-shaped value the tool wrote in its model field rides here as
+itself, under the trust boundary above.
 
 **`modelCategories` is the joint of model against accounting class**, day
 indexed over the full depth the walk partitions rather than the eight-week
@@ -726,10 +788,22 @@ can override a walked day, and a joint refining a split nobody serves would be
 a tracker disagreeing with the panel. When the store owns every such day the
 section is ABSENT rather than empty, which an ordinary pruning run reaches.
 
+**`modelIdCategories` is the same joint by raw identity** (issue #371): the
+shape of `modelCategories` with `id` in place of `model`, accumulated in the
+same loop over the same days, checked against the same class split and
+against the day's raw-identity split, and absent exactly when its twin is.
+Folding it through the vocabulary gives `modelCategories` back. **`modelIdStats`
+is the cache's lifetime classes by raw identity**, `[{id, totals: {class:
+count}}]`, accrued past the cache's as-of day through that joint exactly as
+`modelStats` is through its own; it is present only when a cache is read and
+never reaches the wire, where `modelStats` stays the folded split.
+
 **`sessions` is one entry per record FILE the walk billed a token to** — one
 file is one session in both record shapes — carrying the span from its first
-admitted record to its last, its total, its class partition, and the distinct
-model keys in first-appearance order. Nothing else. Under the message shape's
+admitted record to its last, its total, its class partition, the distinct
+model keys in first-appearance order, and `modelIds`, the distinct raw
+identities in first-appearance order (issue #371; optional, so a block written
+before it still reads). Nothing else. Under the message shape's
 GLOBAL de-duplication a record replayed into a second file was already spent
 where it was first seen, so it counts there and the second file's entry never
 sees it. A file that admitted nothing gets no entry, and neither does one
@@ -803,6 +877,26 @@ workstation's LOCAL calendar days exactly as everywhere else in this pipeline,
 and instants are UTC RFC 3339. `raw` is present only when an archive backs
 the reading; an absent digest says no document was kept, never a fabricated
 one.
+
+**Every model ever used is recorded by name (issue #371).** Three `usage`
+kinds key a reading by the RAW IDENTITY the tool reported rather than by
+vocabulary member: `model-id` (a store day's split, key `<identity>`),
+`model-id-category` (the block's joint, key `<identity>/<class>`, on the days
+it covers) and `model-id-stat` (the cache's lifetime classes, key
+`<identity>/<class>`, on the capture day). Their keys are admitted only in the
+raw-identity shape or as `~unidentified`, never as free printable text — under
+the trust boundary stated with that shape, so an identifier-shaped value that
+is not a model is recorded as itself — and `schema.json` declares them. A session row may carry `modelIds`, its raw
+identities in first-appearance order; it is optional, so every row written
+before it stays valid, and it is part of the session's append comparison, so
+a session first recorded without it is recorded once more with it and then
+never again while it holds. The folded kinds (`model`, `model-category`,
+`model-stat`) keep being written beside them, and no existing row is
+touched. A folded `model` row is a projection under the vocabulary of the run
+that wrote it — naming a model later appends the new projection, and
+resolution's largest-wins rule can keep an older, larger `other` reading
+beside it — so the raw-identity kinds are the durable answer to "which model
+was this".
 
 **Append rules**, and every one of them has a hostile test:
 
@@ -1044,10 +1138,30 @@ window has since dropped and the days a vendor surface later disagrees with.
    large keeps the fresh figure, a day the sources have since lost (or
    partially lost) keeps the stored one — and a day with no evidence on
    either side stays absent, never zero-filled. The stores hold calendar
-   dates and non-negative integers only, live outside every repository,
-   and a malformed store refuses the run rather than silently forgetting.
-   Configure it; the option exists as an option only so an unconfigured
-   workstation still exports.
+   dates, non-negative integers and raw model identities only, live outside
+   every repository, and a malformed store refuses the run rather than
+   silently forgetting. Configure it; the option exists as an option only so
+   an unconfigured workstation still exports.
+
+   The store is `usage-history/v2` (issue #371). A day keeps its model split
+   by raw identity under `modelIds` — identities in the shape above or the
+   bucket, positive counts summing to the day's `total` — and keeps NO folded
+   `models` split: that is a projection, derived on every read through the
+   current vocabulary and the source's scope, so naming a model re-attributes
+   the day on the next export. A day written before v2 keeps the folded split
+   it has, because the identity behind it was never recorded;
+   `RETIRED_MODEL_KEYS` still folds only those legacy splits and never touches
+   an identity. The reader admits both markers, refuses `modelIds` under v1 and
+   a day carrying both splits, and the writer always writes v2. The
+   evidence-survives rule picks a whole day — total, class split and both
+   model splits together — so `modelIds` always travels with the figure it
+   sums to. The writer proves the document through the reader's own rules and
+   its 1 MiB bound before anything replaces the store, so a store the next run
+   would refuse is never written: the previous one stays and the run refuses.
+   Measured at the 732-day series bound with eight identities a day and
+   twelve-digit counts, a store is 350,669 bytes, a third of the bound
+   (pinned under half of it by
+   `test_a_realistic_store_at_the_day_bound_fits_with_room`).
 
    Two files live beside the stores (issue #299). `$HISTORY_DIR/dataset.json`
    is the graphing dataset (`usage-dataset/v1`), rebuilt from the stores on
@@ -1131,19 +1245,29 @@ window has since dropped and the days a vendor surface later disagrees with.
    the same 0600 refusal, and reads it in a subshell so the file's own
    `REPO_DIR` can never move the schedule's anchor.
 
-   What one run writes to the log (issue #299): a `START <stage>` line as
+   What one run writes to the log (issue #299), each line it writes itself
+   opening with the UTC instant it was written (issue #371; what is and is not
+   dated is stated under "What is dated" above): a `START <stage>` line as
    each stage begins — `recapture-<key>`, `export`, `seal`, `push` — so a
    stage that never ends is a START with no SUMMARY; the export's own
    `coverage <key>=<first>..<last>` line naming the newest day each source
-   reaches; on failure the reason, then `FAILED stage=<stage>
-   elapsed=<s>s`; on success one `SUMMARY` line, printed only once the
+   reaches, and each capture's `unattributed-ids <identity>=<folds> …` line
+   naming, by raw identity, the five models it folded to the residual most
+   often (`-` for none), so a model the vocabulary does not name is visible
+   the run it first appears; on failure the reason, then `FAILED stage=<stage>
+   elapsed=<s>s`, where a configuration refusal carries its reason in that
+   line (`FAILED stage=configure reason=<code> … elapsed=<s>s`); on success
+   one `SUMMARY` line, printed only once the
    host's checksum matched, with the sealed size, the
    checksum prefix, the exporter's checkout revision — the fault class where
    a scheduled job ran a tree nine commits behind what the origin admits
    (issue #288) — the total elapsed time, and every stage's duration. Before
    the first START, a run with `SITE_URL` set logs its one served line, and
    a run that found its checkout behind logs `UPDATED` or `DRIFT` (issue
-   #358). Stage names and counts only, never payload content or a path.
+   #358). Stage names, counts and raw model identities, never payload
+   content; a child program's own diagnostic (the shell's about the
+   configuration, `mkdir`'s about the history directory) may name the path it
+   was given.
 
    The installed job is anchored to the PRIMARY checkout
    (`~/code/naranjo.online` by default; override with
@@ -1317,9 +1441,9 @@ shipped snapshots").
 ```sh
 # On the workstation: one manual push.
 scripts/usage-export/push-usage-series.sh
-# -> usage-export: SUMMARY pushed=<N>B sha256=<prefix> exporter=<rev> ...
+# -> <UTC instant> usage-export: SUMMARY pushed=<N>B sha256=<prefix> exporter=<rev> ...
 # With SITE_URL set, the NEXT run first says what the page serves:
-# -> usage-export: SERVED status=ok lag=<s>s
+# -> <UTC instant> usage-export: SERVED status=ok lag=<s>s
 
 # The installed agents, read without changing anything.
 scripts/usage-export/install-launchd.sh --check
@@ -1334,9 +1458,18 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 
 ## Failure modes (all deliberate)
 
+Every symptom below is the text AFTER the UTC instant its log line opens with.
+
 | Symptom | Meaning |
 | --- | --- |
+| `unattributed-ids <identity>=<n> …` | not a failure: the raw identities this capture folded to the residual most often, because the vocabulary does not name them (or `-`). Naming one is a data edit to `models.json`; every remembered day it was recorded on re-attributes on the next export |
+| `the history store would be larger than the 1048576 byte bound; the previous one is kept` | the store the run would write could not be read back, so the run refused and kept the last one. At the series-day bound a store measures about a third of that with eight identities a day, so this means many more distinct identities a day than that |
 | `configuration must be private` | config file mode laxer than 0600 |
+| `configuration is not readable` | the file is private but this account cannot read it |
+| `<NAME> missing from configuration`, then `FAILED stage=configure reason=config-incomplete missing=<NAME>[,<NAME>…]` | a required setting is unset or empty; each is named on its own line, and the FAILED line names them all. Names only, never a value |
+| `FAILED stage=configure reason=config-syntax` | the configuration does not parse as shell; the shell's own diagnostic, dated, is above it |
+| `FAILED stage=configure reason=config-cleanup` | the configuration was read, but the private file holding what it printed could not be removed; its lines, dated, are above it |
+| `FAILED stage=configure reason=config-error` | the configuration parses but fails when sourced under `set -eu` — commonly a setting written `NAME = value`, or one naming an unset variable; the shell's own diagnostic, dated, is above it |
 | `the ledger line N is malformed: …` | a line in the append-only record is damaged in a way an interrupted write cannot produce. The run refuses rather than skipping it; the named line is the whole diagnosis |
 | `ledger repaired a partial line in …` | the tolerated fault: an interrupted append left a line with no newline. It was truncated back and the run continued |
 | `ledger snapshot skipped <stream>` | that panel's envelope did not report `ok`, so the night has no reading for it. The next night takes one |
@@ -1355,7 +1488,7 @@ curl -s localhost:8080/api/panels/token-usage | head -c 400
 | `usage-export: WARN repo-update repair: main could not be read; inspect it ...` | printed with `ref-uncertain` when `main` could not be read: no command is given, because one without the expected old value would overwrite whatever `main` holds; read it with `git rev-parse refs/heads/main` and pass that value as `<that value>` |
 | `usage-export: WARN repo-update state: main is <old> (the update was aborted), ...` | printed with `index-uncertain`: the facts on disk and no command; inspect with `git status` before the next run |
 | `usage-export: FAILED ... main moved without git acknowledging the update` | the commit was sent with the index installed, git never answered, and `main` was found at the new commit; the checkout agrees with `main`, but that run exported nothing. The next run exports normally |
-| `usage-export: WARN repo-update interrupted signal=<name>` | a signal arrived during the update; the run settled it first (agreement, or a kept lock and a stop), then exited 1 without exporting |
+| `usage-export: WARN repo-update interrupted signal=<name>` | a signal arrived during the update; the run settled it first (agreement, or a kept lock and a stop), then failed with `FAILED stage=repo-update` without exporting |
 | `usage-export: WARN repo-update fetch-failed reason=<code>` | the hourly fetch failed or hit its 30-second deadline; the run continued on the tree it had |
 | `REPO_UPDATE must be ff-only or off` | the configuration names another update mode; nothing ran |
 | `install-launchd.sh --check` exits 1 | an agent is missing, runs a different checkout than `REPO_DIR` (`repo=MISMATCH`), is not loaded, or last exited non-zero |

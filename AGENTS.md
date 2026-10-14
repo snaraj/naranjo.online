@@ -315,7 +315,14 @@ conscious edits, never fights:
   capture, the origin and the page (issue #369) — so every member costs one
   integer per window day on each source of its OWN group against the sealed
   payload ceiling, and `CapParityTest` fails the build when the window and a
-  group no longer fit together (the ceiling is never the lever).
+  group no longer fit together (the ceiling is never the lever). Adding a
+  member also re-attributes REMEMBERED history on the next export: the data
+  layer — the history store, the ledger block and the ledger rows — keeps
+  every model by the raw identity the tool reported (issue #371), and the fold
+  to a member is made from that record on every run, so a day recorded by
+  identity before the model was named moves to it with nothing rewritten (a
+  day stored before identities were kept stays as it was folded). Dropping a
+  member from the page never drops its record.
 - Ingress provider changes: a values override of the `ingress` block per
   the deployment-provider contract.
 

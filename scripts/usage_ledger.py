@@ -105,6 +105,17 @@ KIND_MODEL = "model"
 KIND_MODEL_CATEGORY = "model-category"
 KIND_STAT = "stat"
 KIND_MODEL_STAT = "model-stat"
+# The same three readings keyed by RAW IDENTITY rather than by member (issue
+# #371): the model string the tool reported, kept in the capture's bounded
+# identity shape, so a model the vocabulary does not name — or no longer
+# draws — is still recorded by name. The folded kinds above keep being
+# written beside them; these never replace one. The shape is not a model
+# check: by owner ruling (2026-10-13) any identifier-shaped value the tool
+# wrote in its model field is recorded as itself, which this record may hold
+# because it is machine-local and never published.
+KIND_MODEL_ID = "model-id"
+KIND_MODEL_ID_CATEGORY = "model-id-category"
+KIND_MODEL_ID_STAT = "model-id-stat"
 KIND_SESSION = "session"
 KIND_CONTRIBUTIONS = "contributions"
 KIND_STREAK = "streak"
@@ -131,6 +142,9 @@ STREAM_KINDS = {
         KIND_MODEL_CATEGORY,
         KIND_STAT,
         KIND_MODEL_STAT,
+        KIND_MODEL_ID,
+        KIND_MODEL_ID_CATEGORY,
+        KIND_MODEL_ID_STAT,
     ),
     STREAM_SESSIONS: (KIND_SESSION,),
     STREAM_GITHUB: (KIND_CONTRIBUTIONS, KIND_STREAK, KIND_COMMIT),
@@ -220,6 +234,22 @@ ROW_OPTIONAL = ("raw",)
 # there must not be: a session id is a machine fact about a private
 # conversation (requirement 12), while the instant it began is a time.
 SESSION_EXTRA = ("startedAt", "endedAt", "total", "categories", "models")
+
+# The session's raw identities (issue #371). OPTIONAL, because every session
+# row written before it existed must stay a valid reading of the record.
+SESSION_IDENTITIES = capture.MODEL_IDENTITIES_KEY
+SESSION_OPTIONAL = (SESSION_IDENTITIES,)
+
+# The kinds whose key carries a raw identity, and whether it is composite
+# (`<identity>/<class>`). Their keys are admitted by the capture's own
+# identity rule, not as free printable text, so a path, whitespace or a
+# sentence can never be filed as a model in this record; an identifier-shaped
+# value that is not a model can, by owner ruling (2026-10-13), see above.
+IDENTITY_KINDS = {
+    KIND_MODEL_ID: False,
+    KIND_MODEL_ID_CATEGORY: True,
+    KIND_MODEL_ID_STAT: True,
+}
 
 # The instant form the whole pipeline speaks: RFC 3339, UTC, seconds.
 INSTANT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -389,7 +419,7 @@ def admit_row(row, stream, line=None):
         refuse("it is not a JSON object")
     allowed = set(ROW_REQUIRED) | set(ROW_OPTIONAL)
     if row.get("stream") == STREAM_SESSIONS:
-        allowed |= set(SESSION_EXTRA)
+        allowed |= set(SESSION_EXTRA) | set(SESSION_OPTIONAL)
     missing = set(ROW_REQUIRED) - set(row)
     if missing:
         refuse("it carries no %s" % sorted(missing)[0])
@@ -408,6 +438,8 @@ def admit_row(row, stream, line=None):
         refuse("its source is not bounded printable text")
     if not valid_name(row["key"]):
         refuse("its key is not bounded printable text")
+    if row["kind"] in IDENTITY_KINDS and not identity_key(row["kind"], row["key"]):
+        refuse("its key is not a raw model identity")
     if not valid_count(row["value"]):
         refuse("its value is not a bounded non-negative integer")
     if row["unit"] not in UNITS:
@@ -451,6 +483,25 @@ def admit_session_fields(row, refuse):
     models = row["models"]
     if not isinstance(models, list) or not all(valid_name(name) for name in models):
         refuse("a session row carries a malformed model list")
+    if SESSION_IDENTITIES in row:
+        identities = row[SESSION_IDENTITIES]
+        if (
+            not isinstance(identities, list)
+            or not all(capture.valid_model_identity(name) for name in identities)
+            or len(set(identities)) != len(identities)
+        ):
+            refuse("a session row carries a malformed model identity list")
+
+
+def identity_key(kind, key):
+    """Whether a raw-identity kind's key is that identity, or `<identity>/<class>`.
+
+    An identity never carries a slash, so the split is unambiguous.
+    """
+    if not IDENTITY_KINDS[kind]:
+        return capture.valid_model_identity(key)
+    name, slash, category = key.rpartition("/")
+    return bool(slash) and capture.valid_model_identity(name) and category in capture.CATEGORY_KEYS
 
 
 def identity(row):
@@ -612,11 +663,14 @@ def unchanged(previous, row):
     either can move while the duration does not — a session that ended at the
     same second it was last seen but spent more tokens is new information —
     so those are part of the comparison for that stream and nothing else.
+    Its raw identities are too (issue #371), so a session first recorded
+    before they existed is recorded once more WITH them, and then never
+    again while they hold.
     """
     if previous["value"] != row["value"]:
         return False
     if row["stream"] == STREAM_SESSIONS:
-        for field in ("endedAt", "total", "categories", "models"):
+        for field in ("endedAt", "total", "categories", "models", SESSION_IDENTITIES):
             if previous.get(field) != row.get(field):
                 return False
     return True
@@ -800,6 +854,11 @@ STAT_UNITS = {
 CAPTURE_STATS = "stats"
 CAPTURE_MODEL_STATS = "modelStats"
 LEDGER_BLOCK_SCHEMA = "usage-capture-ledger/v1"
+# The block's raw-identity sections and the one field that names an identity
+# in them (issue #371) — the capture's own names, read from it.
+BLOCK_IDENTITY_CATEGORIES = capture.LEDGER_MODEL_ID_CATEGORIES_KEY
+BLOCK_IDENTITY_STATS = capture.LEDGER_MODEL_ID_STATS_KEY
+BLOCK_IDENTITY_FIELD = capture.LEDGER_ID_KEY
 
 
 def record_run(
@@ -849,7 +908,7 @@ def record_run(
         if block is None and isinstance(document, dict):
             block = document.get("ledger")
         if block is not None:
-            usage, sessions = block_rows(key, block, stamp, exporter, digest)
+            usage, sessions = block_rows(key, block, day, stamp, exporter, digest)
             rows[STREAM_USAGE].extend(usage)
             rows[STREAM_SESSIONS].extend(sessions)
         if history_dir is not None:
@@ -996,22 +1055,43 @@ def stat_rows(key, document, day, stamp, exporter, digest):
     return rows
 
 
-def block_rows(key, block, stamp, exporter, digest):
+def block_rows(key, block, day, stamp, exporter, digest):
     """The capture's ledger block: the per-model-per-category days and sessions.
 
     The block is the one part of a capture the sealed document cannot carry —
     the wire's emission guard admits dates and integers only, and a session
     interval is neither — so it reaches this record directly from the capture
     rather than through the document that travels.
+
+    Its raw-identity sections (issue #371) become the raw-identity kinds: the
+    joint by identity as `model-id-category` rows on the days it covers, and
+    the cache's lifetime classes by identity as `model-id-stat` rows on the
+    capture `day`, exactly as `model-stat` rows are filed.
     """
     if not isinstance(block, dict) or block.get("schema") != LEDGER_BLOCK_SCHEMA:
         raise LedgerError("a capture ledger block does not declare the expected schema")
-    if set(block) - {"schema", "modelCategories", "sessions"}:
+    if set(block) - {
+        "schema",
+        "modelCategories",
+        "sessions",
+        BLOCK_IDENTITY_CATEGORIES,
+        BLOCK_IDENTITY_STATS,
+    }:
         raise LedgerError("a capture ledger block carries an unknown section")
     usage = []
     members = block.get("modelCategories")
     if members is not None:
         usage.extend(model_category_rows(key, members, stamp, exporter, digest))
+    members = block.get(BLOCK_IDENTITY_CATEGORIES)
+    if members is not None:
+        usage.extend(
+            model_category_rows(
+                key, members, stamp, exporter, digest, BLOCK_IDENTITY_FIELD, KIND_MODEL_ID_CATEGORY
+            )
+        )
+    stats = block.get(BLOCK_IDENTITY_STATS)
+    if stats is not None:
+        usage.extend(identity_stat_rows(key, stats, day, stamp, exporter, digest))
     sessions = []
     entries = block.get("sessions")
     if entries is not None:
@@ -1019,13 +1099,19 @@ def block_rows(key, block, stamp, exporter, digest):
     return usage, sessions
 
 
-def model_category_rows(key, members, stamp, exporter, digest):
+def model_category_rows(
+    key, members, stamp, exporter, digest, field="model", kind=KIND_MODEL_CATEGORY
+):
     """One row per member per day the block covers, zero days excluded.
 
     A zero is not a reading here: the block lays every member over the same
     window, so a member that spent nothing on a day carries a zero for
     arithmetic rather than as evidence. Recording it would write one line per
     member per day forever to say nothing happened.
+
+    The raw-identity joint reads through here with `field` `id` and `kind`
+    `model-id-category` (issue #371); admission then holds its key to the
+    identity shape.
     """
     if not isinstance(members, dict) or set(members) != {"startDate", "members"}:
         raise LedgerError("a capture ledger block carries a malformed model split")
@@ -1038,9 +1124,9 @@ def model_category_rows(key, members, stamp, exporter, digest):
     first = datetime.date.fromisoformat(start)
     rows = []
     for member in entries:
-        if not isinstance(member, dict) or set(member) != {"model", "category", "totals"}:
+        if not isinstance(member, dict) or set(member) != {field, "category", "totals"}:
             raise LedgerError("a capture ledger block carries a malformed model member")
-        name = member["model"]
+        name = member[field]
         category = member["category"]
         totals = member["totals"]
         if not valid_name(name) or not valid_name(category) or not isinstance(totals, list):
@@ -1057,7 +1143,45 @@ def model_category_rows(key, members, stamp, exporter, digest):
                     (first + datetime.timedelta(days=offset)).isoformat(),
                     STREAM_USAGE,
                     key,
-                    KIND_MODEL_CATEGORY,
+                    kind,
+                    "%s/%s" % (name, category),
+                    value,
+                    UNIT_TOKENS,
+                    stamp,
+                    METHOD_CAPTURE,
+                    exporter,
+                    digest,
+                )
+            )
+    return rows
+
+
+def identity_stat_rows(key, stats, day, stamp, exporter, digest):
+    """The cache's lifetime classes by raw identity, on the capture day.
+
+    `stat_rows`' rule for `modelStats`, applied to the block's `modelIdStats`
+    (issue #371): a level reading with no day of its own is filed under the
+    day it was read.
+    """
+    if not isinstance(stats, list):
+        raise LedgerError("a capture ledger block carries a malformed identity stats section")
+    rows = []
+    for entry in stats:
+        if not isinstance(entry, dict) or set(entry) != {BLOCK_IDENTITY_FIELD, "totals"}:
+            raise LedgerError("a capture ledger block carries a malformed identity stat")
+        name = entry[BLOCK_IDENTITY_FIELD]
+        totals = entry["totals"]
+        if not valid_name(name) or not isinstance(totals, dict):
+            raise LedgerError("a capture ledger block carries a malformed identity stat")
+        for category, value in sorted(totals.items()):
+            if not valid_name(category) or not valid_count(value):
+                raise LedgerError("a capture ledger block carries a malformed identity stat")
+            rows.append(
+                make_row(
+                    day,
+                    STREAM_USAGE,
+                    key,
+                    KIND_MODEL_ID_STAT,
                     "%s/%s" % (name, category),
                     value,
                     UNIT_TOKENS,
@@ -1093,21 +1217,26 @@ def merge_sessions(entries):
         group = sorted(group, key=lambda entry: json.dumps(entry, sort_keys=True))
         categories = {}
         models = []
+        identities = []
         for entry in group:
             for name, count in entry["categories"].items():
                 categories[name] = categories.get(name, 0) + count
             for model in entry["models"]:
                 if model not in models:
                     models.append(model)
-        merged.append(
-            {
-                "startedAt": started,
-                "endedAt": max(entry["endedAt"] for entry in group),
-                "total": sum(entry["total"] for entry in group),
-                "categories": categories,
-                "models": models,
-            }
-        )
+            for name in entry.get(SESSION_IDENTITIES) or ():
+                if name not in identities:
+                    identities.append(name)
+        reading = {
+            "startedAt": started,
+            "endedAt": max(entry["endedAt"] for entry in group),
+            "total": sum(entry["total"] for entry in group),
+            "categories": categories,
+            "models": models,
+        }
+        if any(SESSION_IDENTITIES in entry for entry in group):
+            reading[SESSION_IDENTITIES] = identities
+        merged.append(reading)
     return merged
 
 
@@ -1129,7 +1258,7 @@ def session_rows(key, entries, stamp, exporter, digest):
 
 def session_row(key, entry, stamp, exporter, digest):
     """One session entry as its row; bounds and vocabularies are admit_row's."""
-    if not isinstance(entry, dict) or set(entry) != {
+    if not isinstance(entry, dict) or set(entry) - {SESSION_IDENTITIES} != {
         "startedAt",
         "endedAt",
         "total",
@@ -1150,6 +1279,15 @@ def session_row(key, entry, stamp, exporter, digest):
     seconds = int((finished - began).total_seconds())
     if seconds < 0:
         raise LedgerError("a capture ledger block carries a session that ends before it starts")
+    extra = {
+        "startedAt": started,
+        "endedAt": ended,
+        "total": entry["total"],
+        "categories": entry["categories"],
+        "models": entry["models"],
+    }
+    if SESSION_IDENTITIES in entry:
+        extra[SESSION_IDENTITIES] = entry[SESSION_IDENTITIES]
     return make_row(
         # The day a session belongs to is the LOCAL day it began, the
         # same clock every other day in this pipeline is bucketed by.
@@ -1164,13 +1302,7 @@ def session_row(key, entry, stamp, exporter, digest):
         METHOD_CAPTURE,
         exporter,
         digest,
-        extra={
-            "startedAt": started,
-            "endedAt": ended,
-            "total": entry["total"],
-            "categories": entry["categories"],
-            "models": entry["models"],
-        },
+        extra=extra,
     )
 
 
@@ -1178,10 +1310,14 @@ def store_rows(key, history_dir, stamp, exporter):
     """Every remembered day from the durable store, verified days marked.
 
     Read exactly the way the graphing dataset reads them — the store beside
-    its verified readings, by the source's own key — so the record and the
-    dataset cannot disagree about what a day measured.
+    its verified readings, by the source's own key, projected onto the
+    source's scope — so the record and the dataset cannot disagree about what
+    a day measured. A day the store keeps by raw identity is recorded both
+    ways (issue #371): its folded split as `model` rows under the vocabulary
+    of this run, and its identities as `model-id` rows, which no later
+    vocabulary edit changes.
     """
-    stored = capture.read_history_store(history_dir / ("%s.json" % key))
+    stored = capture.remembered_history(history_dir / ("%s.json" % key), key)
     verified = capture.read_verified_readings(history_dir / ("%s.verified.json" % key))
     rows = []
     for day, entry in sorted(stored.items()):
@@ -1200,7 +1336,11 @@ def store_rows(key, history_dir, stamp, exporter):
                 exporter,
             )
         )
-        for name, kind in (("categories", KIND_CATEGORY), ("models", KIND_MODEL)):
+        for name, kind in (
+            ("categories", KIND_CATEGORY),
+            ("models", KIND_MODEL),
+            (capture.MODEL_IDENTITIES_KEY, KIND_MODEL_ID),
+        ):
             split = entry.get(name)
             if not split:
                 continue
@@ -1328,15 +1468,15 @@ TABLE_COLUMNS = (
     "exporter",
     "raw",
 )
-SESSION_COLUMNS = ("startedAt", "endedAt", "total", "categories", "models")
+SESSION_COLUMNS = ("startedAt", "endedAt", "total", "categories", "models", SESSION_IDENTITIES)
 
 
 def table_row(row, columns):
-    """One row's values in column order; JSON for the two nested columns."""
+    """One row's values in column order; JSON for the three nested columns."""
     values = []
     for column in columns:
         value = row.get(column)
-        if column in ("categories", "models") and value is not None:
+        if column in ("categories", "models", SESSION_IDENTITIES) and value is not None:
             value = json.dumps(value, separators=COMPACT_SEPARATORS, sort_keys=True)
         values.append(value)
     return values
