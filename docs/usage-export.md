@@ -128,11 +128,13 @@ the line's own tokens follow unchanged — so every `reason=`, `START`,
 document show the tokens after the instant. So does every line a program it
 runs writes to the logs outside the checkout update's fast-forward critical
 section: the recapture's and the export's summaries, the ledger's, the served
-check's, the ssh runner's and the fetch's, and the shell's own diagnostic
-when it cannot read the configuration, which is parsed and then sourced in a
-child before the run sources it. Every failure, configuration included, ends
-with a dated `FAILED stage=<stage>` line naming its stage; a run killed
-outright by a signal stops where it is. The only undated lines are
+check's, the ssh runner's and the fetch's. The configuration is parsed in a
+child, then sourced by the run exactly once with its stderr held in a private
+file, printed dated as soon as the read ends: whatever it writes there, the
+shell's own diagnostic when it cannot read it included, appears once, after
+the read rather than interleaved with it. Every failure, configuration
+included, ends with a dated `FAILED stage=<stage>` line naming its stage; a
+run killed outright by a signal stops where it is. The only undated lines are
 diagnostics a child (git, mv, mktemp, mkfifo) prints inside that critical
 section, and a dated line always follows them. A program whose
 standard output is DATA (the capture's document, the sealed bytes, the host's

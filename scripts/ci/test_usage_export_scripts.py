@@ -50,6 +50,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -1729,12 +1730,17 @@ class LogRotationTest(PushFixture, unittest.TestCase):
         self.config.write_text(text, encoding="utf-8")
         self.config.chmod(0o600)
 
-    def refused_configuration(self):
+    def refused_configuration(self, status=1):
         """Run as the agent does and return the error log's lines, after
-        proving the run exited 1, wrote nothing to the output log, and dated
-        every line it wrote to the error log."""
+        proving the run exited with `status` (any non-zero status when None;
+        either way kept as `self.refused_status`), wrote nothing to the output
+        log, and dated every line it wrote to the error log."""
         logs = self.logs(b"", b"")
-        self.assertEqual(self.launchd_run(logs), 1)
+        self.refused_status = self.launchd_run(logs)
+        if status is None:
+            self.assertNotEqual(self.refused_status, 0)
+        else:
+            self.assertEqual(self.refused_status, status)
         self.assertEqual((logs / "usage-export.log").read_bytes(), b"")
         err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
         self.assertTrue(err)
@@ -1787,35 +1793,148 @@ class LogRotationTest(PushFixture, unittest.TestCase):
     def test_a_configuration_that_parses_but_fails_when_read_is_dated_and_refused(self):
         # A setting written with spaces around `=` parses, and then runs as a
         # command that does not exist; a reference to an unset variable parses
-        # and then fails under `set -u`. Both are read in a child first.
+        # and then fails under `set -u`. Both end the shell while the run
+        # sources the configuration, and the EXIT trap dates the shell's own
+        # line and names the status the run ends with. That status is the
+        # shell's, so it differs by shell (127, and 1 or 2); bash 3.2 reports
+        # 0 for the `set -u` refusal under a trap, which the run reports as 1.
         for broken in ("PUSH_PORT = 22\n", "PUSH_PORT=$NARANJO_TEST_UNSET_SETTING\n"):
             with self.subTest(broken=broken):
-                lines = self.refused_configuration_with(broken)
+                lines = self.refused_configuration_with(broken, status=None)
                 self.assertRegex(
-                    lines[-1], r"^usage-export: FAILED stage=configure reason=config-error elapsed=\d+s$"
+                    lines[-1],
+                    r"^usage-export: FAILED stage=configure reason=config-error status=%d elapsed=\d+s$"
+                    % self.refused_status,
                 )
                 self.assertGreaterEqual(len(lines), 2, lines)
 
     def test_a_configuration_naming_its_own_path_is_still_read(self):
-        # The child that reads the configuration first sees CONFIG exactly as
-        # this run does, so a setting derived from it is no false refusal.
+        # The run sources the configuration itself, with CONFIG set, so a
+        # setting derived from it is no false refusal. A plain reference: one
+        # shell does not apply `set -u` to a `${CONFIG%/*}` removal, and this
+        # must fail on every shell wherever CONFIG is unset.
         logs = self.logs(b"", b"")
-        self.write_raw_config(
-            "".join("%s=%s\n" % pair for pair in self.config_lines.items())
-            # A plain reference: one shell does not apply `set -u` to a
-            # `${CONFIG%/*}` removal, and this must fail on every shell when
-            # the child lacks CONFIG.
-            + 'CONFIG_SEEN="$CONFIG"\n'
-        )
+        self.write_raw_config(self.complete_configuration() + 'CONFIG_SEEN="$CONFIG"\n')
         self.assertEqual(self.launchd_run(logs), 0)
 
-    def refused_configuration_with(self, broken):
+    def complete_configuration(self):
+        """The fixture's complete configuration, as text."""
+        return "".join("%s=%s\n" % pair for pair in self.config_lines.items())
+
+    def refused_configuration_with(self, broken, status=1):
         """The fixture's complete configuration with one broken line after it."""
         shutil.rmtree(self.scratch / "logs", ignore_errors=True)
-        self.write_raw_config(
-            "".join("%s=%s\n" % pair for pair in self.config_lines.items()) + broken
+        self.write_raw_config(self.complete_configuration() + broken)
+        return self.refused_configuration(status)
+
+    def evaluation_counter(self, fails_from):
+        """One valid configuration line that counts its own evaluations in the
+        test's scratch and, from evaluation `fails_from` on, prints one line to
+        stderr and fails with status 9. Returns (counter file, line)."""
+        counter = self.scratch / "evaluations"
+        line = (
+            'EVALUATED=$(n=$(cat %(c)s 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >%(c)s; '
+            'if [ "$n" -ge %(f)d ]; then echo "evaluation $n failed" >&2; exit 9; fi; printf "%%s" "$n")\n'
+            % {"c": shlex.quote(str(counter)), "f": fails_from}
         )
-        return self.refused_configuration()
+        return counter, line
+
+    def mktemp_in_front(self, name, body):
+        """A mktemp in its own directory in front of the fixture PATH: `body`
+        runs first, and the real mktemp ($REAL) after it unless `body` exits."""
+        real = shutil.which("mktemp")
+        self.assertIsNotNone(real, "no mktemp on PATH")
+        front = self.scratch / name
+        front.mkdir()
+        write_executable(front / "mktemp", "#!/bin/sh\nREAL=%s\n%s" % (shlex.quote(real), body))
+        self.env["PATH"] = "%s:%s" % (front, self.env["PATH"])
+
+    def record_temporaries(self):
+        """Record every path mktemp makes for the run; returns the record."""
+        record = self.scratch / "temporaries"
+        self.mktemp_in_front(
+            "recording",
+            'made=$("$REAL" "$@") || exit\nprintf \'%%s\\n\' "$made" >>%s\nprintf \'%%s\\n\' "$made"\n'
+            % shlex.quote(str(record)),
+        )
+        return record
+
+    def assert_temporaries_removed(self, record):
+        """Every path the run had mktemp make is gone once it ends."""
+        made = record.read_text(encoding="utf-8").splitlines()
+        self.assertTrue(made, "the run made no temporary through mktemp")
+        for path in made:
+            with self.subTest(temporary=path):
+                self.assertFalse(os.path.lexists(path), path)
+
+    def test_a_configuration_diagnostic_is_printed_once_and_dated(self):
+        # Review of 4ba57f0: the configuration was read in a child, dated, and
+        # then sourced AGAIN by this shell with bare stderr, so a valid
+        # setting whose command prints a diagnostic printed it twice, the
+        # second time undated. Sourced once, it prints once, dated, and the
+        # value it set reaches the push.
+        record = self.record_temporaries()
+        logs = self.logs(b"", b"")
+        self.write_raw_config(
+            self.complete_configuration() + "PUSH_PORT=$(echo 'assignment diagnostic' >&2; printf 2222)\n"
+        )
+        self.assertEqual(self.launchd_run(logs), 0)
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        said = [line for line in err if "assignment diagnostic" in line]
+        self.assertEqual(len(said), 1, err)
+        self.assertRegex(said[0], LOG_STAMP)
+        self.assertEqual(LOG_STAMP.sub("", said[0], count=1), "assignment diagnostic")
+        self.assertIn("Port=2222", self.args_file.read_text(encoding="utf-8").splitlines())
+        self.assert_temporaries_removed(record)
+
+    def test_a_configuration_is_evaluated_exactly_once(self):
+        # Review of 4ba57f0: a command that succeeded on the child's
+        # evaluation and failed (status 9) on the second, this shell's,
+        # ended the run with a bare line and no FAILED line. Read once, there
+        # is no second evaluation to fail.
+        counter, line = self.evaluation_counter(fails_from=2)
+        record = self.record_temporaries()
+        logs = self.logs(b"", b"")
+        self.write_raw_config(self.complete_configuration() + line)
+        self.assertEqual(self.launchd_run(logs), 0)
+        self.assertEqual(counter.read_text(encoding="utf-8"), "1\n")
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        self.assertFalse([line for line in err if "stage=configure" in line or "evaluation" in line], err)
+        for line in err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
+        self.assert_temporaries_removed(record)
+
+    def test_a_configuration_that_fails_on_its_first_evaluation_is_dated_and_refused(self):
+        # The one read fails: the shell exits from inside the source, and the
+        # EXIT trap prints what the configuration said, dated, then a dated
+        # FAILED line naming the status the run ends with.
+        counter, line = self.evaluation_counter(fails_from=1)
+        record = self.record_temporaries()
+        lines = self.refused_configuration_with(line, status=9)
+        self.assertEqual(lines[:-1], ["evaluation 1 failed"])
+        self.assertRegex(
+            lines[-1], r"^usage-export: FAILED stage=configure reason=config-error status=9 elapsed=\d+s$"
+        )
+        self.assertEqual(counter.read_text(encoding="utf-8"), "1\n")
+        self.assert_temporaries_removed(record)
+
+    def test_a_file_for_the_configurations_diagnostics_that_cannot_be_created_is_dated(self):
+        # Refused before the configuration is sourced: it is never read
+        # without somewhere to put what it prints.
+        counter, line = self.evaluation_counter(fails_from=1)
+        self.mktemp_in_front(
+            "refusing", "if [ \"$#\" -eq 0 ]; then echo 'mktemp: refused by the fixture' >&2; exit 1; fi\n"
+            'exec "$REAL" "$@"\n'
+        )
+        self.write_raw_config(self.complete_configuration() + line)
+        lines = self.refused_configuration()
+        self.assertEqual(
+            lines[-3:-1],
+            ["mktemp: refused by the fixture", "usage-export: cannot create a file for the configuration's diagnostics"],
+        )
+        self.assertRegex(lines[-1], r"^usage-export: FAILED stage=configure elapsed=\d+s$")
+        self.assertFalse(counter.exists(), "the configuration was read without its boundary")
 
     def test_a_history_directory_that_cannot_be_created_is_dated(self):
         # mkdir's own diagnostic is a child's line outside the fast-forward
@@ -1831,11 +1950,13 @@ class LogRotationTest(PushFixture, unittest.TestCase):
     def test_a_scratch_directory_that_cannot_be_created_is_dated(self):
         # A refusing mktemp in front of the fixture PATH, because a missing
         # TMPDIR is not a refusal everywhere (one mktemp falls back to another
-        # directory). The scratch is the first mktemp this run reaches.
-        refusing = self.scratch / "refusing"
-        refusing.mkdir()
-        write_executable(refusing / "mktemp", "#!/bin/sh\necho 'mktemp: refused by the fixture' >&2\nexit 1\n")
-        self.env["PATH"] = "%s:%s" % (refusing, self.env["PATH"])
+        # directory). The scratch is the first DIRECTORY this run asks mktemp
+        # for, so only `-d` is refused: the file the configuration's
+        # diagnostics go to, made before it, comes from the real one.
+        self.mktemp_in_front(
+            "refusing", "if [ \"${1:-}\" = -d ]; then echo 'mktemp: refused by the fixture' >&2; exit 1; fi\n"
+            'exec "$REAL" "$@"\n'
+        )
         lines = self.refused_configuration()
         self.assertEqual(
             lines[-3:-1], ["mktemp: refused by the fixture", "usage-export: cannot create scratch directory"]

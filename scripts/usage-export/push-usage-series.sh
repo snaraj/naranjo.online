@@ -127,8 +127,8 @@
 #   * every line this script writes itself opens with the UTC instant it was
 #     written (`log`), and so does every line a program it runs writes to the
 #     logs outside the fast-forward critical section (`stamped`,
-#     `stamped_out`) — the shell's own diagnostic about the configuration
-#     included;
+#     `stamped_out`), and every line the configuration writes to stderr while
+#     it is sourced, once — the shell's own diagnostic about it included;
 #   * every failure, configuration included, ends with a dated
 #     `FAILED stage=<stage>` line naming its stage (a run killed outright by
 #     a signal stops where it is);
@@ -240,17 +240,51 @@ refuse_configuration() {
 }
 
 # The configuration is shell, and a shell that cannot read it dies with a
-# line of its own, undated, and no FAILED line after it (issue #371). So it is
-# read twice in a child before this shell sources it, each time through
-# `stamped`, so whatever the shell says is dated: parsed (`-n`), then sourced
-# under this run's own `set -eu` and with CONFIG set as it is here, which is
-# where a setting written `NAME = value` or one naming an unset variable
-# fails.
+# line of its own, undated, and no FAILED line after it (issue #371). It is
+# parsed first in a child (`-n` runs nothing), through `stamped`, so a syntax
+# error is dated and refused.
 stamped /bin/sh -n "$CONFIG" </dev/null || refuse_configuration config-syntax
-# shellcheck disable=SC2016 # $1 is the child shell's own argument.
-stamped /bin/sh -eu -c 'CONFIG=$1; . "$1"' configuration "$CONFIG" </dev/null >/dev/null \
-    || refuse_configuration config-error
-. "$CONFIG"
+
+# Then this shell sources it EXACTLY ONCE, under this run's own `set -eu`: a
+# second read could print its diagnostics again or fail where the first did
+# not. The variables it sets must stay in this shell, so the source cannot
+# run in a child, and its stderr goes to a private file instead. That file is
+# printed, every line dated, once the read ends, so the configuration's
+# diagnostics follow its read, in order, rather than interleaving with it.
+# A read that ends the shell (a command that fails, a setting written
+# `NAME = value`, one naming an unset variable, an `exit`) runs the EXIT trap
+# instead: the same lines, then a dated FAILED line, and the run ends with the
+# shell's status, or with 1 when that reads 0 — bash 3.2 (macOS's /bin/sh)
+# reports 0 for a `set -u` refusal whenever an EXIT trap is set, and a
+# configuration that runs `exit 0` was not read to its end either. bash 3.2
+# also keeps the source's redirection in force while that trap runs, so the
+# run's own stderr waits on descriptor 9, open only during the read, and the
+# trap puts it back before it writes. The file is stamped whole before a line
+# is written, so even a stderr still pointing at it can never be read back
+# into itself without end.
+configuration_diagnostics=$(stamped mktemp) \
+    || fail "cannot create a file for the configuration's diagnostics"
+configuration_said() {
+    configuration_lines=$(stamp <"$configuration_diagnostics")
+    rm -f "$configuration_diagnostics"
+    if [ -n "$configuration_lines" ]; then
+        printf '%s\n' "$configuration_lines" >&2
+    fi
+}
+configuration_ended() {
+    configuration_status=$1
+    exec 2>&9 9>&-
+    configuration_said
+    [ "$configuration_status" -ne 0 ] || configuration_status=1
+    log "FAILED stage=configure reason=config-error status=$configuration_status elapsed=$(elapsed)s" >&2
+    exit "$configuration_status"
+}
+exec 9>&2
+trap 'configuration_ended "$?"' EXIT
+. "$CONFIG" 2>"$configuration_diagnostics"
+trap - EXIT
+exec 9>&-
+configuration_said
 
 # Every required setting that is unset or empty is named on a dated line of
 # its own — the NAME, never a value, which this function never reads into a
