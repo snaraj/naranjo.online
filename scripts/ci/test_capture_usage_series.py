@@ -1052,6 +1052,28 @@ class ModelFoldTest(unittest.TestCase):
         self.assertGreater(declared, 0, "the vocabulary declares no identifiers to fold")
         self.assertEqual(self.counters["unattributed"], 0)
 
+    # Raw identifiers the tools were seen reporting, each with the member and
+    # the source a release named it for (issue #373). They are literals rather
+    # than read from the vocabulary: the test above iterates the identifiers
+    # the file still declares, so deleting one removes its own subject, while
+    # this table keeps the subject and turns red instead.
+    REPORTED = (
+        ("claude-haiku-4-5-20251001", "haiku-4-5", "anthropic"),
+        ("gpt-6.1-sol", "gpt-6-1-sol", "codex"),
+        ("gpt-6-sol", "gpt-6-sol", "codex"),
+    )
+
+    def test_every_reported_identifier_reaches_the_member_named_for_it(self):
+        for raw, member, source in self.REPORTED:
+            with self.subTest(identifier=raw):
+                counters = capture_usage_series.new_counters()
+                scope = capture_usage_series.model_scope(source)
+                folded, identity = capture_usage_series.attributed_model(raw, counters, scope)
+                self.assertEqual(folded, member)
+                self.assertEqual(identity, raw)
+                self.assertEqual(counters["unattributed"], 0)
+                self.assertEqual(counters["cross_group"], 0)
+
     def test_an_identifier_is_normalised_before_it_is_matched(self):
         # A written version number carries dots; a machine key never does, so
         # the raw identifier is lowercased and its dots read as hyphens before
