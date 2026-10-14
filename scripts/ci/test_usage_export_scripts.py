@@ -1906,6 +1906,47 @@ class LogRotationTest(PushFixture, unittest.TestCase):
         out = (logs / "usage-export.log").read_text(encoding="utf-8")
         self.assertNotIn("configuration stdout line", out)
 
+    def test_a_configuration_that_changes_path_still_ends_dated(self):
+        # Review of d8b4a89: the cleanup after the read looked up a bare `rm`
+        # through the PATH the configuration had just set, so a configuration
+        # ending `PATH=/definitely-missing` ended the run with one bare
+        # "rm: command not found" line and no FAILED line. The cleanup names
+        # /bin/rm, so the run goes on to fail where a missing PATH first
+        # matters, every line dated and a FAILED line last.
+        logs = self.logs(b"", b"")
+        self.write_raw_config(self.complete_configuration() + "PATH=/definitely-missing\n")
+        status = self.launchd_run(logs)
+        self.assertNotEqual(status, 0)
+        self.assertNotEqual(status, 127)
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(err)
+        for line in err:
+            with self.subTest(line=line):
+                self.assertRegex(line, LOG_STAMP)
+        self.assertRegex(LOG_STAMP.sub("", err[-1], count=1), r"^usage-export: FAILED stage=")
+        self.assertFalse([line for line in err if "rm: command not found" in line], err)
+
+    def test_a_configuration_file_that_cannot_be_removed_is_a_dated_refusal(self):
+        # After a successful read the private file holding what the
+        # configuration printed is removed; if it cannot be, the run is
+        # refused, dated, rather than going on with a file left behind. The
+        # file is made in a fixture directory the configuration then makes
+        # read-only, so the removal fails for a reason the test controls.
+        if os.geteuid() == 0:
+            self.skipTest("root removes a file from a read-only directory")
+        held = self.scratch / "held"
+        held.mkdir()
+        self.addCleanup(os.chmod, held, 0o700)
+        self.mktemp_in_front(
+            "holding", 'if [ "$#" -eq 0 ]; then exec "$REAL" %s; fi\nexec "$REAL" "$@"\n'
+            % shlex.quote(str(held / "diagnostics.XXXXXX"))
+        )
+        lines = self.refused_configuration_with("chmod a-w %s\n" % shlex.quote(str(held)), status=1)
+        self.assertTrue([line for line in lines if line.startswith("rm: ")], lines)
+        self.assertRegex(
+            lines[-1], r"^usage-export: FAILED stage=configure reason=config-cleanup elapsed=\d+s$"
+        )
+
     def test_a_configuration_is_evaluated_exactly_once(self):
         # Review of 4ba57f0: a command that succeeded on the child's
         # evaluation and failed (status 9) on the second, this shell's,

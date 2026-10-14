@@ -264,17 +264,25 @@ stamped /bin/sh -n "$CONFIG" </dev/null || refuse_configuration config-syntax
 # into itself without end.
 configuration_diagnostics=$(stamped mktemp) \
     || fail "cannot create a file for the configuration's diagnostics"
+# The file is removed by /bin/rm, never by a PATH lookup: the configuration
+# has just run in this shell and may have changed PATH, and a cleanup that
+# could not even find rm would end the run with a bare line. rm runs through
+# `stamped`, so its own complaint is dated too. The function reports whether
+# the file is gone; after a successful read, a file that could not be removed
+# is a dated refusal of its own.
+configuration_kept=
 configuration_said() {
     configuration_lines=$(stamp <"$configuration_diagnostics")
-    rm -f "$configuration_diagnostics"
+    stamped /bin/rm -f "$configuration_diagnostics" || configuration_kept=1
     if [ -n "$configuration_lines" ]; then
         printf '%s\n' "$configuration_lines" >&2
     fi
+    [ -z "$configuration_kept" ]
 }
 configuration_ended() {
     configuration_status=$1
     exec 2>&9 9>&-
-    configuration_said
+    configuration_said || :
     [ "$configuration_status" -ne 0 ] || configuration_status=1
     log "FAILED stage=configure reason=config-error status=$configuration_status elapsed=$(elapsed)s" >&2
     exit "$configuration_status"
@@ -284,7 +292,7 @@ trap 'configuration_ended "$?"' EXIT
 . "$CONFIG" 2>"$configuration_diagnostics" >&2
 trap - EXIT
 exec 9>&-
-configuration_said
+configuration_said || refuse_configuration config-cleanup
 
 # Every required setting that is unset or empty is named on a dated line of
 # its own — the NAME, never a value, which this function never reads into a

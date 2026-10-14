@@ -1468,6 +1468,7 @@ Every symptom below is the text AFTER the UTC instant its log line opens with.
 | `configuration is not readable` | the file is private but this account cannot read it |
 | `<NAME> missing from configuration`, then `FAILED stage=configure reason=config-incomplete missing=<NAME>[,<NAME>…]` | a required setting is unset or empty; each is named on its own line, and the FAILED line names them all. Names only, never a value |
 | `FAILED stage=configure reason=config-syntax` | the configuration does not parse as shell; the shell's own diagnostic, dated, is above it |
+| `FAILED stage=configure reason=config-cleanup` | the configuration was read, but the private file holding what it printed could not be removed; its lines, dated, are above it |
 | `FAILED stage=configure reason=config-error` | the configuration parses but fails when sourced under `set -eu` — commonly a setting written `NAME = value`, or one naming an unset variable; the shell's own diagnostic, dated, is above it |
 | `the ledger line N is malformed: …` | a line in the append-only record is damaged in a way an interrupted write cannot produce. The run refuses rather than skipping it; the named line is the whole diagnosis |
 | `ledger repaired a partial line in …` | the tolerated fault: an interrupted append left a line with no newline. It was truncated back and the run continued |
