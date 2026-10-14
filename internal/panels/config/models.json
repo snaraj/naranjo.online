@@ -72,6 +72,13 @@
           "slot": 9,
           "ids": [],
           "prefixStrip": true
+        },
+        {
+          "key": "haiku-4-5",
+          "label": "Haiku 4.5",
+          "slot": 10,
+          "ids": ["claude-haiku-4-5-20251001"],
+          "prefixStrip": true
         }
       ]
     },
@@ -119,6 +126,20 @@
           "label": "Daybreak Blue",
           "slot": 1,
           "ids": ["gpt-daybreak-blue-latest"],
+          "prefixStrip": false
+        },
+        {
+          "key": "gpt-6-1-sol",
+          "label": "GPT-6.1 Sol",
+          "slot": 7,
+          "ids": ["gpt-6-1-sol"],
+          "prefixStrip": false
+        },
+        {
+          "key": "gpt-6-sol",
+          "label": "GPT-6 Sol",
+          "slot": 8,
+          "ids": ["gpt-6-sol"],
           "prefixStrip": false
         }
       ]

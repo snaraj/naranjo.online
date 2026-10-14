@@ -74,6 +74,23 @@ as well, which admission also accepts, seals to 116,313 and serves at 117,577.
 Every stage refuses an over-budget document rather than truncating it, and
 that refusal is what bounds a document.
 
+### Three more members (issue #373)
+
+Haiku 4.5 joined the Anthropic group, and GPT-6.1 Sol and GPT-6 Sol joined
+the OpenAI group: 19 keys, the residual plus 10 and 8 members. The measurements
+above move with them. These figures supersede that table:
+
+| Digits | Sealed size of the capacity fixture |
+|---|---|
+| 10 | 114,962 bytes |
+| 11 | 124,990 bytes |
+| 12 | 135,018 bytes |
+
+The one-digit headroom holds and the window did not move. The Go suite's large
+admissible document seals to 106,688 bytes and serves at 108,061. With its
+second source given the same one-category partition, it seals to 119,157 and
+serves at 120,547.
+
 ### The version-control and repository payloads (issues #315, #317)
 
 Two payloads grew on 2026-09-11 and both were measured against the same

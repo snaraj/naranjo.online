@@ -739,6 +739,14 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     '#7a7a7a', '#cccccc', // dark steps
     '#8e5793', '#01a2c5', // slate
     '#985a96', '#0fa3bf', // sepia
+    // Slot 10, added at issue #373 when the Anthropic group grew to ten named
+    // members: a gold, 3.34:1 at the lowest on each mode's raised surface, and
+    // the 9-10 pair at worst 21.6 (normal) and 18.9 (deuteranopia and
+    // protanopia). Dark's is a grey at 3.52:1, held to the no-hue rule.
+    '#9f7604', // light
+    '#737373', // dark step
+    '#8d6803', // slate
+    '#926e10', // sepia
     // The two status inks added at issues 222 and 229, each with its own
     // darkened twin for the light card. They are enumerated here for the
     // same reason every value above is: a status ink restated at a second
