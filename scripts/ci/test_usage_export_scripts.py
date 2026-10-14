@@ -1919,6 +1919,17 @@ class LogRotationTest(PushFixture, unittest.TestCase):
         self.assertEqual(counter.read_text(encoding="utf-8"), "1\n")
         self.assert_temporaries_removed(record)
 
+    def test_a_configuration_that_exits_0_is_still_a_dated_refusal(self):
+        # Reaching the EXIT trap at all means the configuration was not read
+        # to its end, so a status of 0 is reported, and ends the run, as 1.
+        # The same rule covers bash 3.2, which reports 0 for a `set -u`
+        # refusal under a trap; this case pins it on every shell.
+        lines = self.refused_configuration_with("exit 0\n", status=1)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertRegex(
+            lines[0], r"^usage-export: FAILED stage=configure reason=config-error status=1 elapsed=\d+s$"
+        )
+
     def test_a_file_for_the_configurations_diagnostics_that_cannot_be_created_is_dated(self):
         # Refused before the configuration is sourced: it is never read
         # without somewhere to put what it prints.
