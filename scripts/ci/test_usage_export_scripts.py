@@ -1887,6 +1887,25 @@ class LogRotationTest(PushFixture, unittest.TestCase):
         self.assertIn("Port=2222", self.args_file.read_text(encoding="utf-8").splitlines())
         self.assert_temporaries_removed(record)
 
+    def test_a_configuration_line_on_stdout_is_printed_once_and_dated(self):
+        # The configuration's stdout joins its captured stderr: a setting
+        # whose command writes to stdout would otherwise land undated in the
+        # output log, outside the fast-forward exception the dating contract
+        # names. It is printed once, dated, with the configuration's other
+        # diagnostics, and the output log never sees it.
+        logs = self.logs(b"", b"")
+        self.write_raw_config(
+            self.complete_configuration() + "PUSH_PORT=2222; echo 'configuration stdout line'\n"
+        )
+        self.assertEqual(self.launchd_run(logs), 0)
+        err = (logs / "usage-export.err.log").read_text(encoding="utf-8").splitlines()
+        said = [line for line in err if "configuration stdout line" in line]
+        self.assertEqual(len(said), 1, err)
+        self.assertRegex(said[0], LOG_STAMP)
+        self.assertEqual(LOG_STAMP.sub("", said[0], count=1), "configuration stdout line")
+        out = (logs / "usage-export.log").read_text(encoding="utf-8")
+        self.assertNotIn("configuration stdout line", out)
+
     def test_a_configuration_is_evaluated_exactly_once(self):
         # Review of 4ba57f0: a command that succeeded on the child's
         # evaluation and failed (status 9) on the second, this shell's,

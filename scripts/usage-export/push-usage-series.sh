@@ -127,7 +127,7 @@
 #   * every line this script writes itself opens with the UTC instant it was
 #     written (`log`), and so does every line a program it runs writes to the
 #     logs outside the fast-forward critical section (`stamped`,
-#     `stamped_out`), and every line the configuration writes to stderr while
+#     `stamped_out`), and every line the configuration writes to stdout or stderr while
 #     it is sourced, once — the shell's own diagnostic about it included;
 #   * every failure, configuration included, ends with a dated
 #     `FAILED stage=<stage>` line naming its stage (a run killed outright by
@@ -248,7 +248,7 @@ stamped /bin/sh -n "$CONFIG" </dev/null || refuse_configuration config-syntax
 # Then this shell sources it EXACTLY ONCE, under this run's own `set -eu`: a
 # second read could print its diagnostics again or fail where the first did
 # not. The variables it sets must stay in this shell, so the source cannot
-# run in a child, and its stderr goes to a private file instead. That file is
+# run in a child, and its stdout and stderr go to a private file instead. That file is
 # printed, every line dated, once the read ends, so the configuration's
 # diagnostics follow its read, in order, rather than interleaving with it.
 # A read that ends the shell (a command that fails, a setting written
@@ -281,7 +281,7 @@ configuration_ended() {
 }
 exec 9>&2
 trap 'configuration_ended "$?"' EXIT
-. "$CONFIG" 2>"$configuration_diagnostics"
+. "$CONFIG" 2>"$configuration_diagnostics" >&2
 trap - EXIT
 exec 9>&-
 configuration_said

@@ -33,7 +33,7 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - Every line the usage exporter writes itself carries a UTC timestamp, and
   every failure it reports, a configuration refusal included, ends with a
   dated `FAILED` line naming its stage, so a failed push can be dated. The
-  configuration is sourced once, and what it prints to stderr is dated too. The
+  configuration is sourced once, and what it prints is dated too. The
   only undated lines are diagnostics a child program prints while the checkout
   is fast-forwarded (#371).
 
