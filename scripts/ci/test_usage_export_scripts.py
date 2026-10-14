@@ -1942,7 +1942,9 @@ class LogRotationTest(PushFixture, unittest.TestCase):
             % shlex.quote(str(held / "diagnostics.XXXXXX"))
         )
         lines = self.refused_configuration_with("chmod a-w %s\n" % shlex.quote(str(held)), status=1)
-        self.assertTrue([line for line in lines if line.startswith("rm: ")], lines)
+        # rm names itself the way its platform does: BSD's as `rm:`, GNU's
+        # (the Linux gate's) by the path it was run as, `/bin/rm:`.
+        self.assertTrue([line for line in lines if re.match(r"(?:/bin/)?rm: ", line)], lines)
         self.assertRegex(
             lines[-1], r"^usage-export: FAILED stage=configure reason=config-cleanup elapsed=\d+s$"
         )
