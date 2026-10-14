@@ -1346,8 +1346,8 @@ func TestDataRootRefusesOversizeBeforeDecryption(t *testing.T) {
 // partition at its own day bound on BOTH, and every value at the shared
 // numeric ceiling. It is not proven to be the largest, and the name is older
 // than that finding: giving the second source a category partition too,
-// which admission also accepts, seals to 116,313 bytes against this
-// fixture's 103,844 (measured 2026-10-13). What keeps every admissible
+// which admission also accepts, seals to 119,157 bytes against this
+// fixture's 106,688 (measured 2026-10-14, issue #373). What keeps every admissible
 // document inside the ceilings is refusal at seal and serve time; these
 // measurements say how much room a realistic large document leaves.
 //

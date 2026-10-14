@@ -2136,12 +2136,12 @@ const (
 	// refused at serve time by the envelope's own bytes. That is refusal,
 	// not truncation, and it is the refusal that bounds every document, not
 	// any measurement. The measured fixtures are particular shapes, not
-	// proven maxima: the suite's large admissible document seals to 103,844
-	// bytes and serves at 105,091, and giving its second source a category
-	// partition as well, which admission also accepts, seals to 116,313 and
-	// serves at 117,577. The fixture CapParityTest builds from the shipped
+	// proven maxima: the suite's large admissible document seals to 106,688
+	// bytes and serves at 108,061, and giving its second source a category
+	// partition as well, which admission also accepts, seals to 119,157 and
+	// serves at 120,547. The fixture CapParityTest builds from the shipped
 	// vocabularies, each source scoped to its own vendor group (issue #369),
-	// seals to 112,642.
+	// seals to 114,962 (issue #373's three members included).
 	maxSealedSeriesBytes = 128 << 10
 
 	// dataRootFutureSkew is how far ahead of the local clock a series

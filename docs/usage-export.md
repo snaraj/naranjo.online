@@ -516,11 +516,11 @@ room a realistic large document leaves. Each source carries:
   accounting class;
 - every required section.
 
-Compact-encoded and sealed, that measures **112,642 bytes** at ten-digit daily
+Compact-encoded and sealed, that measures **114,962 bytes** at ten-digit daily
 values, an order of magnitude above the shipped snapshot's own measured peak
-day. 131,072 leaves **18,430 bytes** of headroom. The same document seals to
-122,487 bytes at eleven-digit values and only crosses the ceiling at twelve,
-where it reaches 132,332.
+day. 131,072 leaves **16,110 bytes** of headroom. The same document seals to
+124,990 bytes at eleven-digit values and only crosses the ceiling at twelve,
+where it reaches 135,018.
 
 The models section spent one decimal digit of the original headroom — it was
 three before #170 — and the sixth model member (issue #299) spent the second.
@@ -530,7 +530,9 @@ first time that phrase was "its own group" rather than "every source". With
 four Anthropic members added, every member on every source would have sealed to
 135,028 bytes at eleven digits, over the ceiling. Scoping each source to its own
 vendor (the capture folds, and the exporter, the origin and the page refuse)
-paid for them without moving the window. Issue #302 paid that price the other
+paid for them without moving the window. Issue #373 added three more, one
+Anthropic and two OpenAI, for 2,503 bytes at eleven digits, inside the room
+that scoping left. Issue #302 paid that price the other
 way round. Seven named members joined at once, which at the old 92-day window
 put the eleven-digit maximum over the ceiling; the ceiling is one number five
 stages agree on and moving it would move all five, so the WINDOW was cut to

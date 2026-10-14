@@ -334,8 +334,8 @@
   /* The token-usage ENTITY set: identity colors for the per-day breakdowns.
      The five accounting classes take slots 1..5 (input, output, cache read,
      cache write, reasoning) and the model vocabulary's members take a slot
-     within their own vendor group, which is why the set runs to nine
-     chromatic hues (issue 369: the larger group declares nine named
+     within their own vendor group, which is why the set runs to ten
+     chromatic hues (issue 373: the larger group declares ten named
      members). A slot is fixed per KEY so a color follows its entity across
      every payload, and slot 0 is the neutral the residual and any key
      outside a vocabulary draw. Reuse ACROSS groups is deliberate — a colour
@@ -366,6 +366,16 @@
      repainting a slot moves a member's colour, and the gap is recorded here
      rather than restated as a pass.
 
+     Slot 10 (issue 373) is a gold, the one hue gap the first nine leave
+     (between slot 2's brown-orange and slot 7's olive), measured the same
+     way: OKLab distance x100, with deuteranopia and protanopia simulated in
+     linear RGB, the method that reproduces every figure above to the decimal.
+     Each mode's gold sits inside its lightness band, at chroma 0.110 or more
+     and 3.34:1 or more on its raised surface, and the one pair it makes in
+     the vocabulary's order (9 with 10) measures at worst 21.6 to normal
+     vision and 18.9 under deuteranopia and protanopia. Dark's step is an
+     unused grey at 3.52:1 on its card and 2.95:1 against slot 9's grey.
+
      What these slots are today, plainly: TOKENS THE VOCABULARY RULE REQUIRES,
      not colours a reader sees. models.json gives every member a slot unique
      within its group, and the swatch pin in tests/token-usage.test.mjs
@@ -393,6 +403,7 @@
   --palette-light-cat-7: #698240;
   --palette-light-cat-8: #86318a;
   --palette-light-cat-9: #048aad;
+  --palette-light-cat-10: #9f7604;
 
   --palette-dark-cat-0: #565656;
   --palette-dark-cat-1: #6f6f6f;
@@ -404,6 +415,7 @@
   --palette-dark-cat-7: #f2f2f2;
   --palette-dark-cat-8: #7a7a7a;
   --palette-dark-cat-9: #cccccc;
+  --palette-dark-cat-10: #737373;
 
   --palette-slate-cat-0: #5a657e;
   --palette-slate-cat-1: #3f81d9;
@@ -415,6 +427,7 @@
   --palette-slate-cat-7: #678546;
   --palette-slate-cat-8: #8e5793;
   --palette-slate-cat-9: #01a2c5;
+  --palette-slate-cat-10: #8d6803;
 
   --palette-sepia-cat-0: #77685a;
   --palette-sepia-cat-1: #5c88d8;
@@ -426,6 +439,7 @@
   --palette-sepia-cat-7: #6d8a4b;
   --palette-sepia-cat-8: #985a96;
   --palette-sepia-cat-9: #0fa3bf;
+  --palette-sepia-cat-10: #926e10;
 
   /* Stacking order, as tokens rather than magic numbers. Two things sit over
      the document and they must be told apart. The reading-mode popover hangs
@@ -1008,6 +1022,7 @@
   --usage-cat-7: var(--color-cat-7);
   --usage-cat-8: var(--color-cat-8);
   --usage-cat-9: var(--color-cat-9);
+  --usage-cat-10: var(--color-cat-10);
   /* The hover-detail token layer. The detail that hangs off a tile is one
      primitive (lib/components/DetailTip.svelte), so like the card above it
      every dimension it has is a token declared once here — including the two
@@ -1070,6 +1085,7 @@
   --color-cat-7: var(--palette-light-cat-7);
   --color-cat-8: var(--palette-light-cat-8);
   --color-cat-9: var(--palette-light-cat-9);
+  --color-cat-10: var(--palette-light-cat-10);
   /* The page's one font stack, as a token: a card's type ramp reads it rather
      than restating it, so the family is chosen in exactly one place. The face
      is the self-hosted JetBrains Mono declared at the top of this file (owner
@@ -1194,6 +1210,7 @@
     --color-cat-7: var(--palette-dark-cat-7);
     --color-cat-8: var(--palette-dark-cat-8);
     --color-cat-9: var(--palette-dark-cat-9);
+    --color-cat-10: var(--palette-dark-cat-10);
     --gallery-stage-ground: var(--palette-projection-ground);
   }
 }
@@ -1228,6 +1245,7 @@
   --color-cat-7: var(--palette-dark-cat-7);
   --color-cat-8: var(--palette-dark-cat-8);
   --color-cat-9: var(--palette-dark-cat-9);
+  --color-cat-10: var(--palette-dark-cat-10);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 
@@ -1267,6 +1285,7 @@
   --color-cat-7: var(--palette-slate-cat-7);
   --color-cat-8: var(--palette-slate-cat-8);
   --color-cat-9: var(--palette-slate-cat-9);
+  --color-cat-10: var(--palette-slate-cat-10);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 
@@ -1300,6 +1319,7 @@
   --color-cat-7: var(--palette-sepia-cat-7);
   --color-cat-8: var(--palette-sepia-cat-8);
   --color-cat-9: var(--palette-sepia-cat-9);
+  --color-cat-10: var(--palette-sepia-cat-10);
   --gallery-stage-ground: var(--palette-projection-ground);
 }
 

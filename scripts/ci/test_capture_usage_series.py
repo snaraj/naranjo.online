@@ -92,11 +92,19 @@ def source_for(member):
 
 # The two record shapes' fixtures name members of different groups: the
 # message-shaped records name the vocabulary's first member through its
-# vendor-prefix fold, and the running-totals records name a member the file
-# attributes by an exact identifier. Each is captured for the source its
-# fixtures' members belong to.
+# vendor-prefix fold, and the running-totals records name members the file
+# attributes by an exact identifier in ANOTHER group. An exact identifier
+# alone does not say which group: a prefix-folded group may list one too, for
+# an identifier its fold cannot reach (issue #373). Each is captured for the
+# source its fixtures' members belong to.
+EXACT_MEMBERS = [
+    member
+    for member in dict.fromkeys(capture_usage_series.MODEL_IDS.values())
+    if capture_usage_series.MODEL_GROUPS[member]
+    != capture_usage_series.MODEL_GROUPS[capture_usage_series.MODEL_KEYS[1]]
+]
 MESSAGES_SOURCE = source_for(capture_usage_series.MODEL_KEYS[1])
-RUNNING_SOURCE = source_for(list(dict.fromkeys(capture_usage_series.MODEL_IDS.values()))[0])
+RUNNING_SOURCE = source_for(EXACT_MEMBERS[0])
 MESSAGES_SCOPE = capture_usage_series.model_scope(MESSAGES_SOURCE)
 RUNNING_SCOPE = capture_usage_series.model_scope(RUNNING_SOURCE)
 
@@ -890,7 +898,7 @@ class RunningTotalsAttributionTest(unittest.TestCase):
     # The first two members the vocabulary attributes by an EXACT identifier,
     # chosen by that property rather than by position: a member appended to an
     # earlier group shifts every later index (issue #369).
-    MEMBER, OTHER_MEMBER = list(dict.fromkeys(capture_usage_series.MODEL_IDS.values()))[:2]
+    MEMBER, OTHER_MEMBER = EXACT_MEMBERS[:2]
 
     def walk(self, lines):
         counters = capture_usage_series.new_counters()
@@ -1043,6 +1051,28 @@ class ModelFoldTest(unittest.TestCase):
                 )
         self.assertGreater(declared, 0, "the vocabulary declares no identifiers to fold")
         self.assertEqual(self.counters["unattributed"], 0)
+
+    # Raw identifiers the tools were seen reporting, each with the member and
+    # the source a release named it for (issue #373). They are literals rather
+    # than read from the vocabulary: the test above iterates the identifiers
+    # the file still declares, so deleting one removes its own subject, while
+    # this table keeps the subject and turns red instead.
+    REPORTED = (
+        ("claude-haiku-4-5-20251001", "haiku-4-5", "anthropic"),
+        ("gpt-6.1-sol", "gpt-6-1-sol", "codex"),
+        ("gpt-6-sol", "gpt-6-sol", "codex"),
+    )
+
+    def test_every_reported_identifier_reaches_the_member_named_for_it(self):
+        for raw, member, source in self.REPORTED:
+            with self.subTest(identifier=raw):
+                counters = capture_usage_series.new_counters()
+                scope = capture_usage_series.model_scope(source)
+                folded, identity = capture_usage_series.attributed_model(raw, counters, scope)
+                self.assertEqual(folded, member)
+                self.assertEqual(identity, raw)
+                self.assertEqual(counters["unattributed"], 0)
+                self.assertEqual(counters["cross_group"], 0)
 
     def test_an_identifier_is_normalised_before_it_is_matched(self):
         # A written version number carries dots; a machine key never does, so
@@ -4049,11 +4079,12 @@ class CapParityTest(unittest.TestCase):
         self.assertGreater(cap, measured)
         # The headroom is one further decimal digit on every ladder value: the
         # same fixture still fits at eleven digits and crosses only at twelve.
-        # Measured after issue #369 at a fifty-six-day model window, with each
-        # source carrying only its own vendor group: 112,642 sealed bytes at
-        # ten digits, 122,487 at eleven, 132,332 at twelve. Measured as every
-        # member on every source, the nine-member group alone would have
-        # needed 135,028 at eleven — over the ceiling.
+        # Measured after issue #373 at a fifty-six-day model window, with each
+        # source carrying only its own vendor group: 114,962 sealed bytes at
+        # ten digits, 124,990 at eleven, 135,018 at twelve. After issue #369
+        # it was 112,642, 122,487 and 132,332; measured as every member on
+        # every source, that nine-member group alone would have needed 135,028
+        # at eleven — over the ceiling.
         #
         # The history of the trade: three digits before the models section
         # (issue #170), two after the sixth model member (issue #299), one
@@ -4064,7 +4095,9 @@ class CapParityTest(unittest.TestCase):
         # the window again, to eight weeks, for the same reason. Issue #369
         # needed neither: four members joined the larger group, and scoping
         # each source to its own vendor's models paid for them with room to
-        # spare. The ceiling is never the lever.
+        # spare. Issue #373's three members (one per the larger group, two
+        # per the smaller) spent 2,503 bytes of that room at eleven digits.
+        # The ceiling is never the lever.
         self.assertLess(self.wide_fixture_bytes(11), cap)
         self.assertGreater(self.wide_fixture_bytes(12), cap)
 

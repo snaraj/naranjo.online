@@ -7,6 +7,30 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.95] - 2026-10-13
+
+### Changed
+
+- Three more models are named, where they had been counted as "Other":
+  Haiku 4.5 for Claude Code, and GPT-6.1 Sol and GPT-6 Sol for Codex. The
+  0.1.94 export's summary showed them still unnamed. Haiku 4.5's identifier
+  is listed exactly, because the vendor-prefix fold cannot reach a dated
+  identifier. The next export attributes them wherever their identifier was
+  recorded, with nothing rewritten. A day stored before 0.1.94 kept no
+  identifier and keeps the split it was stored with (#371, #373).
+- Two identifiers stay in "Other" on purpose, and stay recorded as
+  themselves: `codex-auto-review`, which is Codex's auto-review feature and
+  not a model (#316), and `<synthetic>`, which Claude Code writes on messages
+  it generates locally.
+- The entity palette gains slot 10 for the Anthropic group's tenth member: a
+  gold in light, slate and sepia, and a grey in the true dark mode. Measured
+  the same way as slots 8 and 9: 3.34:1 at the lowest on each card, and its
+  one adjacent pair at worst 21.6 to normal vision and 18.9 under
+  deuteranopia and protanopia. The model bars still paint a single ink, so no
+  reader sees these colours yet.
+- The capacity fixture now seals to 124,990 bytes at eleven digits, up from
+  122,487, inside the 131,072 ceiling. The model window is unchanged.
+
 ## [0.1.94] - 2026-10-13
 
 ### Changed
