@@ -39,10 +39,17 @@ const panelsDataTestKeyHex = "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfd0d1d2d3d4d5d6d7d8
 // document that refreshed only some of them is refused as partial
 // (2026-08-24 review finding 7), so a complete one is what this suite must
 // stage to exercise the serving path at all.
-func sealSeriesFile(t *testing.T, dir string, labels []string, modelKey, generatedAt string) []byte {
+func sealSeriesFile(t *testing.T, dir string, labels []string, modelKeys map[string]string, generatedAt string) []byte {
 	t.Helper()
 	sources := make(map[string]any, len(labels))
 	for _, label := range labels {
+		// Each source's OWN model key: a source may carry only its vendor
+		// group's members plus the residual (issue #369), so one key pushed
+		// under every source is refused as soon as it names a member.
+		modelKey, ok := modelKeys[label]
+		if !ok {
+			t.Fatalf("no shipped model key for source %q", label)
+		}
 		sources[label] = map[string]any{
 			// Every section is a WHOLE section: its own capture instant plus
 			// the complete window and derived sets, so nothing series-derived
@@ -167,30 +174,36 @@ func shippedSourceLabels(t *testing.T, site *Site) []string {
 	return labels
 }
 
-// shippedModelKey reads ONE model vocabulary key off the served payload, the
-// way shippedSourceLabels reads the source labels and for the same reason:
-// this suite never spells a data label in source, and the per-model lifetime
-// split a pushed document must carry is keyed by that vocabulary (issue
-// #267). Taken from the shipped section itself, so the key is provably one
-// the origin admits rather than one this file believes it admits.
-func shippedModelKey(t *testing.T, site *Site) string {
+// shippedModelKeys reads one model vocabulary key PER SOURCE off the served
+// payload, the way shippedSourceLabels reads the source labels and for the
+// same reason: this suite never spells a data label in source, and the
+// per-model lifetime split a pushed document must carry is keyed by that
+// vocabulary (issue #267). Each key is taken from that source's own shipped
+// section, so it is provably one the origin admits for THAT source (issue
+// #369 scopes a source to its own vendor group) rather than one this file
+// believes it admits. Every shipped source ships the section (the panels
+// package pins that), so a source without one is a fixture fault.
+func shippedModelKeys(t *testing.T, site *Site) map[string]string {
 	t.Helper()
 	envelope := servedTokenUsage(t, site)
 	data, _ := envelope["data"].(map[string]any)
 	sources, _ := data["sources"].([]any)
+	keys := make(map[string]string, len(sources))
 	for _, source := range sources {
-		rows, ok := source.(map[string]any)["modelStats"].([]any)
-		if !ok {
-			continue
-		}
+		fields, _ := source.(map[string]any)
+		label, _ := fields["label"].(string)
+		rows, _ := fields["modelStats"].([]any)
 		for _, row := range rows {
 			if key, ok := row.(map[string]any)["key"].(string); ok && key != "" {
-				return key
+				keys[label] = key
+				break
 			}
 		}
+		if keys[label] == "" {
+			t.Fatalf("shipped source %q carries no per-model lifetime row to take a vocabulary key from", label)
+		}
 	}
-	t.Fatal("no shipped source carries a per-model lifetime row to take a vocabulary key from")
-	return ""
+	return keys
 }
 
 func TestStartPanelDataServesASealedSeriesEndToEnd(t *testing.T) {
@@ -202,7 +215,7 @@ func TestStartPanelDataServesASealedSeriesEndToEnd(t *testing.T) {
 	defer site.Close()
 	dir := t.TempDir()
 	generatedAt := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
-	sealSeriesFile(t, dir, shippedSourceLabels(t, site), shippedModelKey(t, site), generatedAt)
+	sealSeriesFile(t, dir, shippedSourceLabels(t, site), shippedModelKeys(t, site), generatedAt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -670,8 +683,8 @@ func TestStartPanelDataFloorSurvivesProcessRestart(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	labels := shippedSourceLabels(t, site1)
-	modelKey := shippedModelKey(t, site1)
-	accepted := sealSeriesFile(t, dataDir, labels, modelKey, acceptedAt)
+	modelKeys := shippedModelKeys(t, site1)
+	accepted := sealSeriesFile(t, dataDir, labels, modelKeys, acceptedAt)
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	if err := site1.StartPanelData(ctx1, dataDir, stateDir, env); err != nil {
 		t.Fatalf("first StartPanelData: %v", err)
@@ -688,7 +701,7 @@ func TestStartPanelDataFloorSurvivesProcessRestart(t *testing.T) {
 	// Process two, facing a ROLLED-BACK file: refused, stale said. Without
 	// the persisted floor this file (newer than the embedded snapshot) was
 	// accepted after every restart.
-	sealSeriesFile(t, dataDir, labels, modelKey, rolledBackAt)
+	sealSeriesFile(t, dataDir, labels, modelKeys, rolledBackAt)
 	site2, err := New(testsupport.FrontendFS())
 	if err != nil {
 		t.Fatalf("New: %v", err)

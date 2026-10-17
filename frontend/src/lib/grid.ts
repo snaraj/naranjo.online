@@ -1,17 +1,11 @@
-/* Pure helpers behind ContributionGrid.svelte — the ONE contribution-heatmap
- * implementation this site has. Two panels render one: token consumption per
- * day and version-control contributions per day. They differ only in the noun
- * they count, so the grid takes prepared cells and knows nothing about either
- * source.
+/* Pure helpers behind the page's calendar heatmap — the Chronicle's year of
+ * cells (owner direction, 2026-10-16). Token consumption per day and
+ * version-control contributions per day are laid on it alike; they differ
+ * only in the noun they count, so these helpers take prepared cells and know
+ * nothing about either source.
  *
  * Everything here is a plain function so a node test can drive the bucketing,
- * the view transforms, the month axis and the pointer arithmetic directly,
- * with no browser. */
-
-/* The one point shape this page has, borrowed rather than restated: a type-only
- * import, erased at build and at test time, so this module still pulls nothing
- * in at run time and a coordinate cannot come to mean two things. */
-import type { TipPoint } from './tooltip.ts';
+ * the calendar weeks and the month axis directly, with no browser. */
 
 /* A grid column is one week: seven stacked cells, oldest day at the top. */
 export const gridRows = 7;
@@ -41,17 +35,6 @@ export function gridLevel(value: number, peak: number): number {
   return Math.min(gridLevels - 1, Math.ceil((value / peak) * (gridLevels - 1)));
 }
 
-/* peakValue is the anchor the levels quantize against. */
-export function peakValue(cells: GridCell[]): number {
-  let peak = 0;
-  for (const cell of cells) {
-    if (!cell.absent && cell.value > peak) {
-      peak = cell.value;
-    }
-  }
-  return peak;
-}
-
 /* toColumns slices a day-ordered cell list into grid columns of gridRows,
  * padding the final column with absent cells so every column is full height
  * and the grid's geometry never depends on where the window happens to end. */
@@ -70,23 +53,8 @@ export function toColumns(cells: GridCell[]): GridCell[][] {
 /* The shared calendar-week convention (issue 189): row 0 of every column is
  * Sunday, matching the origin's own vcs-activity payload — activityCells
  * (lib/activity.ts) resolves it from that payload's own "Columns run
- * Sunday..Saturday" shape, and the weekday axis below is written from the
- * SAME convention rather than a second guess at it. A Monday label on row 1,
- * a Wednesday on row 3, a Friday on row 5 (both zero-based) is what a
- * Sunday-start week means; a different convention would move all three. */
+ * Sunday..Saturday" shape. */
 export const weekStartsOn = 0;
-
-export interface WeekdayAxisLabel {
-  /* Zero-based row this label marks. */
-  row: number;
-  readonly label: string;
-}
-
-export const weekdayAxis: readonly WeekdayAxisLabel[] = [
-  { row: 1, label: 'Mon' },
-  { row: 3, label: 'Wed' },
-  { row: 5, label: 'Fri' }
-];
 
 /* calendarColumns realigns a dated cell list onto TRUE calendar weeks, so
  * every column starts on the same weekday (weekStartsOn) and a weekday axis
@@ -107,9 +75,9 @@ export const weekdayAxis: readonly WeekdayAxisLabel[] = [
  * ends of the window, and both keep a real date rather than the bare '' a
  * source that cannot date itself produces).
  *
- * Fixed-width by construction (issue 189 supersedes stripColumns' sizing for
- * any series calendarColumns can date): the output is always exactly `weeks`
- * columns, front-padded when the series is younger than the window and
+ * Fixed-width by construction (issue 189): for any series it can date, the
+ * output is always exactly `weeks` columns, front-padded when the series is
+ * younger than the window and
  * silently truncated to the newest `weeks` when it is older — never fewer,
  * never more, because the day-by-day loop below runs from windowStart to
  * windowEnd and nowhere else.
@@ -167,77 +135,13 @@ export function calendarColumns(
  * contribution calendar covers, so a panel still waiting for its series
  * renders the same shaped box the panel beside it renders full.
  *
- * That "same shaped box" is now LOAD-BEARING rather than decorative, because
- * a block is sized to its own column count (see stripColumns). The reserve
- * and the arrival must therefore be the same number of columns or the
+ * The reserve and the arrival must be the same number of columns or the
  * calendar resizes the moment its payload lands, which is the zero-CLS floor
  * breaking. The origin's shipped calendar is pinned to exactly this many
  * weeks by TestVCSActivityPanelShipsARenderableGraph in
  * internal/panels/registry_test.go, and this constant is pinned to the same
  * number from this side; the two must move together. */
 export const pendingWeeks = 53;
-
-/* The narrowest a graph may be drawn, in columns.
- *
- * Sizing a strip to its data was the whole point once (issue #141, residual
- * risk 2): fifteen days is three columns, and three columns hard against the
- * left edge of a box built for fifty-three read as a graph that had lost its
- * data rather than as a short one. Issue 189 SUPERSEDES that rule for any
- * series calendarColumns can date: a fixed weekday axis is only truthful
- * across a fixed trailing window, and the misread the sizing rule protected
- * against is gone by construction once the window's own faint, dated absent
- * cells and its month axis say plainly "the window starts here, the data
- * doesn't" — both being visible is what used to require a short strip, not a
- * rule that shrinks the strip itself. stripColumns and this floor stay live
- * for the one case calendarColumns still falls back on: a series with no
- * dates to align by, where sizing to data is still the honest choice because
- * there is no calendar to draw a window against. The less/more key under
- * every graph measures 123.38px in all three engines, so ten columns (127px)
- * is the first count that carries it and nine (114px) is not — the key would
- * spill out of the block's start edge, which is the same defect one step
- * smaller. The rendering lanes MEASURE that per engine rather than trusting
- * this arithmetic. */
-export const gridMinColumns = 10;
-
-/* stripColumns is the width a grid block claims, in columns: exactly the
- * columns it draws, floored at gridMinColumns. Pure, so a node test can drive
- * it and a browser lane can measure what it produced.
- *
- * A block never claims MORE columns than it draws. That direction is the one
- * the owner reported, and it is the one a regression would take: a fixed
- * fifty-three used to be a claim about a series nobody had — now, for any
- * dated series, calendarColumns hands back exactly pendingWeeks columns by
- * construction, so stripColumns(claimed) resolves to exactly pendingWeeks
- * every time and this function's own floor never engages there. It stays the
- * real answer for the undated fallback above. */
-export function stripColumns(drawn: number): number {
-  if (!Number.isFinite(drawn) || drawn <= 0) {
-    return gridMinColumns;
-  }
-  return Math.max(gridMinColumns, Math.trunc(drawn));
-}
-
-/* pendingColumns is the graph's CHROME with no data in it: every cell absent,
- * valueless and undated. It exists because "no series yet" was rendering as a
- * line of text where a graph belongs, which reads as a broken panel rather
- * than as a panel waiting; an outlined empty grid says the same thing in the
- * shape the reader is looking for.
- *
- * Absent is the whole point. An absent cell carries no value and no date, so
- * this fills a graph with EXACTLY as much information as the source has
- * reported, which is none. A zero would be a datapoint, and inventing one per
- * day for a year would be a doctrine violation with a very tidy look.
- *
- * How the component DRAWS these is its own decision and no longer the same
- * one it makes for a missing day inside a real window: a field of outlined
- * holes read as a graph that had failed to load (issue 134), so the empty
- * state is styled as a reserved plate instead. The data these cells carry —
- * none — is unchanged either way. */
-export function pendingColumns(weeks: number = pendingWeeks): GridCell[][] {
-  return Array.from({ length: Math.max(0, weeks) }, () =>
-    Array.from({ length: gridRows }, () => ({ value: 0, date: '', absent: true }))
-  );
-}
 
 /* addDays walks a calendar date forward in UTC. Dates in this file are plain
  * calendar labels, never instants, so UTC arithmetic keeps them stable in
@@ -382,183 +286,9 @@ export function cellPeriod(cell: GridCell): string {
 /* How a cell's figure is written out. Exact digits are right for a count a
  * reader wants exactly — commits, kills, sessions — and wrong for a count in
  * the hundreds of millions, which is why this is the caller's decision rather
- * than this file's: ContributionGrid draws both kinds of series and knows
+ * than this file's: the calendar draws both kinds of series and knows
  * neither of them. */
 export type ValueFormat = (value: number) => string;
-
-/* The detail card's default title, built from the caller's own noun (issue
- * 219). Every grid carries a card now, so every grid needs a title, and a
- * caller that has not chosen one should not be made to invent a string — its
- * noun is already adapter data naming exactly this. Capitalised and left
- * SINGULAR on purpose: the card's next row is the figure, so "Contribution /
- * 3 / on Jun 3" reads correctly for every count including one, where a
- * guessed plural would not. Callers with a better phrase pass `cardTitle`
- * (the token strip says "Tokens used"). */
-export function nounTitle(noun: string): string {
-  return noun.length === 0 ? '' : `${noun[0].toUpperCase()}${noun.slice(1)}`;
-}
-
-/* WHICH CELL A POINT NAMES (issue 219; corrected by the owner's 2026-08-31
- * defect report, "the hover bleeds").
- *
- * The strip is laid out on a fixed pitch — a cell plus the gap that follows
- * it — so a point maps to a cell by arithmetic rather than by hit-testing
- * every box. That arithmetic lives here, out of the component, so both of its
- * decisions are executable rather than pattern-matched.
- *
- * THE GAP IS THE WHOLE QUESTION, and the answer depends on who is asking.
- * Flooring a point into its slot resolves a point in the GAP to the cell
- * before it, which is right for a finger — a 10px cell cannot offer a 44px
- * target, and reaching for a cell and landing 2px past it is what fingers do —
- * and wrong for a mouse. The owner reported exactly that wrongness: hovering
- * near the edge of a cell showed the NEIGHBOUR's reading, because the
- * neighbour is what the gap resolves to and a mouse is pixel-exact enough to
- * sit in one. So a fine pointer gets no forgiveness: a point outside a cell's
- * own drawn box is -1, which the caller reads as "nothing here" and closes on,
- * rather than a confident answer about the wrong day.
- *
- * Out-of-range points still clamp for a coarse pointer, because a finger a
- * little past the last column is still reaching for the last column; for a
- * fine pointer they are outside every cell like any other gap point. */
-export interface StripGeometry {
-  /* Viewport coordinates of the first cell's top-left corner. */
-  readonly left: number;
-  readonly top: number;
-  /* One cell plus the gap after it, per axis. */
-  readonly pitchX: number;
-  readonly pitchY: number;
-  /* The cell's own drawn box — the pitch minus the gap. Equal to the pitch
-   * only in a grid with no gap at all, where every point inside the strip is
-   * inside some cell and the two rules below agree. */
-  readonly cellWidth: number;
-  readonly cellHeight: number;
-  readonly columns: number;
-  /* How many cells the strip actually holds; a slot past the last one is no
-   * cell however the arithmetic lands. */
-  readonly count: number;
-}
-
-export function stripIndexAt(
-  point: TipPoint,
-  box: StripGeometry,
-  pointer: 'fine' | 'coarse',
-  rows: number = gridRows
-): number {
-  if (box.pitchX <= 0 || box.pitchY <= 0 || box.columns <= 0 || rows <= 0) {
-    return -1;
-  }
-  const offsetX = point.x - box.left;
-  const offsetY = point.y - box.top;
-  const rawColumn = Math.floor(offsetX / box.pitchX);
-  const rawRow = Math.floor(offsetY / box.pitchY);
-  if (pointer === 'fine') {
-    /* Inside a real cell, or nothing: both the slot and the position WITHIN
-       the slot have to land on the cell, and a point before the strip starts
-       floors to a negative slot rather than to cell zero. */
-    if (rawColumn < 0 || rawColumn >= box.columns || rawRow < 0 || rawRow >= rows) {
-      return -1;
-    }
-    if (offsetX - rawColumn * box.pitchX >= box.cellWidth) {
-      return -1;
-    }
-    if (offsetY - rawRow * box.pitchY >= box.cellHeight) {
-      return -1;
-    }
-    const index = rawColumn * rows + rawRow;
-    return index < box.count ? index : -1;
-  }
-  const column = Math.min(box.columns - 1, Math.max(0, rawColumn));
-  const row = Math.min(rows - 1, Math.max(0, rawRow));
-  const index = column * rows + row;
-  return index < box.count ? index : -1;
-}
-
-/* WHERE A KEY PRESS PUTS THE GRID'S CURSOR (issue 219).
- *
- * The strip is one focus stop holding many cells, so the arrows move a cursor
- * INSIDE it — the listbox shape. This is that decision as arithmetic, out of
- * the component so it is executable rather than pattern-matched, the same
- * arrangement columnKeyIntent and swatchKeyTarget already use for the two
- * other keyboard surfaces on this page.
- *
- * `null` means "not this grid's key": the caller does nothing and, crucially,
- * does not preventDefault, so Tab still leaves and PageDown still scrolls.
- * `-1` is "no cell is current", which only Escape produces. Anything else is
- * the index the cursor lands on, and a refused move answers the CURRENT
- * cursor rather than null, so the key is still swallowed — the arrows belong
- * to the grid even at its boundary, or a reader stepping off the end gets a
- * surprise page scroll.
- *
- * THE EMPTY CURSOR IS THE CASE THAT WAS WRONG. The first arrow press on a
- * strip nobody has selected in must open on the newest data, whichever arrow
- * it is. The component used to reach that by stepping from `cells.length - 1`,
- * which works only for a NEGATIVE step: ArrowRight and ArrowDown stepped
- * PAST the end, hit the range guard and returned, so they were dead keys —
- * measured in WebKit as five ArrowRight presses and two ArrowDown presses
- * moving nothing at all while ArrowLeft moved normally (2026-08-27). A
- * reader whose cursor had been dropped — which a page scroll used to do, see
- * lib/tooltip.ts — could never get it back with the arrow that reads as
- * "forwards". Opening on the newest cell for EVERY arrow is what the
- * handler's own comment always claimed, and it is direction-symmetric, so
- * the defect cannot come back through the other axis. */
-export function gridCursorTarget(
-  key: string,
-  cursor: number,
-  dated: readonly boolean[],
-  rows: number = gridRows
-): number | null {
-  if (key === 'Escape') {
-    return cursor >= 0 ? -1 : null;
-  }
-  if (dated.length === 0 || rows <= 0) {
-    return null;
-  }
-  /* The first dated cell at or after `from`, walking in `direction`. An
-     undated cell is pending chrome: it carries no count, no date and no
-     reading, so a cursor must never land on one. */
-  const dating = (from: number, direction: number): number => {
-    for (let at = from; at >= 0 && at < dated.length; at += direction) {
-      if (dated[at]) {
-        return at;
-      }
-    }
-    return -1;
-  };
-  const newest = (): number => dating(dated.length - 1, -1);
-  if (key === 'Home') {
-    const first = dating(0, 1);
-    return first >= 0 ? first : cursor;
-  }
-  if (key === 'End') {
-    const last = newest();
-    return last >= 0 ? last : cursor;
-  }
-  /* Left/right step a WEEK, up/down step a DAY: cells are emitted
-     column-major, so one column along is `rows` cells along. */
-  const step =
-    key === 'ArrowLeft'
-      ? -rows
-      : key === 'ArrowRight'
-        ? rows
-        : key === 'ArrowUp'
-          ? -1
-          : key === 'ArrowDown'
-            ? 1
-            : null;
-  if (step === null) {
-    return null;
-  }
-  if (cursor < 0) {
-    const opening = newest();
-    return opening >= 0 ? opening : cursor;
-  }
-  const next = cursor + step;
-  if (next < 0 || next >= dated.length) {
-    return cursor;
-  }
-  const landed = dating(next, step > 0 ? 1 : -1);
-  return landed >= 0 ? landed : cursor;
-}
 
 /* cellLabel is the one accessible text a cell carries — tooltip and
  * aria-label alike — so a magnitude is never encoded by color alone. The
@@ -663,4 +393,16 @@ function magnitudeStep(value: number): { scaled: number; suffix: string } | null
     scaled = Math.round((value / magnitudeSteps[index][0]) * 10) / 10;
   }
   return { scaled, suffix: magnitudeSteps[index][1] };
+}
+
+/* A calendar cell's state. A day nobody measured is NOT a day that measured
+ * nothing: the first is drawn hollow, the second as the empty step of the
+ * ramp. Conflating them is how a feed that stopped arriving reads as a quiet
+ * month (owner, 2026-10-16: "github heatmap is not updating properly, and not
+ * catching it means a fault in testing procedures"). */
+export function measuredCell(value: number | null | undefined, peak: number): { measured: boolean; level: number } {
+  if (value === null || value === undefined) {
+    return { measured: false, level: 0 };
+  }
+  return { measured: true, level: gridLevel(value, peak) };
 }

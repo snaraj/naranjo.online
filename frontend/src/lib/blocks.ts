@@ -21,7 +21,7 @@
  * in a props FIELD NAME. Everything a component renders arrives as data
  * through one of these shapes.
  *
- * This module is deliberately pure — types, constructors, and the nav helper;
+ * This module is deliberately pure — types, constructors, and the ordinal helper;
  * no component import ever lands here — so node tests execute it directly. */
 
 import type { Component } from 'svelte';
@@ -209,13 +209,6 @@ export function panelsBlock<P extends BlockProps>(
   };
 }
 
-/* The href one nav link carries. Trivial by design: it exists so the '#' is
- * written once, in a function a test can execute, rather than concatenated
- * inside a template where a lost character renders a link to the page root. */
-export function sectionHref(target: Pick<PageSection, 'id'>): string {
-  return `#${target.id}`;
-}
-
 /* The number the ledger prints for a section: its position in the manifest,
  * two digits wide so the five stack as a column of figures rather than a
  * ragged edge. ONE function because two surfaces print it — the nav link and
@@ -312,23 +305,29 @@ export type LedgerCount = {
 
 export type LedgerTableRow = {
   readonly key: string;
-  /* The row's leading cell, as navigation the information layer validated. */
+  /* The entry's title, as navigation the information layer validated. */
   readonly link: ActivityLink;
-  /* No chip and no description. The description cell left with the owner's
-   * 2026-09-11 directive — the column was the widest thing in the row and the
-   * section holds HALF a sheet now — and the `latest` chip left with the
-   * ruling of 2026-09-12 that retired the row it labelled. A row is its name
-   * and its four figures. */
+  /* The entry's SUPPORTING LINE (owner direction, 2026-10-16: one entry fewer,
+   * each carrying more and reading better). The description left as a CELL
+   * with the 2026-09-11 directive — it was the widest column of a five-column
+   * row — and returns as a line of its own under the name, which costs the row
+   * no column at all. Already written: the entry's own words, or the honest
+   * dash when it has none, so the component decides nothing about it. The
+   * `latest` chip stays retired (ruling of 2026-09-12). */
+  readonly about: string;
   /* How long since the row's own last change — the same counter the other
    * three are, so its provenance and its exact instant reach a reader the same
-   * way theirs do. It sits in its own column rather than in the cluster. */
+   * way theirs do. It is drawn last, after the cluster. */
   readonly updated: LedgerCount;
   readonly counts: readonly LedgerCount[];
 };
 
 /* THE SHEET'S TWO COLUMNS (owner design decision, 2026-09-11, issue 318,
- * option B on the design canvas): one block that draws a ruled table beside a
- * ruled log, each with its own head row, and stacks them at a phone width.
+ * option B on the design canvas): one block that draws the repositories beside
+ * the log, each under its own one-word head, and stacks them at a phone width.
+ * Since the owner's direction of 2026-10-16 ("Ongoing Work") each column is
+ * five two-line entries — a title line and a supporting line — where it was
+ * six one-line rows.
  *
  * It is ONE props contract rather than two blocks side by side because the two
  * columns are one picture the reader compares across — the repositories on the
@@ -344,8 +343,12 @@ export type LedgerTableRow = {
 export type LedgerSpreadProps = {
   readonly status: PanelStatus;
   readonly generatedAt?: string;
-  /* The table column's heads, in column order, exactly as they render. */
-  readonly heads: readonly string[];
+  /* The first column's own head: ONE word over the whole list, like the log's
+   * (owner direction, 2026-10-16). The five-cell head row of marks left with
+   * the spreadsheet look — every figure now carries its mark beside it and its
+   * words in the accessibility tree, so a row of marks over them named nothing
+   * a reader did not already have. */
+  readonly head: string;
   readonly rows: readonly LedgerTableRow[];
   readonly emptyNote: string;
   /* The log column's own head, its anchor, its rows and its empty line. */
@@ -401,10 +404,15 @@ export type CalendarSet = {
   readonly format: (value: number) => string;
 };
 
+/* One entry of the log: the subject as its title line, and where, when and
+ * which as its supporting line (owner direction, 2026-10-16). The entry is ONE
+ * link — the title's — and the whole entry is its target; `source` is text. It
+ * was a second link until this direction, and two links on one two-line entry
+ * cannot both be a finger's width tall without the entry growing a line. */
 export type CommitLogRow = {
   readonly key: string;
   readonly age: string;
-  readonly source: ActivityLink;
+  readonly source: string;
   readonly title: ActivityLink;
   /* The short identity, display-only; the full one rides the href. */
   readonly mark: string;
@@ -478,7 +486,7 @@ export type LedgerMeter = {
  * adapter wrote for it, and every day's date and figures already worded. The
  * figures printed above it are the non-colour channel the dataviz floor asks
  * for, so the drawing carries no axis, no caption and no legend. A null day is
- * a day nobody measured; lib/spark.ts decides what that draws.
+ * a day nobody measured.
  *
  * THE THREE DAY ARRAYS ARE PARALLEL TO `totals`, one entry per day, and they
  * exist because the scrubber prints a day rather than drawing one (owner
@@ -496,15 +504,6 @@ export type LedgerSpark = {
   readonly dayFigures: readonly string[];
   /* The same day exactly, grouped, for the line that replaces the sub area. */
   readonly dayExact: readonly string[];
-};
-
-/* What the daily line is handed: its series plus the one thing it reports
- * back. `onScrub` is called with the day index under the pointer, the finger
- * or the keyboard cursor, and with null the moment the reading ends — the
- * component owns no readout of its own, so the card decides what a scrubbed
- * day does to it. */
-export type SparklineProps = LedgerSpark & {
-  readonly onScrub?: (index: number | null) => void;
 };
 
 /* One card of the board. Every region is optional and every one is drawn only
@@ -554,37 +553,6 @@ export type LedgerCard = {
   readonly ariaLabel: string;
 };
 
-/* WHAT A SCRUBBED DAY SAYS ON ITS CARD, or null for "this card is at rest"
- * (owner directive, 2026-09-11, issue 316). Pure, and here rather than in the
- * component, for this repository's usual reason: a lookup a test can execute
- * is a lookup whose hostile cases are decided once instead of being reasoned
- * about in markup.
- *
- * TOTAL BY CONSTRUCTION. The three day arrays are parallel to the series the
- * card is drawing RIGHT NOW, and the index came from a pointer over a chart
- * that may since have been handed a different payload — a shorter series, or
- * a card that lost its line entirely. Every one of those answers "no reading"
- * rather than an undefined figure, which is the only honest answer available
- * and the one that cannot reach the DOM as the word `undefined`. */
-export function scrubReading(
-  card: LedgerCard,
-  index: number
-): { readonly figure: string; readonly line: string } | null {
-  if (card.spark === undefined) {
-    return null;
-  }
-  const figure = card.spark.dayFigures[index];
-  const exact = card.spark.dayExact[index];
-  const label = card.spark.dayLabels[index];
-  if (figure === undefined || exact === undefined || label === undefined) {
-    return null;
-  }
-  /* The exact figure and the day, in that order: the figure is what the reader
-     came for and the date is what qualifies it — the same order the card's own
-     sub line already reads in. */
-  return { figure, line: `${exact} · ${label}` };
-}
-
 /* NO TITLE AND NO MARK (owner directive, 2026-09-12, issue 323). The board's
  * head row named it "TOKEN USAGE" under a section head that already says so,
  * which is the same doubled label the Projects table lost at issue 292 — so
@@ -594,6 +562,104 @@ export type LedgerBoardProps = {
   readonly generatedAt?: string;
   readonly cards: readonly LedgerCard[];
   readonly emptyNote: string;
+};
+
+/* --- THE CHRONICLE (owner direction, 2026-10-16) ----------------------------
+ *
+ * "Turn the info boxes and the heat map … mix those two things … into a very
+ * nice looking diagram." One framed picture of the trackers on ONE timeline:
+ * the picked layer's daily line across the top, the year's calendar of the
+ * same layer under it, every day of the line standing over its own cell's
+ * week, and the figures beside them. A reader who points anywhere along it
+ * names one DAY, and every figure in the frame reads that day until they let
+ * go.
+ *
+ * Like every contract here it names no source, no vendor and no host: a layer
+ * is a labelled series the line and the calendar both draw, and every figure
+ * arrives written.
+ * ------------------------------------------------------------------------ */
+
+/* One day of the window. The window is laid out week by week, seven days to a
+ * column, exactly as the calendar always was; `absent` marks a padding day the
+ * window does not cover (a future day in the current week, a lead-in day). */
+export type ChronicleDay = {
+  readonly date: string;
+  /* The day in the page's own voice, with its year: "Sep 3, 2026". */
+  readonly label: string;
+  readonly absent: boolean;
+};
+
+/* A labelled series over the window's days, parallel to `days`: a value per
+ * day (null where nothing was measured) and the figure that day reads as. */
+export type ChronicleSeries = {
+  readonly key: string;
+  readonly label: string;
+  readonly values: readonly (number | null)[];
+  readonly figures: readonly string[];
+};
+
+/* One layer of the diagram: what the line plots and the calendar paints when
+ * it is picked (owner, 2026-10-16: picking contributions must show
+ * contributions). `tone` is the ink slot the line is drawn in — 'grid' for
+ * the calendar's own green, or a source's slot ('0', '1', …) — a style slot,
+ * never a name. `readings` is each day in words ("12 contributions"), parallel
+ * to `days`, the page's dash where the day was not measured. */
+export type ChronicleLayer = {
+  readonly key: string;
+  readonly label: string;
+  readonly tone: string;
+  readonly series: ChronicleSeries;
+  readonly readings: readonly string[];
+};
+
+/* One of the large figures beside the graph. At rest it reads its own figure
+ * and caption; on a scrubbed day it reads `daily`'s figure for that day
+ * (absent `daily` means the figure has no per-day reading and stays). */
+export type ChronicleHeadline = {
+  readonly key: string;
+  readonly label: string;
+  readonly figure: string;
+  /* "all time", "past year", "+114B past year". */
+  readonly caption: string;
+  readonly daily?: ChronicleSeries;
+};
+
+/* One source's account under the diagram: its facts and its models, the
+ * same rows its board cards carried. */
+export type ChronicleAccount = {
+  readonly key: string;
+  readonly label: string;
+  readonly facts: readonly LedgerFact[];
+  readonly lines: readonly string[];
+  readonly models: readonly LedgerBar[];
+};
+
+export type ChronicleMonth = {
+  readonly column: number;
+  readonly label: string;
+};
+
+export type ChronicleProps = {
+  readonly status: PanelStatus;
+  readonly generatedAt?: string;
+  readonly days: readonly ChronicleDay[];
+  /* How many week columns the days fill. */
+  readonly weeks: number;
+  /* The diagram's layers; the first is the one it opens on. */
+  readonly layers: readonly ChronicleLayer[];
+  readonly headlines: readonly ChronicleHeadline[];
+  readonly accounts: readonly ChronicleAccount[];
+  readonly months: readonly ChronicleMonth[];
+  /* The room every account holds for its facts and its models, filled or
+     not, so a payload landing never grows the board (an account with no
+     label is one whose payload is still in flight). */
+  readonly factSlots: number;
+  readonly modelSlots: number;
+  /* The last day the window covers (today), an index into `days`. */
+  readonly lastDay: number;
+  readonly emptyNote: string;
+  /* The diagram's accessible name, and the words its day cursor reads. */
+  readonly ariaLabel: string;
 };
 
 /* One item of the scrolling strip: a small icon (or its initials fallback),
@@ -731,7 +797,7 @@ export type MediaGalleryProps = {
   /* The intrinsic box every frame declares, so arrival moves nothing. */
   readonly width: number;
   readonly height: number;
-  /* How many tiles the row shows of the chosen set (owner mock: four). */
+  /* How many tiles the row shows of the chosen set (owner, 2026-10-17: five). */
   readonly tiles?: number;
 };
 

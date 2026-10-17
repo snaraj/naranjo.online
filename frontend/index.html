@@ -31,6 +31,13 @@
       ever been read in, and it is opaque on the sheet's own paper because iOS
       composites a transparent tile onto black. -->
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- The page's two faces, asked for with the page rather than after the
+      stylesheet has been read: the application waits for them before it
+      paints (src/main.ts), so the sooner they are here the sooner the page
+      is. The latin subsets only: the page's text is latin, and the other
+      subsets are fetched if a word ever reaches them. -->
+    <link rel="preload" href="/src/assets/fonts/Archivo-Variable-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/src/assets/fonts/JetBrainsMono-Variable-latin.woff2" as="font" type="font/woff2" crossorigin />
     <!-- Link-preview identity (owner directive, 0.1.52: "when I text a link
       to the website, I expect to see a preview... SN. white and black, very
       simple"). These live in the STATIC head, not svelte:head, because the
@@ -52,20 +59,16 @@
   </head>
   <body>
     <div id="app">
-      <!-- The chrome row exists in BOTH shells so the controls arriving at
-        hydration fill space the static document already held open, rather
-        than pushing the page down. -->
-      <header class="page-header"></header>
+      <!-- THE SHEET OPENS ON THE NAME, in both shells (owner direction,
+        2026-10-16: the chrome row and the picture band above the name are
+        gone). The heading sits in the same intro block the mounted page
+        draws it in, so hydration finds it exactly where this document put it
+        and moves nothing; J, who arrives with the mounted page, flies out of
+        the flow and takes no room this shell would have had to hold open. -->
       <main aria-labelledby="static-page-title" data-static-fallback>
-        <!-- The band's own height, held open before the band exists. Without
-          it the shell's heading sat 176px above the hydrated one and mounting
-          MOVED the masthead — which the chrome row above was already written
-          to prevent for the controls, on the same reasoning. It carries no
-          picture and no label because it is a reserve rather than a band: the
-          class gives it exactly the height the real one takes, and hydration
-          replaces this whole element anyway. -->
-        <div class="band" aria-hidden="true"></div>
-        <h1 id="static-page-title">Samuel Naranjo</h1>
+        <div class="page-intro">
+          <h1 id="static-page-title">Samuel Naranjo</h1>
+        </div>
         <!-- THE HONEST BOOT STATE (issue 239). This block is what a visitor
           reads when the entry module never arrives — degraded HTTP/3, or the
           brief post-deploy window where a cached shell names assets the

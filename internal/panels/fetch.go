@@ -733,14 +733,18 @@ func (s *FetchSource) calendarSection(ctx context.Context, doer fetchDoer, env f
 func (s *FetchSource) readCalendar(ctx context.Context, doer fetchDoer, credential string, spec *vcsActivityFetchSpec, now time.Time) (json.RawMessage, error) {
 	if credentialed := spec.Calendar; credentialed != nil {
 		if credential != "" {
-			body, err := s.queryDocument(ctx, doer, roleVCSCalendar, credentialed.document(), credential, credentialed.KeyHeader, credentialed.KeyPrefix, queryVariables{
-				From: calendarWindowStart(now),
-				To:   now.UTC().Format(time.RFC3339),
-			})
+			// ONE clock reading: the variables posted and the window the
+			// answer is mapped against are both derived from this same now.
+			body, err := s.queryDocument(ctx, doer, roleVCSCalendar, credentialed.document(), credential, credentialed.KeyHeader, credentialed.KeyPrefix, calendarVariables(now))
 			if err != nil {
 				return nil, err
 			}
-			return mapCalendarDocument(body, now)
+			mapped, omitted, err := mapCalendarDocument(body, now)
+			if err != nil {
+				return nil, err
+			}
+			s.noteCommitOmission(ctx, omitted)
+			return mapped, nil
 		}
 		// The variable NAME is config data and the value is absent, so there
 		// is nothing here that could leak; what a cluster log needs is the
@@ -755,6 +759,25 @@ func (s *FetchSource) readCalendar(ctx context.Context, doer fetchDoer, credenti
 		return nil, err
 	}
 	return mapContributions(body)
+}
+
+// noteCommitOmission logs the calendar's commit-day omission when its reason
+// CHANGES — omitted, recovered, or omitted for a different reason — so a dash
+// on the page has a cause in the log without a fast cadence repeating it. The
+// reason is one of this package's closed codes; nothing upstream-authored and
+// nothing naming a repository ever reaches the line.
+func (s *FetchSource) noteCommitOmission(ctx context.Context, omitted string) {
+	s.mu.Lock()
+	previous := s.commitOmission
+	s.commitOmission = omitted
+	s.mu.Unlock()
+	switch {
+	case omitted == previous:
+	case omitted == "":
+		s.log().LogAttrs(ctx, slog.LevelInfo, "calendar commit days restored")
+	default:
+		s.log().LogAttrs(ctx, slog.LevelWarn, "calendar commit days omitted", slog.String("reason", omitted))
+	}
 }
 
 // queryRequest is the request body posted to a credentialed producer: the
@@ -774,6 +797,11 @@ type queryVariables struct {
 	// From and To bound a window this package computed from its own clock.
 	From string `json:"from,omitempty"`
 	To   string `json:"to,omitempty"`
+	// Seam1 to Seam3 split that window for the calendar's commit half, each
+	// derived from From (calendarSeams) — never from a second clock reading.
+	Seam1 string `json:"seam1,omitempty"`
+	Seam2 string `json:"seam2,omitempty"`
+	Seam3 string `json:"seam3,omitempty"`
 	// Author is the account's own node identity, read from the discovery
 	// answer and handed back so the history document filters to the owner's
 	// commits without naming anybody.
@@ -797,10 +825,39 @@ func queryRequestBody(query string, variables queryVariables) ([]byte, error) {
 // calendarWindowStart is the calendar window's first instant: the Sunday on or
 // before calendarWindowDays ago — see that constant for why the alignment is
 // load-bearing rather than tidy.
-func calendarWindowStart(now time.Time) string {
+func calendarWindowStart(now time.Time) time.Time {
 	start := now.UTC().AddDate(0, 0, -calendarWindowDays)
 	return time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC).
-		AddDate(0, 0, -int(start.Weekday())).Format(time.RFC3339)
+		AddDate(0, 0, -int(start.Weekday()))
+}
+
+// calendarSeams are the instants the commit half's sub-windows meet at:
+// calendarCommitWindowDays apart from the window's start, each at
+// calendarCommitSeamHour. They are a function of the start alone, so the
+// request and the mapper agree on them by construction.
+func calendarSeams(start time.Time) [calendarCommitWindows - 1]time.Time {
+	var seams [calendarCommitWindows - 1]time.Time
+	for index := range seams {
+		seams[index] = start.AddDate(0, 0, (index+1)*calendarCommitWindowDays).Add(calendarCommitSeamHour)
+	}
+	return seams
+}
+
+// calendarVariables is the credentialed calendar's whole variable set, every
+// instant derived from the one clock reading it is handed: the window From–To
+// the calendar covers, and the seams that split it into the four consecutive
+// sub-windows the commit half is read over — From–Seam1, Seam1–Seam2,
+// Seam2–Seam3, Seam3–To — each ending exactly where the next begins.
+func calendarVariables(now time.Time) queryVariables {
+	start := calendarWindowStart(now)
+	seams := calendarSeams(start)
+	return queryVariables{
+		From:  start.Format(time.RFC3339),
+		To:    now.UTC().Format(time.RFC3339),
+		Seam1: seams[0].Format(time.RFC3339),
+		Seam2: seams[1].Format(time.RFC3339),
+		Seam3: seams[2].Format(time.RFC3339),
+	}
 }
 
 // windowInstant is a plain day-count lookback, which is all a window that is

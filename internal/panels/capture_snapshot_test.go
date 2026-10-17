@@ -63,6 +63,17 @@ func TestCaptureSnapshot(t *testing.T) {
 	if loaded.status != StatusOK {
 		t.Fatalf("live refresh reported %q; a snapshot is only captured from a complete round", loaded.status)
 	}
+	if want == "vcs-activity" {
+		// The calendar's commit half can be omitted while the calendar is
+		// served, and its closed reason otherwise reaches only the serving
+		// log; a capture says which, so a dash in the snapshot has a cause.
+		source.mu.Lock()
+		omitted := source.commitOmission
+		source.mu.Unlock()
+		if omitted != "" {
+			t.Logf("captured without the commit half: %s", omitted)
+		}
+	}
 	data := loaded.data
 	if want == "coding-projects" {
 		// A snapshot row is a RECORDED row by definition: it is the shipped

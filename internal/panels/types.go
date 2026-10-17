@@ -460,6 +460,29 @@ type VCSActivityData struct {
 	// written before this field decodes and renders unchanged, and a reader
 	// that has never heard of it draws the public rows exactly as it did.
 	PrivateActivity []VCSPrivateDay `json:"privateActivity,omitempty"`
+	// CommitWeeks holds the commits the account pushed each day, public and
+	// private repositories alike, in the SAME week columns as Weeks: the same
+	// number of seven-day columns, Sunday first, the same window and the same
+	// zero padding after EndDate (owner direction, 2026-10-16: the trackers
+	// board's "Commits Pushed"). Its days come out of the SAME credentialed
+	// request as the calendar — the commit buckets are asked for in aliased
+	// sub-collections that split the calendar's own window at seams computed
+	// from the same clock reading — so the window is the calendar's by
+	// construction rather than by a second request agreeing with the first. A
+	// day's commits are a count and nothing else: no repository is named,
+	// identified or even asked for (requirement 12).
+	//
+	// Present only together with TotalCommits, and only when the document
+	// carried the buckets and every one of them could be placed exactly
+	// (mapCalendarCommits states the rules). Otherwise both are absent and the
+	// page prints its dash — a commit figure is never padded, scaled or
+	// assembled from part of the buckets. Additive inside the kind, exactly
+	// as PrivateActivity is.
+	CommitWeeks [][]int `json:"commitWeeks,omitempty"`
+	// TotalCommits is exactly the sum of CommitWeeks. A pointer, because zero
+	// commits across the window is a real reading that must be served beside
+	// its weeks, while absence means the figure was not measured.
+	TotalCommits *int `json:"totalCommits,omitempty"`
 }
 
 // VCSPrivateDay is one day of private contribution, counted and never named.
@@ -777,6 +800,11 @@ type FetchSource struct {
 	// calendarAt is when that payload was fetched. It becomes the envelope's
 	// generatedAt, so a payload never claims to be newer than its calendar.
 	calendarAt time.Time
+	// commitOmission is the closed reason the last mapped calendar left its
+	// commit days out, empty when it served them or was never asked for them.
+	// Kept only so the reason is logged when it CHANGES rather than on every
+	// round of a fast cadence.
+	commitOmission string
 	// commits is the last successfully fetched commit list.
 	commits []VCSCommit
 	// commitDays is the private-day aggregate read in the same round, retained
@@ -1022,9 +1050,10 @@ type graphQLDocumentSpec struct {
 type vcsCalendarFetchSpec struct {
 	// Endpoint is the full request URL.
 	Endpoint string `json:"endpoint"`
-	// Query is the literal query document posted to it. It declares the two
-	// window variables this package supplies and nothing else; a query that
-	// does not is refused at construction rather than sent.
+	// Query is the literal query document posted to it. It declares the
+	// window variables this package supplies — the window's two ends and the
+	// seams its commit half is split at — and nothing else; a query that does
+	// not is refused at construction rather than sent.
 	Query string `json:"query"`
 	// KeyEnvName is the environment variable holding the credential. Unset at
 	// fetch time means this producer is skipped, never an error surface.
@@ -1058,6 +1087,12 @@ const (
 	calendarFromVariable = "$from"
 	// calendarToVariable names its last.
 	calendarToVariable = "$to"
+	// The seam variables name the instants the commit half's sub-windows meet
+	// at (calendarSeams). A document that dropped one could not chain its
+	// sub-collections over the calendar's window at all.
+	calendarSeam1Variable = "$seam1"
+	calendarSeam2Variable = "$seam2"
+	calendarSeam3Variable = "$seam3"
 	// historyAuthorVariable names the account whose commits the history
 	// document may return. A document that drops it would answer with every
 	// author's commits on those branches, which is a different panel.
@@ -1338,6 +1373,76 @@ const maxCalendarDays = 400
 // changed — and refusing keeps the last good payload instead of serving a
 // four-cell "calendar" that looks like data.
 const minCalendarDays = 28
+
+// Bounds on the calendar document's commit half (CommitWeeks). Each is the
+// figure the shipped calendar query itself asks for, pinned against the query
+// text by TestTheShippedCalendarQueryAsksForTheCommitHalfAndNoIdentity, so an
+// answer past one is drift and refuses the document; and together they size
+// the worst-case answer under the calendar spec's own byte cap, which
+// TestTheWorstCaseCalendarAnswerFitsItsByteCap measures rather than assumes.
+const (
+	// calendarCommitWindows is how many aliased sub-collections the commit
+	// half is asked for in, inside the calendar's own request. One collection
+	// over the whole year cannot carry it: the upstream pages a repository's
+	// day buckets at maxCalendarCommitBuckets, and a repository committed to
+	// on more days than that in a year is an ordinary busy year (measured
+	// live on 2026-10-16: two of nine repositories carried 163 and 148). Split
+	// into sub-windows of calendarCommitWindowDays, no repository can fill a
+	// page.
+	calendarCommitWindows = 4
+	// calendarCommitWindowDays is how far apart the seams sit: thirteen whole
+	// weeks. Four of them cover the longest window calendarWindowStart can
+	// produce (under 364 days), and a sub-window reports at most this many
+	// days plus the two it shares at its ends — 93, under the page.
+	calendarCommitWindowDays = 91
+	// calendarCommitSeamHour is the time of day a seam sits at. Not midnight:
+	// an account on UTC itself has its local midnight there, and whether a
+	// sub-window ending exactly on a local midnight reports the day it ends
+	// on is the upstream's choice. At noon UTC every account whose buckets
+	// can be dated at all (commitBucketDateHorizon) is between 02:00 and
+	// 12:00 local, so the day a seam falls in is the seam's own UTC date for
+	// all of them, and both sub-windows meeting there report that one day.
+	calendarCommitSeamHour = 12 * time.Hour
+	// maxCalendarCommitRepositories is the query's maxRepositories, per
+	// sub-window. A quarter in which commits landed in more repositories than
+	// this is not drift: the upstream returns this many and the bucket sum
+	// then falls short of the sub-window's total, so the commit fields are
+	// omitted rather than wrong.
+	maxCalendarCommitRepositories = 25
+	// maxCalendarCommitBuckets is the query's per-repository page size. A
+	// sub-window reports at most 93 days, so a page the upstream marks as
+	// continued is no busy year's doing — and should one appear, the fields
+	// are omitted, never assembled from a partial page.
+	maxCalendarCommitBuckets = 100
+	// commitBucketDateHorizon is how far past a UTC midnight a bucket instant
+	// may sit for its UTC date to BE the day it counts. A bucket is the
+	// account's local midnight as a UTC instant (contributionWindowSlack), so
+	// an instant before this hour is the midnight of a zone between UTC-10
+	// and UTC itself, whose local date is the UTC date — the rule the private
+	// days already follow. From this hour on, a western zone's midnight and
+	// an eastern one's share UTC hours (UTC-10 and UTC+14 both read 10:00),
+	// so the date cannot be told and the commit fields are omitted.
+	commitBucketDateHorizon = 10 * time.Hour
+)
+
+// The closed reasons the calendar's commit half is omitted for. A reason is
+// a bound or a placement the upstream answer did not satisfy, never upstream
+// prose, and it is logged on transition (readCalendar) so a dash on the page
+// has a cause an operator can read.
+const (
+	commitOmittedTruncated = "commit-buckets-truncated"
+	commitOmittedTotal     = "commit-total-mismatch"
+	// commitOmittedRepositoryTotal is one repository's buckets not adding up
+	// to its own commit count in the sub-window.
+	commitOmittedRepositoryTotal = "commit-repository-total-mismatch"
+	// commitOmittedWindowTotal is the seam proof failing: the placed days
+	// against the calendar collection's own commit total for the whole
+	// window (mapCalendarCommits, THE SEAMS).
+	commitOmittedWindowTotal = "commit-window-total-mismatch"
+	commitOmittedWindow      = "commit-outside-window"
+	commitOmittedDay         = "commit-day-ambiguous"
+	commitOmittedExceeds     = "commit-exceeds-calendar-day"
+)
 
 // Bounds on the recent-commit producer. Every one of them is a refusal, not a
 // clamp: a commit document that breaks any of them is discarded whole and the
@@ -1684,13 +1789,74 @@ type calendarData struct {
 // about the CREDENTIAL'S OWN account rather than a named one, which is what
 // makes the answer include private contributions at all — and also means no
 // account name travels in the request.
+//
+// Beside the calendar's collection sit the commit half's sub-collections, one
+// per sub-window, under the aliases the shipped query gives them. They are
+// pointers because a query that does not ask for the commit half is a
+// legitimate configuration, and absent must stay distinguishable from an
+// empty answer.
 type calendarViewer struct {
 	Contributions calendarContributions `json:"contributionsCollection"`
+	Commits1      *calendarCommitWindow `json:"commits1"`
+	Commits2      *calendarCommitWindow `json:"commits2"`
+	Commits3      *calendarCommitWindow `json:"commits3"`
+	Commits4      *calendarCommitWindow `json:"commits4"`
 }
 
-// calendarContributions is the collection the calendar hangs off.
+// calendarContributions is the collection the calendar hangs off, over the
+// whole window.
 type calendarContributions struct {
 	Calendar calendarSection `json:"contributionCalendar"`
+	// CommitTotal is this collection's own commit total for the WHOLE window:
+	// the figure every placed day together must account for, which is what
+	// proves the seams between the sub-windows (mapCalendarCommits). A
+	// pointer for the same reason the sub-collections are.
+	CommitTotal *int `json:"totalCommitContributions"`
+}
+
+// calendarCommitWindow is one sub-window's commit half: its own commit total
+// and its buckets grouped by repository. Nothing identifying a repository is
+// decoded — the query asks for none — so a private repository is counted here
+// and cannot be named anywhere.
+type calendarCommitWindow struct {
+	Total        *int                        `json:"totalCommitContributions"`
+	Repositories *[]calendarCommitRepository `json:"commitContributionsByRepository"`
+}
+
+// calendarCommitRepository is one repository's share of the window's commits,
+// carried without any identity of the repository it belongs to.
+type calendarCommitRepository struct {
+	Contributions calendarCommitBuckets `json:"contributions"`
+}
+
+// calendarCommitBuckets is one repository's dated buckets in a sub-window.
+//
+// TotalCount is the repository's COMMIT count in the sub-window, not its
+// bucket count (measured live on 2026-10-16: 163 against 33 buckets, the
+// repositories' figures summing to the window's own commit total), so the
+// buckets must add up to it. Whether the page was cut is a separate fact the
+// connection states outright, in PageInfo. A pointer, because the query asks
+// for it and an answer without it could not say.
+type calendarCommitBuckets struct {
+	TotalCount int                    `json:"totalCount"`
+	PageInfo   *calendarCommitPage    `json:"pageInfo"`
+	Nodes      []calendarCommitBucket `json:"nodes"`
+}
+
+// calendarCommitPage is the connection's own account of whether it holds
+// more buckets than the page carried.
+type calendarCommitPage struct {
+	HasNextPage bool `json:"hasNextPage"`
+}
+
+// calendarCommitBucket is one repository-day: the day's local midnight as a
+// UTC instant (see contributionWindowSlack) and the commits pushed on it. The
+// query renames the upstream's two fields to these short aliases: the worst
+// case the byte cap is measured against is ten thousand buckets, and the
+// shorter names are what keep it under the cap.
+type calendarCommitBucket struct {
+	At    string `json:"at"`
+	Count int    `json:"count"`
 }
 
 // calendarSection is the calendar itself: the account's own total for the

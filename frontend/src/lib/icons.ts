@@ -44,7 +44,6 @@ export type IconName =
   | 'photo'
   | 'film'
   | 'play'
-  | 'location'
   | 'work'
   | 'folder'
   | 'sword';
@@ -117,11 +116,8 @@ export const icons: Record<IconName, readonly IconPart[]> = {
   ],
   'play': [{ tag: 'path', attrs: { d: 'M7.5 5.5v13l11-6.5z' }, solid: true }],
 
-  /* sections */
-  'location': [
-    { tag: 'path', attrs: { d: 'M12 21s-6-5.6-6-11a6 6 0 0 1 12 0c0 5.4-6 11-6 11z' } },
-    { tag: 'rect', attrs: { x: '10', y: '8', width: '4', height: '4' }, solid: true }
-  ],
+  /* sections. The `location` pin that stood beside "California" in the chrome
+     row left with the row (owner direction, 2026-10-16): nothing draws it. */
   'work': [
     { tag: 'rect', attrs: { x: '3', y: '7', width: '18', height: '13' } },
     { tag: 'path', attrs: { d: 'M9 7V4h6v3M3 12h18' } }

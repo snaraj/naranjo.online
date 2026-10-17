@@ -278,6 +278,26 @@ test('a hostile row name is data all the way to the DOM', () => {
  * after the next change.
  * ======================================================================== */
 
+/* THE SHEET IS NEVER THE DETAIL'S CONTAINING BLOCK. The detail is fixed and
+ * placed in viewport coordinates, so an ancestor that becomes the containing
+ * block of fixed descendants moves every detail by that ancestor's box and
+ * the page's scroll. The Keep's glass did exactly that from `main` (a
+ * backdrop-filter; measured by the browser lanes, 2026-10-16: a detail
+ * written at 539/372 rendered at 623/−1488), which is why the glass is painted
+ * on a layer behind main instead. Every property that makes such a block is
+ * refused on main itself. */
+test('the sheet never becomes the containing block of the fixed detail', () => {
+  const sheetRules = [...styles.matchAll(/(?:^|[\n}])\s*main\s*\{([^}]*)\}/g)].map((match) => match[1]);
+  assert.ok(sheetRules.length > 0, 'no rule styles the sheet, so this pin reads nothing');
+  for (const body of sheetRules) {
+    assert.doesNotMatch(
+      body,
+      /(?:^|[;\s])(?:-webkit-)?(?:backdrop-filter|filter|transform|perspective|will-change|container-type)\s*:|(?:^|[;\s])contain\s*:\s*(?:layout|paint|strict|content)/,
+      'main declares a property that makes it the containing block of the fixed hover detail'
+    );
+  }
+});
+
 test('exactly one component in the tree implements a hover detail', () => {
   const implementing = Object.entries(componentSources).filter(([, source]) =>
     /role="tooltip"/.test(source)

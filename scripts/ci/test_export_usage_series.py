@@ -1218,10 +1218,16 @@ class DatasetTest(unittest.TestCase):
                 }
             ],
         )
-        # The walked source carries no activity cache here, so the only
-        # lifetime-class figure it can measure is the one a WALK defines: the
-        # longest session span (issue #267).
-        self.assertEqual(source["stats"], {"longest-session": 75_600})
+        # The walked source carries no activity cache here, so its stats are
+        # the WALK's own: the longest session span (issue #267) and the class
+        # tiles over every day the record still splits. The verified day lost
+        # its split with its corrected total, so it contributes NOTHING to
+        # the classes — only the 3 output tokens of the split day do, and a
+        # split is never scaled onto a day it does not cover.
+        self.assertEqual(
+            source["stats"],
+            {"input": 0, "output": 3, "cache-read": 0, "cache-write": 0, "longest-session": 75_600},
+        )
         self.assertEqual(source["windows"], sources["alpha"]["windows"])
         self.assertEqual(source["derived"], sources["alpha"]["derived"])
         self.assertEqual(source["capturedAt"], sources["alpha"]["capturedAt"])
@@ -2024,6 +2030,134 @@ class MergeSourceModelStatsTest(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 self.refuses(members, needle)
+
+
+# The shipped source whose vendor group is NOT the walked source's, and a
+# member of that group the vocabulary folds by an exact identifier — both read
+# from the vocabulary files rather than spelled.
+RUNNING_KEY = next(key for key in capture.SOURCE_GROUPS if key != MERGE_SOURCE)
+RUNNING_MEMBER = next(
+    member
+    for member in capture.MODEL_IDS.values()
+    if capture.MODEL_GROUPS[member] == capture.SOURCE_GROUPS[RUNNING_KEY]
+)
+
+
+class SecondToolAccountingTest(unittest.TestCase):
+    """A running-totals capture reaches the wire with the first tool's surface.
+
+    End to end through the real seam: the capture tool walks a running-totals
+    tree with no roll-up, its stdout document is merged under its own source
+    key, and the export carries that source's class tiles, session tally,
+    longest session, per-model split, and the lifetime its committed baseline
+    states — every key one the origin's closed vocabularies admit, and the
+    ledger's raw-identity split beside it out of band.
+    """
+
+    RUNNING_KEY = RUNNING_KEY
+    MEMBER = RUNNING_MEMBER
+
+    @staticmethod
+    def reading(stamp, total_input, cached, total_output, reasoning):
+        usage = {field: 0 for field in capture.RUNNING_FIELDS}
+        usage.update(
+            {
+                capture.RUNNING_INPUT_FIELD: total_input,
+                capture.RUNNING_CACHE_READ_FIELD: cached,
+                capture.RUNNING_OUTPUT_FIELD: total_output,
+                capture.RUNNING_REASONING_FIELD: reasoning,
+                capture.RUNNING_TOTAL_FIELD: total_input + total_output,
+            }
+        )
+        return json.dumps(
+            {
+                "timestamp": stamp,
+                "type": "event_msg",
+                "payload": {"type": "token_count", "info": {capture.RUNNING_USAGE_KEY: usage}},
+            }
+        )
+
+    def test_the_merged_source_carries_classes_sessions_split_and_baseline(self):
+        identifier = next(
+            raw for raw, member in capture.MODEL_IDS.items() if member == self.MEMBER
+        )
+        with tempfile.TemporaryDirectory() as scratch:
+            walked = os.path.join(scratch, "walked")
+            write_tree(walked, {"a-private-project/session.jsonl": [transcript_line()]})
+            running = os.path.join(scratch, "running")
+            write_tree(
+                running,
+                {
+                    "2026/08/10/one.jsonl": [
+                        json.dumps(
+                            {
+                                "timestamp": "2026-08-10T09:00:00Z",
+                                "type": capture.RUNNING_SESSION_TYPE,
+                                "payload": {"id": LEAK_SESSION, "cwd": LEAK_PATH},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "timestamp": "2026-08-10T09:00:01Z",
+                                "type": "turn_context",
+                                "payload": {"model": identifier, "cwd": LEAK_PATH},
+                            }
+                        ),
+                        # 100: input 40, cache-read 40, output 15, reasoning 5.
+                        self.reading("2026-08-10T10:00:00Z", 80, 40, 20, 5),
+                        # +60: input 20, cache-read 30, output 9, reasoning 1.
+                        self.reading("2026-08-11T08:00:00Z", 130, 70, 30, 6),
+                    ]
+                },
+            )
+            section, _counters = capture.capture(
+                running,
+                capture.FORMAT_RUNNING_TOTALS,
+                today=datetime.date(2026, 8, 11),
+                source=self.RUNNING_KEY,
+            )
+            merge = os.path.join(scratch, "merge.json")
+            with open(merge, "w", encoding="utf-8") as handle:
+                json.dump({"generatedAt": MERGE_CAPTURED_AT, **section}, handle)
+            sources, _counters, material = export_usage_series.export(
+                walked,
+                MERGE_SOURCE,
+                [(self.RUNNING_KEY, merge)],
+                MERGE_NOW,
+                baselines={self.RUNNING_KEY: (1_000, "2026-08-09")},
+            )
+        merged = sources[self.RUNNING_KEY]
+        self.assertEqual(
+            merged["stats"],
+            {
+                "input": 60,
+                "output": 24,
+                "cache-read": 70,
+                "cache-write": 0,
+                "sessions": 1,
+                "longest-session": 79_200,
+                "lifetime": 1_000 + 100 + 60,
+            },
+        )
+        self.assertEqual(
+            merged["modelStats"],
+            [
+                {
+                    "key": self.MEMBER,
+                    "totals": {"input": 60, "output": 24, "cache-read": 70, "reasoning": 6},
+                }
+            ],
+        )
+        for key in merged["stats"]:
+            self.assertIn(key, capture.STATS_KEYS)
+        self.assertEqual(
+            material[self.RUNNING_KEY]["ledgerBlock"][capture.LEDGER_MODEL_ID_STATS_KEY],
+            [{"id": identifier, "totals": merged["modelStats"][0]["totals"]}],
+        )
+        emitted = json.dumps(sources)
+        for leak in (LEAK_SESSION, LEAK_PATH):
+            with self.subTest(leak=leak):
+                self.assertNotIn(leak, emitted)
 
 
 if __name__ == "__main__":

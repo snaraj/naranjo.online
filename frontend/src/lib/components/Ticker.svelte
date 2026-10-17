@@ -32,8 +32,11 @@
   import Icon from './Icon.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let { title, status, generatedAt, items, emptyNote, label, mark }: TickerProps =
-    $props();
+  /* The strip prints no heading (owner direction, 2026-10-16): it is one of
+     the trackers, inside their frame, not a panel of its own. The envelope's
+     title still names the collection for the adapter; the strip's own label
+     is its accessible name. */
+  let { status, generatedAt, items, emptyNote, label, mark }: TickerProps = $props();
 
   /* ONE DETAIL FOR THE WHOLE STRIP, and the reason is not economy — it is
      that a detail rendered INSIDE this band cannot be positioned at all.
@@ -87,7 +90,7 @@
   );
 </script>
 
-<PanelShell {title} {status} {generatedAt}>
+<PanelShell {status} {generatedAt}>
   <FeedCard variant="strip">
     {#if items.length === 0}
       <p class="ticker-note">{emptyNote}</p>

@@ -132,7 +132,7 @@ func liveTestConfig() FetchConfig {
 func calendarSpec() *vcsCalendarFetchSpec {
 	return &vcsCalendarFetchSpec{
 		Endpoint:                        "https://api.example.test/graphql",
-		Query:                           "query($from: DateTime!, $to: DateTime!) { calendar }",
+		Query:                           "query($from: DateTime!, $to: DateTime!, $seam1: DateTime!, $seam2: DateTime!, $seam3: DateTime!) { calendar }",
 		KeyEnvName:                      "FIXTURE_CALENDAR_TOKEN",
 		KeyHeader:                       "Authorization",
 		KeyPrefix:                       "Bearer ",
@@ -280,10 +280,7 @@ func TestTheCalendarRequestAsksForASundayAlignedWindow(t *testing.T) {
 	// Every weekday, so the alignment cannot pass by happening to land right.
 	for offset := range 7 {
 		now := time.Date(2026, 8, 24, 9, 30, 0, 0, time.UTC).AddDate(0, 0, offset)
-		body, err := queryRequestBody("query($from: DateTime!, $to: DateTime!) { calendar }", queryVariables{
-			From: calendarWindowStart(now),
-			To:   now.UTC().Format(time.RFC3339),
-		})
+		body, err := queryRequestBody(calendarSpec().Query, calendarVariables(now))
 		if err != nil {
 			t.Fatalf("build request body: %v", err)
 		}
@@ -534,7 +531,7 @@ func TestTheCalendarDocumentIsRefusedWhenItsOwnNumbersDisagree(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := mapCalendarDocument([]byte(calendarAnswer(start, days, 3, testCase.total)), now)
+			_, _, err := mapCalendarDocument([]byte(calendarAnswer(start, days, 3, testCase.total)), now)
 			if testCase.want == "" {
 				if err != nil {
 					t.Fatalf("the honest document was refused: %v", err)
@@ -576,7 +573,7 @@ func TestTheCalendarEnvelopeToleratesWhatItNeverReads(t *testing.T) {
 	// The control: the same document, unaltered, must map. Without it a
 	// tolerance assertion could pass against a fixture that was never
 	// mappable in the first place.
-	baseline, err := mapCalendarDocument([]byte(full), now)
+	baseline, _, err := mapCalendarDocument([]byte(full), now)
 	if err != nil {
 		t.Fatalf("the unaltered document does not map: %v", err)
 	}
@@ -614,7 +611,7 @@ func TestTheCalendarEnvelopeToleratesWhatItNeverReads(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			mapped, err := mapCalendarDocument(withSiblings(t, testCase.siblings), now)
+			mapped, _, err := mapCalendarDocument(withSiblings(t, testCase.siblings), now)
 			if err != nil {
 				t.Fatalf("a top-level sibling this package never reads refused the whole document: %v", err)
 			}
@@ -645,7 +642,7 @@ func TestTheCalendarEnvelopeToleratesWhatItNeverReads(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := mapCalendarDocument([]byte(testCase.body), now); err == nil {
+			if _, _, err := mapCalendarDocument([]byte(testCase.body), now); err == nil {
 				t.Fatal("an unknown field inside the mapped payload was admitted")
 			} else if !strings.Contains(err.Error(), "unknown field") {
 				t.Fatalf("refusal = %v, want it to name the unknown field", err)
@@ -661,7 +658,7 @@ func TestTheCalendarEnvelopeToleratesWhatItNeverReads(t *testing.T) {
 	// SURVIVED this assertion, because the minimum-days floor further down
 	// refuses an empty calendar anyway. Two guards, one outcome; this is not
 	// evidence that the nil branch is load-bearing on its own.
-	if _, err := mapCalendarDocument([]byte("{\"extensions\":{}}"), now); err == nil {
+	if _, _, err := mapCalendarDocument([]byte("{\"extensions\":{}}"), now); err == nil {
 		t.Fatal("a document carrying no payload at all was admitted")
 	}
 }
@@ -706,7 +703,7 @@ func TestTheCalendarDocumentFailsClosed(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := mapCalendarDocument([]byte(testCase.body), now)
+			_, _, err := mapCalendarDocument([]byte(testCase.body), now)
 			if err == nil {
 				t.Fatal("a hostile or drifted document was admitted")
 			}
@@ -731,6 +728,15 @@ func TestTheCredentialedCalendarSpecFailsClosed(t *testing.T) {
 	}{
 		{"a query that ignores the window's start", func(s *vcsCalendarFetchSpec) { s.Query = "query($to: DateTime!) { calendar }" }, calendarFromVariable},
 		{"a query that ignores the window's end", func(s *vcsCalendarFetchSpec) { s.Query = "query($from: DateTime!) { calendar }" }, calendarToVariable},
+		{"a query that ignores the first seam", func(s *vcsCalendarFetchSpec) {
+			s.Query = strings.Replace(s.Query, calendarSeam1Variable, "$other", 1)
+		}, calendarSeam1Variable},
+		{"a query that ignores the second seam", func(s *vcsCalendarFetchSpec) {
+			s.Query = strings.Replace(s.Query, calendarSeam2Variable, "$other", 1)
+		}, calendarSeam2Variable},
+		{"a query that ignores the third seam", func(s *vcsCalendarFetchSpec) {
+			s.Query = strings.Replace(s.Query, calendarSeam3Variable, "$other", 1)
+		}, calendarSeam3Variable},
 		{"no credential named", func(s *vcsCalendarFetchSpec) { s.KeyEnvName = "" }, "keyEnvName"},
 		{"no header for the credential to ride in", func(s *vcsCalendarFetchSpec) { s.KeyHeader = "" }, "keyHeader"},
 		{"an authenticated cadence outside the reviewed band", func(s *vcsCalendarFetchSpec) { s.AuthenticatedMinIntervalMinutes = 100000 }, "reviewed"},
@@ -1676,7 +1682,7 @@ func TestTheCalendarRefusesDocumentsTheWindowNeverAskedFor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("re-encode fixture: %v", err)
 		}
-		if _, err := mapCalendarDocument(encoded, now); err == nil {
+		if _, _, err := mapCalendarDocument(encoded, now); err == nil {
 			t.Fatal("a calendar reporting one day twice was admitted")
 		} else if !strings.Contains(err.Error(), "appears twice") {
 			t.Fatalf("refusal = %v, want the repeat named", err)
@@ -1693,7 +1699,7 @@ func TestTheCalendarRefusesDocumentsTheWindowNeverAskedFor(t *testing.T) {
 		// happened rather than the blank week padding a calendar may honestly
 		// close its final column with (see the padding test below, which pins
 		// the general overrun refusal and the tolerated case together).
-		if _, err := mapCalendarDocument([]byte(calendarAnswer(start, days, 1, nil)), now.AddDate(0, 0, -14)); err == nil {
+		if _, _, err := mapCalendarDocument([]byte(calendarAnswer(start, days, 1, nil)), now.AddDate(0, 0, -14)); err == nil {
 			t.Fatal("a calendar ending past the requested window was admitted")
 		} else if !strings.Contains(err.Error(), "has not happened yet") {
 			t.Fatalf("refusal = %v, want the unhappened day named", err)
@@ -1704,7 +1710,7 @@ func TestTheCalendarRefusesDocumentsTheWindowNeverAskedFor(t *testing.T) {
 		t.Parallel()
 		wide := firstSunday(now.AddDate(0, 0, -(maxCalendarDays + 30)))
 		span := int(now.Sub(wide)/(24*time.Hour)) + 1
-		if _, err := mapCalendarDocument([]byte(calendarAnswer(wide, span, 1, nil)), now); err == nil {
+		if _, _, err := mapCalendarDocument([]byte(calendarAnswer(wide, span, 1, nil)), now); err == nil {
 			t.Fatal("a calendar over the day bound was admitted")
 		} else if !strings.Contains(err.Error(), "over the") {
 			t.Fatalf("refusal = %v, want the bound named", err)
@@ -1822,7 +1828,7 @@ func TestTheCalendarToleratesTrailingWeekPaddingButNotFutureContributions(t *tes
 
 	t.Run("padding is dropped and the window's real end is reported", func(t *testing.T) {
 		t.Parallel()
-		mapped, err := mapCalendarDocument(padded(3, 0), now)
+		mapped, _, err := mapCalendarDocument(padded(3, 0), now)
 		if err != nil {
 			t.Fatalf("a padded calendar was refused: %v", err)
 		}
@@ -1840,14 +1846,14 @@ func TestTheCalendarToleratesTrailingWeekPaddingButNotFutureContributions(t *tes
 
 	t.Run("an unpadded calendar is unaffected", func(t *testing.T) {
 		t.Parallel()
-		if _, err := mapCalendarDocument(padded(0, 0), now); err != nil {
+		if _, _, err := mapCalendarDocument(padded(0, 0), now); err != nil {
 			t.Fatalf("an exactly-fitting calendar was refused: %v", err)
 		}
 	})
 
 	t.Run("a future day carrying contributions is refused", func(t *testing.T) {
 		t.Parallel()
-		if _, err := mapCalendarDocument(padded(3, 4), now); err == nil {
+		if _, _, err := mapCalendarDocument(padded(3, 4), now); err == nil {
 			t.Fatal("a calendar reporting contributions on a day that has not happened was admitted")
 		} else if !strings.Contains(err.Error(), "has not happened yet") {
 			t.Fatalf("refusal = %v, want the future day named", err)
@@ -1856,7 +1862,7 @@ func TestTheCalendarToleratesTrailingWeekPaddingButNotFutureContributions(t *tes
 
 	t.Run("more than a week past the window is refused", func(t *testing.T) {
 		t.Parallel()
-		if _, err := mapCalendarDocument(padded(daysPerWeek+1, 0), now); err == nil {
+		if _, _, err := mapCalendarDocument(padded(daysPerWeek+1, 0), now); err == nil {
 			t.Fatal("a calendar running a week past the window was admitted")
 		} else if !strings.Contains(err.Error(), "past the window") {
 			t.Fatalf("refusal = %v, want the overrun named", err)

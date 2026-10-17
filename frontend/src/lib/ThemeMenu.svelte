@@ -130,11 +130,12 @@
      announce a menu, but the popover is a group of pressed-state buttons
      (review F4).
 
-     The widget sits in the page header's flow and takes its position from
-     there. It used to be fixed chrome offset by the side rail's gutter, which
+     The widget sits in the page footer's flow and takes its position from
+     there (owner direction, 2026-10-16: the bar it lived in is gone "for
+     now"). It used to be fixed chrome offset by the side rail's gutter, which
      meant the control slid sideways every time a panel opened — a control
      that moves when the visitor touches something else reads as broken. Only
-     the popover is layered, because it overlaps the panel stack below it. -->
+     the popover is layered, because it overlaps the sheet above it. -->
 <svelte:window onpointerdown={onWindowPointerdown} />
 
 <div class="theme-menu" bind:this={root} onfocusout={onFocusOut}>
@@ -242,7 +243,7 @@
 </div>
 
 <style>
-  /* An in-flow inline control: the header decides where it sits, and the
+  /* An in-flow inline control: the footer decides where it sits, and the
      popover anchors to the trigger. Nothing here is fixed, so opening the
      popover reflows nothing and the control cannot drift when other page
      chrome changes size. */
@@ -257,19 +258,29 @@
      that used to sit beside this one left at issue 179; the rule stayed
      shared because it never described a pair.) Only the popover and its
      swatches are styled here. */
+  /* IT OPENS UPWARD, CENTRED ON ITS TRIGGER (owner direction, 2026-10-16: the
+     control lives in the footer now). The footer is the last thing on the
+     sheet, so a menu hanging below it would hang past the sheet's end and grow
+     the document the moment it opened; above it, it covers only sheet the
+     reader has already scrolled past. Centred because the footer puts the
+     trigger on the column's centre line (App.svelte): a menu pinned to the
+     trigger's end edge would start 48px off a 320px screen, and centred on a
+     centred trigger it sits inside every width this site serves. `translate`
+     rather than `transform`, so the reveal below can still move it without
+     undoing the centring. */
   .popover {
     position: absolute;
-    top: calc(100% + 0.5rem);
-    right: 0;
+    bottom: calc(100% + 0.5rem);
+    left: 50%;
+    translate: -50% 0;
     /* The one layered element in the widget: the popover hangs over the
-       panel stack, which is later in the document and would otherwise paint
-       on top of it. */
+       sheet above it, which is earlier in the document but positioned, and
+       would otherwise paint on top of it. */
     z-index: var(--layer-menu, 30);
     /* No gap between the swatches: each is already a 44px target round an
-       18px glyph, so the glyphs sit 26px apart without one. Four gaps would
-       add 16px, and without them the 230px popover still hangs from its
-       trigger inside a 320px screen with J's wider box closing the row after
-       it — with them it starts 14.5px off the screen's start edge. */
+       18px glyph, so the glyphs sit 26px apart without one, and the whole
+       popover is 230px — inside a 320px screen with room to spare either side
+       of a centred trigger. */
     display: flex;
     padding: var(--swatch-popover-padding);
     border: 1px solid var(--color-border);
@@ -290,10 +301,12 @@
       animation: reveal 120ms ease-out;
     }
 
+    /* It rises into place from just below, toward the trigger it came out
+       of, now that it opens upward. */
     @keyframes reveal {
       from {
         opacity: 0;
-        transform: translateY(-0.25rem);
+        transform: translateY(0.25rem);
       }
     }
   }

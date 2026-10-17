@@ -1,35 +1,124 @@
-<!-- J, the owner's dragon, typing at a laptop (owner request, 2026-10-12:
-  "replace the dragon to use J's latest iteration and use him typing on the
-  computer now instead of just flying"). He bookends the chrome row in the two
-  seats the flying dragon held (issue 314 at the end of the row; issue 325 at
-  the start, "another dragon facing inwards to match the opposite side").
+<!-- J, the owner's dragon, FLYING (owner direction, 2026-10-16: "J's being
+  trapped between two frames does not look good, lets swap him for the flying
+  J again and give him a bit of a back-forth rotation, subtle"). The sheet is
+  the owner's own flight study, the one commit 792f49b swapped for the typing
+  render, restored byte for byte.
 
-  ONE COMPONENT FOR BOTH SEATS, and `mirrored` is the whole difference. The
-  render faces screen-right, toward his laptop, so the start of the row draws
-  him as rendered and the END is the mirrored seat: both face into the row.
-  The sheet, the still, the reserved box and both steps() animations are
-  stated once in styles.css and shared, so the second J costs no second URL:
-  two elements naming one background-image are one resource the browser
-  fetches once. The flip is a class rather than a style attribute because this
-  origin serves no `unsafe-inline` (and it is a static transform, not motion —
-  a reader who asked for less of it gets the same pose, facing the same way).
+  ONE SEAT NOW (owner direction, 2026-10-16: "do away with [the bar] for now,
+  put J elsewhere"). He bookended the chrome row from two seats (issue 314 at
+  its end, issue 325 at its start, mirrored to face inwards); the row is gone,
+  and he flies beside the name instead (App.svelte), as rendered — the flight
+  faces screen-left, which from the name's upper right is toward it. The
+  mirrored seat had no caller left, so its prop and its rule left with it.
 
-  He is a PICTURE and nothing else: no text, no link, no control, and
-  aria-hidden, in both seats. The home link around the first one carries the
-  accessible name — it is named by the page's own heading, the thing it scrolls
-  to — and the keyboard order the rendering lanes pin (the home link, the nav,
-  the reading mode) gains no stop, because a span is not one. A decorative
-  image that announced itself would be a name a screen reader reads past on
-  every visit, beside a link that already says where it goes.
+  He is a PICTURE and nothing else: no text, no link, no control, aria-hidden,
+  so a screen reader reads past nothing and the keyboard gains no stop.
 
-  Everything else about him is stated in styles.css beside the rest of the
-  chrome row, for the reason the row itself is: the sheet and the still are
-  bundled assets the stylesheet resolves, the typing loop is declared inside
-  the site's one no-preference block, and a component-scoped rule could state
-  neither. This file is therefore the element, its name, and which way it
-  faces. -->
-<script lang="ts">
-  let { mirrored = false }: { mirrored?: boolean } = $props();
-</script>
+  THE BOX AND THE PICTURE ARE TWO THINGS, and that is how he arrives without
+  moving anything. The span is a square of the size his seat hands him
+  (--j-size, the seat's own measure; the site's 44px control square when no
+  seat says), RESERVED, so his box is the same before either file arrives as
+  after (the zero-CLS floor). The picture is the span's ::before: out of flow,
+  so it sizes nothing, drawn into exactly that square, and it takes no pointer,
+  so nothing under him is ever unpressable because he flies over it. His size
+  used to be derived from the bar's frame, which he had to fly past; there is
+  no bar to clear any more, so the picture is the box.
 
-<span class="j-mark" class:j-mark-mirrored={mirrored} aria-hidden="true"></span>
+  ONE PICTURE PER READER. At rest he is the still — frame 0 of the sheet,
+  re-encoded losslessly, so it is exactly the pose the flight starts from. The
+  sheet, its grid and the three animations (the two steps() that walk the
+  sheet, and the slow rock) are declared together inside the no-preference
+  block, so a reader who asked for less motion downloads only the 5kB still and
+  never the 882kB sheet, and a reader who welcomes motion never downloads the
+  still: a browser fetches only the background-image an element computes.
+
+  The files are named here, in the component's own style, so the bundler
+  resolves each to a content-hashed same-origin URL (assetsInlineLimit is 0, so
+  never a data: URI the origin's policy would refuse); the markup never learns
+  a file name. -->
+<span class="j-flight" aria-hidden="true"></span>
+
+<style>
+  /* THE RESERVED BOX, and every measure of him stated once, here.
+
+     --j-box is the square his seat hands him. The sheet is 20 columns by 24
+     rows of square cells (480 frames at 60Hz), and its drawn size is derived
+     from --j-box rather than restated, so one cell is always exactly his
+     square and the keyframes below walk whole cells at any size the seat asks
+     for.
+
+     --j-flight is the whole loop and --j-flight-row one row of it, DIVIDED so
+     the two animations stay phase-locked: a written row duration drifts a
+     column across the sheet over time and every row boundary then shows a
+     wrong frame. The rock is a few degrees each way over a slow swing — a
+     glide, not a wobble. */
+  .j-flight {
+    --j-box: var(--j-size, var(--control-target));
+    --j-sheet-inline: calc(var(--j-box) * 20);
+    --j-sheet-block: calc(var(--j-box) * 24);
+    --j-flight: 8s;
+    --j-flight-row: calc(var(--j-flight) / 24);
+    --j-rock-angle: 4deg;
+    --j-rock-swing: 3.2s;
+    display: block;
+    position: relative;
+    flex: none;
+    inline-size: var(--j-box);
+    block-size: var(--j-box);
+  }
+
+  /* THE PICTURE: exactly the box, out of flow. At rest it is the still, drawn
+     whole. */
+  .j-flight::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: url('../../assets/images/j/j-flight-still.webp');
+    background-repeat: no-repeat;
+    background-position: 0 0;
+    background-size: 100% 100%;
+  }
+
+  /* THE FLIGHT AND THE ROCK, only where motion is welcome. Two steps()
+     composed on the picture walk the sheet — the 20 cells of a row, then the
+     24 rows — naming each of the 480 frames once before the loop closes;
+     steps() because a sprite has no in-between state, and a tween would draw
+     two half-frames at once. The rock is the one smooth motion: ease-in-out
+     and alternating, so he leans one way, slows, and leans back, with no
+     corner at either end. */
+  @media (prefers-reduced-motion: no-preference) {
+    .j-flight::before {
+      background-image: url('../../assets/images/j/j-flight.webp');
+      background-size: var(--j-sheet-inline) var(--j-sheet-block);
+      animation:
+        j-flight-row var(--j-flight-row) steps(20) infinite,
+        j-flight-sheet var(--j-flight) steps(24) infinite,
+        j-rock var(--j-rock-swing) ease-in-out infinite alternate;
+    }
+  }
+
+  /* Each sheet keyframe travels the sheet's own measurement, read back from
+     the token the background is sized by, so the grid is stated once. */
+  @keyframes j-flight-row {
+    to {
+      background-position-x: calc(-1 * var(--j-sheet-inline));
+    }
+  }
+
+  @keyframes j-flight-sheet {
+    to {
+      background-position-y: calc(-1 * var(--j-sheet-block));
+    }
+  }
+
+  @keyframes j-rock {
+    from {
+      transform: rotate(calc(-1 * var(--j-rock-angle)));
+    }
+
+    to {
+      transform: rotate(var(--j-rock-angle));
+    }
+  }
+</style>

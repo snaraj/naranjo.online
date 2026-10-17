@@ -7,6 +7,83 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.96] - 2026-10-16
+
+### Changed
+
+- The page is redesigned ("The Keep", #375):
+  - A night sky is drawn behind it on a canvas: still under reduced motion,
+    paused when hidden, 30 frames a second at most, and slower wherever the
+    page cannot afford it (a browser drawing without a GPU), so the sky
+    slows down rather than the page.
+  - One framed glass sheet sits over the sky, with a pixel border on the
+    sheet only.
+  - Black and grey, with no gold: the sky, the sheet and its stone frame
+    carry no hue, and the name and the section titles are set in Archivo
+    in the page's own ink.
+  - The page opens on the name, with J flying beside it. The header bar,
+    the section nav and the picture bands are gone; the reading-mode
+    control lives in the footer, and every section keeps its id.
+  - One background on the sheet: no board, panel or control paints a
+    ground of its own.
+- The trackers are one diagram:
+  - Pull Requests Closed, Commits Pushed and Total Tokens Used sit beside a
+    daily line, over the year's calendar.
+  - Every day of the line stands over its own week's column.
+  - A switch picks what both show: contributions, or each tool's tokens.
+  - Pointing, touching or the arrow keys read one day across all of it.
+  - The Codex and Claude Code accounts carry the same rows, in the same
+    order.
+  - The boss log sits on the same board.
+  - The board holds the room its data will fill while that data is on its
+    way, so nothing below it moves when it lands.
+- Ongoing Work shows one entry fewer per column, with more on each.
+- A role's span reads in full: "2023 – present", "2022 – 2023".
+- The gallery is five pictures across the column with nothing beside them;
+  a phone shows four. A set switch appears above them only when there is
+  a second set to choose.
+- The usage export gives Codex the same figures as Claude Code: input,
+  output, cache read and write, sessions, active and tracked days, and a
+  per-model split. It no longer counts the running total an auto-review
+  session opens with as usage. A stored day is lowered only where its
+  records are intact, so an inflated day whose records are gone keeps its
+  figure until it is corrected by hand.
+
+### Added
+
+- The origin serves every day's commit count with the contribution
+  calendar (`commitWeeks` and `totalCommits`, additive inside
+  `vcs-activity/v1`), which is what Commits Pushed reads. The year is asked
+  for in four sub-windows of the same request, so a repository committed to
+  on more days than the upstream's page size is never cut short. A count
+  that cannot be placed exactly is left out whole, never estimated.
+
+### Fixed
+
+- A hover detail opened beside the pointer again everywhere on the page.
+  The sheet's glass had made it the containing block of every detail,
+  which sent them off the screen.
+- The page paints in its own faces. Their files are preloaded with the
+  document and the page appears once they are loaded, never more than a
+  second later, so a face landing late no longer moves the name, the
+  plaques or a ledger row.
+- Light mode no longer blurs behind its opaque parchment, which showed
+  nothing and slowed every frame where a browser draws without a GPU.
+- The diagram's layer names fit a 320px screen in every engine.
+- The calendar is laid out at its own width from its first frame, rather
+  than a year wide and then cut to the weeks that fit once the browser
+  reported its size.
+- In Safari, a role row and an Ongoing Work heading take their new height
+  when the window widens or a phone rotates, instead of keeping the taller
+  height they had at the narrower width.
+
+### Removed
+
+- The span buttons and the span outline. The graph is always the whole
+  calendar.
+- Eight components and modules the redesign retired, with about 1,100
+  lines of styles nothing read any more.
+
 ## [0.1.95] - 2026-10-13
 
 ### Changed

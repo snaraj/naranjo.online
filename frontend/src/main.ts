@@ -2,7 +2,6 @@ import { mount } from 'svelte';
 import App from './App.svelte';
 import './styles.css';
 import { applyStoredColumnWidth, browserStore, documentHost } from './lib/columnWidth';
-import { applyScrollbarGutter } from './lib/scrollbar';
 
 const target = document.getElementById('app');
 
@@ -14,10 +13,9 @@ if (!target) {
 // application exists. Two things together are why that costs no layout shift,
 // and the ORDER of these statements is the load-bearing one:
 //
-//   * everything the application renders is rendered after this line, inside
-//     the same synchronous task, so the page's first paint of the APPLICATION
-//     is already at the chosen width — nothing is painted narrow and then
-//     widened;
+//   * everything the application renders is rendered after this line, so the
+//     page's first paint of the APPLICATION is already at the chosen width —
+//     nothing is painted narrow and then widened;
 //   * the static shell the document ships with paints one centred heading in
 //     a centred column, whose position does not depend on the column's width
 //     at all, so the earlier paint the browser genuinely does make (measured
@@ -35,14 +33,22 @@ if (!target) {
 // browser lanes MEASURE the resulting layout shift rather than asserting it.
 applyStoredColumnWidth(documentHost(), browserStore());
 
-// And the platform's real scrollbar thickness, for the same reason and in the
-// same window (issue 130): the contribution strips reserve a gutter inside a
-// fixed box, and a reserve that guessed 12px clipped its own month axis under a
-// 15px classic scrollbar. Measured here, before a single grid exists, so no
-// strip is ever painted at one gutter and re-laid at another; the static shell
-// renders no grid at all, so there is nothing earlier to shift. It only ever
-// widens the reserve past what the stylesheet ships with — see lib/scrollbar.ts.
-applyScrollbarGutter(document);
-
-target.replaceChildren();
-mount(App, { target });
+// The application paints in its own faces rather than swapping to them. Their
+// bytes come with the page (the preloads in index.html), but a face is only
+// applied once the main thread is free to take it up, and that was after the
+// application's first paint. So each swap moved whatever wraps differently in
+// the face than in its fallback: the name, the plaques and a ledger role in
+// Archivo (measured on Linux Chromium: layout shifts of 0.03 at 1440px
+// and 0.06 at 390px). So the mount waits for the faces, never longer than
+// faceWait: the static shell stays painted meanwhile, and a face that has not
+// come by then swaps in later, as it always did.
+const faceWait = 1000;
+const faces = ["1em 'Archivo'", "1em 'JetBrains Mono'"];
+const start = () => {
+  target.replaceChildren();
+  mount(App, { target });
+};
+Promise.race([
+  Promise.all(faces.map((face) => document.fonts.load(face))),
+  new Promise((resolve) => setTimeout(resolve, faceWait)),
+]).then(start, start);
