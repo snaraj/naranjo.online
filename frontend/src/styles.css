@@ -1922,11 +1922,15 @@ h1 {
 /* --- 01 / the openable ledger rows --------------------------------------- */
 
 .ledger-entry {
-  /* A grid rather than a block, so the row button inside it stretches to the
-     column without declaring a width of its own — a control that declares
-     `inline-size: 100%` is a control the touch-floor sweep can read no size
-     from, and a percentage is not a floor. */
-  display: grid;
+  /* A column of flex items rather than a block, so the row button inside it
+     stretches to the column without declaring a width of its own — a control
+     that declares `inline-size: 100%` is a control the touch-floor sweep can
+     read no size from, and a percentage is not a floor. Not a grid: WebKit
+     keeps a grid item's height from an earlier, narrower layout, so a widened
+     window or a rotated phone left each row as tall as its narrower self
+     (measured: 210.6px after widening 320 to 360, 188.9px loaded at 360). */
+  display: flex;
+  flex-direction: column;
   border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
 }
 

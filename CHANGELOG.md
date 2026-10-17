@@ -73,6 +73,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - The calendar is laid out at its own width from its first frame, rather
   than a year wide and then cut to the weeks that fit once the browser
   reported its size.
+- In Safari, a role row and an Ongoing Work heading take their new height
+  when the window widens or a phone rotates, instead of keeping the taller
+  height they had at the narrower width.
 
 ### Removed
 

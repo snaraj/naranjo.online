@@ -285,10 +285,12 @@
     gap: 0 var(--ongoing-columns-gap);
   }
 
+  /* A column of flex items, each as wide as the column. Not a one-track grid:
+     WebKit keeps a grid item's height from an earlier, narrower layout, so a
+     head that wrapped at 320px stayed two lines tall at 360px. */
   .ongoing-column {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    align-content: start;
+    display: flex;
+    flex-direction: column;
     min-inline-size: 0;
   }
 
