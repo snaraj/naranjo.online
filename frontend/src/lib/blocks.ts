@@ -797,7 +797,7 @@ export type MediaGalleryProps = {
   /* The intrinsic box every frame declares, so arrival moves nothing. */
   readonly width: number;
   readonly height: number;
-  /* How many tiles the row shows of the chosen set (owner mock: four). */
+  /* How many tiles the row shows of the chosen set (owner, 2026-10-17: five). */
   readonly tiles?: number;
 };
 

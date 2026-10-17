@@ -282,6 +282,13 @@
       write(box?.width ?? 0, box?.height ?? 0);
     });
     observer.observe(node);
+    /* The first size now, not at the observer's first report: that comes with
+       a rendering update, and where an engine draws slowly the calendar was
+       laid out a whole year wide and then re-cut to the weeks that fit, 30px
+       taller on a phone (WebKit without a GPU). Neither box has padding or a
+       border, so its box is its content box. */
+    const box = node.getBoundingClientRect();
+    write(box.width, box.height);
     return () => observer.disconnect();
   }
 
@@ -648,7 +655,7 @@
     font-weight: 800;
     line-height: 1.05;
     font-variant-numeric: tabular-nums;
-    color: var(--keep-name-bottom);
+    color: var(--ledger-ink);
   }
 
   .chronicle-caption {
@@ -811,7 +818,7 @@
   }
 
   .chronicle-cell[data-today='true'] {
-    stroke: var(--keep-ornament);
+    stroke: var(--ledger-ink);
     stroke-width: 1.4;
   }
 
@@ -945,7 +952,7 @@
     font-size: 1rem;
     font-weight: 700;
     letter-spacing: 0.06em;
-    color: var(--keep-name-bottom);
+    color: var(--ledger-ink);
   }
 
   .chronicle-facts {
@@ -1041,7 +1048,7 @@
     display: block;
     block-size: 100%;
     inline-size: var(--chronicle-fill, 0%);
-    background: var(--keep-ornament);
+    background: var(--ledger-ink);
   }
 
   /* A model's own figures hold one line, and two on a phone — by the

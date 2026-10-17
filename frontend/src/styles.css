@@ -89,29 +89,6 @@
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* Cinzel, the Keep's display face (owner direction, 2026-10-16: the medieval
- * look of the Old School RuneScape site). Roman inscriptional capitals for the
- * name, the section plaques and the figures that are read as headings; body
- * text stays Archivo and figures stay JetBrains Mono. Variable weight 400-900,
- * the same two-subset split as the faces above, OFL text beside the files. */
-@font-face {
-  font-family: 'Cinzel';
-  font-style: normal;
-  font-weight: 400 900;
-  font-display: swap;
-  src: url('./assets/fonts/Cinzel-Variable-latin.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-
-@font-face {
-  font-family: 'Cinzel';
-  font-style: normal;
-  font-weight: 400 900;
-  font-display: swap;
-  src: url('./assets/fonts/Cinzel-Variable-latin-ext.woff2') format('woff2');
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-
 /* Reading-mode token layer (issue #22, the OSRS-wiki mechanism adapted):
  * every color lives in a custom property, and each reading mode is one
  * override block scoped by the data-theme attribute the origin stamps on
@@ -1100,24 +1077,21 @@
      still be ONE number. */
   --icon-gap: 0.375rem;
 
-  /* THE KEEP (owner direction, 2026-10-16): the medieval frame. The page is a
-     sheet of parchment (or, in the dark modes, night oak) set inside a gilded
-     painting frame over a dark oak backdrop, with Cinzel for the name and the
-     section plaques. The parchment is generated locally, vendored
-     under src/assets/images/keep/; the frame is a
+  /* THE KEEP (owner direction, 2026-10-16): the page is a sheet of parchment
+     (or, in the dark modes, dark glass) inside a drawn stone frame, under a
+     night sky. Hueless and without gold (owner, 2026-10-17: "not happy with
+     the blue background color … the font used, and the gold color"): the
+     dark modes are true black, the frame is grey stone, and the name and the
+     plaques are set in Archivo in the page's own ink. The parchment is
+     generated locally, vendored under src/assets/images/keep/; the frame is a
      drawn SVG (src/assets/images/frame/), the sky is drawn in code
-     (lib/sky.ts). The fixed values live
-     here; the four that change with the reading mode are declared below and in
-     every mode block. */
-  --font-display: 'Cinzel', Georgia, 'Times New Roman', serif;
-  --palette-keep-gilt: #b9862f;
-  --palette-keep-gilt-light: #f4d98b;
-  --palette-keep-gilt-deep: #3a2810;
-  --palette-keep-bronze: #8c5a1a;
-  --palette-keep-bronze-deep: #4a2c0c;
-  --palette-keep-backdrop: #07050f;
+     (lib/sky.ts). The display face is a token of its own so a heading face is
+     one line to change. The fixed values live here; the ones that change with
+     the reading mode are declared below and in every mode block. */
+  --font-display: var(--font-sans);
+  --palette-keep-backdrop: #050505;
   /* The dark modes' sheet: night-violet glass the sky shows through. */
-  --palette-keep-glass: rgb(12 9 26 / 0.74);
+  --palette-keep-glass: rgb(10 10 10 / 0.74);
   --keep-texture-parchment: url('./assets/images/keep/parchment.jpg');
   /* The frame is a pixel pattern (owner direction, 2026-10-16: borders like
      the old handheld RPGs' text-box frames): an 8-pixel band in a 24-pixel
@@ -1139,9 +1113,6 @@
   --keep-sheet: var(--keep-texture-parchment);
   --keep-sheet-ground: var(--color-surface);
   --keep-sheet-blur: none;
-  --keep-name-top: var(--palette-keep-bronze);
-  --keep-name-bottom: var(--palette-keep-bronze-deep);
-  --keep-ornament: var(--palette-keep-bronze);
 
   color: var(--color-text);
   background: var(--color-surface);
@@ -1191,9 +1162,6 @@
     --keep-sheet: none;
     --keep-sheet-ground: var(--palette-keep-glass);
     --keep-sheet-blur: blur(6px) saturate(115%);
-    --keep-name-top: var(--palette-keep-gilt-light);
-    --keep-name-bottom: var(--palette-keep-gilt);
-    --keep-ornament: var(--palette-keep-gilt);
   }
 }
 
@@ -1232,9 +1200,6 @@
   --keep-sheet: none;
   --keep-sheet-ground: var(--palette-keep-glass);
   --keep-sheet-blur: blur(6px) saturate(115%);
-  --keep-name-top: var(--palette-keep-gilt-light);
-  --keep-name-bottom: var(--palette-keep-gilt);
-  --keep-ornament: var(--palette-keep-gilt);
 }
 
 /* Slate remaps the identical slot list onto its own palette — same roles,
@@ -1278,9 +1243,6 @@
   --keep-sheet: none;
   --keep-sheet-ground: var(--palette-keep-glass);
   --keep-sheet-blur: blur(6px) saturate(115%);
-  --keep-name-top: var(--palette-keep-gilt-light);
-  --keep-name-bottom: var(--palette-keep-gilt);
-  --keep-ornament: var(--palette-keep-gilt);
 }
 
 [data-theme="sepia"] {
@@ -1318,9 +1280,6 @@
   --keep-sheet: none;
   --keep-sheet-ground: var(--palette-keep-glass);
   --keep-sheet-blur: blur(6px) saturate(115%);
-  --keep-name-top: var(--palette-keep-gilt-light);
-  --keep-name-bottom: var(--palette-keep-gilt);
-  --keep-ornament: var(--palette-keep-gilt);
 }
 
 * {
@@ -1872,8 +1831,7 @@ h1 {
   --gallery-columns: 5;
   --gallery-tile-gap: 0.5rem;
   --gallery-tile-aspect: 1;
-  --gallery-control-gap: 0.5rem;
-  --gallery-control-pad: 0.75rem;
+  --gallery-sets-gap: 0.5rem;
   /* The GROUND a tile and a film sit on (issue 239) is --gallery-stage-ground,
      declared with the palettes because it branches by reading mode. */
   /* The stage's prev/next pair: the disc inside the 44px target, its ink, its
@@ -2261,6 +2219,12 @@ h1 {
     --gallery-columns: 2;
   }
 
+  /* Two across holds four of the five tiles; the fifth would stand alone in
+     its row, so a phone shows four and the stage still pages through all. */
+  .gallery-grid > :nth-child(n + 5) {
+    display: none;
+  }
+
   /* Every wide row collapses to stacked lines rather than scrolling sideways:
      the page does not scroll sideways at any width, and a table that did would
      take the whole document with it. */
@@ -2323,9 +2287,9 @@ h1 {
  * THE KEEP — the medieval frame (owner direction, 2026-10-16).
  *
  * The owner's reference is the Old School RuneScape site: a dark backdrop, a
- * framed column, parchment, gold lettering and carved plaques. The page keeps
- * the ledger's ORDER and its content exactly; this layer changes what the
- * sheet is made of. It is one section on purpose, so the whole look can be
+ * framed column, parchment and centred plaques — hueless and without gold
+ * since 2026-10-17. The page keeps the ledger's ORDER and its content exactly;
+ * this layer changes what the sheet is made of. It is one section on purpose, so the whole look can be
  * reviewed as one change — and, if the owner keeps it, folded into the rules
  * above it — rather than threaded through forty rules nobody can see at once.
  *
@@ -2336,18 +2300,15 @@ h1 {
 :root {
   --keep-shadow-deep: 0 1.5rem 3.5rem var(--keep-shadow-ink);
   --keep-shadow-ink: rgb(0 0 0 / 0.5);
-  --keep-vignette-ink: rgb(70 40 10 / 0.16);
+  --keep-vignette-ink: rgb(0 0 0 / 0.16);
   --ledger-rule: var(--color-border-strong);
   --ledger-section-gap: clamp(2.25rem, 4vw, 3.5rem);
   --card-border-color: var(--color-border);
-  --panel-title-family: var(--font-display);
-  --panel-title-weight: 700;
-  --panel-title-tracking: 0.12em;
   /* Under the night sky (NightSky.svelte), the colour it is drawn on. */
   background-color: var(--palette-keep-backdrop);
 }
 
-/* --- The sheet: parchment (or night oak) inside the gilded frame ---------- */
+/* --- The sheet: parchment (or dark glass) inside the stone frame --------- */
 
 /* The sheet's ground, glass, frame and vignette are painted on a layer BEHIND
    main rather than on main. A backdrop-filter on main itself would make main
@@ -2421,33 +2382,13 @@ main::before {
   text-align: center;
 }
 
+/* The masthead's own face, weight and tracking (the rule above), centred on
+   the sheet and held to the intro's size. */
 h1 {
-  inline-size: auto;
   font-family: var(--font-display);
   font-size: var(--keep-name-size);
-  font-weight: 800;
-  letter-spacing: 0.015em;
-  line-height: 0.95;
-  text-transform: none;
   text-align: center;
-  color: var(--keep-name-bottom);
-  background-image: none;
-  -webkit-background-clip: border-box;
-  background-clip: border-box;
-  -webkit-text-fill-color: currentcolor;
-  filter: none;
-}
-
-/* The gilt on the letters is an enhancement: an engine that cannot clip a
-   background to text keeps the solid ink above, never invisible letters. */
-@supports (background-clip: text) or (-webkit-background-clip: text) {
-  h1 {
-    background-image: linear-gradient(180deg, var(--keep-name-top) 8%, var(--keep-name-bottom) 92%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 0.035em 0 var(--palette-keep-gilt-deep)) drop-shadow(0 0.06em 0.05em var(--keep-shadow-ink));
-  }
+  color: var(--ledger-ink);
 }
 
 .masthead-rule {
@@ -2471,11 +2412,11 @@ h1 {
 .section-title {
   font-family: var(--font-display);
   font-size: var(--keep-plaque-size);
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-weight: 800;
+  letter-spacing: -0.01em;
   text-transform: none;
   text-align: center;
-  color: var(--keep-name-bottom);
+  color: var(--ledger-ink);
 }
 
 /* A phone draws the frame one pixel-step finer: the pattern keeps its square
@@ -2486,29 +2427,6 @@ h1 {
   }
 }
 
-.subsection-title {
-  font-family: var(--font-display);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-}
-
-/* --- The ledger rows: names in the display face --------------------------- *
- * The display face is wider than the sans the columns were cut for, so the
- * name column takes the room the date column never used: a span like
- * "2022 – 23" needs about five rems, not nine, and the place needs eight.
- * Wide rows only; the stacked phone row keeps its own grid. */
-@media (min-width: 45.0625rem) {
-  .ledger-row {
-    grid-template-columns: 5.75rem var(--ledger-mark) minmax(0, 1.4fr) minmax(0, 1.2fr) 8.25rem var(--control-target);
-  }
-}
-
-
-.ledger-name {
-  font-family: var(--font-display);
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
 
 /* --- The trackers: one framed board -------------------------------------- *
  * The diagram and the boss strip are one tracker board (owner, 2026-10-16:
@@ -2553,8 +2471,6 @@ h1 {
 .page-footer {
   justify-content: center;
   border-block-start: 0;
-  font-family: var(--font-display);
-  letter-spacing: 0.12em;
 }
 
 /* ===========================================================================

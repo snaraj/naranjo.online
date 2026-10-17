@@ -37,13 +37,13 @@ applyStoredColumnWidth(documentHost(), browserStore());
 // bytes come with the page (the preloads in index.html), but a face is only
 // applied once the main thread is free to take it up, and that was after the
 // application's first paint. So each swap moved whatever wraps differently in
-// the face than in its fallback: the name and the plaques in Cinzel, a ledger
-// role in Archivo (measured on Linux Chromium: layout shifts of 0.03 at 1440px
+// the face than in its fallback: the name, the plaques and a ledger role in
+// Archivo (measured on Linux Chromium: layout shifts of 0.03 at 1440px
 // and 0.06 at 390px). So the mount waits for the faces, never longer than
 // faceWait: the static shell stays painted meanwhile, and a face that has not
 // come by then swaps in later, as it always did.
 const faceWait = 1000;
-const faces = ["800 1em 'Cinzel'", "1em 'Archivo'", "1em 'JetBrains Mono'"];
+const faces = ["1em 'Archivo'", "1em 'JetBrains Mono'"];
 const start = () => {
   target.replaceChildren();
   mount(App, { target });

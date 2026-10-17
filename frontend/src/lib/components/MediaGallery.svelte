@@ -1,6 +1,9 @@
 <!-- MediaGallery is the sheet's last section (owner directive, 2026-09-03,
-  issue 287): a row of square tiles — the first few of the chosen set — beside
-  one control tile, and a native <dialog> that is the stage.
+  issue 287): a row of square tiles — the first few of the chosen set — and a
+  native <dialog> that is the stage. Five pictures span the column with nothing
+  beside them (owner, 2026-10-17: no box of information and dead content); a
+  set switch sits above them only when there is a set to switch to, and what a
+  picture is lives under it on the stage.
 
   This supersedes the single visible frame of issues 176, 202, 219, 243 and
   265, and it keeps what those rulings were FOR rather than their markup: one
@@ -14,13 +17,12 @@
   settle, the offset writes, the neighbour warming and the caption lane, none
   of which a tile grid has a surface for.
 
-  The tiles are a GRID, not a carousel: at the reading width the mock draws
-  four squares and the control tile across the column, and on a phone the same
-  tiles fold to two across. Which set the tiles show is data — an item's set
-  is the manifest's word when it wrote one and the kind-derived default when
-  it did not — and the control tile offers a set only when there is more than
-  one to choose (honest-states floor: a set exists exactly when something is
-  in it). Every dimension is a token in styles.css; the component states no
+  The tiles are a GRID, not a carousel: at the reading width five squares
+  fill the column, and on a phone the first four fold to two across. Which set
+  the tiles show is data — an item's set is the manifest's word when it wrote
+  one and the kind-derived default when it did not — and the switch offers a
+  set only when there is more than one to choose (honest-states floor: a set
+  exists exactly when something is in it). Every dimension is a token in styles.css; the component states no
   colour, length, radius or duration of its own. -->
 <script lang="ts">
   import { tick } from 'svelte';
@@ -30,7 +32,7 @@
   import type { MediaGalleryItem, MediaGalleryProps } from '../blocks.ts';
   import type { IconName } from '../icons.ts';
 
-  let { items, width, height, tiles = 4 }: MediaGalleryProps = $props();
+  let { items, width, height, tiles = 5 }: MediaGalleryProps = $props();
 
   /* The set an item belongs to: the manifest's word, else its kind's. */
   function setOf(candidate: MediaGalleryItem): string {
@@ -64,12 +66,6 @@
   function itemNoun(candidate: MediaGalleryItem): string {
     return candidate.video === undefined ? 'photograph' : 'film';
   }
-  const note = $derived(
-    visible.length > shownTiles.length
-      ? `${shownTiles.length} of ${visible.length} shown · open one to page through all`
-      : `${visible.length} ${visible.length === 1 ? 'item' : 'items'}`
-  );
-
   /* THE STAGE. index is assigned in exactly four places — open, next,
      previous and a set change — and read clamped, so a set shrinking under
      it (a manifest load) can never leave it pointing past the end. */
@@ -193,6 +189,24 @@
 {#if items.length > 0}
   <FeedCard variant="flat">
     {#snippet media()}
+      {#if sets.length > 1}
+        <div class="gallery-sets" role="group" aria-label="Media set">
+          {#each sets as name (name)}
+            <!-- The set's WORD moved to the accessible name and nowhere else:
+              aria-label replaces a control's contents in the accessibility
+              tree, so a screen reader hears "Photographs · 1" where the eye
+              reads a mark and a figure. The count stays visible because a
+              figure is a fact, not a label. -->
+            <button
+              type="button"
+              class="gallery-set"
+              aria-pressed={name === activeSet}
+              aria-label={`${name} · ${countOf(name)}`}
+              onclick={() => selectSet(name)}
+              ><Icon name={setGlyph(name)} slot="row" /> · {countOf(name)}</button>
+          {/each}
+        </div>
+      {/if}
       <div class="gallery-grid" data-gallery-tiles={shownTiles.length}>
         {#each shownTiles as tile (tile.key)}
           {#if tile.video}
@@ -250,30 +264,6 @@
             </button>
           {/if}
         {/each}
-        <div class="gallery-control">
-          <p class="gallery-control-label">Gallery</p>
-          {#if sets.length > 1}
-            <div class="gallery-sets" role="group" aria-label="Media set">
-              {#each sets as name (name)}
-                <!-- The set's WORD moved to the accessible name and nowhere
-                  else: aria-label replaces a control's contents in the
-                  accessibility tree, so a screen reader hears "Photographs ·
-                  1" where the eye reads a mark and a figure. The count stays
-                  visible because a figure is a fact, not a label. -->
-                <button
-                  type="button"
-                  class="gallery-set"
-                  aria-pressed={name === activeSet}
-                  aria-label={`${name} · ${countOf(name)}`}
-                  onclick={() => selectSet(name)}
-                  ><Icon name={setGlyph(name)} slot="row" /> · {countOf(name)}</button>
-              {/each}
-            </div>
-          {:else}
-            <p class="gallery-set-name">{activeSet}</p>
-          {/if}
-          <p class="gallery-control-note">{note}</p>
-        </div>
       </div>
     {/snippet}
   </FeedCard>
@@ -367,10 +357,10 @@
 {/if}
 
 <style>
-  /* THE GRID: the tiles and the control tile share one track list, so the
-     control tile is exactly one tile wide and the row fills the column with
-     no gutter left dead (owner rule: content short of its container's edge is
-     a defect). The column count is a token the phone block halves. */
+  /* THE GRID: one track per tile, so the row fills the column with no
+     gutter left dead (owner rule: content short of its container's edge is a
+     defect). The column count is a token the phone block halves, and there
+     only the first four tiles show, so no tile stands alone in a row. */
   .gallery-grid {
     display: grid;
     grid-template-columns: repeat(var(--gallery-columns), minmax(0, 1fr));
@@ -452,35 +442,15 @@
     border-radius: 999px;
   }
 
-  /* THE CONTROL TILE, in the ledger's own grammar: a hairline box, a mono
-     label, the set switch (only when there is a choice) and one honest line
-     about how much of the set the row shows. */
-  .gallery-control {
-    display: grid;
-    align-content: start;
-    gap: var(--gallery-control-gap);
-    min-inline-size: 0;
-    padding: var(--gallery-control-pad);
-    border: var(--ledger-hairline) solid var(--ledger-rule);
-  }
-  .gallery-control-label,
-  .gallery-control-note,
-  .gallery-set-name {
-    margin: 0;
-    font-family: var(--font-mono);
-    font-size: var(--ledger-label-size);
-    letter-spacing: var(--ledger-label-tracking);
-    text-transform: uppercase;
-    color: var(--ledger-muted);
-  }
-  .gallery-set-name,
-  .gallery-control-note {
-    letter-spacing: 0;
-    text-transform: none;
-  }
+  /* THE SET SWITCH, only when there is a choice: a centred row above the
+     strip with no box and no ground, the chosen set marked by the brand ink
+     and its underline, like every other switch on the sheet. */
   .gallery-sets {
-    display: grid;
-    gap: var(--gallery-control-gap);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--gallery-sets-gap);
+    margin-block-end: var(--gallery-sets-gap);
   }
   .gallery-set {
     display: inline-flex;
@@ -488,10 +458,11 @@
     gap: var(--icon-gap);
     min-inline-size: var(--control-target);
     min-block-size: var(--control-target);
-    padding: 0 var(--gallery-control-gap);
-    border: var(--ledger-hairline) solid var(--ledger-rule);
+    padding: 0 var(--gallery-sets-gap);
+    border: 0;
+    border-block-end: 2px solid transparent;
     background: none;
-    color: var(--ledger-ink);
+    color: var(--ledger-muted);
     font-family: var(--font-mono);
     font-size: var(--ledger-label-size);
     letter-spacing: var(--ledger-label-tracking);
@@ -499,9 +470,8 @@
     cursor: pointer;
   }
   .gallery-set[aria-pressed='true'] {
-    background: var(--ledger-ink);
-    color: var(--ledger-bg);
-    border-color: var(--ledger-ink);
+    color: var(--color-brand);
+    border-block-end-color: var(--color-brand);
   }
   .gallery-set:focus-visible {
     outline: 2px solid var(--color-accent);

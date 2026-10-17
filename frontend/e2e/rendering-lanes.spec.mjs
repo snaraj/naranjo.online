@@ -5118,9 +5118,9 @@ test('every rendered link is unmarked at rest and marks itself on hover', async 
  * issue 287)
  *
  * Every lane below used to drive one visible frame with a swipe strip under
- * it. The frame is gone: the sheet's last section draws the first few squares
- * of the chosen set beside one control tile, and the stage is a native
- * <dialog> a tile opens. What the rulings of issues 176, 202, 219, 233, 241,
+ * it. The frame is gone: the sheet's last section draws the first five squares
+ * of the chosen set across the column (owner, 2026-10-17: no control tile
+ * beside them), and the stage is a native <dialog> a tile opens. What the rulings of issues 176, 202, 219, 233, 241,
  * 243, 265 and 275 were FOR survives that move and is re-aimed here — one
  * full-size picture at a time, the full derivative fetched only on demand,
  * nothing autoplaying, a film inline behind one control, every box reserved
@@ -5148,19 +5148,22 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
   await expect
     .poll(
       async () =>
-        thumbs.evaluateAll((nodes) =>
-          nodes.length > 0 && nodes.every((img) => img.complete && img.naturalWidth > 0)
-        ),
+        thumbs.evaluateAll((nodes) => {
+          const drawn = nodes.filter((img) => img.getClientRects().length > 0);
+          return drawn.length > 0 && drawn.every((img) => img.complete && img.naturalWidth > 0);
+        }),
       { message: 'the vendored previews never finished decoding', timeout: 10_000 }
     )
     .toBe(true);
 
   const observed = await page.evaluate(() => {
     const gridNode = window.document.querySelector('.gallery-grid');
-    const tiles = [...window.document.querySelectorAll('.gallery-tile')];
-    const images = [...window.document.querySelectorAll('img.gallery-thumb')];
+    const all = [...window.document.querySelectorAll('.gallery-tile')];
+    const tiles = all.filter((tile) => tile.getClientRects().length > 0);
+    const images = tiles.flatMap((tile) => [...tile.querySelectorAll('img.gallery-thumb')]);
     return {
       declared: gridNode.getAttribute('data-gallery-tiles'),
+      mounted: all.length,
       tiles: tiles.length,
       images: images.length,
       /* One picture per tile, and every one of them the PREVIEW derivative:
@@ -5174,31 +5177,31 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
          half of "one loaded photograph": the closed page mounts no stage at
          all, so there is no second copy of anything to load. */
       enlarged: window.document.querySelectorAll('.gallery-lightbox-image').length,
-      note: window.document.querySelector('.gallery-control-note')?.textContent?.trim() ?? null,
-      controls: window.document.querySelectorAll('.gallery-control').length,
+      /* No box of information beside the row and no instructions in it
+         (owner, 2026-10-17): the row is pictures and nothing else. */
+      boxes: window.document.querySelectorAll('.gallery-control, .gallery-set-name').length,
+      words: window.document.querySelector('.gallery-grid').textContent.trim(),
     };
   });
+  /* A phone shows four of the five (two full rows), a wider screen all five. */
+  const drawn = (page.viewportSize()?.width ?? 1280) <= 720 ? 4 : 5;
 
-  expect(observed.tiles, 'the gallery rendered a number of tiles other than the four it declares').toBe(4);
-  expect(observed.declared, 'the grid stopped declaring how many tiles it drew').toBe('4');
-  expect(observed.controls, 'the row lost its control tile, or grew a second one').toBe(1);
-  expect(observed.images, 'the row mounts a number of pictures other than one per tile').toBe(4);
-  expect(observed.perTile, 'a tile mounts something other than exactly one picture').toEqual([1, 1, 1, 1]);
+  expect(observed.mounted, 'the gallery mounted a number of tiles other than the five it declares').toBe(5);
+  expect(observed.declared, 'the grid stopped declaring how many tiles it drew').toBe('5');
+  expect(observed.tiles, `the row draws ${observed.tiles} tiles at this width, not ${drawn}`).toBe(drawn);
+  expect(observed.boxes, 'a box of information is back beside the row').toBe(0);
+  expect(observed.words, 'the row explains itself in words again').toBe('');
+  expect(observed.images, 'the row draws a number of pictures other than one per tile').toBe(drawn);
+  expect(observed.perTile, 'a tile mounts something other than exactly one picture').toEqual(Array(drawn).fill(1));
   expect(observed.lazy, 'a thumbnail stopped being lazy, so the row costs a reader who never reaches it').toEqual(
-    ['lazy', 'lazy', 'lazy', 'lazy']
+    Array(drawn).fill('lazy')
   );
   expect(observed.fit, 'a thumbnail is letterboxed inside its square instead of filling it').toEqual(
-    ['cover', 'cover', 'cover', 'cover']
+    Array(drawn).fill('cover')
   );
   expect(observed.previews, 'a tile is showing something other than the preview derivative').toBe(true);
   expect(observed.masters, 'a full-size master is mounted in the tile row').toBe(0);
   expect(observed.enlarged, 'an enlarged picture is mounted before anybody opened one').toBe(0);
-  /* The row says what it is showing OF, honestly: four of the eight the
-     vendored set carries, and where the other four are. */
-  expect(observed.note, 'the control tile stopped saying how much of the set the row shows').toBe(
-    '4 of 8 shown · open one to page through all'
-  );
-
   // ...and opening one mounts exactly ONE enlarged picture, not eight.
   await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
   await expect(page.locator('dialog.gallery-lightbox')).toBeVisible();
@@ -5372,9 +5375,9 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
 });
 
 /* THE SET CONTROL (owner sketch 2026-08-31, issue 275; RE-AIMED by the owner
- * directive of 2026-09-03, issue 287). The dropdown became the control tile's
- * own switch — one pressed button per set, in the row, with no menu to open
- * and therefore no overlap to trade against. What the ruling was FOR is
+ * directive of 2026-09-03, issue 287; 2026-10-17). The dropdown became a switch
+ * above the row — one pressed button per set, drawn only when there is a
+ * choice, with no menu to open and therefore no overlap to trade against. What the ruling was FOR is
  * unchanged and is what this measures: an entry exists exactly for a set
  * something is published in, choosing one really filters the row, and the
  * choice costs the page no layout.
@@ -5392,15 +5395,15 @@ test('the set switch lists only sets that exist, filters the row without moving 
   await visit(page);
   const grid = page.locator('.gallery-grid');
   await grid.scrollIntoViewIfNeeded();
-  /* ONE SET, so no switch at all — the set is NAMED instead, which is the
-     honest-states floor applied to a control: a button nobody can press to
-     any effect is worse than a label. */
+  /* ONE SET, so no switch at all, and no label in its place (owner,
+     2026-10-17): a button nobody can press to any effect is worse than
+     nothing, and so is a word that only says what the pictures already show. */
   await expect(
     page.locator('.gallery-set'),
     'a set switch is drawn for a row with only one set to choose'
   ).toHaveCount(0);
   await expect(page.locator('.gallery-sets')).toHaveCount(0);
-  await expect(page.locator('.gallery-set-name')).toHaveText('Photographs');
+  await expect(page.locator('.gallery-set-name')).toHaveCount(0);
 
   await page.route('**/media/mutable/gallery/manifest.json', (route) =>
     route.fulfill({
@@ -5743,9 +5746,9 @@ test('a film is a tile of its own square, plays inline behind one control, and n
   await grid.scrollIntoViewIfNeeded();
 
   // The manifest replaced the vendored set wholesale, so the row is the
-  // fixture's own: one still, one film, one control tile.
+  // fixture's own: one still and one film, and nothing beside them.
   await expect(page.locator('.gallery-tile')).toHaveCount(2);
-  await expect(page.locator('.gallery-control-note')).toHaveText('2 items');
+  await expect(page.locator('.gallery-control')).toHaveCount(0);
 
   const shape = await page.evaluate(() => {
     const round = (box) => ({
@@ -5996,7 +5999,7 @@ test('the gallery grid fills the reading column edge to edge, in five equal cell
         left: mainBox.left + Number.parseFloat(mainStyle.borderLeftWidth) + Number.parseFloat(mainStyle.paddingLeft),
         right: mainBox.right - Number.parseFloat(mainStyle.borderRightWidth) - Number.parseFloat(mainStyle.paddingRight),
       };
-      const cells = [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map(
+      const cells = [...window.document.querySelectorAll('.gallery-tile')].filter((cell) => cell.getClientRects().length > 0).map(
         (cell) => {
           const box = cell.getBoundingClientRect();
           return { x: round(box.x), y: round(box.y), width: round(box.width) };
@@ -6021,8 +6024,8 @@ test('the gallery grid fills the reading column edge to edge, in five equal cell
     expect(observed.right, `the grid runs past the column's right edge ${at}`).toBeGreaterThanOrEqual(-1);
     expect(observed.left, `the grid starts ${observed.left}px inside the column ${at}`).toBeLessThanOrEqual(1);
     expect(observed.left, `the grid starts ${observed.left}px outside the column ${at}`).toBeGreaterThanOrEqual(-1);
-    /* FIVE CELLS, ONE ROW, EQUAL WIDTHS — four tiles beside one control tile,
-       which is what makes the row fill the column with no track left over. */
+    /* FIVE CELLS, ONE ROW, EQUAL WIDTHS — five pictures, which is what makes
+       the row fill the column with no track left over (owner, 2026-10-17). */
     expect(observed.cells.length, `the row holds ${observed.cells.length} cells ${at}`).toBe(5);
     expect(observed.rows, `the five cells wrapped onto ${observed.rows} rows ${at}`).toBe(1);
     expect(observed.columns, `the row draws ${observed.columns} columns ${at}`).toBe(5);
@@ -6207,7 +6210,7 @@ async function galleryRowShape(page) {
       /* Each cell relative to the row's own origin, never in viewport
          coordinates: a panel painting elsewhere on the page would move every
          absolute y at once and make this read as a gallery shift it is not. */
-      cells: [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map((cell) => {
+      cells: [...window.document.querySelectorAll('.gallery-tile')].filter((cell) => cell.getClientRects().length > 0).map((cell) => {
         const box = cell.getBoundingClientRect();
         return {
           x: round(box.left - grid.left),
@@ -6234,15 +6237,16 @@ async function galleryRowShape(page) {
  * There are four boxes to hold now rather than one, and that is a stronger
  * question than the frame's was: a reservation that came from the picture
  * rather than from the track would leave the row shorter, re-flow the cells
- * beside it, and move the control tile — all of which this reads, cell by
- * cell, against the page's own other state. */
+ * beside it — all of which this reads, cell by cell, against the page's own
+ * other state. */
 test('every tile reserves the SAME square with its picture refused as with it served (issue 202; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
   await page.route('**/gallery-*.webp', (route) => route.abort());
   await visit(page);
   const refused = await galleryRowShape(page);
-  expect(refused.cells.length, 'the row rendered no cells with the pictures refused').toBe(5);
+  const drawn = (page.viewportSize()?.width ?? 1280) <= 720 ? 4 : 5;
+  expect(refused.cells.length, 'the row drew a different number of cells with the pictures refused').toBe(drawn);
   for (const [index, cell] of refused.cells.entries()) {
     expect(
       cell.width,
@@ -6261,9 +6265,10 @@ test('every tile reserves the SAME square with its picture refused as with it se
   await expect
     .poll(
       async () =>
-        thumbs.evaluateAll((nodes) =>
-          nodes.length > 0 && nodes.every((img) => img.complete && img.naturalWidth > 0)
-        ),
+        thumbs.evaluateAll((nodes) => {
+          const drawn = nodes.filter((img) => img.getClientRects().length > 0);
+          return drawn.length > 0 && drawn.every((img) => img.complete && img.naturalWidth > 0);
+        }),
       { message: 'the vendored previews never finished decoding', timeout: 10_000 }
     )
     .toBe(true);
@@ -6306,7 +6311,7 @@ test('the gallery row folds to two tiles across on a phone, at every width this 
         left: mainBox.left + Number.parseFloat(mainStyle.borderLeftWidth) + Number.parseFloat(mainStyle.paddingLeft),
         right: mainBox.right - Number.parseFloat(mainStyle.borderRightWidth) - Number.parseFloat(mainStyle.paddingRight),
       };
-      const cells = [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map(
+      const cells = [...window.document.querySelectorAll('.gallery-tile')].filter((cell) => cell.getClientRects().length > 0).map(
         (cell) => {
           const box = cell.getBoundingClientRect();
           return { x: Math.round(box.x), y: Math.round(box.y), width: round(box.width) };
@@ -6327,12 +6332,9 @@ test('the gallery row folds to two tiles across on a phone, at every width this 
       };
     });
     expect(row.columns, `the row draws ${row.columns} columns at ${width}px, not the two the phone form asks for`).toBe(2);
-    /* Five cells in two columns is two full rows and a last one holding the
-       remainder — what must never happen is a row holding more than two. */
-    for (const [index, count] of row.perRow.entries()) {
-      expect(count, `row ${index + 1} holds ${count} cells at ${width}px`).toBeLessThanOrEqual(2);
-    }
-    expect(row.perRow.filter((count) => count === 2).length, `no row is full at ${width}px`).toBeGreaterThan(0);
+    /* Four of the five tiles in two columns is two full rows: no row holds
+       more than two, and no tile stands alone in one (owner, 2026-10-17). */
+    expect(row.perRow, `the phone rows hold ${row.perRow.join(', ')} tiles at ${width}px`).toEqual([2, 2]);
     for (const [index, cell] of row.widths.entries()) {
       expect(
         cell,
@@ -6619,8 +6621,7 @@ test('the lightbox also closes on a backdrop click and its own close button', as
  * column and the heatmap blocks; it does not reach the gallery, and the
  * gallery is exactly where a mode is most tempted to move something — the
  * tiles sit on `--gallery-stage-ground`, which IS one of the tokens a reading
- * mode overrides, and the control tile is drawn in the ledger's hairline
- * palette. A reading-mode block may declare only custom properties and
+ * mode overrides. A reading-mode block may declare only custom properties and
  * `color-scheme` (AGENTS.md, "Frontend and UX floors"), which is what makes a
  * zero-CLS swap structural rather than a promise; this lane is what an engine
  * did with that rule, on the one gallery surface whose ground changes with
@@ -6640,7 +6641,7 @@ test('switching the reading mode repaints the gallery without moving any of it (
       const grid = window.document.querySelector('.gallery-grid');
       return {
         grid: boxed(grid),
-        cells: [...window.document.querySelectorAll('.gallery-tile, .gallery-control')].map(boxed),
+        cells: [...window.document.querySelectorAll('.gallery-tile')].filter((cell) => cell.getClientRects().length > 0).map(boxed),
         ground: getComputedStyle(window.document.querySelector('.gallery-tile')).backgroundColor,
         scrollY,
         scrollHeight: window.document.documentElement.scrollHeight,
@@ -6649,7 +6650,9 @@ test('switching the reading mode repaints the gallery without moving any of it (
 
   await bringReadingModeIntoView(page);
   const before = await shape();
-  expect(before.cells.length, 'the gallery rendered no cells; this lane measures nothing').toBe(5);
+  expect(before.cells.length, 'the gallery rendered no cells; this lane measures nothing').toBe(
+    (page.viewportSize()?.width ?? 1280) <= 720 ? 4 : 5
+  );
 
   /* EVERY stamped mode, each compared against the ORIGINAL rather than
      against its predecessor, so a drift that accumulates a fraction at a time
@@ -6864,7 +6867,7 @@ test('a panel head with no title keeps the reserved row, and no head draws a fre
  *  - (the chrome row's one rule and its reserve were measured here until the
  *    row was removed — owner direction, 2026-10-16: "do away with it for
  *    now"; and the rule drawn under the name, until THE KEEP set the name as
- *    a gilt plaque with no rule under it the same day — their subjects are
+ *    a centred plaque with no rule under it the same day — their subjects are
  *    gone, so they are);
  *  - the calendar opens on the contributions layer, with the token layers
  *    after it and the busiest source first among them, and the diagram wears
@@ -10253,7 +10256,7 @@ test('the gallery is reachable without a gesture, and says where it is (issue 21
      wrong — and it says what pressing it will do rather than leaving a reader
      to infer it from a picture with an empty alt. */
   const tiles = page.locator('.gallery-tile[data-gallery-kind="image"]');
-  await expect(tiles).toHaveCount(4);
+  await expect(tiles).toHaveCount(5);
   const labels = await tiles.evaluateAll((nodes) =>
     nodes.map((node) => ({ tag: node.tagName, label: node.getAttribute('aria-label') }))
   );

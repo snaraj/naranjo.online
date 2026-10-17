@@ -408,7 +408,7 @@
     font-weight: 700;
     letter-spacing: 0.03em;
     line-height: var(--ongoing-line);
-    color: var(--keep-name-bottom);
+    color: var(--ledger-ink);
   }
 
   .repo-about {
@@ -577,7 +577,7 @@
     font-size: 0.75rem;
     font-weight: 700;
     letter-spacing: 0.04em;
-    color: var(--keep-name-bottom);
+    color: var(--ledger-ink);
   }
 
   .log-age,

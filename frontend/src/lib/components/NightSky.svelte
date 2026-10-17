@@ -3,13 +3,15 @@
   assistive technology, never a target for the pointer — and it is fixed, so it
   takes no room in the layout and cannot shift anything.
 
-  The loop runs only while the page is visible, at most at skyFrameInterval,
-  and not at all for a reader who asked for reduced motion: they get one still
-  frame of the same sky, redrawn only when the window's size changes. -->
+  The loop runs only while the page is visible, at most at skyFrameInterval and
+  slower where the page cannot afford it (nextSkyInterval), and not at all for
+  a reader who asked for reduced motion: they get one still frame of the same
+  sky, redrawn only when the window's size changes. -->
 <script lang="ts">
   import {
     driftX,
     nebulaPixels,
+    nextSkyInterval,
     skyFrameInterval,
     skyMaxPixelRatio,
     skyPreset,
@@ -35,6 +37,9 @@
     let glow: HTMLCanvasElement | null = null;
     let frame = 0;
     let last = 0;
+    let interval = skyFrameInterval;
+    // When the sky last drew, so the next frame can say what it cost.
+    let drawnAt = -1;
     const started = performance.now();
 
     function glowSprite(): HTMLCanvasElement {
@@ -121,16 +126,22 @@
         return;
       }
       frame = requestAnimationFrame(tick);
-      if (now - last < skyFrameInterval) {
+      if (drawnAt >= 0) {
+        interval = nextSkyInterval(interval, now - drawnAt);
+        drawnAt = -1;
+      }
+      if (now - last < interval) {
         return;
       }
       last = now;
       draw((now - started) / 1000);
+      drawnAt = now;
     }
 
     function start(): void {
       cancelAnimationFrame(frame);
       frame = 0;
+      drawnAt = -1;
       draw((performance.now() - started) / 1000);
       if (!document.hidden && !quiet.matches) {
         frame = requestAnimationFrame(tick);

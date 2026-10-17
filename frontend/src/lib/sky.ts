@@ -56,12 +56,13 @@ export type SkyPreset = {
 /* The sky the page wears — the owner's pick from the gallery (2026-10-16):
  * "I like midnight blue … fine static looks good, clean and space like, and I
  * like drift's movement … maybe 15% faster", then, of the three takes on that,
- * "midnight drift deeper". A deep ink-blue sky, so the stars carry more; a
- * dense field of fine stars flickering gently, in three layers gliding right
- * to left at 1.15 times the gallery's drift. */
+ * "midnight drift deeper", made hueless on 2026-10-17 ("not happy with the
+ * blue background color"): a black sky, so the stars carry more; a dense
+ * field of fine stars flickering gently, in three layers gliding right to left
+ * at 1.15 times the gallery's drift. */
 export const skyPreset: SkyPreset = {
   id: 'midnight-drift-deeper',
-  sky: ['#02041a', '#070f3c', '#101d5a'],
+  sky: ['#060606', '#141414', '#242424'],
   nebula: {
     seed: 83,
     res: 7,
@@ -70,11 +71,11 @@ export const skyPreset: SkyPreset = {
     floor: 0.5,
     gamma: 1.6,
     opacity: 0.2,
-    colors: ['#060c30', '#1a2668', '#4a55a8']
+    colors: ['#101010', '#2d2d2d', '#5c5c5c']
   },
   stars: {
     density: 0.0014,
-    colors: ['255,255,255', '226,230,255'],
+    colors: ['255,255,255', '230,230,230'],
     period: [2, 5],
     flicker: 0.4,
     fine: true,
@@ -84,6 +85,28 @@ export const skyPreset: SkyPreset = {
 
 /* The loop's ceiling: a slow sky needs no more than this. */
 export const skyFrameInterval = 1000 / 30;
+
+/* The sky paces itself. A frame drawn on a canvas the size of the window
+ * costs the page a repaint, and where a browser draws without a GPU that
+ * repaint is slow: in WebKit on Linux a bare animated canvas took 88ms a
+ * frame, and the page took 95ms a frame with the sky moving against 17ms
+ * with it still, so a reader there got a page that answered a few times a
+ * second. So when the page takes longer than skyFrameBudget to answer a sky
+ * frame, the sky waits at least skyCostShare times that long before its next
+ * one (and at least twice its last wait), so it takes no more than a tenth of
+ * the page's time, down to one frame each skySlowestInterval; when the page
+ * answers in time the sky doubles back towards its ceiling. It slows at once,
+ * so the page is quick within a frame or two of loading; where frames are
+ * cheap, as in any browser with a GPU, the sky never leaves the ceiling. */
+export const skyFrameBudget = 50;
+export const skyCostShare = 10;
+export const skySlowestInterval = 1000;
+
+export function nextSkyInterval(interval: number, answeredIn: number): number {
+  return answeredIn > skyFrameBudget
+    ? Math.min(skySlowestInterval, Math.max(interval * 2, answeredIn * skyCostShare))
+    : Math.max(skyFrameInterval, interval / 2);
+}
 /* The canvas resolution ceiling: a soft background gains nothing past it. */
 export const skyMaxPixelRatio = 1.5;
 

@@ -694,12 +694,11 @@ test('the card token defaults are global, and resolve through the reading modes'
      declares its variable WIDTH span, because the masthead reads that axis and
      a face that shipped without it would silently synthesize the width. */
   const faces = styles.match(/@font-face \{[^}]*\}/gs) ?? [];
-  /* And two more (owner direction, 2026-10-16: the Keep): Cinzel, the
-     display face the name, the plaques and the figures are cut in, by the
-     same two ranges. Its variable span is the one the family ships —
-     400 to 900 — and claiming a lighter end would be a span it cannot
-     draw. */
-  assert.equal(faces.length, 8, 'expected four JetBrains Mono faces, two Archivo faces and two Cinzel faces');
+  /* Cinzel, the Keep's display face of 2026-10-16, left with the gold
+     (owner, 2026-10-17: "not happy with … the font used"); the display role
+     reads Archivo through its own token until the owner picks a face. */
+  assert.equal(faces.length, 6, 'expected four JetBrains Mono faces and two Archivo faces');
+  assert.doesNotMatch(styles, /Cinzel/, 'the retired display face is still declared or named');
   let variableWidthFaces = 0;
   for (const face of faces) {
     assert.match(face, /src: url\('\.\/assets\/fonts\//, 'a webfont loads from outside the bundle');
@@ -740,7 +739,7 @@ test('the page asks for its faces with the document and paints in them', async (
   const upright = [
     ...styles.matchAll(/font-family: '([^']+)';\s*font-style: normal;[^}]*?src: url\('\.\/assets\/fonts\/([^']+-latin\.woff2)'\)/g),
   ];
-  assert.equal(upright.length, 3, 'expected one upright latin file for each of the three families');
+  assert.equal(upright.length, 2, 'expected one upright latin file for each of the two families');
   assert.deepEqual(
     [...preloaded].sort(),
     upright.map((match) => match[2]).sort(),
@@ -866,6 +865,10 @@ test('the experience section carries four complete real entries, newest first', 
     for (const field of ['company', 'short', 'years', 'markFile', 'role', 'dates', 'location', 'site']) {
       assert.ok(entry[field].trim().length > 0, `an experience entry has an empty ${field}`);
     }
+    /* A span reads in full (owner, 2026-10-17: "having the time - cut off like
+       this makes no sense, it should say 2023 - present"): whole years, and a
+       role still held says so in a word rather than with a dangling dash. */
+    assert.match(entry.years, /^\d{4}(?: – (?:\d{4}|present))?$/, `${entry.short} reads "${entry.years}"`);
     /* The employer's own home on the web (issue 243), and it is checked rather
        than merely present: an absolute https origin, no credentials, no query,
        no path pretending to be one. A relative or http value would render an
@@ -2297,15 +2300,19 @@ test('the coding-projects block declares no heading of its own (owner ruling, 20
 
 /* THE GALLERY IS A ROW OF TILES (owner directive, 2026-09-03, issue 287). The
  * single visible frame of issues 176/202/219/243/265 is superseded by a grid of
- * reserved square tiles beside one control tile, with the native dialog as the
- * stage. These pins keep what those rulings were FOR — one full-size picture at
- * a time, bytes only on demand, films inline and never autoplaying, reserved
- * boxes, 44px controls, sets as data, tokens for every dimension — and pin the
- * behaviour rather than the markup wherever the source lets them. */
+ * reserved square tiles, with the native dialog as the stage. These pins keep
+ * what those rulings were FOR — one full-size picture at a time, bytes only on
+ * demand, films inline and never autoplaying, reserved boxes, 44px controls,
+ * sets as data, tokens for every dimension — and pin the behaviour rather than
+ * the markup wherever the source lets them. The control tile beside the row is
+ * gone (owner, 2026-10-17: "gallery should not have a right most box with
+ * information and dead content, instead the images should span across the
+ * space, so we should show 5 images not 4 … make the design intuitive enough
+ * to where you don't need to explain what to do"). */
 const galleryStyle = styleBlock(mediaGallery);
 
-test('the gallery is a row of reserved square tiles beside one control tile, and the row is the column (owner directive, 2026-09-03, issue 287)', () => {
-  assert.match(mediaGallery, /tiles = 4 \}: MediaGalleryProps = \$props\(\)/, 'the mock draws four tiles; the count is a prop with that default');
+test('the gallery is a row of five reserved square tiles that is the column, with nothing beside it and no instructions (owner directive, 2026-09-03, issue 287; 2026-10-17)', () => {
+  assert.match(mediaGallery, /tiles = 5 \}: MediaGalleryProps = \$props\(\)/, 'five pictures span the column; the count is a prop with that default');
   assert.match(mediaGallery, /visible\.slice\(0, Math\.max\(1, tiles\)\)/);
   assert.match(mediaGallery, /<div class="gallery-grid" data-gallery-tiles=\{shownTiles\.length\}>/);
   assert.match(mediaGallery, /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind="image"/);
@@ -2317,8 +2324,16 @@ test('the gallery is a row of reserved square tiles beside one control tile, and
   const phoneColumns = styles.indexOf('--gallery-columns: 2;');
   assert.ok(phoneColumns > styles.indexOf('--gallery-columns: 5;'), 'a phone folds the same tiles to two across — declared AFTER the token block, or the cascade hands the phone five columns');
   assert.match(styles.slice(styles.lastIndexOf('@media (max-width: 45rem)', phoneColumns), phoneColumns), /^@media \(max-width: 45rem\) \{[\s\S]*:root \{\s*$/m, 'and inside the phone block, on :root');
-  assert.equal((mediaGallery.match(/class="gallery-control"/g) ?? []).length, 1);
-  assert.match(mediaGallery, /`\$\{shownTiles\.length\} of \$\{visible\.length\} shown · open one to page through all`/, 'the control tile says how much of the set the row shows');
+  assert.doesNotMatch(mediaGallery, /gallery-control|gallery-set-name/, 'a box of information beside the row is back');
+  assert.doesNotMatch(mediaGallery, /open one to|page through|shown ·/, 'the row explains itself in words again');
+  /* The grid is ONLY tiles: every child the row draws is a tile, so the five
+     tracks hold five pictures and nothing else. */
+  const grid = /<div class="gallery-grid" data-gallery-tiles=\{shownTiles\.length\}>([\s\S]*?)\n {6}<\/div>\n {4}\{\/snippet\}/.exec(mediaGallery)?.[1] ?? '';
+  assert.ok(grid.length > 0, 'the grid is not where this pin expects it');
+  assert.match(grid, /^\s*\{#each shownTiles as tile \(tile\.key\)\}[\s\S]*\{\/each\}\s*$/, 'the grid holds something besides its tiles');
+  /* A phone folds to two across and shows four, so no tile stands alone in a
+     row; the stage still pages through all of them. */
+  assert.match(styles.slice(phoneColumns), /^\s*\.gallery-grid > :nth-child\(n \+ 5\) \{\s*display: none;\s*\}/m, 'a phone shows a lone fifth tile');
 });
 
 test('opening a tile is the only way onto the stage, a native <dialog> that loads the full derivative only then', () => {

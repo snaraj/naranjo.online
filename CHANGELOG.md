@@ -13,9 +13,14 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 - The page is redesigned ("The Keep", #375):
   - A night sky is drawn behind it on a canvas: still under reduced motion,
-    paused when hidden, 30 frames a second at most.
+    paused when hidden, 30 frames a second at most, and slower wherever the
+    page cannot afford it (a browser drawing without a GPU), so the sky
+    slows down rather than the page.
   - One framed glass sheet sits over the sky, with a pixel border on the
     sheet only.
+  - Black and grey, with no gold: the sky, the sheet and its stone frame
+    carry no hue, and the name and the section titles are set in Archivo
+    in the page's own ink.
   - The page opens on the name, with J flying beside it. The header bar,
     the section nav and the picture bands are gone; the reading-mode
     control lives in the footer, and every section keeps its id.
@@ -33,6 +38,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   - The board holds the room its data will fill while that data is on its
     way, so nothing below it moves when it lands.
 - Ongoing Work shows one entry fewer per column, with more on each.
+- A role's span reads in full: "2023 – present", "2022 – 2023".
+- The gallery is five pictures across the column with nothing beside them;
+  a phone shows four. A set switch appears above them only when there is
+  a second set to choose.
 - The usage export gives Codex the same figures as Claude Code: input,
   output, cache read and write, sessions, active and tracked days, and a
   per-model split. It no longer counts the running total an auto-review
@@ -61,6 +70,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - Light mode no longer blurs behind its opaque parchment, which showed
   nothing and slowed every frame where a browser draws without a GPU.
 - The diagram's layer names fit a 320px screen in every engine.
+- The calendar is laid out at its own width from its first frame, rather
+  than a year wide and then cut to the weeks that fit once the browser
+  reported its size.
 
 ### Removed
 

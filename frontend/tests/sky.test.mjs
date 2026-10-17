@@ -10,10 +10,14 @@ import { test } from 'node:test';
 import {
   driftX,
   nebulaPixels,
+  nextSkyInterval,
   noiseField,
   seeded,
+  skyCostShare,
+  skyFrameBudget,
   skyFrameInterval,
   skyMaxPixelRatio,
+  skySlowestInterval,
   skyPreset,
   starField,
   twinkle
@@ -51,8 +55,44 @@ test('a reader who asked for less motion gets one still frame', () => {
 test('the loop is capped, and the canvas never draws past what a soft background needs', () => {
   assert.ok(skyFrameInterval >= 1000 / 30, 'a slow sky needs no more than thirty frames a second');
   assert.ok(skyMaxPixelRatio <= 2);
-  assert.match(component, /if \(now - last < skyFrameInterval\) \{/);
+  assert.match(component, /let interval = skyFrameInterval;/);
+  assert.match(component, /if \(now - last < interval\) \{/);
   assert.match(component, /Math\.min\(devicePixelRatio \|\| 1, skyMaxPixelRatio\)/);
+});
+
+/* The sky never takes the page's frames: where a sky frame costs the page more
+ * than the budget (a browser drawing without a GPU), the sky slows down rather
+ * than the page, and where it is cheap the sky keeps its ceiling. */
+test('the sky slows down where the page cannot afford it, and only there', () => {
+  // A page that answers in time keeps the sky at its ceiling, never above it.
+  assert.equal(nextSkyInterval(skyFrameInterval, 17), skyFrameInterval);
+  assert.equal(nextSkyInterval(skyFrameInterval, skyFrameBudget), skyFrameInterval);
+  // A slow answer gives the page ten times the sky frame's cost before the
+  // next one, at once, and at least halves the rate; repeated ones stop at
+  // the floor.
+  assert.equal(nextSkyInterval(skyFrameInterval, 60), 60 * skyCostShare);
+  assert.equal(nextSkyInterval(400, 60), 800);
+  assert.equal(nextSkyInterval(skyFrameInterval, 300), skySlowestInterval);
+  assert.ok(skyCostShare >= 10, 'the sky takes more than a tenth of a slow page');
+  let interval = skyFrameInterval;
+  for (let frame = 0; frame < 20; frame += 1) {
+    interval = nextSkyInterval(interval, 88);
+  }
+  assert.equal(interval, skySlowestInterval);
+  assert.ok(skySlowestInterval <= 1000, 'the slowest sky still moves once a second');
+  // When the page answers in time again, the sky climbs back to its ceiling.
+  for (let frame = 0; frame < 20; frame += 1) {
+    interval = nextSkyInterval(interval, 17);
+  }
+  assert.equal(interval, skyFrameInterval);
+  // The loop measures the frame after each drawing, and forgets it when the
+  // loop restarts, so a hidden spell is not read as a slow frame.
+  assert.match(
+    component,
+    /if \(drawnAt >= 0\) \{\s*interval = nextSkyInterval\(interval, now - drawnAt\);\s*drawnAt = -1;\s*\}/
+  );
+  assert.match(component, /draw\(\(now - started\) \/ 1000\);\s*drawnAt = now;/);
+  assert.match(component, /function start\(\): void \{\s*cancelAnimationFrame\(frame\);\s*frame = 0;\s*drawnAt = -1;/);
 });
 
 test('the same sky on every load: the generator, the noise and the stars are seeded', () => {

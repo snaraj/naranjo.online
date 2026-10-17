@@ -31,12 +31,11 @@
       ever been read in, and it is opaque on the sheet's own paper because iOS
       composites a transparent tile onto black. -->
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <!-- The page's three faces, asked for with the page rather than after the
+    <!-- The page's two faces, asked for with the page rather than after the
       stylesheet has been read: the application waits for them before it
       paints (src/main.ts), so the sooner they are here the sooner the page
       is. The latin subsets only: the page's text is latin, and the other
       subsets are fetched if a word ever reaches them. -->
-    <link rel="preload" href="/src/assets/fonts/Cinzel-Variable-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/src/assets/fonts/Archivo-Variable-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/src/assets/fonts/JetBrainsMono-Variable-latin.woff2" as="font" type="font/woff2" crossorigin />
     <!-- Link-preview identity (owner directive, 0.1.52: "when I text a link
