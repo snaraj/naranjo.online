@@ -42,6 +42,20 @@ guard, the splice — is shared:
     a shape change in the journal degrades to a loud refusal — no records
     found — rather than to a quietly wrong number.
 
+    A FILE CAN OPEN WITH AN ACCOUNTING IT DID NOT SPEND, and that opening
+    balance bills nothing. A thread created from a compacted history carries
+    that history's running total in its first reading, written before any
+    turn of its own has run. Measured on the owner's tree: 98 review threads,
+    4,121,447,105 tokens, every one of them the file's third record, written
+    in the same second as the session declaration, with no model declared
+    before it, a running total far above the turn figure the same reading
+    reports, and no turn the tool's own thread history records before it. The
+    vendor's own daily figures sit nearer the walk without those readings than
+    with them. So a file's FIRST reading, read before any model declaration,
+    whose running total exceeds its own reported turn usage, sets the file's
+    high-water mark and is counted as `opened`; every later advance bills as
+    before.
+
 WHAT ONE CAPTURE EMITS. One section, in exactly the shape the runtime
 exporter's merge loader admits and the origin's data root then merges: the
 aggregate daily series, a per-day CATEGORY partition of it, a per-day MODEL
@@ -692,6 +706,11 @@ LEDGER_ID_KEY = "id"
 # a ledger session alike.
 MODEL_IDENTITIES_KEY = "modelIds"
 
+# The walk's per-file session accumulator also notes whether its file is a
+# top-level session. Only the accumulator carries it; the ledger's emitted
+# session shape never does (ledger_session copies named fields).
+SESSION_TOP_LEVEL_KEY = "topLevel"
+
 # The per-model lifetime-class section's field names (issue #267). It rides
 # the WIRE beside `stats`, so its shape is admitted by the emission guard and
 # by the origin; the ledger block above is the section that does not.
@@ -715,6 +734,21 @@ RECORD_FORMATS = (FORMAT_MESSAGES, FORMAT_RUNNING_TOTALS)
 # keeps the reader correct for records that report only the aggregate.
 RUNNING_USAGE_KEY = "total_token_usage"
 RUNNING_TOTAL_FIELD = "total_tokens"
+
+# Where the same record reports the usage of its own latest turn. It is never
+# summed (summing it is the replay trap); it is read for ONE question, at a
+# file's first reading only: does the running total already hold more than
+# the turn the reading reports? See `opening_balance`.
+RUNNING_TURN_KEY = "last_token_usage"
+
+# The record that DECLARES a file's session, and the field inside it naming
+# the thread that spawned it. A file whose first declaration names no parent
+# is a top-level session — one a person started — and every other file is a
+# thread something else spawned (a subagent, a review). Only the first
+# declaration counts: a spawned thread's file repeats its parent's declaration
+# after its own.
+RUNNING_SESSION_TYPE = "session_meta"
+RUNNING_PARENT_FIELD = "parent_thread_id"
 
 # The running-totals record's remaining fields, and the accounting classes
 # they resolve to. They are NOT additions to the total: measured across the
@@ -764,7 +798,11 @@ MESSAGE_USAGE_KEY = "usage"
 # name the reader looks up, so the filter and the parser cannot come to read
 # two different keys.
 MESSAGE_KEY_TOKENS = ('"%s"' % MESSAGE_USAGE_KEY,)
-RUNNING_KEY_TOKENS = ('"%s"' % RUNNING_USAGE_KEY, '"%s"' % MESSAGE_MODEL_FIELD)
+RUNNING_KEY_TOKENS = (
+    '"%s"' % RUNNING_USAGE_KEY,
+    '"%s"' % MESSAGE_MODEL_FIELD,
+    '"%s"' % RUNNING_SESSION_TYPE,
+)
 
 # How every JSON escape that spells an ASCII character begins: those all sit
 # below U+0080, and an escape carries exactly four hex digits.
@@ -959,12 +997,15 @@ STAT_SESSIONS = "sessions"
 # leaving it frozen, which is the defect issue #276 closed for the other
 # lifetime-class figures.
 STAT_LONGEST_SESSION = "longest-session"
+# The accounting classes the captured-stats vocabulary carries a lifetime
+# figure for. `reasoning` is a category the daily partition and the per-model
+# split carry, and NOT a captured stat: the origin's closed stat vocabulary
+# has no tile key for it (usageSeriesStatKeys), so a document carrying one is
+# refused there. Adding it is a vocabulary edit in both places together.
+STAT_CLASS_KEYS = ("input", "output", "cache-read", "cache-write")
 STATS_KEYS = (
     STAT_LIFETIME,
-    "input",
-    "output",
-    "cache-read",
-    "cache-write",
+    *STAT_CLASS_KEYS,
     STAT_SESSIONS,
     STAT_LONGEST_SESSION,
 )
@@ -992,6 +1033,10 @@ def new_counters():
         "counted": 0,
         "duplicates": 0,
         "restarts": 0,
+        # Running-totals files whose first reading was an opening balance —
+        # an accounting carried in from elsewhere, billed nowhere (see
+        # `opening_balance`). A count of files, never of what they carried.
+        "opened": 0,
         # Bytes actually read, against MAX_RECORD_BYTES, and entries skipped
         # for being symbolic links. Both are diagnostics AND bounds: the walk
         # refuses past the byte ceiling, and a skipped link is something an
@@ -1379,27 +1424,30 @@ def open_record_file(record, counters):
 
 
 def may_carry(line, tokens):
-    """False only when no key in `tokens` can decode out of this line.
+    """False only when no string in `tokens` can decode out of this line.
 
     THE WALK'S COST IS THE DECODE, and most of a journal is records no shape
     counts — prompts, tool output, file contents. A line whose record has none
-    of the keys a shape reads is discarded by that shape's reader with no
+    of the strings a shape reads is discarded by that shape's reader with no
     counter touched: `reduce_line` returns before its first tally, and the
-    running reader's two lookups both come back empty. Not decoding such a
-    line therefore changes nothing but the time spent. The line has already
-    been read, bounded and tallied by `bounded_lines` before this is asked, so
-    every count the walk reports stays exactly what it was.
+    running reader's three lookups — the session declaration (matched by its
+    record-type VALUE, the one token here that is not a key), the model
+    declaration and the running total — all come back empty. Not decoding
+    such a line therefore changes nothing but the time spent. The line has
+    already been read, bounded and tallied by `bounded_lines` before this is
+    asked, so every count the walk reports stays exactly what it was.
 
     SOUND AGAINST EVERY SPELLING JSON ADMITS. A JSON string spells each
     character literally or as a `\\uXXXX` escape; the only other escapes yield
     a quote, a backslash, a solidus or a control character, none of which the
-    keys here contain, and the keys are plain ASCII, whose escapes all begin
-    `\\u00`. So a key can decode out of a line only if the line carries its
-    quoted token literally or carries a `\\u00` somewhere, and either sends
-    the line to the decoder exactly as before. Whitespace between a key and
-    its colon lies outside the token, so it cannot hide one. A token that turns
-    up as a value costs one decode the reader then discards, which is the safe
-    direction to be wrong in.
+    tokens here contain, and the tokens are plain ASCII, whose escapes all
+    begin `\\u00`. So a token's string — a key or a value alike — can decode
+    out of a line only if the line carries its quoted token literally or
+    carries a `\\u00` somewhere, and either sends the line to the decoder
+    exactly as before. Whitespace between a key and its colon lies outside the
+    token, so it cannot hide one. A key token that turns up as a value, or a
+    value token that turns up as a key, costs one decode the reader then
+    discards, which is the safe direction to be wrong in.
     """
     for token in tokens:
         if token in line:
@@ -1449,13 +1497,19 @@ def read_records(root, counters, sessions=None, *, scope):
         close_session(sessions, opened)
 
 
-def read_running_totals(root, counters, sessions=None, *, scope):
+def read_running_totals(root, counters, sessions=None, *, scope, carried=None):
     """Yield (day, advance, parts, model, identity) rows from running-totals records.
 
-    The running total is per FILE — every journal in the owner's tree opens
-    its own accounting at zero — so the high-water mark resets at each file
+    The running total is per FILE, so the high-water mark resets at each file
     and a session's history is never counted twice because a later session
-    resumed it.
+    resumed it. A file almost always opens its accounting at zero; one that
+    opens with a balance carried in from elsewhere has that balance set as its
+    high-water mark and billed nowhere (`opening_balance`, counted as
+    `opened`). `carried`, when a dict is supplied, collects per local day what
+    those balances would have billed, which is exactly how far the walk's
+    figure for that day moved under this rule — the history store's merge
+    needs that to tell a corrected day from a day whose records were lost
+    (`merge_history`).
 
     The three cases in the module docstring, made operational. `advance`
     is the distance the running total moved, so a record that repeats the
@@ -1483,7 +1537,13 @@ def read_running_totals(root, counters, sessions=None, *, scope):
 
     `sessions` collects the ledger block's per-file entries exactly as it does
     on the message path (issue #267): one file is one session in both shapes,
-    and the entry spans the file's first admitted advance to its last.
+    and the entry spans the file's first admitted advance to its last. Each
+    entry also says whether its file is a TOP-LEVEL session, read off the
+    file's first session declaration (`declared_session_of`): True when it
+    names no parent thread, False when it does, None when the file declares
+    no session at all. That marker never reaches the ledger's own shape
+    (`ledger_session` copies named fields only); it is what the session tally
+    counts (`walked_stats`).
     """
     for record in admitted_records(root, counters):
         counters["files"] += 1
@@ -1493,6 +1553,8 @@ def read_running_totals(root, counters, sessions=None, *, scope):
         previous = {field: 0 for field in RUNNING_FIELDS}
         member, identity = MODEL_OTHER, UNIDENTIFIED_MODEL
         opened = new_session()
+        declared_any = False
+        read_any = False
         with handle:
             for line in bounded_lines(handle, counters):
                 if not may_carry(line, RUNNING_KEY_TOKENS):
@@ -1500,14 +1562,27 @@ def read_running_totals(root, counters, sessions=None, *, scope):
                 decoded = decoded_record(line)
                 if decoded is None:
                     continue
+                if opened[SESSION_TOP_LEVEL_KEY] is None:
+                    top_level = declared_session_of(decoded)
+                    if top_level is not None:
+                        opened[SESSION_TOP_LEVEL_KEY] = top_level
+                        continue
                 declared = declared_model_of(decoded)
                 if declared is not None:
                     member, identity = attributed_model(declared, counters, scope)
+                    declared_any = True
                     continue
                 reduced = running_totals_of(decoded)
                 if reduced is None:
                     continue
                 day, instant, running = reduced
+                first, read_any = not read_any, True
+                if first and not declared_any and opening_balance(decoded, running):
+                    counters["opened"] += 1
+                    if carried is not None:
+                        carried[day] = carried.get(day, 0) + running[RUNNING_TOTAL_FIELD]
+                    previous = running
+                    continue
                 if running[RUNNING_TOTAL_FIELD] == previous[RUNNING_TOTAL_FIELD]:
                     counters["duplicates"] += 1
                     previous = running
@@ -1552,6 +1627,10 @@ def new_session():
         "categories": {},
         "models": [],
         MODEL_IDENTITIES_KEY: [],
+        # Whether the file is a top-level session (see read_running_totals).
+        # The accumulator's, never the ledger entry's: ledger_session copies
+        # named fields, and this is not one of them.
+        SESSION_TOP_LEVEL_KEY: None,
     }
 
 
@@ -1683,6 +1762,46 @@ def declared_model_of(record):
         return None
     declared = payload.get(MESSAGE_MODEL_FIELD)
     return declared if isinstance(declared, str) and declared else None
+
+
+def declared_session_of(record):
+    """Whether a decoded record declares a TOP-LEVEL session, or None.
+
+    None when the record declares no session at all. Otherwise True when the
+    declaration names no parent thread — a session a person started — and
+    False when it names one, whatever it names: a spawned thread is not a
+    session in the sense the other tool's own tally uses, which counts the
+    sessions a person ran and none of the subagents they spawned. Only the
+    VALUE's presence is read; the identifier itself never leaves this call.
+    """
+    if record.get("type") != RUNNING_SESSION_TYPE:
+        return None
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    return payload.get(RUNNING_PARENT_FIELD) in (None, "")
+
+
+def opening_balance(record, running):
+    """True when a file's first reading reports an accounting it did not spend.
+
+    The caller asks only of a file's FIRST running-total reading, and only
+    when no model has been declared before it — no turn of the file has run.
+    The reading's own turn figure is then the one witness: a running total
+    larger than the turn it reports holds tokens no turn of this file spent.
+    A reading that reports no turn figure, or one that is not a count,
+    answers False, so a journal that never states one bills its first reading
+    exactly as it always did.
+    """
+    payload = record.get("payload")
+    info = payload.get("info") if isinstance(payload, dict) else None
+    turn = info.get(RUNNING_TURN_KEY) if isinstance(info, dict) else None
+    if not isinstance(turn, dict):
+        return False
+    spent = turn.get(RUNNING_TOTAL_FIELD)
+    if not isinstance(spent, int) or isinstance(spent, bool) or spent < 0:
+        return False
+    return running[RUNNING_TOTAL_FIELD] > spent
 
 
 def running_totals_of(record):
@@ -2462,19 +2581,81 @@ def accrue_after_cache(stats, document, series, categories, partitioned):
     as_of = document.get(ACTIVITY_CACHE_COMPUTED_KEY)
     if not valid_calendar_day(as_of):
         raise CaptureError("the activity cache carries no calendar as-of day for its accounting")
-    boundary = datetime.date.fromisoformat(as_of)
-    start = datetime.date.fromisoformat(series["startDate"])
-    partitioned = set(partitioned)
-    for offset, total in enumerate(series["totals"]):
-        day = start + datetime.timedelta(days=offset)
-        if day <= boundary or total <= 0 or day.isoformat() not in partitioned:
-            continue
-        stats[STAT_LIFETIME] += total
-        for _, key in ACTIVITY_CACHE_USAGE_FIELDS:
-            stats[key] += categories[key][offset] if key in categories else 0
+    whole, classes = partitioned_class_totals(
+        series, categories, partitioned, after=datetime.date.fromisoformat(as_of)
+    )
+    stats[STAT_LIFETIME] += whole
+    for key, value in classes.items():
+        stats[key] += value
     if any(value > MAX_COUNT for value in stats.values()):
         raise CaptureError("the activity cache lifetime figures exceed the shared count bound")
     return stats
+
+
+def partitioned_class_totals(series, categories, partitioned, after=None):
+    """(whole, {stat class: count}) over every PARTITIONED day of the served series.
+
+    ONE RULE FOR BOTH LIFETIME PATHS. The cache's accrual reads it for the
+    days strictly after the cache's own as-of day; a source with no roll-up
+    (`walked_stats`) reads it over every day. Either way a day contributes
+    only when its class split partitions its total — the same split the
+    served categories section carries for it — so the whole stays the sum of
+    its classes plus whatever the split spent on a class the stat vocabulary
+    carries no tile for (reasoning), and a day nobody could split contributes
+    nothing rather than a guessed split.
+    """
+    start = datetime.date.fromisoformat(series["startDate"])
+    partitioned = set(partitioned)
+    whole = 0
+    classes = {key: 0 for key in STAT_CLASS_KEYS}
+    for offset, total in enumerate(series["totals"]):
+        day = start + datetime.timedelta(days=offset)
+        if after is not None and day <= after:
+            continue
+        if total <= 0 or day.isoformat() not in partitioned:
+            continue
+        whole += total
+        for key in classes:
+            classes[key] += categories[key][offset] if key in categories else 0
+    return whole, classes
+
+
+def walked_stats(series, categories, partitioned, sessions):
+    """The captured stats a source with no roll-up measures on its own.
+
+    THE TOOL KEEPS NO LIFETIME ACCOUNTING HERE, so every figure is the
+    record's own, and each says exactly what it covers:
+
+      * the four class tiles sum every PARTITIONED day of the served series
+        (`partitioned_class_totals`) — the walk's own days and every
+        remembered day that kept its split. A day the record holds only a
+        total for (a figure restored from a vendor surface, say)
+        contributes NOTHING: its split was never measured, and scaling a
+        neighbour's split onto it would be the invention this pipeline
+        refuses. So the classes cover the record's split days and nothing
+        else, and never claim to sum to a lifetime figure that reaches back
+        further than they do (docs/usage-export.md);
+      * `sessions` counts the record files whose first session declaration
+        names no parent thread and that billed a token — the sessions a
+        person ran. Present only when the record declares sessions at all: a
+        journal that never declares one cannot tell a session from a thread
+        something spawned, and a count of files would overstate it;
+      * `longest-session` is the walk's own span, as it always was.
+
+    No `lifetime`: a source whose lifetime reaches past its record carries a
+    committed baseline instead (`apply_lifetime_baselines` in the exporter,
+    which refuses a collision), and one without a baseline has no honest
+    lifetime to state.
+    """
+    _whole, classes = partitioned_class_totals(series, categories, partitioned)
+    stats = dict(classes)
+    declared = [entry for entry in sessions if entry[SESSION_TOP_LEVEL_KEY] is not None]
+    if declared:
+        stats[STAT_SESSIONS] = sum(1 for entry in declared if entry[SESSION_TOP_LEVEL_KEY])
+    stats[STAT_LONGEST_SESSION] = longest_session_seconds(None, sessions)
+    if any(value > MAX_COUNT for value in stats.values()):
+        raise CaptureError("a walked lifetime figure exceeds the shared count bound")
+    return {key: stats[key] for key in STATS_KEYS if key in stats}
 
 
 def cached_longest_session(document):
@@ -2589,7 +2770,17 @@ def accrue_model_stats(folded, document, joint, owned):
     as_of = document.get(ACTIVITY_CACHE_COMPUTED_KEY)
     if not valid_calendar_day(as_of):
         raise CaptureError("the activity cache carries no calendar as-of day for its accounting")
-    eligible = {day for day in owned if day > as_of}
+    return accrue_joint(folded, joint, {day for day in owned if day > as_of})
+
+
+def accrue_joint(folded, joint, eligible):
+    """Add every eligible day of a joint onto per-key class totals.
+
+    The one accrual both per-model paths share: the cache's, over the owned
+    days after its as-of day, and a source with no roll-up's, over every
+    owned day (its whole per-model lifetime split IS this sum). Indifferent to
+    whether the joint's first coordinate is a member or a raw identity.
+    """
     for (member, key), by_day in joint.items():
         for day, value in by_day.items():
             if day not in eligible:
@@ -3032,7 +3223,7 @@ def admitted_identities(values, total):
     return dict(values)
 
 
-def merge_history(series, categories, models, partitioned, stored, identities):
+def merge_history(series, categories, models, partitioned, stored, identities, carried=None):
     """Union the derived series with the store; evidence, once seen, survives.
 
     THE RULE, one sentence per direction. A day the fresh capture measures at
@@ -3042,6 +3233,19 @@ def merge_history(series, categories, models, partitioned, stored, identities):
     including not at all — keeps the stored figure, because the only way a
     genuinely measured day shrinks is its sources being deleted underneath
     it, and pruning is precisely what the store exists to survive.
+
+    ONE PROVEN EXCEPTION: A CORRECTED DAY. `carried` maps a day to what the
+    walk no longer bills on it — the opening balances `read_running_totals`
+    now sets aside, which an earlier walk billed. The fresh figure is compared
+    as that earlier walk would have measured it, `fresh + carried[day]`: when
+    THAT reaches the stored figure, the earlier rule would still replace the
+    stored figure today from what is on disk — nothing it remembers is lost —
+    and the only thing that moved is the rule, so the fresh, corrected figure
+    wins. When it falls short, records were lost and the stored figure keeps
+    winning, opening balance and all: the store cannot tell which of its
+    tokens were the balance, and it never guesses. Idempotent: once the
+    corrected figure is stored, `fresh + carried` reaches it on every later
+    run. Absent, every day compares exactly as before.
 
     No fabrication: the store holds only what a real capture measured, so a
     day absent from both sides stays absent, rendered as the zero-inside-the-
@@ -3086,10 +3290,11 @@ def merge_history(series, categories, models, partitioned, stored, identities):
                 dict(recorded) if recorded and sum(recorded.values()) == total else None
             ),
         }
+    carried = carried or {}
     overridden = set()
     for day, entry in stored.items():
         current = merged.get(day)
-        if current is None or current[HISTORY_TOTAL_KEY] < entry[HISTORY_TOTAL_KEY]:
+        if current is None or current[HISTORY_TOTAL_KEY] + carried.get(day, 0) < entry[HISTORY_TOTAL_KEY]:
             merged[day] = entry
             overridden.add(day)
     if not merged:
@@ -3620,10 +3825,13 @@ def capture(
     The returned section is EXACTLY the shape export_usage_series.py's
     merge-source loader admits and the origin's data root then merges: the
     aggregate series, the two windowed breakdowns with their own start dates,
-    the complete window set, the complete derived-tile set, and — when an
-    activity cache supplies the tool's own lifetime accounting — the
-    captured-stats section (issue #276) and the per-model lifetime classes
-    (issue #267). It is one
+    the complete window set, the complete derived-tile set, the captured-stats
+    section, and the per-model lifetime classes. When an activity cache
+    supplies the tool's own lifetime accounting, those two sections are that
+    accounting accrued forward (issues #276 and #267); when none does, they
+    are the record's own — the class tiles over every day it splits, its
+    top-level sessions, and the per-model split over the walk's own days
+    (`walked_stats`; the second tool's parity with the first). It is one
     shape, produced by one function, so "capture a second tool's series and
     merge it" needs no hand assembly and no second definition of what a valid
     section is — which is exactly how a hand-written merge file came to be
@@ -3647,11 +3855,16 @@ def capture(
         today = datetime.datetime.now().astimezone().date()
     counters = new_counters()
     scope = model_scope(source)
-    reader = read_records if record_format == FORMAT_MESSAGES else read_running_totals
     sessions = []
-    series, categories, models, partitioned, joint, identities, identity_joint = daily_series(
-        reader(root, counters, sessions, scope=scope)
-    )
+    # What the running-totals walk no longer bills, per day: the opening
+    # balances it sets aside. The store's merge reads it to tell a corrected
+    # day from a day whose records were lost. The message shape has none.
+    carried = {}
+    if record_format == FORMAT_MESSAGES:
+        rows = read_records(root, counters, sessions, scope=scope)
+    else:
+        rows = read_running_totals(root, counters, sessions, scope=scope, carried=carried)
+    series, categories, models, partitioned, joint, identities, identity_joint = daily_series(rows)
     # The days whose emitted split is still the WALK's own, which is what the
     # ledger's joint is a refinement of. It starts as everything the walk
     # partitioned and only ever shrinks: the cache's union adds days the walk
@@ -3689,7 +3902,7 @@ def capture(
                 },
             )
         series, categories, models, partitioned, remembered, overridden = merge_history(
-            series, categories, models, partitioned, stored, identities
+            series, categories, models, partitioned, stored, identities, carried
         )
         series, categories, models, partitioned, remembered = apply_verified_readings(
             series, categories, models, partitioned, remembered, readings, today
@@ -3706,10 +3919,10 @@ def capture(
         stats = accrue_after_cache(stats, cache_document, series, categories, partitioned)
         stats[STAT_LONGEST_SESSION] = longest_session_seconds(cache_document, sessions)
     else:
-        # A source with no roll-up still measures the one lifetime-class
-        # figure a WALK can measure on its own (issue #267). The others are
-        # the tool's accounting and stay absent rather than being guessed.
-        stats = {STAT_LONGEST_SESSION: longest_session_seconds(None, sessions)}
+        # A source with no roll-up measures its accounting from the record
+        # itself, over exactly the days the record splits — AFTER the store
+        # for the same reason as above. No lifetime: see walked_stats.
+        stats = walked_stats(series, categories, partitioned, sessions)
     section = {"series": series}
     totals = series["totals"]
     start = datetime.date.fromisoformat(series["startDate"])
@@ -3725,6 +3938,19 @@ def capture(
         identity_stats = identity_stats_section(
             accrue_model_stats(recorded, cache_document, identity_joint, owned)
         )
+    else:
+        # With no roll-up the per-model split IS the joint summed over every
+        # day the walk owns: exact rather than apportioned, and over fewer
+        # days than the class tiles whenever the store supplied a split day
+        # without the joint behind it — so `Σ members ≤ each class tile`, the
+        # relation the origin enforces, holds here exactly as it does for the
+        # cache's split. A split whose only member is the residual says
+        # nothing the class tiles do not, so it stays off the wire (the daily
+        # model partition's rule); the ledger keeps it by raw identity.
+        members = model_stats_section(accrue_joint({}, joint, owned))
+        if {member[MODEL_STATS_MEMBER_KEY] for member in members} <= {MODEL_OTHER}:
+            members = None
+        identity_stats = identity_stats_section(accrue_joint({}, identity_joint, owned))
 
     # Built BEFORE the wire sections are windowed, from the full-depth day
     # indexes, because the ledger pays no payload ceiling and must not
@@ -4005,7 +4231,7 @@ def main(argv=None):
         return 1
     print(
         "files=%d unreadable=%d symlinks=%d oversized=%d lines=%d counted=%d "
-        "duplicates=%d restarts=%d unpartitioned=%d unattributed=%d cross_group=%d days=%d"
+        "duplicates=%d restarts=%d opened=%d unpartitioned=%d unattributed=%d cross_group=%d days=%d"
         % (
             counters.get("files", 0),
             counters.get("unreadable", 0),
@@ -4015,6 +4241,7 @@ def main(argv=None):
             counters.get("counted", 0),
             counters.get("duplicates", 0),
             counters.get("restarts", 0),
+            counters.get("opened", 0),
             counters.get("unpartitioned", 0),
             counters.get("unattributed", 0),
             counters.get("cross_group", 0),

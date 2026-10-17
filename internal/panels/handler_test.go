@@ -288,6 +288,19 @@ func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 		}
 		payload.Weeks = append(payload.Weeks, week)
 	}
+	// The commit weeks (owner direction, 2026-10-16) at their own bound: a
+	// day's commits never exceed that day's contributions, so the widest
+	// commit cell is the widest calendar cell, and the total is their sum.
+	commits := 0
+	for _, week := range payload.Weeks {
+		column := make([]int, daysPerWeek)
+		copy(column, week)
+		payload.CommitWeeks = append(payload.CommitWeeks, column)
+		for _, count := range column {
+			commits += count
+		}
+	}
+	payload.TotalCommits = &commits
 	name := strings.Repeat("r", maxRepositoryNameRunes)
 	subject := strings.Repeat("s", maxCommitMessageRunes) + "…"
 	for index := range maxServedCommits {
@@ -321,7 +334,7 @@ func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 	// asserted as a CEILING with its headroom named rather than as an equality,
 	// because a payload that shrinks is not a regression — but one that grows
 	// past this without somebody re-measuring is.
-	const measured = 15000
+	const measured = 17500
 	if len(envelope) > measured {
 		t.Errorf("the maximal activity envelope is %d bytes, over the %d recorded in docs/panels-invariants.md; re-measure before raising it", len(envelope), measured)
 	}

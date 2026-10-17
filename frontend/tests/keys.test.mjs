@@ -135,8 +135,14 @@ test('every composite widget on this page handles its own keys', () => {
   /* WAI-ARIA gives a composite ONE tab stop with the arrows moving inside it.
      Both halves or neither: a roving tabindex without a key handler takes
      every option but one out of the tab order and offers nothing in return,
-     which is strictly worse than the plain list of buttons it replaced. */
-  const composite = /role=(?:"(listbox|radiogroup|tablist|menu|tree)"|\{[^}]*'(listbox|radiogroup|tablist|menu|tree)'[^}]*\})/g;
+     which is strictly worse than the plain list of buttons it replaced.
+
+     A SLIDER makes the same promise about the arrows on one element, so it
+     is swept with them (carried from the daily line to the Chronicle's chart,
+     2026-10-16). It is also, since the calendar's listbox retired with its
+     grid that day, the one arrow-key widget the page draws — which is what
+     keeps this sweep's non-vacuity guard honest rather than deleted. */
+  const composite = /role=(?:"(listbox|radiogroup|tablist|menu|tree|slider)"|\{[^}]*'(listbox|radiogroup|tablist|menu|tree|slider)'[^}]*\})/g;
   let found = 0;
   for (const [name, source] of Object.entries(componentSources)) {
     for (const match of source.matchAll(composite)) {
@@ -159,8 +165,11 @@ test('a composite option is never a tab stop of its own unless it is the current
      the group is one stop rather than sixteen. Measured against the option
      roles that actually appear here. */
   const options = /role="(radio|option|tab)"/g;
+  const composites = /role=(?:"(listbox|radiogroup|tablist|menu|tree)"|\{[^}]*'(listbox|radiogroup|tablist|menu|tree)'[^}]*\})/;
   let swept = 0;
+  let owners = 0;
   for (const [name, source] of Object.entries(componentSources)) {
+    if (composites.test(source)) owners += 1;
     for (const match of source.matchAll(options)) {
       const tag = openingTag(source, match.index);
       /* A grid cell is an option inside a listbox whose single tab stop is
@@ -175,5 +184,12 @@ test('a composite option is never a tab stop of its own unless it is the current
       swept += 1;
     }
   }
-  assert.ok(swept > 0, 'the composite-option sweep found nothing to check; it is broken');
+  /* NON-VACUITY, TIED TO ITS SUBJECT. The page drew a composite until the
+     calendar's listbox retired (2026-10-16), and today it draws none, so an
+     option-free page is the honest reading rather than a broken sweep. A
+     component that declares a composite role again must also be one whose
+     options this walk reaches. */
+  if (owners > 0) {
+    assert.ok(swept > 0, 'the composite-option sweep found nothing to check; it is broken');
+  }
 });

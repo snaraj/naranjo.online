@@ -89,6 +89,29 @@
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* Cinzel, the Keep's display face (owner direction, 2026-10-16: the medieval
+ * look of the Old School RuneScape site). Roman inscriptional capitals for the
+ * name, the section plaques and the figures that are read as headings; body
+ * text stays Archivo and figures stay JetBrains Mono. Variable weight 400-900,
+ * the same two-subset split as the faces above, OFL text beside the files. */
+@font-face {
+  font-family: 'Cinzel';
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url('./assets/fonts/Cinzel-Variable-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Cinzel';
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url('./assets/fonts/Cinzel-Variable-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 /* Reading-mode token layer (issue #22, the OSRS-wiki mechanism adapted):
  * every color lives in a custom property, and each reading mode is one
  * override block scoped by the data-theme attribute the origin stamps on
@@ -123,10 +146,10 @@
  * twice below because light's text is slate's surface and vice versa — one
  * occurrence per palette slot, never per consumer. */
 :root {
-  --palette-light-surface: #faf9f5;
-  --palette-light-surface-raised: #f1efe7;
-  --palette-light-surface-overlay: #e7e4da;
-  --palette-light-border: #d9d5c9;
+  --palette-light-surface: #efe2c2;
+  --palette-light-surface-raised: #e6d5ac;
+  --palette-light-surface-overlay: #dcc795;
+  --palette-light-border: #c4ab7a;
   /* Repainted at issue 138. border-strong is a non-text UI boundary, so WCAG
      2.2 SC 1.4.11 sets its floor at 3:1 against the surface it sits on, and
      three of the four palettes were below it — measured against each mode's
@@ -138,9 +161,9 @@
      lighter away from theirs. The four now land in one tight band — 3.14,
      3.17, 3.22, 3.14 on their cards — which is the point: a card seam that is
      equally perceivable in every reading mode rather than in one of them. */
-  --palette-light-border-strong: #87877c;
-  --palette-light-accent: #3d434f;
-  --palette-light-text: #10131a;
+  --palette-light-border-strong: #8a6a3c;
+  --palette-light-accent: #6b4e2a;
+  --palette-light-text: #2b1b0c;
 
   /* Dark: the true one, derived rather than picked. Every slot is white at
      one fixed opacity composited over the same near-black base — the two
@@ -274,7 +297,7 @@
      measures this ordering, so moving the declaration down fails the build
      rather than the reader. The full issue-239 history of why a stage
      paints a ground at all stays with the gallery tokens. */
-  --gallery-stage-ground: rgb(250, 249, 245);
+  --gallery-stage-ground: rgb(239, 226, 194);
 
   /* The contribution ramp: one hue, monotone lightness, five steps. The
      DIRECTION is per-palette and that is the whole point — "steps brighter"
@@ -308,7 +331,7 @@
      short of the 4.5:1 a text ink is held to, so it carries a deeper green of
      the same hue — 5.54:1 on the surface, 5.07:1 raised, 4.59:1 overlay. The
      three dark modes' fourth steps clear 10:1 and are the mark as they are. */
-  --palette-light-mark: #10752a;
+  --palette-light-mark: #0b6223;
 
   --palette-dark-grid-0: #2a2a2a;
   --palette-dark-grid-1: #17492a;
@@ -380,10 +403,9 @@
      not colours a reader sees. models.json gives every member a slot unique
      within its group, and the swatch pin in tests/token-usage.test.mjs
      demands a declared token in every reading mode for every slot the file
-     hands out, so a member whose slot had none could not ship. The model bars
-     on the board paint a SINGLE ink (--board-ink, .board-fill below), and no
-     component reads --usage-cat-* at all, so no reader is shown any of these
-     colours. A card that one day paints by entity reads them from here.
+     hands out, so a member whose slot had none could not ship. No component
+     reads --usage-cat-* at all, so no reader is shown any of these colours.
+     A card that one day paints by entity reads them from here.
 
      The true dark mode is the DELIBERATE exception, exactly as its grid
      ramp is: the mode's whole design is that the brand mark stays its only
@@ -528,21 +550,16 @@
      holds the two equal. */
   --page-rails-from: 67.5rem;
 
-  /* The space above the page's name (owner directive, 2026-08-25: "Samuel
-     Naranjo" sat hard against the top of the viewport — "it almost feels
-     like it's about to escape"). The header row is OUT OF FLOW (.page-header,
-     below — fixed above the handle breakpoint, absolute under it), so it
-     occupies no flow space and reserved none: #app declared a block-start
-     padding of zero and the h1 began at the very first pixel of the document.
-
-     Derived rather than picked, so the rhythm cannot drift away from the
-     thing it clears: the chrome row starts at its own top inset and is
-     --page-rail-size tall (the same 44px hit box every other control on this
-     page carries), so its bottom edge is exactly these two lengths added
-     together. The name begins where the chrome ends. A frontend test
-     recomputes that sum from the same two tokens and a rendering lane
-     measures the two boxes against each other in a real engine, so a change
-     to either token moves this with it or turns a build red. */
+  /* The space above the sheet (owner directive, 2026-08-25: "Samuel Naranjo"
+     sat hard against the top of the viewport — "it almost feels like it's
+     about to escape"). It was derived from the chrome row it cleared — the
+     row's top inset plus the 44px hit lane the row was. The row is gone
+     (owner direction, 2026-10-16: "do away with it for now") and the space
+     keeps exactly that measure for a new tenant: on a phone J perches on the
+     sheet's top-end corner with half of him above it (App.svelte), and this
+     is the sky he rises into. tests/experience.test.mjs holds his overhang
+     inside it, and a rendering lane measures him on screen at the top of the
+     page. */
   --page-top-space: calc(var(--page-gutter) + var(--page-rail-size));
 
   /* --page-rail-size is a HIT LANE, not a visible object: 44px of grab area
@@ -761,24 +778,8 @@
   --ledger-hairline: 1px;
   --ledger-heavy: 2px;
   --ledger-section-gap: 2.5rem;
-  /* The commit log's row pitch, and the number its reserve is built from. It
-     is a token because the row is TALLER on a phone — the repository and the
-     subject stack there — and a reserve computed from one width while the rows
-     are drawn at another is a box that clips its own last row. */
-  --commit-row-height: 2.75rem;
   --ledger-row-pad: 0.875rem;
   --ledger-column-gap: 1.5rem;
-  /* THE PAIRED SECTION'S TWO GAPS (owner design decision, 2026-09-11, issue
-     318). The first is the air between the sheet's two columns — the one
-     length that says "these are two columns of one sheet" rather than two
-     sheets. The second is what a row spends between its own cells INSIDE such
-     a column, and it is smaller than --ledger-column-gap for an arithmetic
-     reason rather than a visual one: a full-width row can afford 1.5rem five
-     times, and a row in half a sheet cannot — four of them is 96px of the
-     ~324px a column has at the width the pair first appears, which is the
-     name track spent on white space. */
-  --ledger-spread-gap: 2.5rem;
-  --ledger-cell-gap: 0.75rem;
   /* The organisation mark's square (owner ruling, 2026-09-12, issue 326): a
      hairline box holding the organisation's own tile. Its own token because
      the row grid declares it as a TRACK and the tile declares it as a box, and
@@ -816,14 +817,6 @@
   --masthead-leading: 0.86;
   --masthead-rule: 3px;
 
-  /* The picture band, top and bottom. Its height is fixed at both widths
-     rather than fluid: the band is the one box on the page whose contents
-     arrive as an image, and a height that depended on the picture would move
-     everything under it the moment a texture decoded. */
-  --band-height: 8.25rem;
-  --band-height-phone: 5.5rem;
-  --band-ground: rgb(0, 0, 0);
-
   /* Controls. The VISIBLE mark is 32px — a chevron's circle, a segment's box,
      a texture arrow — and the control around it is the site's 44px floor,
      which is why these are two tokens rather than one: the drawing's size and
@@ -831,56 +824,8 @@
   --control-target: 2.75rem;
   --control-mark: 2rem;
 
-  /* J's box and sheet, DERIVED from the control target rather than restated
-     as the 60.5 x 44 and 726 x 440 pixels they come to (owner request,
-     2026-10-12). He stands the row's own 44px height, and his cell is wider
-     than it is tall: the render is 176 x 128 per frame, so the box keeps that
-     ratio rather than squeezing him into a square. One cell must draw at
-     exactly the size of the box, and that box is a rem length: a reader whose
-     browser font size is not 16px gets a box literal numbers no longer
-     divide, and the cell beside the one being shown starts to show inside it.
-     Twelve columns by ten rows is the sheet's own layout, so these lines are
-     the one place the grid is stated and the keyframes below read them back.
-     His height is its own token so the phone block can lower it alone; every
-     length below follows, because they are all declared on this same element. */
-  --j-cell-block: var(--control-target);
-  --j-cell-inline: calc(var(--j-cell-block) * 176 / 128);
-  --j-sheet-inline: calc(var(--j-cell-inline) * 12);
-  --j-sheet-block: calc(var(--j-cell-block) * 10);
-
-  /* The board of cards, and the strip under it. The minimum is the height the
-     owner's drawing gives a card at 1440px; a row is taller when a card in it
-     has more to say, and never shorter, so the board keeps its rhythm without
-     the fixed square that used to clip whatever did not fit. */
-  --square-figure-size: 2.75rem;
-  --square-pad: 0.875rem;
+  /* The air a board or strip card opens under its head (FeedCard.svelte). */
   --square-gap: 0.5rem;
-  --board-card-min: 16.75rem;
-  --board-row-gap: 0.625rem;
-  --board-ctx-size: 0.625rem;
-  --board-fact-size: 0.71875rem;
-  --board-fact-pad: 0.375rem;
-  /* The hairline under a fact. The one card colour that does NOT invert with
-     the rest: a mid value reads as a rule against the sheet's paper and
-     against its ink alike, so one declaration serves both states where an
-     inverted pair would need two values measured against two surfaces. */
-  --board-fact-rule: var(--color-border);
-  --board-model-gap: 0.375rem;
-  --board-model-name-size: 0.8125rem;
-  --board-detail-size: 0.625rem;
-  --board-bar-rule: 4px;
-
-  /* The daily line. The stroke is a length rather than a ratio because the
-     plot is drawn with a squashed aspect (Sparkline.svelte) and keeps its own
-     thickness through vector-effect; the mark is the diameter of the dot on
-     the newest reading. */
-  --spark-height: 3rem;
-  --spark-stroke: 1.5px;
-  --spark-mark-size: 0.375rem;
-  /* The scrubber's hairline: one device pixel of rule, because it marks a
-     POSITION and a thicker one would start reading as a measurement of its
-     own (owner directive, 2026-09-11, issue 316). */
-  --spark-guide-width: 1px;
   --ticker-icon: 22px;
   /* The item padding, stated per axis so the lead's mark can cancel the block
      half of it and stand the strip's full height (below). */
@@ -897,20 +842,8 @@
   --ledger-repaint: 360ms;
   --ledger-hover: 200ms;
   --drawer-duration: 520ms;
-  --heat-fade: 420ms;
-  --band-fade: 320ms;
   --masthead-draw: 1400ms;
   --ticker-duration: 90s;
-  /* J's typing loop (owner request, 2026-10-12). The render is 120 frames
-     at 15fps, laid out as 10 rows of 12: --j-typing is the whole 8s loop and
-     --j-typing-row is one row of it, DIVIDED rather than stated so the two
-     stay phase-locked. A row duration written on its own is free to disagree
-     with the loop: any remainder walks the row animation a column across the
-     sheet over time, and every row boundary then shows a wrong frame — a
-     stutter that grows for as long as the tab stays open. The quotient keeps
-     the two exact whatever the loop is later set to. */
-  --j-typing: 8s;
-  --j-typing-row: calc(var(--j-typing) / 10);
 
   /* The panel theme layer. Every panel component was built "shaped, not
      styled" — each color reads a --panel-* custom property with a
@@ -1167,6 +1100,46 @@
      still be ONE number. */
   --icon-gap: 0.375rem;
 
+  /* THE KEEP (owner direction, 2026-10-16): the medieval frame. The page is a
+     sheet of parchment (or, in the dark modes, night oak) set inside a gilded
+     painting frame over a dark oak backdrop, with Cinzel for the name and the
+     section plaques. The parchment is generated locally, vendored
+     under src/assets/images/keep/; the frame is a
+     drawn SVG (src/assets/images/frame/), the sky is drawn in code
+     (lib/sky.ts). The fixed values live
+     here; the four that change with the reading mode are declared below and in
+     every mode block. */
+  --font-display: 'Cinzel', Georgia, 'Times New Roman', serif;
+  --palette-keep-gilt: #b9862f;
+  --palette-keep-gilt-light: #f4d98b;
+  --palette-keep-gilt-deep: #3a2810;
+  --palette-keep-bronze: #8c5a1a;
+  --palette-keep-bronze-deep: #4a2c0c;
+  --palette-keep-backdrop: #07050f;
+  /* The dark modes' sheet: night-violet glass the sky shows through. */
+  --palette-keep-glass: rgb(12 9 26 / 0.74);
+  --keep-texture-parchment: url('./assets/images/keep/parchment.jpg');
+  /* The frame is a pixel pattern (owner direction, 2026-10-16: borders like
+     the old handheld RPGs' text-box frames): an 8-pixel band in a 24-pixel
+     nine-slice, drawn at whole multiples so every pixel stays square, its
+     pattern repeated round the edge rather than stretched. */
+  --keep-frame-image: url('./assets/images/frame/rampart.svg');
+  --keep-frame-slice: 8;
+  --keep-frame-repeat: round;
+  --keep-frame-page: 1.5rem;
+  --keep-sheet-pad: clamp(1rem, 3vw, 2.75rem);
+  --keep-plaque-size: clamp(1.375rem, 2.6vw, 2.125rem);
+  /* The floor fits "NARANJO" inside a 320px phone's framed sheet. The intro
+     holds the name to its own column on top of this (the Keep layer). */
+  --keep-name-ceiling: clamp(2.5rem, 11.5vw, 12.5rem);
+  --keep-name-size: var(--keep-name-ceiling);
+  /* The four mode-dependent values, light's here. */
+  --keep-sheet: var(--keep-texture-parchment);
+  --keep-sheet-ground: var(--color-surface);
+  --keep-name-top: var(--palette-keep-bronze);
+  --keep-name-bottom: var(--palette-keep-bronze-deep);
+  --keep-ornament: var(--palette-keep-bronze);
+
   color: var(--color-text);
   background: var(--color-surface);
   font-family: var(--font-mono);
@@ -1212,6 +1185,11 @@
     --color-cat-9: var(--palette-dark-cat-9);
     --color-cat-10: var(--palette-dark-cat-10);
     --gallery-stage-ground: var(--palette-projection-ground);
+    --keep-sheet: none;
+    --keep-sheet-ground: var(--palette-keep-glass);
+    --keep-name-top: var(--palette-keep-gilt-light);
+    --keep-name-bottom: var(--palette-keep-gilt);
+    --keep-ornament: var(--palette-keep-gilt);
   }
 }
 
@@ -1247,6 +1225,11 @@
   --color-cat-9: var(--palette-dark-cat-9);
   --color-cat-10: var(--palette-dark-cat-10);
   --gallery-stage-ground: var(--palette-projection-ground);
+  --keep-sheet: none;
+  --keep-sheet-ground: var(--palette-keep-glass);
+  --keep-name-top: var(--palette-keep-gilt-light);
+  --keep-name-bottom: var(--palette-keep-gilt);
+  --keep-ornament: var(--palette-keep-gilt);
 }
 
 /* Slate remaps the identical slot list onto its own palette — same roles,
@@ -1287,6 +1270,11 @@
   --color-cat-9: var(--palette-slate-cat-9);
   --color-cat-10: var(--palette-slate-cat-10);
   --gallery-stage-ground: var(--palette-projection-ground);
+  --keep-sheet: none;
+  --keep-sheet-ground: var(--palette-keep-glass);
+  --keep-name-top: var(--palette-keep-gilt-light);
+  --keep-name-bottom: var(--palette-keep-gilt);
+  --keep-ornament: var(--palette-keep-gilt);
 }
 
 [data-theme="sepia"] {
@@ -1321,6 +1309,11 @@
   --color-cat-9: var(--palette-sepia-cat-9);
   --color-cat-10: var(--palette-sepia-cat-10);
   --gallery-stage-ground: var(--palette-projection-ground);
+  --keep-sheet: none;
+  --keep-sheet-ground: var(--palette-keep-glass);
+  --keep-name-top: var(--palette-keep-gilt-light);
+  --keep-name-bottom: var(--palette-keep-gilt);
+  --keep-ornament: var(--palette-keep-gilt);
 }
 
 * {
@@ -1424,7 +1417,7 @@ textarea {
   font-size: max(1rem, 16px);
 }
 
-/* The page is one centered column: the header row, then the panel stack. It
+/* The page is one centered column: the name, then the sections. It
    used to lay itself out AROUND fixed chrome — a gutter reserved for the rail
    on the inline end, a strip reserved for the activity bar on the block end —
    and every one of those reserves existed only because chrome was floating
@@ -1455,9 +1448,9 @@ textarea {
   }
 }
 
-/* The column's own width, decoupled from the header (owner directive, issue
-   168: the header pins to the viewport corner now, independent of whatever
-   the reader drags this to).
+/* The column's own width (owner directive, issue 168). The chrome row that
+   shared it from issue 287 is gone (owner direction, 2026-10-16), so the
+   column is the one box this rule sizes.
 
    Three declarations, and the outer two are the reason a dragged width
    cannot break this page. The knob is clamped HERE, in the browser,
@@ -1470,17 +1463,7 @@ textarea {
    less its gutters and its safe-area insets. The script that writes the knob
    clamps too; neither clamp is the other's excuse, and each alone still holds
    the page. */
-/* THE CHROME ROW TAKES THE SAME COLUMN (owner directive, 2026-09-03, issue
-   287), and it is the same three declarations rather than a second set of
-   numbers: the row is the sheet's own top rule, so it has to begin and end
-   exactly where every section head below it does. Issue 168 decoupled the
-   header from the column on purpose — a corner-pinned control must not move
-   when the reader drags the feed — and this is the opposite arrangement for
-   the opposite object: a row in the flow that IS part of the sheet. What the
-   old coupling actually broke is fixed at its cause instead, by the header
-   being a row rather than a floating box. */
-#app > main,
-.page-header {
+#app > main {
   inline-size: min(var(--page-column-width), 100%);
   min-inline-size: min(var(--page-column-min), 100%);
   max-inline-size: min(var(--page-column-max), 100%);
@@ -1553,8 +1536,7 @@ html[data-column-resizing] {
    have. A frontend test holds this literal equal to --page-rails-from, so
    the breakpoint cannot drift away from the token the script reads. */
 @media (min-width: 67.5rem) {
-  #app > main,
-  .page-header {
+  #app > main {
     max-inline-size: min(var(--page-column-max), calc(100% - 2 * var(--page-rail-size)));
   }
 
@@ -1563,189 +1545,10 @@ html[data-column-resizing] {
   }
 }
 
-/* THE CHROME ROW IS A REAL ROW NOW (owner directive, 2026-09-03, issue 287).
-   It is styled HERE rather than inside PageHeader.svelte because the static
-   shell renders the same row before any control has hydrated into it, and a
-   component-scoped rule would style only the hydrated one.
-
-   It used to be FIXED to the viewport's top-end corner (issue 168): the header
-   held one icon, out of the document flow so dragging the column could not
-   move it, backed by a translucent plate (issue 219) because a viewport-glued
-   box owns its corner at every scroll offset and page content passed under it.
-   Below the handle breakpoint it was re-aimed at the document (issue 264)
-   because that corner cost the whole column a 60px lane it could not use.
-
-   The ledger answers all three at their cause rather than one at a time: the
-   row spans the sheet instead of sitting beside the column, so the column's
-   width cannot reach it and there is nothing to reserve a lane for; it is in
-   the flow, so it occupies its own height honestly and no scrolled row can
-   pass beneath it; and with nothing passing beneath it there is nothing left
-   for a plate to soften, so the plate, its blur and its pill are gone rather
-   than restyled. What survives is the part that was never decoration: the row
-   is the site's 44px hit lane tall, and the controls in it clear the touch
-   floor on both axes. */
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--ledger-column-gap);
-  /* The row's reserve is the touch row PLUS its own rule, because the box is
-     border-box and the static shell's copy of this header is EMPTY. Stated as
-     the control alone, the empty shell measured 44px while the hydrated row
-     measured more — content plus border — and mounting moved the whole page
-     down. The shell exists precisely so that does not happen (index.html says
-     so), and it can only work if the reserve is the height the arrived row
-     actually takes.
-
-     ONE RULE, UNDER THE ROW (owner directive, 2026-09-04, issue 294). The row
-     used to be ruled top and bottom, and on a phone the top rule sat directly
-     under the browser's own toolbar edge, so the two read as one band twice as
-     thick as either. The sheet's top edge is the screen's; the row hangs from
-     it and draws its rule below, where the masthead needs one. */
-  min-block-size: calc(var(--page-rail-size) + var(--ledger-heavy));
-  padding-block: 0;
-  border-block-end: var(--ledger-heavy) solid var(--ledger-rule);
-}
-
-/* The home link. An anchor to the page's own name, so the row's first stop is
-   "back to the top" — and since the owner's ruling of 2026-09-12 (issue 325)
-   what it DRAWS is the dragon rather than the "SN." wordmark.
-
-   The BOX is all that is left here, and that is the point: the link is a 44px
-   hit lane holding a picture that states its own size, so every typographic
-   declaration this rule used to carry — the sans face, the 1.25rem, the 900
-   weight, the tight tracking, the ink and the underline suppression — was
-   styling text that no longer exists. They are deleted rather than kept warm;
-   a rule that paints nothing is a rule the next reader has to disprove.
-
-   THE LINK'S PAINT STAYS, and that is a deliberate line rather than an
-   oversight: the site's one link doctrine (owner directive, 2026-08-25) is
-   that no link wears a resting underline and every link marks itself the
-   moment intent is shown, and experience.test.mjs holds EVERY link class the
-   markup declares to it. A picture draws none of those marks today — but the
-   class would have to be written OUT of that doctrine to drop them, and a link
-   class exempt from the site's link rule is a class the next home link, with
-   words in it again, would inherit the exemption from. The ring is the one
-   that paints on this link today: it is the only thing telling a keyboard
-   reader where they are, it marks the box rather than the text, and it is
-   unchanged.
-
-   flex: none, because the link must stay as wide as the picture it holds. J
-   is wider than the 44px floor, and a link the row may shrink to that floor
-   leaves him overhanging it toward the nav at every phone width, with the
-   focus ring drawn round a box narrower than the picture. */
-.page-mark {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  min-inline-size: var(--control-target);
-  min-block-size: var(--control-target);
-  color: var(--ledger-ink);
-  text-decoration: none;
-}
-
-.page-mark:hover,
-.page-mark:focus-visible {
-  color: var(--ledger-highlight);
-  text-decoration: underline;
-}
-
-.page-mark:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-/* The row's end cluster: where the page is written from, and the reading
-   mode. */
-.page-chrome {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex: none;
-}
-
-/* A pin and a city (owner design decision, 2026-09-11, issue 313). Inline-flex
-   rather than plain inline so the mark and the word share one measured gap —
-   the same token every other pair on the page spends. */
-.page-place {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--icon-gap);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-  white-space: nowrap;
-  color: var(--ledger-muted);
-}
-
-/* J TYPES AT BOTH ENDS OF THE ROW (owner request, 2026-10-12: "use him
-   typing on the computer now instead of just flying"; the two seats are
-   issue 314's and issue 325's).
-
-   One WebP sheet of the owner's own render of J at his laptop — 120 frames
-   at 15fps laid out as 10 rows of 12 — stepped by two composed animations:
-   the columns of a row every --j-typing-row and the rows of the sheet over
-   --j-typing, which is one new cell every 66.67ms. No canvas, no WebGL, no
-   library, no script, no second origin and no new content type. The sheet
-   and the still are named here, in the stylesheet, so the bundler resolves
-   each to a content-hashed URL and the component never learns a file name
-   (requirement 11's rule for media, the same one the gallery's adapter
-   follows).
-
-   The box is the row's own 44px height (the drawn mark's 32px on a phone) at
-   the render's 176:128 ratio, and it is RESERVED: stated on the element rather than measured from the picture,
-   so the row is the same height before either file has arrived as after, and
-   a decode cannot move the page (the zero-CLS floor). flex: none for the same
-   reason — the row must not squeeze him when the nav is wide.
-
-   HERE HE IS THE STILL: the render's own reduced-motion frame, one small file
-   drawn whole into the box. The sheet and the loop are declared together
-   inside the page's one no-preference block further down, so a reader who
-   asked for less motion gets the pose rather than a cancelled animation —
-   and so does a browser that has never heard of the preference — and neither
-   downloads the whole sheet to show one frame of it. A browser fetches only
-   the background-image an element computes, so each reader fetches exactly
-   one of the two files. */
-.j-mark {
-  flex: none;
-  inline-size: var(--j-cell-inline);
-  block-size: var(--j-cell-block);
-  background-image: url('./assets/images/j/j-typing-still.webp');
-  background-repeat: no-repeat;
-  background-position: 0 0;
-  background-size: 100% 100%;
-}
-
-/* THE SAME DRAGON, FACING THE OTHER WAY (owner ruling, 2026-09-12, issue 325:
-   "replace this with another dragon facing inwards to match the opposite
-   side"). J's render faces screen-right, toward his laptop, so the seat at
-   the END of the row is the flipped one. One declaration is the whole
-   difference between the two seats: the still, the sheet, the reserved box
-   and both steps() animations are SHARED, so the second J costs one element
-   and no second request — two boxes naming one background-image are one
-   resource.
-
-   It is a static transform rather than motion, so it sits out here with the
-   rest of the mark's shape instead of inside the no-preference block: a reader
-   who asked for less motion gets the same still pose, facing the same way.
-   transform-origin is stated because the flip has to happen about the box's
-   own middle — the default IS the centre, and saying so is what keeps a later
-   origin change from silently sliding the dragon out of his own hit lane. */
-.j-mark-mirrored {
-  transform: scaleX(-1);
-  transform-origin: center;
-}
-
-/* The place label is the first thing to go when the row runs out of room: it
-   is context, not navigation, and the nav and the mode control are both. J
-   is not in that queue: the owner's decision puts him in the row at every
-   width, and the row has space for him precisely because the label yields. */
-@media (max-width: 45rem) {
-  .page-place {
-    display: none;
-  }
-}
+/* THE CHROME ROW IS GONE (owner direction, 2026-10-16: "do away with it for
+   now"): the home link, the section nav, the place and J's two seats with
+   it. The page opens on the name; the reading mode is in the footer and J
+   flies beside the name (App.svelte). */
 
 /* THE SCROLL PADDING IS GONE WITH THE FIXED CONTROL (owner directive,
    2026-09-03, issue 287). It reserved the top of the viewport so a fragment
@@ -1793,103 +1596,8 @@ main {
   inline-size: 100%;
 }
 
-/* The nav is the chrome row's middle now (owner directive, 2026-09-03, issue
-   287): one line of five links between the wordmark and the reading mode.
-
-   It SCROLLS rather than wraps, which is the opposite of what it used to do
-   and the right answer in its new home: a wrapping nav changes the height of
-   the row it sits in, and this row is the sheet's own top rule — a rule that
-   moved down a line on a narrow phone would take the whole page with it. The
-   scrollbar is hidden because the row is 44px of touch target with no room to
-   spare, and the affordance is the content itself running past the edge. */
-.section-nav {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  /* START, not centre: a scroll container that centres content wider than
-     itself clips the BEGINNING of that content and cannot be scrolled back to
-     it, so the first link reads as a word cut in half — measured at 390px.
-     Centring is a decision about spare room, and a scrolling row has none. */
-  justify-content: flex-start;
-  gap: 0.25rem 1.25rem;
-  min-inline-size: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-/* Above the phone range there IS spare room, and the row is centred in it
-   between the wordmark and the reading mode. */
-@media (min-width: 45.0625rem) {
-  .section-nav {
-    /* Centred, and SAFELY so, because centring is only correct while the row
-       fits. A centred scroll container whose content overflows hides the
-       BEGINNING of that content, and no scroll gesture brings it back — the
-       first link renders as a word cut in half. `safe` says exactly that:
-       centre while there is room, fall back to the start when there is not.
-       The plain `center` under it is the base an engine without the keyword
-       keeps, and the tighter column gap narrows the row enough that the
-       fallback is rarely even reached — the overflow at 721px, the first
-       width this block covers, went from twenty pixels to four. */
-    justify-content: center;
-    justify-content: safe center;
-    column-gap: 1rem;
-  }
-}
-
-.section-nav::-webkit-scrollbar {
-  display: none;
-}
-
-/* A link, and a touch target. The 44px floor is a MINIMUM on both axes rather
-   than a fixed box: a reader who enlarges their base font gets a bigger
-   target, never a clipped label.
-
-   The idle underline is gone (owner directive, issue 157). These are
-   hyperlinks and identifying them by color alone would identify them for
-   fewer readers — but color is not the only other channel here, which is the
-   a11y position this change rests on: a NAV link is distinguished by POSITION
-   (one row in the page's own chrome, nowhere else prose ever puts a link) and
-   by ROLE (the enclosing <nav aria-label="Page sections">, which names the
-   row's purpose to assistive tech independent of any visual mark) before color
-   enters into it at all. Hover and keyboard focus still mark a link as a link
-   the moment intent is shown. */
-.section-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* NEVER SHRUNK, and this is what makes the sentence above true. The nav is
-     a flex row, so its links are flex items, and a flex item shrinks to its
-     min-inline-size — which the touch floor sets to 44px. Five labels squeezed
-     to 44px each is five labels overflowing their own boxes and drawing over
-     one another, measured at 390px, where the row read as one run-on word.
-     The row scrolls instead: each link keeps the width its label needs, and
-     the floor goes back to being a floor for the SHORT labels. */
-  flex: none;
-  min-inline-size: var(--control-target);
-  min-block-size: var(--control-target);
-  padding-inline: 0.25rem;
-  color: var(--ledger-ink);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-  white-space: nowrap;
-  text-decoration: none;
-  text-underline-offset: 0.2em;
-}
-
-.section-link:hover {
-  color: var(--ledger-highlight);
-  text-decoration: underline;
-}
-
-.section-link:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
 /* Every section of the sheet takes the column and stacks its own contents.
-   The scroll margin is what the nav links land against: an anchor jump puts
+   The scroll margin is what a fragment link lands against: an anchor jump puts
    the target at the very top edge of the viewport otherwise, with the heading
    touching the browser chrome. */
 .page-section,
@@ -2200,7 +1908,7 @@ h1 {
  *
  * Every rule below draws one part of the ruled sheet, and not one of them
  * states a colour, a family or a motion of its own: each reads a --ledger-*,
- * --control-*, --band-* or --square-* role declared once in the token layer at
+ * --control-* or --square-* role declared once in the token layer at
  * the top of this file. That is what lets the four reading modes carry this
  * design with no mode-specific rule anywhere, and what lets the owner retune
  * the whole sheet from one block.
@@ -2223,45 +1931,6 @@ h1 {
    scrolls inside its own box (the calendar strip and the ticker both do). */
 .feed-card-body > * {
   min-inline-size: 0;
-}
-
-/* --- The picture bands --------------------------------------------------- */
-
-.band {
-  position: relative;
-  /* A grid item's automatic minimum is its MIN-CONTENT, and the cycle box
-     this band used to carry was one unbreakable line — the band refused to
-     shrink under about 237px and pushed the document sideways below that,
-     measured at 250px. The box is gone (owner directive, 2026-09-04, issue
-     292) and the floor stays: the band is a picture, not a column of text,
-     and it has no minimum it needs to keep. */
-  min-inline-size: 0;
-  block-size: var(--band-height);
-  overflow: hidden;
-  background: var(--band-ground);
-  border-block-start: var(--ledger-heavy) solid var(--ledger-rule);
-  border-block-end: var(--ledger-heavy) solid var(--ledger-rule);
-}
-
-.band-layers {
-  position: absolute;
-  inset: 0;
-}
-
-/* The picture showing and the one it left are mounted and only one is opaque;
-   the swap is a crossfade under the motion guard and an instant change
-   without it. */
-.band-layer {
-  position: absolute;
-  inset: 0;
-  inline-size: 100%;
-  block-size: 100%;
-  object-fit: cover;
-  opacity: 0;
-}
-
-.band-layer[data-band-active='true'] {
-  opacity: 1;
 }
 
 /* --- The footer ---------------------------------------------------------- */
@@ -2456,911 +2125,12 @@ h1 {
 }
 
 .ledger-note,
-.table-note,
-.commit-note,
-.board-note,
 .ticker-note {
   margin: 0;
   padding-block: var(--ledger-row-pad);
   font-family: var(--font-mono);
   font-size: var(--ledger-figure-size);
   color: var(--ledger-muted);
-}
-
-/* --- 02 / the paired columns: the ruled table and the ruled log ----------- */
-
-/* THE SHEET'S TWO COLUMNS (owner design decision, 2026-09-11, issue 318,
-   option B on the design canvas): the repositories on the left, every commit
-   on every repository on the right, one gap between them and nothing else
-   dividing them — they are two columns of one sheet, not two cards.
-
-   BOTH TRACKS ARE minmax(0, 1fr), which is the no-dead-space rule and the
-   no-sideways-scroll floor in one declaration: equal halves fill the sheet to
-   its right edge at every width, and a zero minimum lets each half be exactly
-   the track it was given rather than the width of its widest unbreakable row.
-   A bare `1fr` would take its minimum from its content and push the document
-   sideways the moment a reader drags the column in. */
-.ledger-spread {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 0 var(--ledger-spread-gap);
-}
-
-/* A column is its own stack of rows, and it declares the same zero minimum for
-   the same reason its parent track does. */
-.spread-column {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-content: start;
-  min-inline-size: 0;
-}
-
-/* The four figure tracks are sized to the LONGEST value each column can
-   print, not to a number somebody liked: a released version is the widest of
-   them (a ten-character tag at the figure size plus the mark slot and its
-   gap), the two tallies are four digits, and the age is a compact "12mo". A
-   track narrower than its own content is a numeral that ellipsizes, which is a
-   wrong figure rather than a tight one (issue 317).
-
-   EVERY TRACK IS A minmax NOW, and that is what lets the table live in half a
-   sheet (issue 318). A fixed track overflows its box when the box is smaller
-   than the track list; a `minmax(0, …)` track takes its stated width wherever
-   there is room for it — which is every viewport the lanes drive — and shrinks
-   below it rather than pushing the page sideways when a reader drags the
-   reading column in. The alignment claim survives the shrink because every row
-   is in the SAME container: all of them shrink by the same amount, so a figure
-   still sits where the table put it rather than where its own length pushed
-   it (issue 188's ruling).
-
-   The description column is gone with the same directive: a half-sheet column
-   holds a name and four figures, and a repository's own words are one click
-   away on the row's own link. */
-.table-head,
-.table-row {
-  display: grid;
-  grid-template-columns:
-    minmax(0, 1fr) minmax(0, 4.5rem) minmax(0, 6rem) minmax(0, 4rem) minmax(0, 5.5rem);
-  align-items: center;
-  gap: var(--ledger-cell-gap);
-  border-block-end: var(--ledger-hairline) solid var(--ledger-rule);
-}
-
-/* The log column's head is ONE cell over the whole column rather than five
-   over the table's tracks: the table beside it names five columns because a
-   reader has to know which figure is which, and this one names the whole
-   stream, which is a different kind of statement (issue 315, written hashless
-   because three digits after a hash read as a hex color to this sheet's own
-   color sweep: it is every repository's record, not a selection). It reuses
-   `.table-head` for the rule
-   and the type and overrides only the track list, so the two heads are drawn
-   at one height by one rule rather than by two that must agree. */
-.spread-log-head {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.table-head {
-  padding-block: 0.5rem;
-}
-
-.table-row {
-  min-block-size: var(--control-target);
-}
-
-.table-row:hover {
-  background: var(--ledger-raised);
-}
-
-.table-label {
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-  color: var(--ledger-muted);
-}
-
-/* A MARKED head is laid out as its own cells are — the mark in a fixed slot at
-   the column's start, everything after it filling the rest — so the mark sits
-   directly over the marks under it and the head row cannot drift out of the
-   column it names (owner directive, 2026-09-11, issue 317). The two word
-   heads keep the old end alignment through the same rule, because a word with
-   no mark has nothing to line up with. */
-.table-label[data-table-align='end'] {
-  display: grid;
-  grid-template-columns: var(--icon-cell) minmax(0, 1fr);
-  align-items: center;
-  gap: var(--icon-gap);
-  text-align: end;
-}
-
-/* The name is the row's flexible track. The cell held a second thing until the
-   owner's ruling of 2026-09-12 — the `latest` chip, set against the name it
-   qualified — and it is a flex cell still, because the link inside it keeps its
-   own floor while the cell keeps the track's width.
-
-   The cell CLIPS rather than letting its contents decide its width, and the
-   link inside it keeps its own 44px floor: a repository whose name is shorter
-   than a finger is still a control a finger has to hit (the touch floor,
-   measured at 1280px where "theme" drew a 42px box), and a name longer than
-   the column still has to ellipsize inside it rather than push the sheet. The
-   floor is a MINIMUM, so the two are not in tension — the link shrinks to the
-   cell and stops at the floor. */
-.table-name-cell {
-  display: flex;
-  align-items: center;
-  gap: var(--icon-gap);
-  min-inline-size: 0;
-  overflow: hidden;
-}
-
-.table-link,
-.table-name {
-  display: inline-flex;
-  align-items: center;
-  min-inline-size: var(--control-target);
-  min-block-size: var(--control-target);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-family: var(--font-mono);
-  font-size: var(--ledger-body-size);
-  font-weight: 500;
-  color: var(--ledger-ink);
-  text-decoration: none;
-  text-underline-offset: 0.2em;
-}
-
-.table-link:hover,
-.table-link:focus-visible {
-  color: var(--ledger-highlight);
-  text-decoration: underline;
-}
-
-/* THE MARK SLOT IS FIXED AND THE FIGURE FILLS THE REST (owner directive,
-   2026-09-11, issue 317). An inline row that packed mark and figure together
-   put the mark wherever the figure's own length left it, so a column of
-   four-digit tallies and a column of one-digit ones drew their marks at two
-   different x positions — the drift issue 188 already threw out for figures,
-   reaching the marks. Two declared tracks fix both ends at once: every mark
-   starts at its column's start edge, and every numeral ends at its end edge,
-   whatever either of them is that row. */
-.table-count {
-  display: grid;
-  grid-template-columns: var(--icon-cell) minmax(0, 1fr);
-  align-items: center;
-  gap: var(--icon-gap);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-figure-size);
-  font-variant-numeric: tabular-nums;
-}
-
-.table-figure {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  text-align: end;
-}
-
-.table-glyph {
-  display: inline-flex;
-  color: var(--ledger-muted);
-}
-
-/* Every counter and the age are focus stops, because each carries a detail a
-   keyboard has to be able to open; they wear the site's one focus ring. */
-.table-count:focus-visible,
-.table-age:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-/* The words a glyph replaced. They are clipped rather than removed, so a
-   screen reader still hears "1 star" where the eye reads a mark and a number
-   (issue 268's terse-counter rule, unchanged by the redesign). */
-.table-clipped {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-.table-age {
-  color: var(--ledger-muted);
-}
-
-/* --- 03 / the cycling calendar and the commit log ------------------------ */
-
-.commit-segments {
-  display: flex;
-  flex-wrap: wrap;
-  padding-block: 0.5rem;
-}
-
-/* A grid or flex item's automatic minimum is its MIN-CONTENT, and a segment's
-   label is one unbreakable line, so three of them refuse to shrink and push
-   the row past the column — which the page would then scroll sideways to
-   reveal. Zero as the minimum lets each segment be the track it was given and
-   clip its own label instead. Declared on the CHILDREN rather than on the
-   control's own class, because the touch-floor sweep reads a class's own size
-   declarations and a `min-inline-size: 0` there is a control declaring itself
-   smaller than the floor — true of the layout box, false of the control. */
-.commit-segments > * {
-  min-inline-size: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.commit-segment {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-block-size: var(--control-target);
-  min-inline-size: var(--control-target);
-  padding-inline: 0.75rem;
-  margin-inline-start: -1px;
-  border: var(--ledger-hairline) solid var(--ledger-rule);
-  background: var(--ledger-bg);
-  color: var(--ledger-ink);
-  cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.commit-segment:first-child {
-  margin-inline-start: 0;
-}
-
-.commit-segment:hover {
-  background: var(--ledger-raised);
-}
-
-.commit-segment[aria-pressed='true'] {
-  background: var(--ledger-ink);
-  color: var(--ledger-bg);
-}
-
-.commit-segment:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
-}
-
-.commit-grid {
-  padding-block: 0.5rem;
-}
-
-/* THE LOG'S BOX IS RESERVED (issue 285's reserve, kept through the redesign):
-   exactly as tall as the rows it holds open, so a payload that lands a moment
-   after first paint lands without moving the page. The number is a
-   multiplication of the reserve by the row's own touch floor rather than a
-   height somebody measured, and a frontend test recomputes it from the
-   adapter's own constant — so the box and the number of rows it holds cannot
-   drift apart.
-
-   SIX, because the table beside it shows six (owner ruling, 2026-09-12: the
-   seventh, "latest" row went, and the table is the pinned set). The two columns
-   of the paired section are one picture and the reserve is the one place that
-   pairing is expressible as a length — so the constant this recomputes from is
-   `shownProjectRows` in lib/projects.ts, the SAME number the table selects its
-   rows with, rather than a second one for this box to disagree with.
-
-   IT SCROLLS FOR THE REST ON A DESKTOP (owner directive, 2026-09-11, issue 315
-   — written hashless because three digits after a hash read as a hex color to
-   the stylesheet's own color sweep). The log lists every contribution now,
-   which is more rows than any reserve should hold open; a box that GREW to fit
-   them would move every section under it the moment a payload landed, which is
-   the shift the reserve exists to prevent. So the box keeps its exact height
-   whatever arrives and the rows past it scroll inside it — the page's layout
-   is decided before the data, and stays decided. A PHONE does not do this, and
-   the phone block below says why.
-
-   There is deliberately NO `scrollbar-gutter` reservation here, and that is
-   this repository's own measured ruling rather than an omission: a reserved
-   gutter is charged on every platform, including the ones where a scrollbar
-   overlays the content and costs the layout nothing, and a frontend test
-   refuses the declaration anywhere in this sheet for exactly that reason (see
-   the modal lock above). Where an engine does draw a classic scrollbar it
-   takes its width from the row's own flexible subject column, inside a box
-   whose HEIGHT is fixed either way — so the page below it still does not
-   move. There is no hint text under the box and there must not be (the
-   no-reading-hints ruling): the scrollbar and the clipped row are the
-   affordance. */
-.commit-rows {
-  block-size: calc(6 * var(--commit-row-height));
-  overflow-y: auto;
-}
-
-/* THE PHONE LOG'S DISCLOSURE (owner ruling, 2026-09-12). Declared here rather
-   than inside the phone block because it is the control's whole appearance and
-   the component renders it at one width only — a rule split across two places
-   would be the same button described twice. It wears the head row's face: this
-   is chrome the sheet rules, not a figure.
-
-   FULL WIDTH AND AT THE TOUCH FLOOR, because it is the one thing under the log
-   a finger aims at, and a control narrower than its own row is a target a thumb
-   has to find. The width is its GRID COLUMN's, taken by stretching rather than
-   declared here (see the phone block), so the touch-floor sweep can still
-   measure both of its axes in pixels. The floor is a MINIMUM so a wrapped word
-   grows the box rather than being clipped by it, and the collapsed reserve is
-   computed from the same token, so an unwrapped control costs exactly what the
-   reserve holds open for it. */
-.commit-disclosure {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-block-size: var(--control-target);
-  margin-block-start: var(--ledger-cell-gap);
-  padding: 0;
-  border: var(--ledger-hairline) solid var(--ledger-rule);
-  background: none;
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-  color: var(--ledger-muted);
-  cursor: pointer;
-}
-
-.commit-disclosure:hover {
-  background: var(--ledger-raised);
-  color: var(--ledger-ink);
-}
-
-/* The ring is INSET, like the sheet's other full-width controls: an outset one
-   on a control that already reaches its column's edge would be drawn outside
-   the column, and on a phone that is the document scrolling sideways. */
-.commit-disclosure:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
-}
-
-.commit-row {
-  display: grid;
-  grid-template-columns:
-    minmax(0, 4rem) minmax(0, 9rem) minmax(0, 1fr) minmax(0, 4rem);
-  align-items: center;
-  gap: var(--ledger-cell-gap);
-  block-size: var(--commit-row-height);
-  min-block-size: var(--control-target);
-  /* THE RULE UNDER A ROW IS AN INSET SHADOW, never a border (owner directive,
-     2026-08-25, kept through the redesign): a border adds its pixel to every
-     row's box, and five of them push the last row out of a reservation that is
-     exactly five rows tall — the zero-CLS reserve turned into a clipped row.
-     It draws the identical hairline. */
-  box-shadow: inset 0 -1px 0 var(--ledger-rule);
-}
-
-.commit-row:last-child {
-  box-shadow: none;
-}
-
-.commit-row:hover {
-  background: var(--ledger-raised);
-}
-
-.commit-age,
-.commit-mark {
-  font-family: var(--font-mono);
-  font-size: var(--ledger-figure-size);
-  color: var(--ledger-muted);
-}
-
-.commit-mark {
-  text-align: end;
-}
-
-.commit-source,
-.commit-source-text,
-.commit-title,
-.commit-title-text {
-  display: inline-flex;
-  align-items: center;
-  min-inline-size: var(--control-target);
-  min-block-size: var(--control-target);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--ledger-ink);
-  text-decoration: none;
-  text-underline-offset: 0.2em;
-}
-
-.commit-source,
-.commit-source-text {
-  font-family: var(--font-mono);
-  font-size: var(--ledger-figure-size);
-  font-weight: 500;
-}
-
-.commit-title,
-.commit-title-text {
-  display: block;
-  line-height: var(--control-target);
-  font-family: var(--font-sans);
-  font-size: var(--ledger-body-size);
-}
-
-.commit-source:hover,
-.commit-source:focus-visible,
-.commit-title:hover,
-.commit-title:focus-visible {
-  color: var(--ledger-highlight);
-  text-decoration: underline;
-}
-
-/* A grid item's automatic minimum size is its MIN-CONTENT, so a row holding a
-   long commit subject refuses to shrink and drags the column past the page,
-   which the body then scrolls sideways to reveal. Zero as the minimum is what
-   lets each cell be exactly the track it was given and ellipsize inside it.
-   Declared on the row's CHILDREN rather than on each cell's own class, because
-   the touch-floor sweep reads a class's own size declarations and a
-   `min-inline-size: 0` on a link class is a control declaring itself smaller
-   than the floor — true of the layout box, false of the control, and
-   indistinguishable to a walk that can only read the declaration. The name
-   cell's own link is deliberately NOT swept in here: it keeps the floor and
-   clips against its cell instead (see .table-name-cell). */
-.commit-row > *,
-.table-row > * {
-  min-inline-size: 0;
-}
-
-/* --- 04 / the board of cards --------------------------------------------- */
-
-/* THE BOARD FILLS THE COLUMN AT EVERY WIDTH (owner directive, 2026-09-11).
-   The tracks are fractions of the sheet's own width rather than a fixed size,
-   so the board's right edge is the column's right edge at every viewport —
-   the no-dead-space rule, stated in the one declaration that decides it. The
-   row height is the tallest card in that row and never less than the minimum
-   below, which is what keeps a row reading as one band while letting a card
-   that has more to say be taller than a square would have allowed.
-
-   ONE COLUMN IS THE BASE and the wider arrangements are the upgrades, which
-   is what lets the whole ladder be written in the sheet's OWN two boundaries
-   and add none of its own: the sheet already says where a phone ends
-   (45rem, measured, and a second max-width breakpoint would be the sheet
-   disagreeing with itself about that) and where the reading column stops
-   being a phone-shaped one (--page-rails-from). Six cards is one column on a
-   phone, three symmetric rows on a tablet, and the owner's three-by-two board
-   from the width the rails appear at. */
-.board-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: minmax(var(--board-card-min), auto);
-  gap: var(--square-gap);
-  padding-block-start: var(--square-gap);
-}
-
-@media (min-width: 45.0625rem) {
-  .board-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (min-width: 67.5rem) {
-  .board-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-/* THE CARD IS ITS OWN TOKEN LAYER. Every colour inside a card reads one of
-   these five roles, which is what let the board be restyled in one place — and
-   is now what makes "everything should follow the same pattern" (owner
-   directive, 2026-09-12, issue 323) a deletion rather than a sweep: the remap
-   that pointed the roles at their opposites on every second card is gone, so
-   the six cards are six reads of one declaration. */
-.board-card {
-  --board-paper: var(--ledger-bg);
-  --board-ink: var(--ledger-ink);
-  --board-rule: var(--ledger-rule);
-  --board-muted: var(--ledger-muted);
-  --board-raised: var(--ledger-raised);
-  /* A COLUMN, so the regions stack in the order the adapter composed them and
-     the daily line can be pushed to the card's own floor by an auto margin —
-     which is what makes two cards' lines comparable at a glance whatever
-     sits above them. A grid would size each region to its content and leave
-     the slack at the bottom, which is where the line has to be. */
-  display: flex;
-  flex-direction: column;
-  gap: var(--board-row-gap);
-  /* THE GRID ITEM'S AUTOMATIC MINIMUM IS MIN-CONTENT, and that is what this
-     stated floor replaces: an unbreakable row (a long model name, a wide
-     figure) would otherwise refuse to shrink and drag the board past the
-     column, which the body then scrolls sideways to reveal. Stated, so every
-     card is exactly the track it was given and anything genuinely too wide
-     ellipsizes inside it. The value is the page's own smallest box rather
-     than a number invented here; the card is no longer a control (owner
-     directive, 2026-09-11, issue 316) and this is no longer a touch floor —
-     the one target on the board is the daily line, which is taller than the
-     floor and declares its own. */
-  min-inline-size: var(--control-target);
-  min-block-size: var(--control-target);
-  padding: var(--square-pad);
-  border: var(--ledger-hairline) solid var(--board-rule);
-  background: var(--board-paper);
-  color: var(--board-ink);
-}
-
-.board-card > * {
-  min-inline-size: 0;
-}
-
-.board-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-  overflow: hidden;
-}
-
-/* The card's name: its mark, when the canvas gave it one, beside the label —
-   a sibling of the label rather than a child of it, so the label stays the one
-   text node the payload wrote (the hostile-label lane reads it that way). The
-   mark is cell-sized so the head keeps the height of a head without one. */
-.board-name {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--icon-gap);
-  min-inline-size: 0;
-}
-
-.board-label {
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-/* What the figure is OF, at the head's far edge: a step smaller than the
-   label and muted, so the row reads as one name and one qualifier rather
-   than as two headings. */
-.board-ctx {
-  flex: 1 1 auto;
-  min-inline-size: 0;
-  font-family: var(--font-mono);
-  font-size: var(--board-ctx-size);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--board-muted);
-  text-align: end;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.board-headline {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.board-figure {
-  font-family: var(--font-sans);
-  font-size: var(--square-figure-size);
-  font-weight: 900;
-  letter-spacing: -0.05em;
-  line-height: 0.9;
-  font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The lines beside the figure: right-aligned, so a one-line sub and a
-   two-line one both hang off the same edge.
-
-   AND IT KEEPS THE HEIGHT OF THE CARD'S OWN LINES WHATEVER IT IS PRINTING.
-   Scrubbing the daily line replaces these with ONE line (owner directive,
-   2026-09-11, issue 316), and without a reserve a card would lose a line's
-   height the moment a pointer touched its chart — MEASURED as the headline's
-   box, which baseline alignment sizes from the taller of the figure and this
-   stack. The fact ladder under it is `flex: 1` with its rows spread through
-   the slack, so every one of them would move. The reserve is the card's own
-   line count, a dynamic length, and it therefore reaches this sheet as a
-   custom property rather than as a style string. `em` because the unit that
-   has to stay in step is this element's own line box: 1.4em is exactly the
-   line-height declared above it.
-
-   AND IT KEEPS ITS SEAT WHETHER OR NOT IT IS PRINTING ANYTHING, which is the
-   half the records move exposed (owner directive, 2026-09-12, issue 323). A
-   source card's two lines went to the records card, so its sub area is now
-   EMPTY until a pointer touches the chart — and an empty box has no text
-   baseline, so the headline's baseline alignment synthesized one from its
-   bottom margin edge and seated the box 4.39px higher than the same box with
-   a line in it, so the first scrub dropped it by that much. Measured in
-   chromium at 1440px: the reserved area held its height perfectly and still
-   moved on the first scrub. The reserve is a BOX
-   the sheet states, so it is seated by that box's own edge rather than by
-   whatever happens to be inside it; the figure beside it is taller and decides
-   the row either way. */
-.board-sub {
-  display: grid;
-  align-self: end;
-  justify-items: end;
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  line-height: 1.4;
-  min-block-size: calc(var(--board-sub-lines, 1) * 1.4em);
-  color: var(--board-muted);
-  min-inline-size: 0;
-}
-
-.board-sub-line {
-  max-inline-size: 100%;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-/* THE FACT LIST DIVIDES INTO COLUMNS THE ADAPTER ASKED FOR, because the
-   number of columns is a property of what the facts ARE — a pair of
-   accounting ladders, or one ruled record — rather than of how wide the card
-   happens to be. The phone block below overrides it to one for the same
-   reason the board folds to one card across. */
-.board-facts {
-  display: grid;
-  grid-template-columns: repeat(var(--board-fact-columns, 1), minmax(0, 1fr));
-  gap: 0 var(--ledger-column-gap);
-  /* The ladder takes the card's spare height and spreads its rows through it,
-     so a card with two facts and a card with six read as the same object at
-     different densities rather than as one ladder and one gap. */
-  flex: 1 1 auto;
-  align-content: space-evenly;
-}
-
-.board-facts[data-columns='2'] {
-  --board-fact-columns: 2;
-}
-
-/* AN ODD LAST FACT TAKES THE WHOLE ROW rather than leaving a hole beside
-   itself — the same rule the retired board of squares gave its odd final
-   square, for the same reason and with one more: a window row reads "this
-   week  3.3B in · 4.3M out", which does not fit half a card, and a term that
-   ellipsizes to "this we…" is a fact the page withheld. The pair columns are
-   for the accounting classes, which come in fours. */
-.board-facts[data-columns='2'] .board-fact:last-child:nth-child(odd) {
-  grid-column: 1 / -1;
-}
-
-.board-fact {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding-block: var(--board-fact-pad);
-  border-block-end: var(--ledger-hairline) solid var(--board-fact-rule);
-  font-family: var(--font-mono);
-  font-size: var(--board-fact-size);
-}
-
-/* THE RECORD, MARKED — and never marked alone. The figure this one has
-   reached is printed on the line directly above it, so a reader who sees no
-   colour reads the same fact off two equal numbers (the dataviz floor). */
-.board-fact[data-peak='true'] .board-value {
-  color: var(--ledger-highlight);
-}
-
-.board-term {
-  min-inline-size: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--board-muted);
-}
-
-.board-value {
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-/* The model rows. Each is a name, its reading at the row's end, the rule that
-   runs under both, and the accounting line under that where the source
-   reports one — four cells of one small grid, placed rather than auto-flowed
-   so the reading stays beside its name instead of being pushed under the
-   rule it belongs to.
-
-   THE LIST NEVER SETS THE CARD'S HEIGHT, AND IT DRAWS ONLY WHOLE ROWS (owner
-   ruling, 2026-10-13, issue 369: "just show the top 4-5 but make it
-   responsive ... it should fit nicely in the box and change as needs
-   change"). The adapter hands over at most five rows and the box decides how
-   many of them show. `contain: size` makes the rows count for nothing when
-   the grid sizes the row, so the card's height comes from its grid row and
-   --board-card-min, never from the list; the list then grows into whatever
-   height the card has left. Inside that height the rows run down a column
-   that WRAPS, spread evenly through it: a row that does not fit moves, whole,
-   into a second column past the list's right edge, and `overflow: hidden`
-   keeps that column unpainted. A row is therefore drawn complete or not drawn
-   at all, never cut through its name or its rule, and because the rows
-   arrive by usage, what is left off is always the tail. */
-.board-models {
-  display: flex;
-  flex-direction: column;
-  flex-wrap: wrap;
-  justify-content: space-evenly;
-  align-content: flex-start;
-  gap: var(--board-model-gap);
-  flex: 1 1 auto;
-  contain: size;
-  overflow: hidden;
-}
-
-.board-model {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.1875rem 0.5rem;
-  inline-size: 100%;
-  font-family: var(--font-mono);
-  font-size: var(--board-fact-size);
-}
-
-.board-model-name {
-  grid-row: 1;
-  grid-column: 1;
-  font-family: var(--font-sans);
-  font-size: var(--board-model-name-size);
-  font-weight: 700;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.board-reading {
-  grid-row: 1;
-  grid-column: 2;
-  text-align: end;
-  font-variant-numeric: tabular-nums;
-}
-
-/* The rule spans both columns under its own name, so a share is read as a
-   length AND as a printed figure — never as a colour. */
-.board-track {
-  grid-row: 2;
-  grid-column: 1 / -1;
-  block-size: var(--board-bar-rule);
-  background: var(--board-raised);
-}
-
-.board-fill {
-  display: block;
-  block-size: 100%;
-  inline-size: var(--board-fill, 0%);
-  background: var(--board-ink);
-}
-
-.board-detail {
-  grid-row: 3;
-  grid-column: 1 / -1;
-  font-size: var(--board-detail-size);
-  color: var(--board-muted);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.board-card-note,
-.board-note {
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  color: var(--board-muted, var(--ledger-muted));
-}
-
-/* --- 04 / the daily line -------------------------------------------------- */
-
-/* THE LINE RUNS TO THE CARD'S OWN EDGES. It is the last thing in the card and
-   it pulls the card's padding back on three sides, so the series spans the
-   full width of the box rather than sitting in a well — which is what makes
-   two cards' lines comparable at a glance. `preserveAspectRatio="none"` on
-   the plot is what lets one coordinate space serve every card width. */
-.spark {
-  position: relative;
-  display: block;
-  block-size: var(--spark-height);
-  margin-block-start: auto;
-  margin-inline: calc(-1 * var(--square-pad));
-  margin-block-end: calc(-1 * var(--square-pad));
-  /* THE LINE IS THE BOARD'S ONE TARGET (owner directive, 2026-09-11, issue
-     316): it scrubs, so it takes a cursor and a focus stop, and it is 3rem
-     tall against the 2.75rem touch floor before the card's padding is pulled
-     back around it.
-     `pan-y` HANDS THE PAGE ITS VERTICAL SCROLL and keeps only the axis this
-     reads, which is lib/gesture.ts's rule applied rather than re-argued: a
-     surface that swallowed both axes would be a chart a phone cannot scroll
-     past. Nothing here calls preventDefault on a pointer, so the declaration
-     is the whole promise. */
-  touch-action: pan-y;
-  cursor: crosshair;
-}
-
-/* INSIDE ITS OWN EDGES, because the plot deliberately bleeds into the card's
-   padding on three sides — a ring drawn outside it would land on the card's
-   border and read as the card being focused rather than the chart. */
-.spark:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
-}
-
-.spark-plot {
-  display: block;
-  inline-size: 100%;
-  block-size: 100%;
-}
-
-.spark-area {
-  fill: var(--grid-cell-1);
-  stroke: none;
-}
-
-.spark-line {
-  fill: none;
-  stroke: var(--grid-cell-peak);
-  stroke-width: var(--spark-stroke);
-  stroke-linejoin: round;
-  stroke-linecap: round;
-  /* The box is squashed to the card; the stroke is not. Without this the line
-     would be thicker on a narrow card than on a wide one. */
-  vector-effect: non-scaling-stroke;
-}
-
-/* The newest reading, marked OUTSIDE the squashed coordinate space so it is a
-   circle rather than an ellipse whose eccentricity is the card's aspect
-   ratio. It is never the only channel: the figure the line ends at is printed
-   above it. */
-.spark-mark {
-  position: absolute;
-  inset-block-start: var(--spark-mark-y, 0%);
-  inset-inline-start: var(--spark-mark-x, 0%);
-  inline-size: var(--spark-mark-size);
-  block-size: var(--spark-mark-size);
-  margin-block-start: calc(-0.5 * var(--spark-mark-size));
-  margin-inline-start: calc(-0.5 * var(--spark-mark-size));
-  border-radius: 50%;
-  background: var(--grid-cell-peak);
-}
-
-/* THE SCRUBBED DAY, MARKED TWICE: a hairline down the plot says WHICH day,
-   and a dot on the line says what it read. Both wear the chart's own family
-   rather than the sheet's one mark — the line and its end dot are already
-   --grid-cell-peak, and a cursor in a different ink would read as a second
-   quantity rather than as a position on the first.
-
-   Both are out of flow and neither takes pointer events: the reading must not
-   move the card (the zero-CLS floor) and the cursor must never stand between
-   the pointer and the chart it is reading. They are mounted at rest and
-   merely unlit, which is what lets the fade below have something to fade. */
-.spark-cursor,
-.spark-guide {
-  position: absolute;
-  pointer-events: none;
-  opacity: 0;
-}
-
-.spark-cursor[data-scrubbing='true'],
-.spark-guide[data-scrubbing='true'] {
-  opacity: 1;
-}
-
-.spark-guide {
-  inset-block: 0;
-  inset-inline-start: var(--spark-cursor-x, 0%);
-  inline-size: var(--spark-guide-width);
-  margin-inline-start: calc(-0.5 * var(--spark-guide-width));
-  background: var(--grid-cell-peak);
-}
-
-.spark-cursor {
-  inset-block-start: var(--spark-cursor-y, 0%);
-  inset-inline-start: var(--spark-cursor-x, 0%);
-  inline-size: var(--spark-mark-size);
-  block-size: var(--spark-mark-size);
-  margin-block-start: calc(-0.5 * var(--spark-mark-size));
-  margin-inline-start: calc(-0.5 * var(--spark-mark-size));
-  border-radius: 50%;
-  background: var(--grid-cell-peak);
 }
 
 /* --- 04 / the ticker ----------------------------------------------------- */
@@ -3482,15 +2252,6 @@ h1 {
      because an earlier declaration at equal specificity loses to it. */
   :root {
     --gallery-columns: 2;
-    /* J at the drawn mark's 32px instead of the touch row's 44px (owner ruling,
-       2026-10-12): two of him at 60.5px took 33px from the nav's window on a
-       390px phone. At 44 x 32 he is exactly as wide as the touch floor, so the
-       home link around him is no wider than any other control, and he still
-       sits centred in the row's own 44px. */
-    --j-cell-block: var(--control-mark);
-  }
-  .band {
-    block-size: var(--band-height-phone);
   }
 
   /* Every wide row collapses to stacked lines rather than scrolling sideways:
@@ -3549,158 +2310,244 @@ h1 {
   .ledger-link {
     margin-inline-start: 0;
   }
+}
 
+/* ===========================================================================
+ * THE KEEP — the medieval frame (owner direction, 2026-10-16).
+ *
+ * The owner's reference is the Old School RuneScape site: a dark backdrop, a
+ * framed column, parchment, gold lettering and carved plaques. The page keeps
+ * the ledger's ORDER and its content exactly; this layer changes what the
+ * sheet is made of. It is one section on purpose, so the whole look can be
+ * reviewed as one change — and, if the owner keeps it, folded into the rules
+ * above it — rather than threaded through forty rules nobody can see at once.
+ *
+ * Every colour below is a token read. The frame is a drawn SVG file, so it
+ * is sharp at every size and costs a few kilobytes.
+ * ======================================================================== */
 
-  /* THE COLUMNS STACK, repositories first (owner design decision, 2026-09-11,
-     issue 318). One track, and the gap that separated them side by side now
-     separates them top to bottom — one length, both arrangements. */
-  .ledger-spread {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--ledger-spread-gap) 0;
+:root {
+  --keep-shadow-deep: 0 1.5rem 3.5rem var(--keep-shadow-ink);
+  --keep-shadow-ink: rgb(0 0 0 / 0.5);
+  --keep-vignette-ink: rgb(70 40 10 / 0.16);
+  --ledger-rule: var(--color-border-strong);
+  --ledger-section-gap: clamp(2.25rem, 4vw, 3.5rem);
+  --card-border-color: var(--color-border);
+  --panel-title-family: var(--font-display);
+  --panel-title-weight: 700;
+  --panel-title-tracking: 0.12em;
+  /* Under the night sky (NightSky.svelte), the colour it is drawn on. */
+  background-color: var(--palette-keep-backdrop);
+}
+
+/* --- The sheet: parchment (or night oak) inside the gilded frame ---------- */
+
+/* The sheet's ground, glass, frame and vignette are painted on a layer BEHIND
+   main rather than on main. A backdrop-filter on main itself would make main
+   the containing block of every fixed descendant — and the hover details are
+   fixed, placed in viewport coordinates — so each one rendered shifted by
+   main's box and the page's scroll, off the screen (measured by the browser
+   lanes, 2026-10-16). main keeps a transparent border of the frame's width so
+   the content sits where the frame leaves room for it; `isolation` keeps the
+   layer above the night sky and below main's content. */
+main {
+  isolation: isolate;
+  padding: var(--keep-sheet-pad);
+  border: var(--keep-frame-page) solid transparent;
+  box-shadow: var(--keep-shadow-deep);
+}
+
+main::before {
+  content: '';
+  position: absolute;
+  inset: calc(var(--keep-frame-page) * -1);
+  z-index: -1;
+  border: var(--keep-frame-page) solid transparent;
+  border-image: var(--keep-frame-image) var(--keep-frame-slice) var(--keep-frame-repeat);
+  background-color: var(--keep-sheet-ground);
+  background-image: var(--keep-sheet);
+  -webkit-backdrop-filter: blur(6px) saturate(115%);
+  backdrop-filter: blur(6px) saturate(115%);
+  box-shadow: inset 0 0 7rem var(--keep-vignette-ink);
+  pointer-events: none;
+}
+
+/* The column handles stand outside the frame, against the column's outer
+   edge. The frame is main's transparent border (its layer paints it), and an
+   absolutely placed box measures from main's padding edge — the frame's inner
+   edge — so each handle steps out by the frame's width. */
+.column-handle {
+  inset-block: calc(var(--keep-frame-page) * -1);
+}
+
+.column-handle[data-edge='start'] {
+  inset-inline-end: calc(100% + var(--keep-frame-page));
+}
+
+.column-handle[data-edge='end'] {
+  inset-inline-start: calc(100% + var(--keep-frame-page));
+}
+
+/* --- The name ------------------------------------------------------------- */
+
+/* The name never outgrows its column. Sized from the viewport alone it ran
+   800px wide in a 154px box once the column was dragged to its 18rem floor on
+   a wide screen, and took the page sideways (measured by the browser lanes,
+   2026-10-16). The intro is the name's container, so the name — and J, who
+   reads the same size — is held to the column it is actually in as well. An
+   engine without the unit keeps the viewport size. */
+.page-intro {
+  --keep-name-size: var(--keep-name-ceiling);
+  container-type: inline-size;
+}
+
+@supports (width: 1cqi) {
+  .page-intro {
+    --keep-name-size: min(var(--keep-name-ceiling), 17cqi);
   }
+}
 
-  /* The TABLE's head row goes: every cell under it repeats its own word, so
-     five marks over a restacked row would be five heads over nothing. The
-     LOG's head stays — it is the only thing separating the stacked commit
-     column from the repositories above it, and it names the whole stream
-     rather than a column of figures. */
-  .table-head:not(.spread-log-head) {
-    display: none;
+.page-intro {
+  justify-items: center;
+  gap: 0.25rem;
+  padding-block: clamp(0.75rem, 2.5vw, 2rem) 0;
+  text-align: center;
+}
+
+h1 {
+  inline-size: auto;
+  font-family: var(--font-display);
+  font-size: var(--keep-name-size);
+  font-weight: 800;
+  letter-spacing: 0.015em;
+  line-height: 0.95;
+  text-transform: none;
+  text-align: center;
+  color: var(--keep-name-bottom);
+  background-image: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  -webkit-text-fill-color: currentcolor;
+  filter: none;
+}
+
+/* The gilt on the letters is an enhancement: an engine that cannot clip a
+   background to text keeps the solid ink above, never invisible letters. */
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  h1 {
+    background-image: linear-gradient(180deg, var(--keep-name-top) 8%, var(--keep-name-bottom) 92%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0.035em 0 var(--palette-keep-gilt-deep)) drop-shadow(0 0.06em 0.05em var(--keep-shadow-ink));
   }
+}
 
-  /* EXACTLY TWO LINES PER ROW (owner directive, 2026-09-11: "reduce the amount
-     of new lines as much as possible"). The name takes the first line whole,
-     and the row's four figures share the second — three lines became two when
-     the description column left the table with the same directive.
+.masthead-rule {
+  display: none;
+}
 
-     FOUR EQUAL TRACKS, not four content-sized ones (issue 317). `auto` sized
-     each counter track to the row's own figure, so a row reading 155 drew its
-     neighbours' marks further right than a row reading 15 — the ragged column
-     issue 188 threw out, reaching the marks. Fractions of the row make every
-     row's tracks identical, so a mark sits where the table put it at this
-     width too — the AGE included, which is why all four are fractions rather
-     than three plus a content-sized one: an age track that sized to "3h" on
-     one row and "12mo" on the next moved the three tracks beside it by the
-     difference.
+/* --- Section plaques ------------------------------------------------------ */
 
-     The four counters are PLACED BY FLOW rather than by named areas: the name
-     cell spans the row, so the auto-placement algorithm puts the four cells
-     after it on the next line, in their own order. A name that spans is one
-     declaration; four areas would be five. */
-  .table-row {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    align-items: center;
-    padding-block: 0.5rem;
-    row-gap: 0.125rem;
-  }
+.section-head {
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+  padding-block: 0 0.75rem;
+  border: 0;
+}
 
-  .table-name-cell {
-    grid-column: 1 / -1;
-  }
+.section-number {
+  display: none;
+}
 
-  /* At this width each counter has a whole track of its own, so the figure
-     reads better hard against its mark than pushed to a track edge the eye
-     has no column to compare against. */
-  .table-count {
-    grid-template-columns: var(--icon-cell) auto;
-  }
+.section-title {
+  font-family: var(--font-display);
+  font-size: var(--keep-plaque-size);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  text-align: center;
+  color: var(--keep-name-bottom);
+}
 
-  .table-count .table-figure {
-    text-align: start;
-  }
-
-  /* A narrow row stacks its source over its subject, so the pitch — and the
-     reserve derived from it — is taller here. Both move together, from the one
-     token, and the number is ARITHMETIC rather than taste: two stacked lines
-     that are each a touch target (2 × 2.75rem) plus the row's own padding
-     (2 × 0.375rem). A reserve shorter than that is a box that clips its own
-     last row, which is what 3.75rem did at 390px. */
+/* A phone draws the frame one pixel-step finer: the pattern keeps its square
+   pixels (16px is the 8px band at 2x) and gives the narrow sheet its room. */
+@media (max-width: 45rem) {
   :root {
-    --commit-row-height: 6.25rem;
+    --keep-frame-page: 1rem;
   }
+}
 
-  .commit-segments {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+.subsection-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+/* --- The ledger rows: names in the display face --------------------------- *
+ * The display face is wider than the sans the columns were cut for, so the
+ * name column takes the room the date column never used: a span like
+ * "2022 – 23" needs about five rems, not nine, and the place needs eight.
+ * Wide rows only; the stacked phone row keeps its own grid. */
+@media (min-width: 45.0625rem) {
+  .ledger-row {
+    grid-template-columns: 5.75rem var(--ledger-mark) minmax(0, 1.4fr) minmax(0, 1.2fr) 8.25rem var(--control-target);
   }
+}
 
-  .commit-segment {
-    padding-inline: 0.25rem;
-    font-size: 0.625rem;
-    letter-spacing: 0.06em;
-  }
 
-  /* THE LOG IS NOT A SCROLL REGION HERE (owner ruling, 2026-09-12, on the live
-     page: at this width the log is "quite busy ... an endless scroll field that
-     I have to fight out of"). A box that scrolls inside a page that scrolls is
-     two scrolls under one thumb, and the inner one captures the gesture meant
-     for the outer — which is the fight the owner described. So the box keeps no
-     fixed height and takes no overflow of its own: it shows the first rows, a
-     control under them reveals the rest inline (LedgerSpread.svelte), and the
-     page's own scroll is the only scroll.
+.ledger-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
 
-     IT STILL RESERVES, and the reserve is the COLLAPSED log rather than the
-     whole of it: five rows plus the control and the gap above it, which is
-     exactly what the box holds the moment a payload lands. Without it the empty
-     box would be one note tall and the arriving rows would push every section
-     under them down the page — the zero-CLS floor, broken by the same arrival
-     the desktop reserve exists to absorb. A MINIMUM rather than a height,
-     because the reader's own press is allowed to grow it; nothing else is.
+/* --- The trackers: one framed board -------------------------------------- *
+ * The diagram and the boss strip are one tracker board (owner, 2026-10-16:
+ * "The oldschool runescape boss log IS a tracker and should be part of that
+ * section"), so the frame goes around the stack rather than around each. The
+ * panel heads there carry no title, so their reserved rows go too. */
+/* The boards sit straight on the sheet: no frame, and no ground of their own
+   or their panels' — the sheet is the one colour behind everything on it. The id
+   is what lets this outweigh the shell's scoped ground without touching the
+   --panel-surface token the contrast suite measures. */
+#trackers .panel-stack {
+  gap: 1.25rem;
+}
 
-     The five is `phoneLogRows` in lib/commits.ts, which is the number the
-     component slices with, and a frontend test recomputes this calc from it so
-     the box and the slice cannot come to hold different numbers of rows. */
-  .commit-rows {
-    /* ONE COLUMN, so the list and the control under it both take the log's
-       full width without either of them declaring a width: a grid item
-       stretches to its column, and a <button> is one of the few elements whose
-       own `auto` width does NOT fill its parent — measured in Chromium at
-       390px, where the same control laid out as a plain block came to 99px of
-       a 358px column. Declaring `inline-size: 100%` instead would put a
-       percentage on a control the touch-floor sweep measures in pixels
-       (tests/experience.test.mjs), which is a guard going blind rather than a
-       control getting wider. `align-content: start` keeps the rows their own
-       height inside the reserve below rather than stretching to fill it. */
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    align-content: start;
-    block-size: auto;
-    min-block-size: calc(
-      5 * var(--commit-row-height) + var(--control-target) + var(--ledger-cell-gap)
-    );
-    overflow-y: visible;
-  }
+#trackers .panel-shell,
+#projects .panel-shell {
+  background: none;
+}
 
-  /* A COMMIT ROW IS TWO LINES HERE TOO, and the short identity is not one of
-     them: it is absent from the DOM at this width rather than hidden (see
-     LedgerSpread.svelte — a hidden cell is still something a screen reader can
-     be walked into), so the row declares two tracks and two areas and has
-     nothing left over to place. */
-  .commit-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      'source age'
-      'title title';
-    align-items: center;
-    padding-block: 0.375rem;
-    row-gap: 0;
-  }
+#trackers .panel-head {
+  display: none;
+}
 
-  .commit-source,
-  .commit-source-text {
-    grid-area: source;
-  }
+#trackers .ticker-strip {
+  border: 0;
+}
 
-  .commit-age {
-    grid-area: age;
-    text-align: end;
-  }
+/* The strip's lead (the gnome) stands on the sheet like everything else,
+   rather than on an inverted tile. */
+#trackers .ticker-lead {
+  background: none;
+  color: var(--ledger-ink);
+}
 
-  .commit-title,
-  .commit-title-text {
-    grid-area: title;
-  }
+/* A panel's own heading is a small plaque, centred like the section's. */
+.panel-title {
+  text-align: center;
+}
 
+/* --- The footer ----------------------------------------------------------- */
+
+.page-footer {
+  justify-content: center;
+  border-block-start: 0;
+  font-family: var(--font-display);
+  letter-spacing: 0.12em;
 }
 
 /* ===========================================================================
@@ -3722,17 +2569,10 @@ h1 {
   /* The reading-mode crossfade: the sheet's paper, ink and rules move between
      palettes rather than snapping. Only paint properties, so the zero-CLS
      floor is untouched by construction. */
-  .page-header,
   .section-head,
   .page-footer,
-  .band,
   .ledger-entry,
   .ledger-chevron,
-  .table-head,
-  .table-row,
-  .commit-row,
-  .commit-segment,
-  .board-card,
   .ticker-strip,
   .ticker-lead,
   .ticker-item {
@@ -3742,17 +2582,8 @@ h1 {
       border-color var(--ledger-repaint) var(--ledger-ease);
   }
 
-  .band-layer {
-    transition: opacity var(--band-fade) var(--ledger-ease);
-  }
-
   .ledger-row,
-  .commit-source,
-  .commit-title,
-  .table-link,
-  .ledger-link,
-  .page-mark,
-  .section-link {
+  .ledger-link {
     transition:
       background-color var(--ledger-hover),
       color var(--ledger-hover);
@@ -3768,23 +2599,6 @@ h1 {
 
   .ledger-row[data-open='true'] .ledger-chevron {
     transform: rotate(180deg);
-  }
-
-  /* THE SCRUBBER'S CURSOR ARRIVES AND LEAVES RATHER THAN BLINKING (owner
-     directive, 2026-09-11, issue 316). Opacity only, on two elements that are
-     already out of flow, so the zero-CLS floor is untouched by construction —
-     and a reader who asked for less motion gets the identical cursor at the
-     identical position with no travel, because the STATE is the data
-     attribute and this block only adds the crossing between its two values.
-     The position itself is never transitioned: a cursor that lagged the
-     pointer would be pointing at a day the reader has already left. */
-  .spark-cursor,
-  .spark-guide {
-    transition: opacity var(--ledger-hover) var(--ledger-ease);
-  }
-
-  .commit-grid {
-    transition: opacity var(--heat-fade) var(--ledger-ease);
   }
 
   /* The masthead's rule is DRAWN on load: the dash pattern is as long as the
@@ -3809,34 +2623,6 @@ h1 {
   .ticker-strip:focus-within .ticker-run {
     animation-play-state: paused;
   }
-
-  /* THE TYPING LOOP (owner request, 2026-10-12). The sheet replaces the still
-     HERE, together with the size that lays its grid over the box, so only a
-     reader who welcomes motion downloads it. Two steps() composed on one
-     element: the inner one walks the 12 cells of a row, the outer one walks
-     the 10 rows, and together they name each of the 120 frames once before
-     returning to the first. steps() rather than a duration, because a sprite
-     has no in-between state to interpolate — a smooth tween would draw two
-     half-frames at once.
-
-     The loop closes on itself by construction rather than by a fade: the
-     scene was rendered with its closing frame equal to frame 0, so the step
-     back to the top-left cell is one more 66.67ms step like every other.
-     Measured on the shipped sheet: the mean absolute difference between the
-     last cell and the first is 0.65/255, under the 1.24 the widest pair of
-     consecutive cells already spends, so the seam is no larger than the
-     motion inside the loop.
-
-     Nothing is paused when the tab is hidden and nothing needs to be: a
-     document that is not being painted does not run its animations, and
-     buying that with script would cost the page a listener it cannot check. */
-  .j-mark {
-    background-image: url('./assets/images/j/j-typing.webp');
-    background-size: var(--j-sheet-inline) var(--j-sheet-block);
-    animation:
-      j-typing-row var(--j-typing-row) steps(12) infinite,
-      j-typing var(--j-typing) steps(10) infinite;
-  }
 }
 
 @keyframes masthead-draw {
@@ -3852,21 +2638,5 @@ h1 {
 
   to {
     transform: translateX(-50%);
-  }
-}
-
-/* Each keyframe travels the sheet's own measurement, read back from the token
-   the background is sized by, so the sprite grid is stated once. A literal
-   here would be a second copy free to disagree with the first, and the frame
-   the mark shows is exactly where those two numbers meet. */
-@keyframes j-typing-row {
-  to {
-    background-position-x: calc(-1 * var(--j-sheet-inline));
-  }
-}
-
-@keyframes j-typing {
-  to {
-    background-position-y: calc(-1 * var(--j-sheet-block));
   }
 }

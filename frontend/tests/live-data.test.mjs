@@ -369,7 +369,7 @@ describe('the Coding Projects feed follows the host', () => {
   });
 });
 
-test('the Projects · Commits block is bound to its panels, not to a frozen props object', async () => {
+test('the Ongoing Work block is bound to its panels, not to a frozen props object', async () => {
   // The structural half of the commission: a static binding cannot follow the
   // host however good the adapter is, so the binding itself is pinned. It is a
   // MULTI-panel binding since the sheet paired the two columns (owner design

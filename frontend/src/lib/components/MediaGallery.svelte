@@ -462,7 +462,6 @@
     min-inline-size: 0;
     padding: var(--gallery-control-pad);
     border: var(--ledger-hairline) solid var(--ledger-rule);
-    background: var(--ledger-bg);
   }
   .gallery-control-label,
   .gallery-control-note,
@@ -491,7 +490,7 @@
     min-block-size: var(--control-target);
     padding: 0 var(--gallery-control-gap);
     border: var(--ledger-hairline) solid var(--ledger-rule);
-    background: var(--ledger-bg);
+    background: none;
     color: var(--ledger-ink);
     font-family: var(--font-mono);
     font-size: var(--ledger-label-size);

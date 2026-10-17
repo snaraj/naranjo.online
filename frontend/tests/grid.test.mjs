@@ -1,8 +1,8 @@
-/* Drives the shared contribution-grid helpers directly: the three series
- * lenses, the magnitude bucketing, the column padding, the month axis, and
- * the accessible cell text both panels depend on. */
+/* Drives the calendar helpers directly: the magnitude bucketing, the column
+ * padding, the calendar weeks, the month axis, and the accessible cell text
+ * the panels depend on. The grid component these once also pinned retired
+ * with the redesign of 2026-10-16 (the Chronicle draws the calendar now). */
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -12,28 +12,16 @@ import {
   cellPeriod,
   formatMagnitude,
   formatWhole,
-  gridCursorTarget,
   gridLevel,
   gridLevels,
-  gridMinColumns,
   gridRows,
   magnitudeFloor,
   monthTicks,
-  peakValue,
-  pendingColumns,
   pendingWeeks,
   seriesCells,
-  stripColumns,
-  stripIndexAt,
   toColumns,
-  weekdayAxis,
   weekStartsOn
 } from '../src/lib/grid.ts';
-
-const grid = await readFile(
-  new URL('../src/lib/components/ContributionGrid.svelte', import.meta.url),
-  'utf8'
-);
 
 // A tiny helper: two dated columns, one fully real and one with a trailing
 // absent (future) day — the shape calendarColumns actually produces, and the
@@ -70,11 +58,6 @@ test('levels quantize against the peak, and nothing is level 0 by accident', () 
   assert.equal(gridLevel(1000, 100), gridLevels - 1, 'a level can never exceed the ramp');
 });
 
-test('peakValue ignores padding cells', () => {
-  assert.equal(peakValue([{ value: 3, date: '' }, { value: 9, date: '', absent: true }]), 3);
-  assert.equal(peakValue([]), 0);
-});
-
 test('columns are always full height, padded with dated-less absent cells', () => {
   const columns = toColumns(seriesCells('2026-08-01', [1, 2, 3, 4, 5, 6, 7, 8, 9]));
   assert.equal(columns.length, 2);
@@ -94,20 +77,11 @@ test('day arithmetic is UTC calendar arithmetic and survives month ends', () => 
   assert.equal(addDays('not-a-date', 1), '');
 });
 
-test('weekStartsOn and weekdayAxis are the one Sunday-start convention every column and every gutter reads (issue 189)', () => {
+test('weekStartsOn is the one Sunday-start convention every column reads (issue 189)', () => {
   assert.equal(
     weekStartsOn,
     0,
     "the convention is Sunday-start, sourced from activity.ts's own \"Columns run Sunday..Saturday\" comment and the VCS snapshot's endDate"
-  );
-  assert.deepEqual(
-    weekdayAxis.map((entry) => [entry.row, entry.label]),
-    [
-      [1, 'Mon'],
-      [3, 'Wed'],
-      [5, 'Fri']
-    ],
-    'a Sunday-start week puts Monday on row 1, Wednesday on row 3, Friday on row 5 (zero-based)'
   );
 });
 
@@ -367,216 +341,30 @@ test('a magnitude is written the way a person reads one', () => {
   );
 });
 
-// The graph a panel renders while it waits for its series (owner directive,
-// issue 127). It replaced a line of text where the graph belongs, and the
-// honesty invariant is the whole design: an empty graph must contain exactly
-// as many datapoints as the source has reported, which is none.
-test('the pending graph is chrome with no datapoints in it', () => {
-  const columns = pendingColumns();
-  assert.equal(columns.length, pendingWeeks, 'the empty graph is a year wide, like the real one');
-  // Parity pin, and it became load-bearing the day a block started sizing
-  // itself to its column count: the reserve and the payload that lands in it
-  // must be the SAME number of columns, or the calendar changes width on
-  // arrival and the zero-CLS floor is gone. The other side of this number is
-  // TestVCSActivityPanelShipsARenderableGraph in
-  // internal/panels/registry_test.go, which pins the shipped calendar to
-  // exactly 53 weeks and names this constant when it fails. Move one and the
-  // other goes red.
+// The calendar's window, in weeks. The reserve a panel holds while its
+// series is on the way and the payload that lands in it must be the SAME
+// number of columns, or the calendar changes width on arrival and the
+// zero-CLS floor is gone. The other side of this number is
+// TestVCSActivityPanelShipsARenderableGraph in
+// internal/panels/registry_test.go, which pins the shipped calendar to
+// exactly 53 weeks and names this constant when it fails. Move one and the
+// other goes red. (The placeholder columns this test also pinned retired
+// with the grid that drew them, 2026-10-16.)
+test('the calendar window is exactly the shipped year of weeks', () => {
   assert.equal(
     pendingWeeks,
     53,
     'the reserve must stay exactly as wide as the shipped calendar; see internal/panels/registry_test.go'
-  );
-  for (const column of columns) {
-    assert.equal(column.length, gridRows, 'every column is a full week, like the real ones');
-    for (const cell of column) {
-      // Absent is what makes this honest rather than decorative: an absent
-      // cell carries no value and no date, so it can never be read as a
-      // measurement. How it is DRAWN is the component's decision and is
-      // pinned separately below.
-      assert.equal(cell.absent, true);
-      assert.equal(cell.value, 0);
-      assert.equal(cell.date, '', 'a placeholder day must not claim a date it was never told');
-    }
-  }
-  // Every cell absent means no peak, so the ramp cannot paint a level: a
-  // placeholder can never be mistaken for activity, whatever it is passed to.
-  assert.equal(peakValue(columns.flat()), 0);
-  assert.equal(cellLabel(columns[0][0], 'token'), 'no data for this day');
-  // ...and no month axis either, since an undated column cannot be labelled.
-  assert.deepEqual(monthTicks(columns), []);
-  // A caller asking for nothing gets nothing, never a negative-length loop.
-  assert.deepEqual(pendingColumns(0), []);
-  assert.deepEqual(pendingColumns(-3), []);
-});
-
-// How WIDE a graph is drawn (issue #141, residual risk 2). The box used to be
-// a year wide whatever it held, so a fifteen-day series was three columns
-// against the left edge of fifty-three columns of nothing. Both directions are
-// pinned here because either alone is satisfied by a page that got it wrong: a
-// block that always claims 53 passes "never narrower than the minimum", and a
-// block that always claims 1 passes "never wider than its data".
-test('a graph claims the columns it draws, never more, and never collapses', () => {
-  // The direction the owner reported: more box than series.
-  assert.equal(stripColumns(3), gridMinColumns, 'a short series must not claim a year of columns');
-  assert.equal(stripColumns(53), 53, 'a full calendar keeps every column it draws');
-  assert.equal(
-    stripColumns(pendingWeeks),
-    pendingWeeks,
-    'the reserved chrome claims exactly the columns it renders'
-  );
-  for (const drawn of [11, 12, 26, 40, 53, 104]) {
-    assert.equal(stripColumns(drawn), drawn, `a ${drawn} column graph must be ${drawn} columns wide`);
-  }
-
-  // The other direction: a claim is never smaller than what is drawn, so a
-  // graph can never be clipped by its own box.
-  for (const drawn of [1, 2, 3, 9, 10, 11, 53]) {
-    assert.ok(
-      stripColumns(drawn) >= drawn,
-      `a ${drawn} column graph may not be drawn into a narrower box`
-    );
-  }
-
-  // The floor is the block's own furniture, not a preference: it is the first
-  // count whose strip carries the less/more key printed under it (measured at
-  // 123.38px in all three engines, and re-measured per engine in the
-  // rendering lanes). Nine columns is 114px and would spill it.
-  assert.equal(gridMinColumns, 10);
-  assert.ok(gridMinColumns * (0.625 + 0.1875) - 0.1875 >= 123.38 / 16, 'the floor must carry the legend');
-  assert.ok(
-    (gridMinColumns - 1) * (0.625 + 0.1875) - 0.1875 < 123.38 / 16,
-    'the floor is the SMALLEST count that carries the legend; a larger one is padding'
-  );
-
-  // Nothing a caller can pass produces a box that is not a box.
-  for (const rogue of [0, -4, Number.NaN, Number.POSITIVE_INFINITY]) {
-    assert.equal(stripColumns(rogue), gridMinColumns, `${String(rogue)} columns must still draw a graph`);
-  }
-  assert.equal(stripColumns(3.9), gridMinColumns, 'a fractional column count never widens the box');
-});
-
-// The component half: the number above has to reach the stylesheet, and the
-// stylesheet has to spend it on a CAP rather than a width — a fixed width
-// would push a year of columns past a 320px viewport and take the page's own
-// scrollbar sideways with it, which is a stage-1 floor.
-test('the block is sized from the columns it rendered, as a cap', () => {
-  assert.match(
-    grid,
-    /stripColumns\(columns\.length > 0 \? columns\.length : chrome\.length\)/,
-    'the width must come from the columns actually drawn, not from a constant'
-  );
-  // The floor is refused exactly where it lied (0.1.52): a dated full-width
-  // series claims the columns it draws, so no template track is ever a ghost
-  // — and BOTH guards are pinned, because dropping the floor for an undated
-  // chunked series would revive the issue-141 misread, and dropping it for
-  // the capped layout would spill the legend the floor was measured against.
-  assert.match(
-    grid,
-    /columns\.length > 0 && fullWidth && datedSeries\s*\n?\s*\? columns\.length/,
-    'a dated full-width series must claim exactly its drawn columns'
-  );
-  assert.match(grid, /style:--grid-columns=\{claimedColumns\}/, 'the count never reaches the stylesheet');
-  const block = /\.grid-block \{([^}]*)\}/.exec(grid);
-  assert.ok(block, 'the grid block lost its rule');
-  assert.match(
-    block[1],
-    /max-inline-size:\s*calc\(/,
-    'the size must be a maximum, so a narrow screen still shrinks it'
-  );
-  assert.match(
-    block[1],
-    /var\(--grid-columns/,
-    'the cap must still be driven by the columns actually rendered'
-  );
-  assert.doesNotMatch(
-    block[1],
-    /(?:^|[\s;])inline-size:/,
-    'a fixed inline size would overflow a 320px viewport instead of scrolling inside the strip'
-  );
-  // The box and the cells must be laid out from the SAME cell metrics, or a
-  // token change resizes one and not the other.
-  for (const token of ['--grid-cell-size, 0.625rem', '--grid-cell-gap, 0.1875rem']) {
-    assert.ok(block[1].includes(token), `the box computes its width from a different ${token}`);
-  }
-  // Issue 189: the weekday gutter shares this box's horizontal budget with
-  // the strip, so the cap must reserve the gutter's own fixed width and the
-  // row-gap beside it too — reading the SAME --grid-axis-width token
-  // .grid-weekday-axis is sized from, so the two can never disagree about
-  // how wide "the gutter" is.
-  assert.ok(
-    block[1].includes('--grid-axis-width, 1.25rem'),
-    'the cap no longer reserves the weekday gutter its own width'
-  );
-  const gutter = /\.grid-weekday-axis \{([^}]*)\}/.exec(grid);
-  assert.ok(gutter, 'the weekday gutter rule is missing');
-  assert.match(
-    gutter[1],
-    /inline-size:\s*var\(--grid-axis-width,\s*1\.25rem\)/,
-    'the gutter must be sized from the SAME token the block reserves room for'
-  );
-});
-
-// The opt-in override (issue #178): a full-width call site drops the cap
-// above rather than replacing it, so the calendar's own content-sized box is
-// unaffected by a rule scoped to the [data-grid-fullwidth='true'] attribute.
-test('a full-width call site stretches to its container instead of its columns', () => {
-  const wide = /\.grid-block\[data-grid-fullwidth='true'\] \{([^}]*)\}/.exec(grid);
-  assert.ok(wide, 'the full-width override rule is missing');
-  assert.match(wide[1], /max-inline-size:\s*none/, 'the content-sized cap survives the opt-in');
-  assert.match(wide[1], /inline-size:\s*100%/);
-  // Cells and the month axis stretch together, floored at the same token the
-  // capped layout uses, so a short series fills the card instead of leaving
-  // a tiny graph beside empty space — and a long one still overflows into
-  // the strip's own scroll, exactly as the capped layout already does.
-  const tracks = /\.grid-block\[data-grid-fullwidth='true'\] \.grid-cells,\s*\n\s*\.grid-block\[data-grid-fullwidth='true'\] \.grid-months \{([^}]*)\}/.exec(
-    grid
-  );
-  assert.ok(tracks, 'the full-width track rule is missing, or no longer covers both the cells and the month axis');
-  /* The floor is the DRAWN day (--grid-day), not the theme's base cell. A
-     window too long for its card has to overflow at the size the day is
-     actually drawn, which is what keeps a bounded day square at 53 columns as
-     well as at ten; flooring at the base cell instead would draw tall
-     rectangles the moment a caller raised its bound. */
-  assert.match(tracks[1], /minmax\(var\(--grid-day\),\s*1fr\)/);
-
-  /* That bare var() carries no fallback and needs none — but ONLY because the
-     alias is declared outright, so this asserts the declaration rather than
-     assuming it. The hazard it replaces is real and shipped here once:
-     --grid-cell-size has no :root definition anywhere, only fallback usages,
-     so a bare var() on IT is invalid at computed-value time and silently drops
-     the whole declaration to `none`, falling through to the capped layout's
-     fixed-size columns rather than stretching. */
-  const block = /\.grid-block \{([^}]*)\}/.exec(grid);
-  assert.ok(block, 'the base .grid-block rule is missing');
-  assert.match(
-    block[1],
-    /--grid-day:\s*var\(--grid-cell-size,\s*0\.625rem\)/,
-    'the drawn-day alias is not declared on .grid-block, so every bare var(--grid-day) under it is invalid at computed-value time'
-  );
-
-  /* THE RULING (issue 178 vs 268, owner-delegated 2026-08-31): a bounded day
-     is drawn SQUARE, and the square is made by re-pointing the one alias every
-     box in the strip already derives from — the cell, its seven rows, the
-     weekday gutter and the strip's own height — so none of them can be left
-     behind at the old size. Scoped to .grid-body on purpose: .grid-legend is
-     its sibling, so the legend's swatches keep the base size in every mode. */
-  const body = /\.grid-block\[data-grid-fullwidth='true'\] \.grid-body \{([^}]*)\}/.exec(grid);
-  assert.ok(body, 'the full-width square-day rule is missing');
-  assert.match(
-    body[1],
-    /--grid-day:\s*var\(--grid-day-size,\s*var\(--grid-cell-size,\s*0\.625rem\)\)/,
-    'the full-width day no longer follows the caller bound, or lost the default that keeps an unbounded caller unchanged'
   );
 });
 
 // The series arrives from a capture file on the owner's machine, through a
 // snapshot, through the origin, into this DOM — so every string on that path
 // has to reach the page as TEXT and never as markup (owner directive,
-// 2026-08-24). The browser lane proves the rendered result; this proves the
-// two places the component could leave the escaped path, which is where such
-// a regression is actually written.
-test('payload strings reach the grid as text, never as markup', () => {
+// 2026-08-24). The browser lanes prove the rendered result; this proves the
+// label builder hands a payload string back verbatim. (The component half —
+// no {@html} — follows the calendar into the Chronicle: activity.test.mjs.)
+test('a cell label carries a payload string verbatim, never sanitised', () => {
   // The one label a cell carries is built here, and it must hand back what it
   // was given rather than sanitising it — a helper that stripped markup would
   // hide the bug the escaping is there to prevent, and would silently corrupt
@@ -588,341 +376,5 @@ test('payload strings reach the grid as text, never as markup', () => {
     'the cell label must carry the payload string verbatim'
   );
   assert.ok(cellLabel({ value: 1, date: hostile }, 'token').includes(hostile));
-
-  // ...and the component must never take a raw-HTML route with it. Both
-  // spellings, because one is Svelte's and one is the DOM's.
-  assert.doesNotMatch(grid, /\{@html/, 'the grid renders a payload string as raw HTML');
-  assert.doesNotMatch(grid, /innerHTML|insertAdjacentHTML|outerHTML/, 'the grid writes markup by hand');
-  // The cell text reaches the DOM through attribute bindings, which Svelte
-  // escapes; pinning the spelling keeps a later edit from hand-rolling one.
-  // Anchored on the attribute boundary, not on the substring, so a mutant
-  // that renames the attribute cannot satisfy a loose match.
-  assert.match(grid, /\saria-label=\{cellLabel\(cell, noun, formatValue\)\}/);
-  // The card is the OTHER place a payload string lands, and it takes the same
-  // route: DetailTip interpolates every field as text, and the grid hands it
-  // a built object rather than markup. Issue 219 moved the readout from the
-  // browser's `title=` (no touch trigger, so 96% of the token strip and the
-  // whole calendar said nothing on a phone) to that card, and this pins that
-  // the move did not open a raw-HTML route on the way.
-  assert.match(grid, /<DetailTip\b/);
-  assert.doesNotMatch(
-    grid,
-    /\stitle=\{cellLabel|\stitle=\{text\}/,
-    'the grid cell carries the browser tooltip again; it has no touch trigger and no reading on a phone'
-  );
 });
 
-// How the empty state LOOKS, which is a different question from what it
-// contains and was conflated with it until issue 134: the placeholders were
-// drawn as outlined holes, identically to a missing day inside a real window,
-// so a panel with nothing to plot read as a graph that had failed to load.
-test('the empty graph is styled as a reserved plate, not as a graph of holes', () => {
-  assert.match(
-    grid,
-    /data-grid-state=\{columns\.length > 0 \? 'series' : 'empty'\}/,
-    'the state must be declared on the block, not inferred by a selector'
-  );
-  const emptyCell = /\.grid-block\[data-grid-state='empty'\] \.grid-cell\[data-grid-pending\]\s*\{([^}]*)\}/.exec(grid);
-  assert.ok(emptyCell, 'the empty state gives its placeholder cells no treatment of their own');
-  assert.match(emptyCell[1], /box-shadow:\s*none/, 'the placeholder outlines must be cleared');
-  assert.match(emptyCell[1], /background:\s*var\(--grid-cell-empty/, 'a flat field needs a fill');
-
-  const emptyStrip = /\.grid-block\[data-grid-state='empty'\] \.grid-strip\s*\{([^}]*)\}/.exec(grid);
-  assert.ok(emptyStrip, 'the empty state does not frame its plate');
-  // Load-bearing, and the reason the rule is written the way it is: block-size
-  // is content-box, so a border would add two pixels to the strip's bounding
-  // rectangle and an empty panel would stop being exactly as tall as a full
-  // one — which is the zero-CLS floor and a rendering-lane assertion both.
-  assert.match(emptyStrip[1], /box-shadow:\s*inset/);
-  assert.doesNotMatch(
-    emptyStrip[1],
-    /(?:^|[\s;])border(?:-block|-inline|-top|-bottom|-left|-right)?:/,
-    'a border grows the strip box; the empty and filled panels must be the same height'
-  );
-
-  const emptyLegend = /\.grid-block\[data-grid-state='empty'\] \.grid-legend\s*\{([^}]*)\}/.exec(grid);
-  assert.ok(emptyLegend, 'the magnitude legend still explains a magnitude that is not there');
-  // Hidden, never removed: display:none would take the legend's box out of
-  // flow and shorten the panel, which is the same shift by another route.
-  assert.match(emptyLegend[1], /visibility:\s*hidden/);
-  assert.doesNotMatch(emptyLegend[1], /display:\s*none/);
-
-  const note = /\.grid-empty\s*\{([^}]*)\}/.exec(grid);
-  assert.ok(note, 'the empty note lost its rule');
-  assert.match(note[1], /position:\s*absolute/, 'the note stays out of flow');
-  assert.match(note[1], /text-transform:\s*uppercase/, 'a state reads as a label, not as prose');
-  assert.doesNotMatch(
-    note[1],
-    /font-style:\s*italic/,
-    'italics are the typography of an apology; an unavailable series is a state, not a fault'
-  );
-});
-
-// Issue 189 carries issue 134's finding one step further: a day INSIDE the
-// window a real series draws — before the series existed, or a future day in
-// its current week — is absent for the same reason a whole empty panel is,
-// and now PAINTS the same honest way: a faint filled field, never an
-// outlined hole. Deliberately a DIFFERENT rule from the pending/empty
-// state's own plate treatment above (a whole panel with nothing to plot
-// stays visually distinct from a few missing days inside a real one), so
-// this pins the general, unscoped selector rather than reusing the empty
-// state's.
-test('an absent day inside a real series paints as a faint filled field, not an outlined hole (issue 189)', () => {
-  const rule = /(?:^|\n)[ \t]*\.grid-cell\[data-grid-absent='true'\]\s*\{([^}]*)\}/.exec(grid);
-  assert.ok(rule, 'the general in-window absent-cell treatment rule is missing, or was rescoped under another selector');
-  assert.match(rule[1], /background:\s*var\(--grid-cell-absent/, 'an absence still needs a fill, not a bare outline');
-  assert.match(
-    rule[1],
-    /box-shadow:\s*none/,
-    "the outlined-hole treatment issue 134 retired for the empty state must stay cleared here too"
-  );
-});
-
-// The gutter has to render EVERY time — series or empty — because it draws
-// calendar structure (weekdayAxis), never data: an empty panel still has
-// Mondays and Fridays, it just has no counts on them yet.
-test('the weekday gutter sits beside the strip in one flex row, and renders unconditionally rather than gated on a series arriving (issue 189)', () => {
-  // Anchored on the block's own closing tag and the comment that follows it.
-  // It used to anchor on `{#if columns.length === 0}` sitting immediately
-  // after, which coupled this pin to whatever happened to be the NEXT thing
-  // in the file — issue 219 rendered the shared detail card between the two
-  // and broke a test about the weekday gutter, which is a pin measuring the
-  // wrong distance rather than a regression.
-  const body = /<div class="grid-body">([\s\S]*?)\n {2}<\/div>\n {2}<!--/.exec(grid);
-  assert.ok(body, 'the grid-body wrapper is missing, or no longer matches the shape the weekday gutter needs');
-  assert.match(
-    body[1],
-    /<div class="grid-weekday-axis" aria-hidden="true">/,
-    'the weekday gutter markup is missing from grid-body'
-  );
-  assert.match(
-    body[1],
-    /\{#each weekdayAxis as weekday \(weekday\.row\)\}/,
-    'the gutter must read the SAME weekdayAxis constant the Sunday-start convention is written down in once'
-  );
-  assert.match(
-    body[1],
-    /style:grid-row=\{weekday\.row \+ 1\}/,
-    'a label must land on the row grid.ts declared for it, not a hand-picked one'
-  );
-  // The weekday gutter's own markup must sit BEFORE the {#if columns.length
-  // > 0} branch that gates the strip's series/empty content — outside that
-  // conditional is what makes "renders in both states" a fact rather than a
-  // comment.
-  const weekdayIndex = body[1].indexOf('grid-weekday-axis');
-  const conditionalIndex = body[1].indexOf('{#if columns.length > 0}');
-  assert.ok(weekdayIndex >= 0, 'the weekday gutter markup was not found inside grid-body');
-  assert.ok(conditionalIndex >= 0, 'the series/empty conditional was not found inside grid-body');
-  assert.ok(
-    weekdayIndex < conditionalIndex,
-    'the weekday gutter must render outside (before) the series/empty conditional, not inside it'
-  );
-});
-
-/* THE GRID'S KEYBOARD CURSOR (issue 219).
- *
- * The arithmetic behind the listbox strip, executed rather than pattern
- * matched. The behavioural half is e2e/rendering-lanes.spec.mjs, which
- * measures what five real engines do with the same decisions; neither half
- * replaces the other.
- *
- * A fourteen-cell fixture: two full columns of gridRows, with the last two
- * cells undated. That is the shape calendarColumns really produces — the
- * current week is padded out with pending chrome that carries no date, no
- * count and no reading — and it is the shape every "must not land on a
- * pending cell" claim below needs to be about something. */
-const datedFixture = () => Array.from({ length: 2 * gridRows }, (_, at) => at < 2 * gridRows - 2);
-
-test('the grid cursor answers only the keys it owns', () => {
-  const dated = datedFixture();
-  for (const key of ['Tab', 'Enter', ' ', 'PageDown', 'a', 'Shift']) {
-    assert.equal(
-      gridCursorTarget(key, 3, dated, gridRows),
-      null,
-      `${key} is not the grid's key and must be left to the page`
-    );
-  }
-  // Escape with nothing selected is likewise not the grid's: swallowing it
-  // would take a key away from whatever else on the page wants it.
-  assert.equal(gridCursorTarget('Escape', -1, dated, gridRows), null);
-  assert.equal(gridCursorTarget('Escape', 3, dated, gridRows), -1);
-  // A grid with no cells has no cursor to move, whatever the key.
-  assert.equal(gridCursorTarget('ArrowRight', -1, [], gridRows), null);
-  assert.equal(gridCursorTarget('Home', -1, [], gridRows), null);
-});
-
-test('every arrow opens a strip with no cursor, on the newest dated cell', () => {
-  const dated = datedFixture();
-  const newest = dated.lastIndexOf(true);
-  /* THE DEFECT THIS PINS: ArrowRight and ArrowDown used to step from the last
-     INDEX rather than open, so `cursor + step` ran past the end, hit the
-     range guard and returned unchanged — dead keys a reader could never
-     recover from, while ArrowLeft and ArrowUp worked and hid it. All four
-     are checked, because a one-axis fix is the same defect with a different
-     victim. */
-  for (const key of ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp']) {
-    assert.equal(
-      gridCursorTarget(key, -1, dated, gridRows),
-      newest,
-      `${key} on a strip with no cursor must open on the newest dated cell`
-    );
-  }
-  // ...and never on the pending chrome past it, which has nothing to read.
-  assert.ok(newest < dated.length - 1, 'the fixture has no trailing pending cells to skip');
-});
-
-test('the grid cursor steps a week sideways and a day vertically', () => {
-  const dated = datedFixture();
-  assert.equal(gridCursorTarget('ArrowRight', 0, dated, gridRows), gridRows);
-  assert.equal(gridCursorTarget('ArrowLeft', gridRows, dated, gridRows), 0);
-  assert.equal(gridCursorTarget('ArrowDown', 0, dated, gridRows), 1);
-  assert.equal(gridCursorTarget('ArrowUp', 1, dated, gridRows), 0);
-});
-
-test('the grid cursor refuses to leave the strip, and says so by not moving', () => {
-  const dated = datedFixture();
-  // Past the start and past the end both answer the CURRENT cursor rather
-  // than null: the key still belongs to the grid, so the component still
-  // swallows it and a reader at the edge gets no surprise page scroll.
-  assert.equal(gridCursorTarget('ArrowLeft', 0, dated, gridRows), 0);
-  assert.equal(gridCursorTarget('ArrowUp', 0, dated, gridRows), 0);
-  const last = dated.length - 1;
-  assert.equal(gridCursorTarget('ArrowRight', last, dated, gridRows), last);
-  assert.equal(gridCursorTarget('ArrowDown', last, dated, gridRows), last);
-});
-
-test('the grid cursor never lands on a cell with no reading', () => {
-  const dated = datedFixture();
-  const newest = dated.lastIndexOf(true);
-  // Stepping forward INTO the pending tail walks on looking for a dated cell,
-  // finds none, and leaves the cursor where it was rather than marking a
-  // cell whose card would say nothing.
-  assert.equal(gridCursorTarget('ArrowDown', newest, dated, gridRows), newest);
-  // Home and End are the two ends of the DATED range, not of the array.
-  assert.equal(gridCursorTarget('Home', 5, dated, gridRows), 0);
-  assert.equal(gridCursorTarget('End', 0, dated, gridRows), newest);
-  // A strip of nothing but pending chrome has no cell to put a cursor on, so
-  // every one of these answers the cursor it was given.
-  const pending = Array.from({ length: gridRows }, () => false);
-  assert.equal(gridCursorTarget('Home', -1, pending, gridRows), -1);
-  assert.equal(gridCursorTarget('End', -1, pending, gridRows), -1);
-  assert.equal(gridCursorTarget('ArrowRight', -1, pending, gridRows), -1);
-});
-
-test('the grid strip wires its keyboard to that one function and nothing else', () => {
-  // A second copy of this arithmetic inside the component is how the two
-  // drift, and it is exactly what this extraction removed.
-  assert.match(
-    grid,
-    /gridCursorTarget\(event\.key, selected, datedCells, gridRows\)/,
-    'the strip must ask lib/grid.ts where its cursor goes'
-  );
-  assert.doesNotMatch(
-    grid,
-    /ArrowLeft:\s*-gridRows/,
-    'the component must not carry its own copy of the step table'
-  );
-});
-
-/* THE HOVER MUST NOT BLEED (owner defect report, 2026-08-31: hovering near the
- * edge of a cell showed the NEIGHBOUR cell's reading).
- *
- * The strip resolves a point by arithmetic rather than by hit-testing every
- * box, and the slot it floors into is one cell PLUS the gap after it — so a
- * point in the gap used to resolve to the cell before it, unconditionally.
- * That forgiveness is the 44px reach a 10px cell cannot otherwise offer a
- * finger, and it is a wrong answer for a mouse, which is pixel-exact and whose
- * reader is looking straight at the cell they are not over.
- *
- * Both readers are executed below against ONE geometry, which is what makes
- * this a real distinction rather than two restatements of one rule: the same
- * gap point must answer differently depending on who asked. */
-const strip = {
-  left: 100,
-  top: 200,
-  // A 10px cell with a 3px gap after it: the shipped token pair.
-  pitchX: 13,
-  pitchY: 13,
-  cellWidth: 10,
-  cellHeight: 10,
-  columns: 4,
-  count: 4 * gridRows,
-};
-
-test('a point ON a cell names that cell for every pointer (issue 219)', () => {
-  // The unambiguous case, stated first so the two rules below are known to
-  // differ only where they are meant to.
-  for (const pointer of ['fine', 'coarse']) {
-    assert.equal(stripIndexAt({ x: 101, y: 201 }, strip, pointer), 0, `${pointer} lost cell 0`);
-    // Column-major: the child gridRows along is one column across.
-    assert.equal(stripIndexAt({ x: 114, y: 201 }, strip, pointer), gridRows);
-    assert.equal(stripIndexAt({ x: 109, y: 209 }, strip, pointer), 0, `${pointer} lost the cell's last pixel`);
-  }
-});
-
-test('a point in the GAP is forgiven for a finger and refused for a mouse (owner, 2026-08-31)', () => {
-  /* x 111 is 11px into the first slot: past the 10px cell, inside the 3px gap
-     before the next column. This is the exact point the owner's report
-     describes, and it is the assertion that is RED on the arithmetic that
-     shipped — which floored every pointer alike into cell 0. */
-  assert.equal(
-    stripIndexAt({ x: 111, y: 201 }, strip, 'fine'),
-    -1,
-    'a mouse in the gap was handed the neighbouring cell — the bleed the owner reported'
-  );
-  assert.equal(
-    stripIndexAt({ x: 111, y: 201 }, strip, 'coarse'),
-    0,
-    'a finger lost the reach that a 10px target depends on'
-  );
-  // The same distinction on the other axis: the gap between two rows.
-  assert.equal(stripIndexAt({ x: 101, y: 211 }, strip, 'fine'), -1);
-  assert.equal(stripIndexAt({ x: 101, y: 211 }, strip, 'coarse'), 0);
-});
-
-test('a point outside the strip clamps for a finger and resolves nothing for a mouse', () => {
-  // A finger a little past the last column is still reaching for the last
-  // column; a mouse there is simply not on the grid.
-  const lastColumn = (strip.columns - 1) * gridRows;
-  assert.equal(stripIndexAt({ x: 400, y: 201 }, strip, 'coarse'), lastColumn);
-  assert.equal(stripIndexAt({ x: 400, y: 201 }, strip, 'fine'), -1);
-  // BEFORE the strip: the floor of a negative offset is a negative slot, which
-  // must not fall back onto cell zero for the exact pointer.
-  assert.equal(stripIndexAt({ x: 90, y: 201 }, strip, 'coarse'), 0);
-  assert.equal(stripIndexAt({ x: 90, y: 201 }, strip, 'fine'), -1);
-  assert.equal(stripIndexAt({ x: 101, y: 100 }, strip, 'fine'), -1);
-});
-
-test('a slot past the last cell is no cell, and a degenerate geometry answers nothing', () => {
-  // A short final column leaves slots the strip has no cells for; both readers
-  // refuse them rather than indexing off the end.
-  const short = { ...strip, count: 3 * gridRows + 2 };
-  assert.equal(stripIndexAt({ x: 140, y: 240 }, short, 'coarse'), -1);
-  assert.equal(stripIndexAt({ x: 140, y: 240 }, short, 'fine'), -1);
-  // A grid nothing has measured yet: no pitch, no answer, for either reader.
-  for (const pointer of ['fine', 'coarse']) {
-    assert.equal(stripIndexAt({ x: 101, y: 201 }, { ...strip, pitchX: 0 }, pointer), -1);
-    assert.equal(stripIndexAt({ x: 101, y: 201 }, { ...strip, pitchY: 0 }, pointer), -1);
-    assert.equal(stripIndexAt({ x: 101, y: 201 }, { ...strip, columns: 0 }, pointer), -1);
-  }
-});
-
-test('the grid strip asks lib/grid.ts for the cell under a point, and asks who is pointing', () => {
-  // A second copy of this arithmetic inside the component is how the two
-  // drift — the same extraction gridCursorTarget already had — and the pointer
-  // kind is what the component cannot answer alone: it comes from the event,
-  // through the shared detail binding.
-  assert.match(
-    grid,
-    /stripIndexAt\(point, geometry, pointer\)/,
-    'the strip must ask lib/grid.ts which cell a point names'
-  );
-  assert.match(
-    grid,
-    /cellIndexAt\(point, pointer === 'fine' \? 'fine' : 'coarse'\)/,
-    'the strip must carry the asking pointer into the gap decision'
-  );
-  // And a DIRECT hit still wins for everyone: the element under the event IS
-  // the cell, and no arithmetic can improve on that.
-  assert.match(grid, /target\.closest\('\[data-grid-cell\]'\)/);
-});

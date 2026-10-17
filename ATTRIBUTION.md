@@ -30,17 +30,6 @@ local-origin-only, so no visitor request may leave the origin to fetch a
 letterform. Two axes in two files is what lets the masthead be set at 900 and
 the prose at 400 with no second download.
 
-## Band textures
-
-The four photographs under `frontend/src/assets/textures/` — one per reading
-mode (owner directive, 2026-09-04, issue #292: the cycle box and the second
-picture of each pair are gone) — are the owner's own wallpaper library,
-originally from Unsplash and used under the Unsplash Licence. Their
-provenance, licence, encoding recipe and exact vendored weight are recorded
-beside the files in `frontend/src/assets/textures/SOURCES.md`, which is the
-document a reviewer should read: it states what was verified and claims
-nothing beyond it.
-
 ## Old School RuneScape boss icons
 
 The images under `frontend/src/assets/icons/bosses/` are small downscaled

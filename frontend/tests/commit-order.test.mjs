@@ -153,8 +153,10 @@ test('private days interleave with the public commits, counted and never named',
   ], new Date('2026-09-11T12:00:00Z'));
   // Newest first, one list, both kinds. A private day sorts by the END of its
   // day, so it sits above the commits of that same day rather than under them.
+  /* `source` is the supporting line's TEXT (owner direction, 2026-10-16: the
+     entry is one link, the subject's), so it is compared as text. */
   assert.deepEqual(
-    props.logRows.map((row) => row.source.text),
+    props.logRows.map((row) => row.source),
     ['public-repo', 'private', 'public-repo', 'private']
   );
   const [, privateRow] = props.logRows;
@@ -165,10 +167,11 @@ test('private days interleave with the public commits, counted and never named',
      a scan that has to be told to ignore a test is a scan one edit from
      ignoring something real. */
   assert.equal(privateRow.key, `private-${'2026-09-10'}`);
-  // NO DESTINATION, on either half: there is nothing a reader could be sent
-  // to, and a link that opens a repository they cannot read would be worse
-  // than no link at all.
-  assert.equal(privateRow.source.href, null);
+  // NO DESTINATION: there is nothing a reader could be sent to, and a link
+  // that opens a repository they cannot read would be worse than no link at
+  // all. The entry's one link is its title's, and the source is text on every
+  // entry (owner direction, 2026-10-16), so it can carry no address either.
+  assert.equal(typeof privateRow.source, 'string');
   assert.equal(privateRow.title.href, null);
   // And NO IDENTITY: a private commit's sha is exactly the kind of fact that
   // must never reach the wire, so there is nothing to shorten.

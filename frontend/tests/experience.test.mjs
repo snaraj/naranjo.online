@@ -562,11 +562,10 @@ test('every status ink is declared, resolves, and clears 1.4.11 on both surfaces
  * or by adding a new one that resolves to a literal nobody measured. */
 test('no component reads a status ink that is undeclared or fallback-shielded', () => {
   const declared = new Set(statusInkNames);
-  let reads = 0;
+  const statusReads = (source) =>
+    [...source.matchAll(/var\(\s*(--[a-z0-9-]+)\s*([,)])/g)].filter(([, token]) => statusInkPattern.test(token));
   for (const [name, source] of Object.entries(componentStyles)) {
-    for (const [, token, tail] of source.matchAll(/var\(\s*(--[a-z0-9-]+)\s*([,)])/g)) {
-      if (!statusInkPattern.test(token)) continue;
-      reads += 1;
+    for (const [, token, tail] of statusReads(source)) {
       assert.ok(
         declared.has(token),
         `${name} reads ${token}, which the token layer declares nowhere; its var() chain paints something the contrast guard never measured`
@@ -578,7 +577,24 @@ test('no component reads a status ink that is undeclared or fallback-shielded', 
       );
     }
   }
-  assert.ok(reads > 0, 'no component reads a status ink at all; this sweep proves nothing');
+  /* NON-VACUITY, PROVEN ON A PROBE. The board's utilization meter was the one
+     component that read a status ink, and it retired with the board (the
+     Chronicle that replaced it draws no meter), so today no component reads
+     one and the walk above has nothing to refuse. What keeps
+     the sweep honest is that its reader still FINDS a read and still sees
+     both of its tails — one bare, one behind a fallback — so the next
+     component that reads a status ink is checked rather than missed. */
+  const probe = statusReads(
+    '.a { color: var(--usage-meter-ok); } .b { color: var( --panel-status-stale , red); } .c { color: var(--color-text); }'
+  );
+  assert.deepEqual(
+    probe.map(([, token, tail]) => [token, tail]),
+    [
+      ['--usage-meter-ok', ')'],
+      ['--panel-status-stale', ','],
+    ],
+    'the status-ink reader no longer finds a read; this sweep proves nothing'
+  );
 });
 
 // The contrast guard above resolves the TOKEN LAYER, not the DOM. That is a
@@ -693,11 +709,12 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
 
   // Palette deduplication (review finding): every palette value is written
   // exactly once, as a --palette-* definition; theme blocks and components
-  // only reference. The two anchor hexes appear exactly twice because
-  // light's text is SLATE's surface and vice versa — one occurrence per
-  // palette slot, still zero per consumer.
+  // only reference. Slate's surface and text used to be light's text and
+  // surface; the parchment light ramp ended that sharing, so they are
+  // ordinary single definitions now.
   const uniqueValues = [
-    '#f1efe7', '#e7e4da', '#d9d5c9', '#87877c', '#3d434f', // light ramp
+    // The parchment light ramp (owner direction, 2026-10-16: the Keep).
+    '#efe2c2', '#e6d5ac', '#dcc795', '#c4ab7a', '#8a6a3c', '#6b4e2a', '#2b1b0c', // light ramp
     // The true dark. Every one of these is a grey — red, green and blue
     // equal — which is the whole claim the mode makes and the one a repaint
     // toward navy would have to break to get past here.
@@ -707,10 +724,11 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     // ramps of four steps plus each palette's own peak, every value its own
     // hex so a repaint of one mode cannot quietly restate another's.
     '#aadf9f', '#72cc6c', '#37b043', '#158a31', '#00d95a', // light greens + peak
-    '#10752a', // light's mark: a deeper step of the same hue, 4.5:1 as text where grid-4 is not
+    '#0b6223', // light's mark: a deeper step of the same hue, 4.5:1 on every parchment surface where grid-4 is not
     '#17492a', '#1f7d3d', '#2eb457', '#5ee97b', '#8dff97', // dark greens + peak
     '#1e4b35', '#237f48', '#34b762', '#6ceb8a', '#9dffb2', // slate greens + peak
     '#3d5330', '#55823f', '#79b455', '#a9e37e', '#ccff8a', // sepia greens + peak
+    '#10131a', '#faf9f5', // slate's surface and text
     '#161a23', '#1d222d', '#2a3040', '#5f6a84', '#b9c2d4', // slate ramp
     '#1b1612', '#28221d', '#312a25', '#3e362f', '#7b6d60', '#b79d7e', '#f4eaea', // browntown seeds
     // The token-usage entity sets (issue #142, widened at #302 and #369): four
@@ -772,9 +790,6 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
   }
   for (const value of uniqueValues) {
     assert.equal(occurrences(styles, value), 1, `${value} must be defined exactly once`);
-  }
-  for (const anchor of ['#faf9f5', '#10131a']) {
-    assert.equal(occurrences(styles, anchor), 2, `anchor ${anchor} fills exactly two palette slots`);
   }
 
   // Structural closure of the dedup pin (review F2): the enumerated counts
@@ -1201,7 +1216,8 @@ test('every progressive feature is guarded, and every guard has a base under it 
      wherever it is CONSUMED: if the feature makes its own declaration
      invalid at computed-value time, the custom property resolves to its
      guaranteed-invalid value, and a var() reference with a second, fallback
-     argument (--header-inset-inline's own use site, .page-header below)
+     argument (the retired --header-inset-inline's own use site, on the
+     header row the page no longer has)
      is what actually recovers from that — so a bare feature-bearing custom
      property declaration is accepted here PROVIDED every place that reads
      it supplies that fallback argument, checked separately below. What is
@@ -1449,14 +1465,17 @@ test('no link wears a resting underline, and every one marks itself on intent', 
 
 /* The page's own top rhythm (owner directive, 2026-08-25: "Samuel Naranjo"
  * sat hard against the top of the viewport, "it almost feels like it's about
- * to escape"). The header row is fixed, so it reserves no flow space and
- * #app reserved none either — the h1 began at the document's first pixel.
+ * to escape"). The reserve was derived from the chrome row it cleared — the
+ * row's own top inset plus the 44px hit box it was — so the name began exactly
+ * where the chrome ended.
  *
- * Recomputed here from the two tokens it is derived from rather than compared
- * with a number somebody typed: the reserve is the chrome row's own top inset
- * plus the 44px hit box it is, so the name begins exactly where the chrome
- * ends and a change to either token moves it or turns this red. */
-test('the page reserves the space above its name, derived from the chrome that space clears', () => {
+ * THE ROW IS GONE and the space has a new tenant (owner direction,
+ * 2026-10-16: "do away with it for now, put J elsewhere"). The sky above the
+ * sheet keeps exactly that measure, and on a phone J perches on the sheet's
+ * top-end corner with half of him rising into it — so what this pin holds now
+ * is that his overhang fits inside the space, from the same tokens. The
+ * rendering lane measures his picture on screen at the top of the page. */
+test('the page keeps its sky above the sheet, and J’s phone overhang fits inside it (owner 2026-08-25, 2026-10-16)', () => {
   const token = (name) => {
     const found = new RegExp(`--${name}:\\s*([^;]+);`).exec(stylesCode);
     assert.ok(found, `--${name} is gone; the top rhythm is derived from it`);
@@ -1466,7 +1485,8 @@ test('the page reserves the space above its name, derived from the chrome that s
   const gutter = lengthInPx(token('page-gutter'));
   const rail = lengthInPx(token('page-rail-size'));
   assert.ok(gutter !== null && rail !== null, 'the top rhythm is built from a length this pin cannot read');
-  assert.equal(gutter + rail, 60, 'the reserved top space is no longer the 60px the chrome row occupies');
+  const topSpace = gutter + rail;
+  assert.equal(topSpace, 60, 'the sky above the sheet is no longer the 60px it has always been');
   // Used in BOTH branches of #app's padding, and the guarded one still
   // widens for a notch rather than replacing the rhythm with it: max() takes
   // the larger, so an inset shorter than the rhythm changes nothing and a
@@ -1480,6 +1500,30 @@ test('the page reserves the space above its name, derived from the chrome that s
     stylesCode,
     /padding-block: max\(0px, env\(safe-area-inset-top\)\)/,
     'the zero-height top reserve is back; the page name touches the top of the viewport again'
+  );
+
+  /* J's phone seat: centred on the sheet's outer top edge (his own top inset
+     is the sheet's padding and frame back out, less half of him), so half of
+     him is above the sheet — and his size is CAPPED in rem, so that half has a
+     ceiling this pin can hold against the space. */
+  const phone = sweptRules.find(
+    (rule) =>
+      rule.file === 'App.svelte' &&
+      rule.selector === '.page-j' &&
+      rule.enclosing.some((at) => /max-width:\s*45rem/.test(at))
+  );
+  assert.ok(phone, 'J has no phone seat of his own');
+  const seat = declared(phone);
+  assert.equal(
+    seat['inset-block-start'],
+    'calc(-1 * (var(--keep-sheet-pad) + var(--keep-frame-page)) - var(--j-size) / 2)',
+    'J’s phone seat is no longer centred on the sheet’s top edge, so his overhang is no longer half of him'
+  );
+  const cap = /^min\(\s*[\d.]+em\s*,\s*([\d.]+rem)\s*\)$/.exec(seat['--j-size'] ?? '');
+  assert.ok(cap, `J’s phone size is "${seat['--j-size']}", not a size capped in rem this pin can hold`);
+  assert.ok(
+    lengthInPx(cap[1]) / 2 <= topSpace,
+    `half of J’s phone size (${lengthInPx(cap[1]) / 2}px) rises past the ${topSpace}px of sky above the sheet`
   );
 });
 
@@ -1499,29 +1543,28 @@ test('the page reserves the space above its name, derived from the chrome that s
  * issue 219 answered a third face of the same thing — content showing THROUGH
  * a control that painted nothing — with a translucent plate behind it.
  *
- * The ledger removes the cause all three were treating. The chrome is a ROW
- * across the sheet now, in the document's own flow, between two rules: it
- * cannot pass over scrolled content, because it scrolls with it; it cannot
- * take a lane from the column, because it spans the same column; and it needs
- * no plate, because nothing passes beneath it. So this pin changed direction
- * rather than value — what it proves now is that the row is in flow and that
- * none of the three retired mechanisms has come back.
- *
- * The one thing that did NOT change is the reason the corner was ever
- * defended: the controls in the row still clear the 44px touch floor, which
- * the floor sweep above measures on every one of them. */
-test('the chrome row is in the document, so no control owns a corner of the page (issues 219, 241, 264, 287)', () => {
-  // In flow: neither of the two positioning schemes that took it out of the
-  // document survives, in either range.
-  assert.doesNotMatch(
-    stylesCode,
-    /\.page-header \{[^}]*position:\s*(?:fixed|absolute)/,
-    'the chrome row is out of the document flow again; a row that floats over the page is the corner all three of these issues were about'
-  );
-  assert.doesNotMatch(
-    stylesCode,
-    /@media not all and \(min-width: 67\.5rem\) \{\s*\.page-header \{\s*position:/,
-    'the narrow-range positioning override is back, so the row is floating again in one range'
+ * The ledger removed the cause all three were treating by making the chrome a
+ * ROW in the document's flow (issue 287). The row itself is gone now (owner
+ * direction, 2026-10-16: "do away with it for now"), and its pins — in flow,
+ * one rule under it, its reserve — went with their subject. What they were
+ * FOR stays: the reading mode, the one control the chrome had, is in the
+ * page's own footer, in the flow, so it cannot pass over scrolled content or
+ * take a lane from the column; none of the three retired mechanisms is back;
+ * and the control still clears the 44px touch floor, which the floor sweep
+ * above measures on every control. */
+test('no control owns a corner of the page, and the name keeps its own block (issues 219, 241, 264, 287; owner 2026-10-16)', () => {
+  /* The reading mode rides the footer, which is an ordinary block of the
+     sheet: nothing positions it, so it scrolls with the page. */
+  const footer = /<footer class="page-footer">([\s\S]*?)<\/footer>/.exec(component)?.[1];
+  assert.ok(footer, 'the page footer is not where this pin expects it');
+  assert.match(footer, /<ThemeMenu \/>/, 'the reading mode is not in the page footer');
+  assert.ok(
+    !sweptRules.some(
+      (rule) =>
+        selectorParts(rule.selector).includes('.page-footer') &&
+        declarationsOf(rule.body).some(({ property, value }) => property === 'position' && /fixed|absolute|sticky/.test(value))
+    ),
+    'the footer that carries the reading mode floats over the page'
   );
 
   // The lane the column used to pay for is still not being paid for, in any
@@ -1542,26 +1585,6 @@ test('the chrome row is in the document, so no control owns a corner of the page
     'the page reserves a rail-sized lane on #app again, by some other spelling'
   );
 
-  // The plate is gone with the float it existed to soften. It answered
-  // content showing THROUGH a viewport-glued control; a row in the flow has
-  // nothing passing beneath it, so a translucent wash and a backdrop blur
-  // would be chrome nothing needs.
-  assert.doesNotMatch(
-    stylesCode,
-    /\.page-header \{[^}]*backdrop-filter/,
-    'the plate is back under a control that no longer floats over anything'
-  );
-
-  // What the row IS: the site's own hit lane tall, ruled UNDER like every
-  // other head on the sheet — and only under (owner directive, 2026-09-04,
-  // issue 294): a top rule sat directly beneath a phone browser's toolbar edge
-  // and the two read as one band twice as thick.
-  /* The reserve is the touch row PLUS the row's own rule (owner directive,
-     2026-09-03, issue 287): the box is border-box and the static shell renders
-     this header EMPTY, so a reserve stated as the control alone measured short
-     of the row that arrives and mounting moved the page. The arithmetic is
-     what makes the shell's promise keepable, so it names the ONE rule the row
-     draws and nothing else. */
   /* THE NAME IS TWO LINES AT EVERY WIDTH (owner directive, 2026-09-04, issue
      294): the heading's box is its longest word, so the break lands at the
      space on a monitor exactly as it does on a phone, with the DOM text left
@@ -1572,24 +1595,14 @@ test('the chrome row is in the document, so no control owns a corner of the page
   assert.match(masthead[1], /inline-size: min-content;/, 'the name is no longer boxed to its longest word');
   assert.match(masthead[1], /text-transform: lowercase;/);
 
-  // The stylesheet states .page-header more than once (its width beside the
-  // column's, its ceiling under the rails); the ROW is the block that
-  // reserves its height, so that is the one read here.
-  const rows = [...stylesCode.matchAll(/\.page-header \{([^}]*)\}/g)].map((found) => found[1]);
-  const row = rows.find((body) => body.includes('min-block-size'));
-  assert.ok(row, 'the chrome row no longer states its reserve');
-  assert.match(row, /min-block-size: calc\(var\(--page-rail-size\) \+ var\(--ledger-heavy\)\)/);
-  assert.match(row, /border-block-end: var\(--ledger-heavy\) solid var\(--ledger-rule\)/);
-  assert.doesNotMatch(row, /border-block-start|border-top|border:/, 'the row grew a top rule back');
-
-  // And the control inside it still clears the touch floor on both axes.
+  // And the control still clears the touch floor on both axes.
   assert.match(stylesCode, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
   assert.match(stylesCode, /\.icon-button\s*\{[^}]*block-size:\s*2\.75rem/);
 
-  /* The two insets the floating control needed are retired with it: #app's own
-     safe-area padding clears a notch for everything in the column, including
-     this row, so a second answer to the same question would be a second set of
-     numbers free to disagree with the first. */
+  /* The two insets the floating control needed stay retired: #app's own
+     safe-area padding clears a notch for everything in the column, so a
+     second answer to the same question would be a second set of numbers free
+     to disagree with the first. */
   assert.doesNotMatch(
     stylesCode,
     /--header-inset-(?:block|inline)/,
@@ -1597,11 +1610,14 @@ test('the chrome row is in the document, so no control owns a corner of the page
   );
 });
 
-/* J TYPES AT BOTH ENDS OF THE ROW (owner request, 2026-10-12: "use him typing
- * on the computer now instead of just flying"; the seats are issue 314's and
- * issue 325's), and everything that makes that safe is a source fact this pin
- * holds. The rendering lane of the same name measures the boxes, the requests
- * and the moving frames in a real engine; neither half replaces the other. */
+/* J FLIES OFF THE NAME (owner direction, 2026-10-16: "put J elsewhere"; the
+ * flight itself is the direction of the same day, "swap him for the flying J
+ * again and give him a bit of a back-forth rotation, subtle"). He bookended
+ * the chrome row from two seats (issue 314, and issue 325's mirrored one); the
+ * row is gone, and he has ONE seat beside the name. Everything that makes that
+ * safe is a source fact this pin holds; the rendering lane of the same name
+ * measures his box against every line of the name, the requests, the moving
+ * frames and the rock in a real engine. Neither half replaces the other. */
 /* Comments come out to a FIXPOINT, not in one pass: a single replace leaves
    a `<!--` behind when one comment's removal joins two halves of another,
    which is the incompleteness CodeQL's multi-character-sanitization rule
@@ -1614,214 +1630,269 @@ const stripComments = (source) => {
   return out;
 };
 
-test('J is a picture at both ends of the chrome row, reserved, silent, still at rest, and typing only where motion is welcome (owner 2026-09-11 issue 314, 2026-10-12)', () => {
-  const mark = componentSources['lib/components/JMark.svelte'];
-  assert.ok(mark, 'the mark component is not where this pin expects it');
-  const markup = stripComments(mark).trim();
+const jMarkFile = 'lib/components/JMark.svelte';
+/* One rule of J's own <style>, found by selector and by whether it sits in
+   the no-preference block — the two places every one of his rules can live. */
+const jRule = (selector, moving) =>
+  sweptRules.find(
+    (rule) =>
+      rule.file === jMarkFile &&
+      rule.selector === selector &&
+      rule.enclosing.some((at) => /prefers-reduced-motion\s*:\s*no-preference/.test(at)) === moving &&
+      (moving || !rule.enclosing.some((at) => at.startsWith('@media')))
+  );
+const declared = (rule) =>
+  Object.fromEntries(declarationsOf(rule.body).map(({ property, value }) => [property, value]));
 
-  /* SILENT AND UNREACHABLE, in BOTH seats. The home link at the start of the
-     row carries the page's accessible name (below); a decorative dragon that
-     announced itself would be a name every screen reader reads past twice on
-     every visit, and a focusable one would be a new stop on a keyboard order
-     the rendering lanes pin. */
-  assert.match(markup, /aria-hidden="true"/, 'the mark is announced to a screen reader');
+test('J flies off the name from one seat, reserved, silent, still at rest, and flying with a gentle rock only where motion is welcome (owner 2026-09-11 issue 314, 2026-10-16)', () => {
+  const mark = componentSources[jMarkFile];
+  assert.ok(mark, 'the mark component is not where this pin expects it');
+  /* The ELEMENT, without its script and its style: what a reader's tree gets. */
+  const markup = stripComments(mark)
+    .replace(/<script[\s\S]*?<\/script>/g, '')
+    .replace(/<style[\s\S]*?<\/style>/g, '')
+    .trim();
+  const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(mark)?.[1] ?? '';
+  const style = (componentStyles[jMarkFile] ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(style.trim(), 'J’s look is no longer stated in his own component');
+
+  /* SILENT AND UNREACHABLE. A decorative dragon that announced itself would be
+     a name every screen reader reads past on every visit, and a focusable one
+     would be a new stop on the page's keyboard order. */
+  assert.match(markup, /^<span class="j-flight" aria-hidden="true"><\/span>$/, 'the mark is no longer one empty, aria-hidden span');
   assert.doesNotMatch(markup, />[^<\s][\s\S]*</, 'the mark carries text');
   assert.doesNotMatch(
     markup,
     /\b(?:href|tabindex|role|onclick|onkeydown|aria-label|title)\b/,
     'the mark has grown a name, a role, or a way to reach it'
   );
-  /* And the component knows no file name of its own: the stylesheet names the
-     sheet and the still so the bundler resolves them to content-hashed URLs,
-     which is the same rule requirement 11 puts on every other picture this
-     page draws. */
-  assert.doesNotMatch(markup, /\.webp|import\.meta|src=/, 'the component resolves its own asset');
-
-  /* LAST IN THE ROW. After the reading mode, so the keyboard order through
-     the chrome — the home link, the nav, the mode — gains nothing between any
-     two of its stops. */
-  const header = stripComments(componentSources['lib/components/PageHeader.svelte']);
-  const chrome = /<div class="page-chrome">([\s\S]*?)<\/div>/.exec(header);
-  assert.ok(chrome, 'the row’s end cluster is not where this pin expects it');
-  assert.ok(
-    chrome[1].indexOf('<JMark') > chrome[1].indexOf('<ThemeMenu'),
-    'J is drawn before the reading mode, so he now sits between two keyboard stops'
+  /* SELF-HOSTED, and never named by the markup or imported by a script: the
+     component's own style names the sheet and the still by relative path, so
+     the bundler resolves each to a content-hashed same-origin URL (the build
+     inlines nothing — assetsInlineLimit 0, pinned by vite-config.test.mjs —
+     because the origin's default-src 'self' refuses a data: URI). */
+  assert.doesNotMatch(markup, /\.webp|src=|style=/, 'the element names a file or writes an inline style');
+  assert.doesNotMatch(script, /\.webp|import\.meta|assets\//, 'the script resolves J’s picture itself');
+  const urls = [...style.matchAll(/url\(([^)]*)\)/g)].map(([, inner]) => inner.trim());
+  assert.deepEqual(
+    urls.sort(),
+    ["'../../assets/images/j/j-flight-still.webp'", "'../../assets/images/j/j-flight.webp'"],
+    'J’s style names something other than exactly the vendored sheet and still, by relative path'
   );
 
-  /* BOTH FACING INTO THE ROW (owner ruling, 2026-09-12, issue 325: "replace
-     this with another dragon facing inwards to match the opposite side").
-     J's render faces screen-right, toward his laptop, so the START of the row
-     draws him as rendered and the END is the mirrored seat — the reverse of
-     the flying dragon's sheet, which faced the other way. The two seats are
-     the same component, not a second sprite or a second rule, which is what
-     makes the pair cost one file. */
-  const home = /<a class="page-mark"([^>]*)>([\s\S]*?)<\/a>/.exec(header);
-  assert.ok(home, 'the home link is not where this pin expects it');
-  assert.match(home[2].trim(), /^<JMark \/>$/, 'the home link no longer draws J as rendered, facing into the row');
-  assert.match(chrome[1], /<JMark mirrored \/>/, 'the row’s end no longer draws the mirrored J, so he faces out of the row');
-  assert.equal(
-    (header.match(/<JMark\b/g) ?? []).length,
-    2,
-    'the row no longer holds exactly two of him'
+  /* ONE SEAT, BESIDE THE NAME. The page shell draws him once, in the name's
+     own block, right after the heading — and no other component draws him,
+     so there is no second request and no second dragon. The mirrored seat
+     left with the row it faced into: no prop, no flip rule, anywhere. */
+  const seats = Object.entries(componentSources).flatMap(([file, source]) =>
+    (stripComments(source).match(/<JMark\b[^>]*\/>/g) ?? []).map((tag) => [file, tag])
   );
-  assert.doesNotMatch(home[2], /SN\./, 'the wordmark is back inside the home link');
-  /* The link is still a link to the page's own name, and it is NAMED — by the
-     heading it scrolls to, so "Samuel Naranjo" is written once, in the
-     masthead, and never a second time in this component. Its content is
-     aria-hidden, so without this the row's first stop would announce nothing
-     at all. */
-  assert.match(home[1], /href="#page-title"/, 'the home link stopped pointing at the page name');
-  assert.match(home[1], /aria-labelledby="page-title"/, 'the home link has no accessible name');
-  assert.doesNotMatch(home[1], /aria-label=/, 'the home link spells the page name a second time');
-  /* And the link HOLDS all of him. He is wider than the 44px floor its own
-     minimum states, so a link the row may shrink leaves him overhanging it
-     toward the nav on a phone, with the focus ring round a box narrower than
-     the picture; the rendering lane measures the boxes. */
-  const homeRule = sweptRules.find(
-    (rule) => rule.selector === '.page-mark' && !rule.enclosing.some((at) => at.startsWith('@media'))
-  );
-  assert.ok(homeRule, 'the home link has no rule of its own');
-  assert.ok(
-    declarationsOf(homeRule.body).some(({ property, value }) => property === 'flex' && value === 'none'),
-    'the row may shrink the home link narrower than the J inside it'
-  );
-
-  /* ONE component, TWO seats, and the mirror is a class rather than a second
-     copy of the sprite: `mirrored` is a prop the element turns into a class,
-     and the class's whole rule is the flip. A style attribute could not do it
-     at all — this origin serves no unsafe-inline. */
+  assert.deepEqual(seats, [['App.svelte', '<JMark />']], 'J is drawn somewhere other than exactly once, as rendered, by the page shell');
   assert.match(
-    markup,
-    /let \{ mirrored = false \}: \{ mirrored\?: boolean \} = \$props\(\);/,
-    'the mark no longer takes the mirror as a prop'
+    stripComments(component),
+    /<div class="page-intro">\s*<h1 id="page-title">[^<]+<\/h1>\s*<span class="page-j"><JMark \/><\/span>/,
+    'J is not seated in the name’s own block, right after it'
   );
-  assert.match(markup, /class:j-mark-mirrored=\{mirrored\}/, 'the mirror is not a class on the shared element');
-  assert.doesNotMatch(markup, /style=/, 'the mark writes an inline style; this origin serves no unsafe-inline');
-
-  const flipped = sweptRules.find((rule) => rule.selector === '.j-mark-mirrored');
-  assert.ok(flipped, 'the mirrored seat has no rule, so both dragons face the same way');
+  assert.doesNotMatch(
+    stripComments(mark).replace(/\/\*[\s\S]*?\*\//g, ''),
+    /mirrored|\$props/,
+    'the retired mirrored seat is back as a prop'
+  );
   assert.ok(
-    !flipped.enclosing.some((at) => at.startsWith('@media')),
-    'the flip is inside a media block, so a reader who asked for less motion gets a dragon facing the wrong way'
+    !sweptRules.some((rule) => /j-flight-mirrored/.test(rule.selector)),
+    'a rule still flips a J nobody mirrors'
   );
-  const flip = Object.fromEntries(
-    declarationsOf(flipped.body).map(({ property, value }) => [property, value])
-  );
-  assert.deepEqual(
-    flip,
-    { transform: 'scaleX(-1)', 'transform-origin': 'center' },
-    'the mirrored rule states something other than the flip; the pictures, the box and the loop are shared'
-  );
-  /* SHARED, and this is the pin that proves it rather than asserting it: the
-     sheet and the still are each named exactly once in the whole stylesheet,
-     so the second J can never become a second URL, and the box and the loop
-     are declared on the base class both seats carry. */
-  for (const file of ['j-typing.webp', 'j-typing-still.webp']) {
+
+  /* SHARED, and this proves it rather than asserting it: the sheet and the
+     still are each named exactly once across the whole stylesheet AND every
+     component style, so no second seat can become a second URL. */
+  const everyStyle = [stylesCode, ...Object.values(componentStyles)]
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const file of ['j-flight.webp', 'j-flight-still.webp']) {
     assert.equal(
-      (stylesCode.match(new RegExp(`/${file.replaceAll('.', '\\.')}`, 'g')) ?? []).length,
+      (everyStyle.match(new RegExp(`/${file.replaceAll('.', '\\.')}`, 'g')) ?? []).length,
       1,
-      `${file} is named more than once (or not at all); the second J is a second request`
+      `${file} is named more than once (or not at all); a second J is a second request`
     );
   }
 
-  const rest = sweptRules.find(
-    (rule) => rule.selector === '.j-mark' && !rule.enclosing.some((at) => at.startsWith('@media'))
-  );
-  assert.ok(rest, 'the mark has no rule outside a media block, so it renders nothing at all for a reader who asked for less motion');
-  const resting = Object.fromEntries(
-    declarationsOf(rest.body).map(({ property, value }) => [property, value])
-  );
-  /* THE BOX IS RESERVED, not measured from the picture: the row is the same
-     height before either file arrives as after it, which is the page's
-     zero-CLS floor. It stands the row's own control height, at the render's
-     own ratio. */
-  assert.equal(resting['inline-size'], 'var(--j-cell-inline)');
-  assert.equal(resting['block-size'], 'var(--j-cell-block)');
-  assert.equal(resting.flex, 'none', 'the row may squeeze him');
-  /* AT REST HE IS THE STILL — the render's own reduced-motion frame, drawn
-     whole into the box — rather than a cancelled animation, and the sheet is
-     not named here: an element fetches only the background it computes, so a
-     reader who asked for less motion never downloads the loop. */
-  assert.equal(resting['background-position'], '0 0');
-  assert.equal(resting['background-image'], "url('./assets/images/j/j-typing-still.webp')");
-  assert.equal(resting['background-size'], '100% 100%', 'the still is not drawn whole into the box');
-  /* The box and the sheet are DERIVED from the control target rather than
-     restated in pixels: the box is a rem length, so literals stop dividing it
-     the moment a reader runs a browser font size other than 16px and the next
-     cell starts showing inside the mark. The cell is the render's 176 x 128,
-     the sheet is 12 of them across and 10 down. */
-  for (const declaration of [
-    '--j-cell-block: var(--control-target);',
-    '--j-cell-inline: calc(var(--j-cell-block) * 176 / 128);',
-    '--j-sheet-inline: calc(var(--j-cell-inline) * 12);',
-    '--j-sheet-block: calc(var(--j-cell-block) * 10);',
-  ]) {
-    assert.ok(
-      stylesCode.includes(declaration),
-      `${declaration} is gone, so the grid is no longer derived from the mark’s own box`
-    );
-  }
-  /* ON A PHONE HE STANDS THE DRAWN MARK'S HEIGHT (owner ruling, 2026-10-12):
-     two of him at the touch row's height took 33px from the nav's window at
-     390px. Only the height token is restated, on :root inside the phone block,
-     so the cell, the sheet and the keyframes all follow it from one line. */
-  const phoneRoot = sweptRules.find(
-    (rule) =>
-      rule.selector === ':root' &&
-      rule.enclosing.some((at) => at === '@media (max-width: 45rem)') &&
-      /--j-cell-block/.test(rule.body)
-  );
-  assert.ok(phoneRoot, 'the phone block no longer lowers J, so two of him narrow the nav again');
-  assert.deepEqual(
-    declarationsOf(phoneRoot.body)
-      .filter(({ property }) => property.startsWith('--j-'))
-      .map(({ property, value }) => `${property}: ${value}`),
-    ['--j-cell-block: var(--control-mark)'],
-    'the phone block restates more of J than his height, so the derived grid can disagree with it'
-  );
-
-  /* THE LOOP, and only inside no-preference. The sweep below proves no rule
-     animates outside that block; this proves the sheet arrives THERE, sized to
-     its grid, and that the two steps() that make the sprite advance are
-     DECLARED, that they are steps rather than a tween (a tween paints two
-     half-frames at once), and that each walks its own axis's whole sheet. */
-  const moving = sweptRules.find(
-    (rule) =>
-      rule.selector === '.j-mark' &&
-      rule.enclosing.some((at) => /prefers-reduced-motion\s*:\s*no-preference/.test(at))
-  );
-  assert.ok(moving, 'J never types; the mark declares no loop where motion is welcome');
-  const looping = Object.fromEntries(
-    declarationsOf(moving.body).map(({ property, value }) => [property, value])
-  );
-  assert.equal(looping['background-image'], "url('./assets/images/j/j-typing.webp')");
-  assert.equal(looping['background-size'], 'var(--j-sheet-inline) var(--j-sheet-block)');
-  assert.ok(looping.animation, 'the mark’s motion rule declares no animation');
-  assert.match(looping.animation, /j-typing-row var\(--j-typing-row\) steps\(12\) infinite/);
-  assert.match(looping.animation, /j-typing var\(--j-typing\) steps\(10\) infinite/);
-  /* The loop is the render's 8s, and the row is the loop DIVIDED by the
-     sheet's 10 rows, never a written duration of its own that could drift
-     from it. */
-  assert.ok(stylesCode.includes('--j-typing: 8s;'), 'the loop is no longer the render’s 8s (120 frames at 15fps)');
+  /* THE BOX IS RESERVED, not measured from the picture: the square his seat
+     hands him (the site's control square when no seat says), so his box is
+     the same before either file arrives as after (the zero-CLS floor). */
+  const box = jRule('.j-flight', false);
+  assert.ok(box, 'J has no box outside a media block, so he renders nothing for a reader who asked for less motion');
+  const boxed = declared(box);
+  assert.equal(boxed['--j-box'], 'var(--j-size, var(--control-target))', 'J’s box is no longer the square his seat hands him');
+  assert.equal(boxed['inline-size'], 'var(--j-box)');
+  assert.equal(boxed['block-size'], 'var(--j-box)');
+  assert.equal(boxed.flex, 'none', 'a flex parent may squeeze him');
+  assert.equal(boxed.position, 'relative', 'the picture is no longer placed against J’s own box');
+  assert.ok(!('animation' in boxed) && !('transform' in boxed), 'the reserved box itself moves');
   assert.ok(
-    stylesCode.includes('--j-typing-row: calc(var(--j-typing) / 10);'),
-    'the row duration is no longer the loop divided by its 10 rows, so the two animations drift apart'
+    !sweptRules.some((rule) => rule.file === jMarkFile && rule.selector === '.j-flight' && rule.enclosing.length > 0),
+    'J’s box is restated inside a media block; his size is his seat’s to decide'
   );
-  for (const [name, token] of [
-    ['j-typing-row', '--j-sheet-inline'],
-    ['j-typing', '--j-sheet-block'],
+
+  /* THE PICTURE IS THE BOX: the ::before, out of flow so it sizes nothing,
+     drawn into exactly his square — there is no bar left to fly past — and it
+     takes no pointer, so nothing under him is ever unpressable. At rest it is
+     the still, drawn whole. */
+  const picture = jRule('.j-flight::before', false);
+  assert.ok(picture, 'J’s picture has no rule outside a media block');
+  const resting = declared(picture);
+  assert.equal(resting.content, "''");
+  assert.equal(resting.position, 'absolute', 'the picture is in the flow, so its size moves the page');
+  assert.equal(resting.inset, '0', 'the picture is not drawn into his box');
+  assert.equal(resting['pointer-events'], 'none', 'the picture catches presses meant for what is under it');
+  assert.equal(resting['background-image'], "url('../../assets/images/j/j-flight-still.webp')");
+  assert.equal(resting['background-position'], '0 0');
+  assert.equal(resting['background-size'], '100% 100%', 'the still is not drawn whole into the picture');
+  assert.ok(!('animation' in resting) && !('transform' in resting), 'the resting picture moves');
+  /* The sheet's drawn size is DERIVED from his square, 20 cells across and
+     24 down, so one cell is always exactly the picture and the keyframes walk
+     whole cells at any size his seat asks for. */
+  assert.equal(boxed['--j-sheet-inline'], 'calc(var(--j-box) * 20)');
+  assert.equal(boxed['--j-sheet-block'], 'calc(var(--j-box) * 24)');
+
+  /* THE SEAT: out of the flow, so the name is exactly where the static shell
+     put it whether or not he has arrived; measured in the name's own size, so
+     he scales with the masthead; in the name's own grid area; and taking no
+     pointer. The size token is the one the name is SET in, so this reads the
+     stylesheet's masthead rule too: a name re-sized by another token would
+     leave him measured against a size the name no longer has. */
+  const wideSeat = sweptRules.find(
+    (rule) => rule.file === 'App.svelte' && rule.selector === '.page-j' && rule.enclosing.length === 0
+  );
+  assert.ok(wideSeat, 'J has no seat in the page shell');
+  const seated = declared(wideSeat);
+  assert.equal(seated.position, 'absolute', 'J’s seat is in the flow, so his arrival moves the name');
+  assert.equal(seated['pointer-events'], 'none');
+  assert.equal(seated['font-size'], 'var(--keep-name-size)', 'J is no longer measured in the name’s own size');
+  assert.ok(
+    sweptRules.some(
+      (rule) =>
+        rule.file === 'styles' &&
+        rule.selector === 'h1' &&
+        declarationsOf(rule.body).some(({ property, value }) => property === 'font-size' && value === 'var(--keep-name-size)')
+    ),
+    'the name is no longer set in --keep-name-size, so J is measured against a size it does not have'
+  );
+  assert.equal(seated['grid-area'], '1 / 1', 'J is not placed in the name’s own grid area');
+  assert.match(seated['--j-size'] ?? '', /^[\d.]+em$/, 'J’s size is not a share of the name’s');
+  assert.match(seated['inset-inline-start'] ?? '', /^calc\(50% \+ [\d.]+em\)$/, 'J is not placed from the name’s centre in its own size');
+  assert.ok(
+    !declarationsOf(wideSeat.body).some(({ property }) => /^(?:animation|transition|transform)/.test(property)),
+    'the seat moves; motion is J’s own, inside the no-preference block'
+  );
+  /* On a phone his END edge is the sheet's outer edge — its padding and its
+     frame back out from the intro — so he can never be what scrolls the page
+     sideways. */
+  const phoneSeat = declared(
+    sweptRules.find(
+      (rule) =>
+        rule.file === 'App.svelte' && rule.selector === '.page-j' && rule.enclosing.some((at) => /max-width:\s*45rem/.test(at))
+    ) ?? { body: '' }
+  );
+  assert.equal(
+    phoneSeat['inset-inline-end'],
+    'calc(-1 * (var(--keep-sheet-pad) + var(--keep-frame-page)))',
+    'J’s phone seat no longer ends at the sheet’s own outer edge'
+  );
+  assert.equal(phoneSeat['inset-inline-start'], 'auto', 'J’s phone seat is pinned at both ends');
+
+  /* THE FLIGHT AND THE ROCK, and only inside no-preference. The sweep below
+     proves no rule animates outside that block; this proves the sheet
+     arrives THERE, sized to its grid, that the two steps() that walk it are
+     DECLARED and are steps rather than a tween (a tween paints two
+     half-frames at once), and that the rock is the gentle one the owner
+     asked for: smooth, alternating, a few degrees, slow. */
+  const moving = jRule('.j-flight::before', true);
+  assert.ok(moving, 'J never flies; the picture declares no motion where motion is welcome');
+  const flying = declared(moving);
+  assert.equal(flying['background-image'], "url('../../assets/images/j/j-flight.webp')");
+  assert.equal(flying['background-size'], 'var(--j-sheet-inline) var(--j-sheet-block)');
+  assert.ok(flying.animation, 'the picture’s motion rule declares no animation');
+  assert.match(flying.animation, /j-flight-row var\(--j-flight-row\) steps\(20\) infinite/);
+  assert.match(flying.animation, /j-flight-sheet var\(--j-flight\) steps\(24\) infinite/);
+  assert.match(
+    flying.animation,
+    /j-rock var\(--j-rock-swing\) ease-in-out infinite alternate/,
+    'the rock is not a smooth, alternating swing'
+  );
+  /* The loop is the study's 8s, and the row is the loop DIVIDED by the
+     sheet's 24 rows, never a written duration of its own that could drift
+     from it. */
+  assert.equal(boxed['--j-flight'], '8s', 'the loop is no longer the study’s 8s (480 frames at 60Hz)');
+  assert.equal(
+    boxed['--j-flight-row'],
+    'calc(var(--j-flight) / 24)',
+    'the row duration is no longer the loop divided by its 24 rows, so the two animations drift apart'
+  );
+  /* SUBTLE: a few degrees each way, never a spin, over a swing slow enough
+     to read as a glide. */
+  const angle = /^([\d.]+)deg$/.exec(boxed['--j-rock-angle'] ?? '');
+  assert.ok(angle, 'the rock’s angle is not a plain number of degrees');
+  assert.ok(Number(angle[1]) > 0 && Number(angle[1]) <= 6, `the rock leans ${angle[1]}deg each way; subtle is a few degrees`);
+  const swing = /^([\d.]+)s$/.exec(boxed['--j-rock-swing'] ?? '');
+  assert.ok(swing, 'the rock’s swing is not a plain number of seconds');
+  assert.ok(Number(swing[1]) >= 2, `the rock swings in ${swing[1]}s; slow is two seconds or more each way`);
+  for (const [name, pattern] of [
+    ['j-flight-row', /^\s*to\s*$/],
+    ['j-flight-sheet', /^\s*to\s*$/],
   ]) {
-    const frames = sweptRules.find((rule) =>
-      rule.enclosing.some((at) => at === `@keyframes ${name}`)
+    const frames = sweptRules.filter(
+      (rule) => rule.file === jMarkFile && rule.enclosing.some((at) => at === `@keyframes ${name}`)
     );
-    assert.ok(frames, `@keyframes ${name} is missing, so the animation names nothing`);
+    assert.equal(frames.length, 1, `@keyframes ${name} is missing or has grown, so the animation walks something else`);
+    assert.match(frames[0].selector, pattern);
+  }
+  for (const [name, token] of [
+    ['j-flight-row', '--j-sheet-inline'],
+    ['j-flight-sheet', '--j-sheet-block'],
+  ]) {
+    const frames = sweptRules.find(
+      (rule) => rule.file === jMarkFile && rule.enclosing.some((at) => at === `@keyframes ${name}`)
+    );
     assert.match(
       frames.body,
       new RegExp(`background-position-[xy]: calc\\(-1 \\* var\\(${token}\\)\\)`),
       `@keyframes ${name} travels a distance the sheet’s own size does not decide`
     );
   }
+  /* The rock is symmetrical about level: the same angle each way, so at rest
+     between swings he is the still's own pose rather than a lean. */
+  const rock = Object.fromEntries(
+    sweptRules
+      .filter((rule) => rule.file === jMarkFile && rule.enclosing.some((at) => at === '@keyframes j-rock'))
+      .map((rule) => [rule.selector, declared(rule)])
+  );
+  assert.deepEqual(
+    rock,
+    {
+      from: { transform: 'rotate(calc(-1 * var(--j-rock-angle)))' },
+      to: { transform: 'rotate(var(--j-rock-angle))' },
+    },
+    'the rock is not one rotation swung evenly either side of level'
+  );
 });
+
+test('the stylesheet no longer dresses the J it retired (owner direction, 2026-10-16)', () => {
+  /* J's whole look lives in his own component now. The global sheet's old
+     typing rules match no element any more, and a dead rule that still names
+     a picture is a picture the build still emits and the next reader has to
+     disprove — so they are gone, tokens and keyframes with them, rather than
+     kept warm for a render the owner swapped away. */
+  assert.doesNotMatch(stylesCode, /j-typing/, 'styles.css still names the typing render');
+  assert.doesNotMatch(stylesCode, /\.j-mark\b/, 'styles.css still styles the retired .j-mark');
+  assert.doesNotMatch(stylesCode, /--j-[a-z-]+\s*:/, 'styles.css still declares J tokens his component owns');
+});
+
+/* RETIRED WITH THE NAV (owner direction, 2026-10-16: "do away with it for
+ * now"): "the nav is centred on the chrome row whatever its two ends hold".
+ * Its subject was the row's three-column grid and the nav's place in it; the
+ * row, its two ends and the nav are all gone, so there is nothing left to
+ * centre. */
 
 test('the document declares both marks a browser looks for, and nothing inlines them (owner 2026-09-11, issue 314)', () => {
   /* The tab mark keeps its name and its type (issue 239): the runtime image

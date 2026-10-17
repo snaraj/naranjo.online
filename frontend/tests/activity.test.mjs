@@ -10,7 +10,6 @@ import {
   commitPullRequestNumber,
   commitReferenceLinkLabel,
   commitReferenceUrl,
-  commitRepoLinkLabel,
   commitRepoUrl,
   commitShaLinkLabel,
   commitShaUrl,
@@ -30,19 +29,12 @@ import {
 import { spreadFromRem } from '../src/lib/columnWidth.ts';
 import { calendarColumns, pendingWeeks, toColumns } from '../src/lib/grid.ts';
 import {
+  effectiveDescription,
   projectHost,
-  projectHostLabel,
   projectTableProps,
   projects,
   shownProjectRows
 } from '../src/lib/projects.ts';
-import {
-  applyScrollbarGutter,
-  measureScrollbarPx,
-  scrollbarGutterFallbackPx,
-  scrollbarGutterProperty,
-  scrollbarGutterPx
-} from '../src/lib/scrollbar.ts';
 
 // A well-formed vcs-activity/v1 payload in the exact shape internal/panels
 // serves; tests clone and break one field at a time so every admission rule
@@ -351,13 +343,6 @@ describe('isValidRepoSlug / commitRepoUrl', () => {
       );
     }
   });
-
-  it('carries the same "opens in a new tab" convention the Coding Projects feed already uses', () => {
-    assert.equal(
-      commitRepoLinkLabel('naranjo.online'),
-      `naranjo.online on ${projectHostLabel}, opens in a new tab`
-    );
-  });
 });
 
 describe('commitPullRequestNumber', () => {
@@ -509,52 +494,34 @@ describe('isValidCommitSha / commitShaUrl', () => {
   });
 });
 
-/* The calendar's own component and binding moved with the owner's ledger
-   redesign (2026-09-03, issue 287) and moved again with the sheet's paired
-   section (2026-09-11, issue 318): the contribution calendar is one of three
-   pictures the reader cycles between, it is a TRACKER now, and its block still
-   binds two panels. The log that used to ride under it is the sheet's
-   right-hand column, drawn by LedgerSpread — read here too, because the rows
-   and the reserve are still this payload's and the pins that describe them
-   belong beside the admission they come from. */
-const [component, spread, manifest, binding, helpers, grid, sheet] = await Promise.all([
-  readFile(new URL('../src/lib/components/ContributionCalendar.svelte', import.meta.url), 'utf8'),
+/* The contribution calendar is drawn inside the Chronicle now (owner
+   direction, 2026-10-16): the year's cells under the token lines, one
+   timeline. Its own component, its shared grid and its block binding retired
+   with that direction; the Chronicle is read here for the pins that were
+   always about the panel rather than the grid (no label, no stale line, no
+   docking). The log that used to ride under it is the sheet's right-hand
+   column, drawn by LedgerSpread — read here too, because the rows and the
+   reserve are still this payload's and the pins that describe them belong
+   beside the admission they come from. */
+const [chronicle, spread, manifest, helpers, sheet] = await Promise.all([
+  readFile(new URL('../src/lib/components/Chronicle.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/components/LedgerSpread.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/blocks/contributionCalendar.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/activity.ts', import.meta.url), 'utf8'),
-  readFile(new URL('../src/lib/components/ContributionGrid.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
 ]);
+
+/* The spread's OWN stylesheet. Its reserve, its pitch and its phone rules
+   moved out of styles.css and into the component's <style> with the owner's
+   direction of 2026-10-16 (two-line entries, "Ongoing Work"): they are one
+   component's geometry, and the pins below read them where they are decided. */
+const spreadStyle = /<style[^>]*>([\s\S]*?)<\/style>/.exec(spread)?.[1] ?? '';
 
 // Browser execution is deliberately outside this dependency-free test; these
 // assertions pin the component source's structural contracts the same way
 // experience.test.mjs pins the shells. What the component used to compute it
 // now receives (issue 165): the adapter below is EXECUTED, and the component
 // pins hold that the generic tracker renders exactly what it is handed.
-test('the calendar renders through the one shared grid component', () => {
-  // The ramp, the cell labels, the month axis, and the absent-day rendering
-  // live in ContributionGrid — the same component the usage tracker's
-  // heatmap uses — so the two grids cannot drift apart.
-  assert.match(component, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
-  assert.match(component, /<ContributionGrid/);
-  assert.match(component, /noun=\{active\.noun\}/);
-  // ONE grid, not one per set: the segments swap the props the same instance
-  // renders, so the strip's scroll position, its keyboard cursor and its
-  // detail card all survive a set change instead of being three of each.
-  assert.equal((component.match(/<ContributionGrid/g) ?? []).length, 1);
-  /* AND NOTHING UNDER IT (owner directive, 2026-09-12, issue 323; the standing
-     ruling already forbids a chart caption). The sentence under the grid
-     restated figures the grid's own cells, the segments and the board above
-     all carry — "30.4B tokens over 30 days · peak 3B · data through
-     2026-09-11" — so the block is the segments and the grid. The non-colour
-     channel the dataviz floor asks for is unaffected: every cell prints its
-     own count in its detail card, which is where a reader meets it. */
-  assert.ok(!component.includes('commit-caption'), 'the calendar draws a caption row again');
-  assert.ok(!component.includes('caption'), 'the calendar still reads a caption off its set');
-  assert.ok(!sheet.includes('commit-caption'), 'the sheet still styles a caption row');
-});
-
 test('the adapter renders the figures, the strip, and the noun the panel always showed', () => {
   const envelope = {
     schema: 'panel/v1',
@@ -670,9 +637,9 @@ test('a stalled payload draws its missing days as dated absences up to today, an
     contributionCalendarProps([envelope, null], now).generatedAt,
     '2026-08-20T09:50:34Z'
   );
-  assert.match(component, /<PanelShell \{status\} \{generatedAt\}>/);
-  assert.doesNotMatch(component, /\{title\}/, 'the commit block renders a panel label again (issue 294)');
-  assert.ok(!component.includes('staleNote'), 'the commit block carries a stale-note prop again');
+  assert.match(chronicle, /<PanelShell \{status\} \{generatedAt\}>/);
+  assert.doesNotMatch(chronicle, /\{title\}/, 'the calendar\u2019s panel renders a panel label again (issue 294)');
+  assert.ok(!chronicle.includes('staleNote'), 'the calendar\u2019s panel carries a stale-note prop again');
   const shell = await readFile(new URL('../src/lib/components/PanelShell.svelte', import.meta.url), 'utf8');
   assert.ok(!shell.includes('panel-note'), 'the shell draws a freshness line again');
   assert.ok(!shell.includes('note'), 'the shell still takes a note prop');
@@ -699,79 +666,8 @@ test('an empty commit list says so instead of showing invented history', () => {
   assert.equal(noCalendar.status, 'unavailable');
 });
 
-test('the cell ramp is themeable custom properties with the validated dark defaults', () => {
-  // One custom property per level; the defaults are the validated sequential
-  // ramp (single hue, monotone lightness, dark-surface anchored). A hex
-  // change here must re-run the ramp validation — that is the point of the
-  // pin. The ramp now lives in the shared grid component.
-  for (const [level, hex] of [
-    [0, '#383835'],
-    [1, '#1c5cab'],
-    [2, '#2a78d6'],
-    [3, '#5598e7'],
-    [4, '#86b6ef']
-  ]) {
-    assert.match(
-      grid,
-      new RegExp(`var\\(--grid-cell-${level}, ${hex}\\)`),
-      `level ${level} must default to the validated ${hex}`
-    );
-  }
-  // No raw color may bypass the variable layer: every color literal in the
-  // style block sits inside a var() default. The literal is matched text, so
-  // it is escaped COMPLETELY before entering a pattern — every regex
-  // metacharacter including backslash, not just the expected few — so a
-  // literal this scan has never seen can only fail the assertion honestly,
-  // never distort the pattern it is checked with (CodeQL
-  // js/incomplete-sanitization).
-  const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
-  const styles = grid.slice(grid.indexOf('<style>'));
-  for (const literal of styles.match(/(?:#[0-9a-f]{3,8}|rgba?\([^)]*\))/gi) ?? []) {
-    assert.match(
-      styles,
-      new RegExp(`var\\(--[a-z0-9-]+, ${escapeRegExp(literal)}\\)`),
-      `color literal ${literal} must be a custom-property default`
-    );
-  }
-});
-
-test('the strip owns fixed geometry and its own overflow', () => {
+test('the log box owns fixed geometry and its own overflow', () => {
   // Fixed block sizes per region: data arriving never shifts layout.
-  //
-  // The strip's own box is DERIVED now (issue 130) rather than stated as one
-  // number. It read `block-size: 7rem` under a comment claiming "5.5rem of
-  // cells, 0.75rem of month axis, 0.75rem of scrollbar gutter" — arithmetic
-  // that only came to 7rem because it had forgotten the month axis's own
-  // 0.1875rem top margin, leaving 9px of real reserve for a scrollbar that is
-  // 15px on a classic Windows or Linux theme. Every term below is the SAME
-  // token the thing it measures is laid out with, so a box computed from one
-  // set of numbers while its contents are drawn from another is no longer
-  // expressible.
-  //
-  // The row term is --grid-day, the DRAWN day, which is the same alias the
-  // cells and the weekday gutter read (issue 178 vs 268's ruling let a
-  // full-width caller bound that day and draw it square). Reading the base
-  // cell token here instead would restore exactly the class of drift this pin
-  // exists to forbid: a caller raises its day, the cells and gutter grow, and
-  // the box that holds them stays the old height and clips them.
-  const stripBox = /\.grid-strip \{[^}]*?block-size: calc\(([\s\S]*?)\);/.exec(grid);
-  assert.ok(stripBox, 'the strip no longer derives its own block size from its rows');
-  for (const term of [
-    '7 * var(--grid-day)',
-    '6 * var(--grid-cell-gap, 0.1875rem)',
-    'var(--grid-month-gap, 0.1875rem)',
-    'var(--grid-month-size, 0.75rem)',
-    `var(${scrollbarGutterProperty}, 0.75rem)`,
-  ]) {
-    assert.ok(
-      stripBox[1].replace(/\s+/g, ' ').includes(term),
-      `the strip's box no longer accounts for "${term}"`
-    );
-  }
-  // ...and the two axis terms are what .grid-months is actually laid out
-  // with, or the box and its contents are two different measurements again.
-  assert.match(grid, /\.grid-months \{[^}]*margin: var\(--grid-month-gap, 0\.1875rem\) 0 0/);
-  assert.match(grid, /\.grid-months \{[^}]*block-size: var\(--grid-month-size, 0\.75rem\)/);
   /* The regions the calendar sits between keep their fixed boxes through the
      ledger redesign (owner directive, 2026-09-03, issue 287); what changed is
      which file states them, because the sheet's row rhythm is a page-level
@@ -781,66 +677,85 @@ test('the strip owns fixed geometry and its own overflow', () => {
      with the caption itself (issue 323). Nothing under the grid can shift the
      page because there is nothing under the grid. */
   assert.ok(!sheet.includes('commit-caption'), 'the sheet still reserves a caption row');
-  // SIX rows at the 44px touch floor (owner ruling, 2026-09-12; seven since
-  // issue 318, ten since issue #315, five since issue 157): every entry row can
-  // carry two real links, so the reservation is a multiplication of the reserve
-  // by the row's own floor rather than a decorative-text height, and this pin
-  // recomputes it from the constant the TABLE BESIDE IT selects its rows with —
-  // so the two columns of the paired section cannot come to hold different
-  // numbers of rows, and the box and its row count cannot drift apart.
-  const rowFloorRem = 2.75;
-  /* The reserve is DERIVED from the row's own pitch rather than restated, and
-     the pitch is a token because a phone row is taller — the repository stacks
-     over the subject there. A box computed from one width while its rows are
-     drawn at another is a box that clips its own last row, which is what this
-     recomputation refuses in both directions. */
+  /* FIVE ENTRIES, each a two-line pitch (owner direction, 2026-10-16: "show 1
+     less entry per but give more information … I am not trying to make this
+     larger block in the page"; six one-line rows since 2026-09-12, seven since
+     issue 318, ten since issue #315, five since issue 157). The reserve is a
+     multiplication of the column's own entry pitch by the constant the
+     REPOSITORIES beside it select their entries with — so the two columns of
+     the paired section cannot come to hold different numbers of entries, and
+     the box and its count cannot drift apart. It reads these where they are
+     decided, the component's own <style>. */
+  const spreadRule = (selector, source = spreadStyle) =>
+    new RegExp(`(?:^|\\n)\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(source)?.[1] ?? '';
+  const baseLogBox = spreadRule('.log-box');
+  assert.ok(baseLogBox !== '', 'the component no longer styles its log box');
   assert.match(
-    sheet,
-    new RegExp(`\\.commit-rows \\{[^}]*block-size: calc\\(${shownProjectRows} \\* var\\(--commit-row-height\\)\\)`)
+    baseLogBox.replace(/\s+/g, ' '),
+    new RegExp(`block-size: calc\\(${shownProjectRows} \\* var\\(--repo-pitch\\)\\);`),
+    'the log no longer reserves exactly the repositories’ count of their own pitch'
   );
-  assert.match(sheet, /\.commit-row \{[^}]*block-size: var\(--commit-row-height\)/);
-  assert.match(sheet, new RegExp(`\\.commit-row \\{[^}]*min-block-size: var\\(--control-target\\)`));
+  /* THE PITCH IS ARITHMETIC: a title line, a supporting line and two
+     paddings, and the wide sheet's repository pitch IS that entry pitch — so
+     the log's reserve and the repository entries beside it are one length. */
+  const pitchTokens = spreadStyle.replace(/\s+/g, ' ');
+  assert.match(
+    pitchTokens,
+    /--ongoing-pitch: calc\(var\(--ongoing-line\) \+ var\(--ongoing-sub\) \+ 2 \* var\(--ongoing-pad\)\);/
+  );
+  assert.match(pitchTokens, /@media \(min-width: 64rem\) \{ \.ongoing \{ --repo-pitch: var\(--ongoing-pitch\); \}/);
+  assert.match(spreadRule('.repo-entry').replace(/\s+/g, ' '), /block-size: var\(--repo-pitch\);/);
+  /* AND THAT PITCH CLEARS THE TOUCH FLOOR, recomputed from the four lengths it
+     is built from rather than trusted: every entry is one link, and the link
+     is the entry's whole box. */
+  const length = (name) => Number(new RegExp(`--ongoing-${name}: ([\\d.]+)rem;`).exec(spreadStyle)?.[1]);
+  const rowFloorRem = 2.75;
   assert.match(sheet, new RegExp(`--control-target: ${rowFloorRem}rem;`));
-  // Both pitches are declared, and the phone one is the taller of the two, or
-  // the reserve is a ceiling rather than a reserve.
-  const pitches = [...sheet.matchAll(/--commit-row-height: ([\d.]+)rem;/g)].map(([, value]) => Number(value));
-  assert.equal(pitches.length, 2, 'the row pitch is declared once; a phone row is taller than a desktop one');
-  assert.ok(pitches[1] > pitches[0], 'the phone pitch must be the taller one');
-  assert.ok(pitches[0] >= rowFloorRem, 'the row pitch dropped under the touch floor');
-  // The row separator is an INSET SHADOW, never a border (owner directive,
-  // 2026-08-25): a border would add its pixel to every row's box and six of
-  // them would push the last row out of a reservation that is exactly six
-  // rows tall — the zero-CLS reserve turned into a clipped row.
-  assert.match(sheet, /\.commit-row \{[^}]*box-shadow: inset 0 -1px 0 var\(--ledger-rule/);
-  assert.match(sheet, /\.commit-row:last-child \{[^}]*box-shadow: none/);
+  const pitchRem = length('line') + length('sub') + 2 * length('pad');
+  assert.ok(pitchRem >= rowFloorRem, `the entry pitch (${pitchRem}rem) dropped under the touch floor`);
+  /* AND FIVE OF THEM PLUS THE HEAD ARE NO TALLER THAN THE SIX ONE-LINE ROWS
+     THEY REPLACED (2.75rem each, plus the 1px rule a row drew under itself, and
+     the 2.125rem head row): the direction was more information in the same
+     height, not a larger block. */
+  const replacedPx = 6 * (rowFloorRem * 16 + 1) + 2.125 * 16;
+  const nowPx = (length('head') + shownProjectRows * pitchRem) * 16;
+  assert.ok(nowPx <= replacedPx, `the section grew: ${nowPx}px of head and entries against the ${replacedPx}px it replaced`);
+  // The links themselves declare the floor as their minimum, from the token.
+  assert.match(spreadRule('.log-link'), /min-block-size: var\(--control-target\);/);
+  assert.match(spreadRule('.repo-link'), /min-block-size: var\(--control-target\);/);
+  // The entry separator is an INSET SHADOW, never a border (owner directive,
+  // 2026-08-25): a border would add its pixel to every entry's box and five of
+  // them would push the last entry out of a reserve that is exactly five
+  // entries tall — the zero-CLS reserve turned into a clipped entry.
+  assert.match(spreadRule('.log-entry'), /box-shadow: inset 0 -1px 0 var\(--color-border\)/);
+  assert.match(spreadRule('.log-entry:last-child'), /box-shadow: none/);
   assert.doesNotMatch(
-    sheet,
-    /\.commit-row \{[^}]*border-block-end/,
-    'a row separator drawn as a border grows the row box the reservation is built on'
+    spreadRule('.log-entry'),
+    /border-block-end/,
+    'an entry separator drawn as a border grows the entry box the reservation is built on'
   );
   // THE RESERVE IS NOT A CAP (owner directive, 2026-09-11, issue #315). The
   // adapter used to hand the component exactly the rows the box could hold;
   // the box scrolls now, so every row the wire carried renders and the WIRE's
   // own cap is what bounds the list. A cap in the adapter would be the page
-  // quietly deciding the record stops at six, which is the defect the owner
+  // quietly deciding the record stops at five, which is the defect the owner
   // reported in the first place.
   //
-  // SIX is the owner's pairing after the ruling of 2026-09-12 retired the
-  // "latest" row, and it is ONE constant: the table's own row count. A second
-  // number here would be the two columns free to disagree about a height they
-  // share, which is exactly the drift the reserve exists to prevent.
-  assert.equal(shownProjectRows, 6);
+  // FIVE is the owner's direction of 2026-10-16 — one entry fewer than the six
+  // of 2026-09-12 — and it is ONE constant: the repositories' own count. A
+  // second number here would be the two columns free to disagree about a
+  // height they share, which is exactly the drift the reserve exists to
+  // prevent.
+  assert.equal(shownProjectRows, 5);
   // The DESKTOP rule, read on its own: the box scrolls there and reserves an
   // exact height, so it declares an overflow and no minimum. Scoped to the
-  // base rule rather than to the whole sheet, because the phone block below
-  // deliberately declares the opposite — a sheet-wide `doesNotMatch` would
-  // read that override as this rule breaking.
-  const baseCommitRows = /\.commit-rows \{([^}]*)\}/.exec(sheet)?.[1] ?? '';
-  assert.match(baseCommitRows, /overflow-y: auto/);
+  // base rule rather than to the whole style block, because the phone block
+  // below deliberately declares the opposite.
+  assert.match(baseLogBox, /overflow-y: auto/);
   // And the box's HEIGHT is the thing that never moves on a desktop: a reserve
-  // that grew with its rows would push every section under it down the moment a
-  // payload landed.
-  assert.doesNotMatch(baseCommitRows, /min-block-size/);
+  // that grew with its entries would push every section under it down the
+  // moment a payload landed.
+  assert.doesNotMatch(baseLogBox, /min-block-size/);
   const overfull = projectsCommitsProps([
     null,
     {
@@ -860,15 +775,13 @@ test('the strip owns fixed geometry and its own overflow', () => {
     }
   ]);
   assert.equal(overfull.logRows.length, 30, 'every row the wire carried renders; the box scrolls for the rest');
-  // A wide window scrolls inside the strip, never the page.
-  assert.match(grid, /\.grid-strip \{[^}]*overflow-x: auto/);
   // The panel is an ordinary block in the page's stack. It used to dock to
   // the viewport's bottom-start corner, which meant the page had to reserve a
   // strip for a bar that overlaid it AND the bar had to bound its own height
   // against that same reserve so the two could not disagree — two facts that
   // only existed because it floated. It takes the column's width now, so it
   // declares neither.
-  assert.doesNotMatch(component, /position: fixed/, 'the panel must not dock again');
+  assert.doesNotMatch(chronicle, /position: fixed/, 'the calendar\u2019s panel must not dock again');
   assert.doesNotMatch(spread, /position: fixed/, 'the sheet must not dock either');
   assert.doesNotMatch(sheet, /--page-activity-gutter/, 'a card reserves no gutter');
 });
@@ -921,11 +834,14 @@ const drawn = (repos) => projectTableProps(projectsPanel(repos), Date.parse('202
 
 test('the table draws the pinned set and nothing outside it (owner ruling, 2026-09-12)', () => {
   const rendered = drawn(repoFixture());
-  // The six pinned rows, in push order, and `r00` — the newest push on the
-  // wire — is NOT among them, because it is not pinned.
+  /* The pinned rows, in push order, and `r00` — the newest push on the wire —
+     is NOT among them, because it is not pinned. FIVE of the six (owner
+     direction, 2026-10-16: one entry fewer per column): the set is cut at the
+     column's own count, keeping the most recently pushed, so `r11` — the
+     oldest pinned push — is the one that waits. */
   assert.deepEqual(
     rendered.rows.map((row) => row.link.text),
-    ['r01', 'r03', 'r05', 'r07', 'r09', 'r11'],
+    ['r01', 'r03', 'r05', 'r07', 'r09'],
     'the table is not the pinned set in push order'
   );
   assert.equal(rendered.rows.length, shownProjectRows);
@@ -933,36 +849,83 @@ test('the table draws the pinned set and nothing outside it (owner ruling, 2026-
      to explain the seventh row's presence; with every row on the table for the
      same reason there is nothing left to explain, and the field it rode on is
      gone from the props rather than merely unset — a field nothing writes is a
-     field the next payload shape can quietly start writing again. */
+     field the next payload shape can quietly start writing again. What a row
+     DOES carry since the owner's direction of 2026-10-16 is its supporting
+     line, `about`: the repository's own description. */
   for (const row of rendered.rows) {
     assert.deepEqual(
       Object.keys(row).toSorted(),
-      ['counts', 'key', 'link', 'updated'],
+      ['about', 'counts', 'key', 'link', 'updated'],
       `the row "${row.key}" carries a field the table stopped drawing`
     );
   }
   /* The control that makes the claim mean something: without the pinned flags
-     the SAME twelve rows select the six most recent, which is a different set
+     the SAME twelve rows select the five most recent, which is a different set
      — so the assertion above is about the flags rather than about a slice that
      happened to agree with them. */
   const unflagged = drawn(repoFixture([]));
   assert.deepEqual(
     unflagged.rows.map((row) => row.link.text),
-    ['r00', 'r01', 'r02', 'r03', 'r04', 'r05'],
+    ['r00', 'r01', 'r02', 'r03', 'r04'],
     'a payload with no pinned flag must fall back to the most recent by push'
   );
 });
 
-test('the pinned rule never pads, never overflows six, and never conjures a row', () => {
+/* THE SUPPORTING LINE (owner direction, 2026-10-16): each repository entry
+ * carries its own description under its name. It is chosen by the same
+ * provenance rule as the instant the entry is ordered by — the panel's words
+ * when it vouched for them, the captured words otherwise — and a repository
+ * with no description reads as the honest dash, never as a blank a reader
+ * would take for missing data and never as words the page invented. */
+test('each repository entry carries its own description, or the honest dash', () => {
   const now = Date.parse('2026-01-12T12:00:00Z');
-  /* FEWER THAN SIX PINNED — which is also what a pinned PRIVATE repository
+  const live = drawn([
+    { name: 'said', description: '  A sentence the host serves.  ', stars: 1, pushedAt: '2026-01-11T00:00:00Z' },
+    { name: 'silent', description: '', stars: 1, pushedAt: '2026-01-10T00:00:00Z' },
+    { name: 'blank', description: '   ', stars: 1, pushedAt: '2026-01-09T00:00:00Z' }
+  ]);
+  assert.deepEqual(
+    live.rows.map((row) => [row.link.text, row.about]),
+    [
+      ['said', 'A sentence the host serves.'],
+      ['silent', '—'],
+      ['blank', '—']
+    ]
+  );
+  /* PROVENANCE: a captured repository the panel serves LIVE wears the live
+     words; the same row marked `recorded` wears the captured words, because a
+     row that fell back must not pair a live name with a stale sentence. */
+  const [captured] = projects;
+  const servedLive = projectTableProps(
+    projectsPanel([{ name: captured.name, description: 'what the host says today', stars: 1, pushedAt: captured.pushedAt }]),
+    now
+  );
+  assert.equal(servedLive.rows[0].about, 'what the host says today');
+  const fellBack = projectTableProps(
+    projectsPanel([
+      { name: captured.name, description: 'what the host says today', stars: 1, pushedAt: captured.pushedAt, recorded: true }
+    ]),
+    now
+  );
+  assert.equal(fellBack.rows[0].about, captured.description);
+  // The captured face carries every captured description verbatim.
+  for (const row of projectTableProps(null, now).rows) {
+    const project = projects.find((candidate) => candidate.name === row.link.text);
+    assert.equal(row.about, project.description);
+  }
+  assert.equal(effectiveDescription(undefined, undefined), '—', 'a row nobody describes must read as the dash');
+});
+
+test('the pinned rule never pads, never overflows five, and never conjures a row', () => {
+  const now = Date.parse('2026-01-12T12:00:00Z');
+  /* FEWER THAN FIVE PINNED — which is also what a pinned PRIVATE repository
      looks like from here: the wire carries only public repositories, so a
      pinned private one is simply not in the answer. The table shows what
      exists and pads nothing, and the newest push outside the set stays out of
      it however recent it is. */
   const three = drawn(repoFixture(['r02', 'r04', 'r06']));
   assert.deepEqual(three.rows.map((row) => row.link.text), ['r02', 'r04', 'r06']);
-  /* EXACTLY ONE pinned row is a one-row table, not a row plus five of filler. */
+  /* EXACTLY ONE pinned row is a one-row table, not a row plus four of filler. */
   const one = drawn(repoFixture(['r08']));
   assert.deepEqual(one.rows.map((row) => row.link.text), ['r08']);
   /* A NAME NOBODY SERVED cannot become a row. The flag lives ON a row, so the
@@ -975,12 +938,12 @@ test('the pinned rule never pads, never overflows six, and never conjures a row'
   ]);
   assert.deepEqual(short.rows.map((row) => row.link.text), ['kept']);
   /* MORE PINNED THAN THE PAIR RESERVES: the two columns share one height, so
-     the table can never draw more rows than the log holds open — and the six it
-     keeps are the six most recently pushed of the set, which is the same order
-     the rest of the table is in rather than a second rule. */
+     the table can never draw more rows than the log holds open — and the five
+     it keeps are the five most recently pushed of the set, which is the same
+     order the rest of the table is in rather than a second rule. */
   const many = drawn(repoFixture(['r00', 'r01', 'r02', 'r03', 'r04', 'r05', 'r06', 'r07', 'r08']));
   assert.equal(many.rows.length, shownProjectRows);
-  assert.deepEqual(many.rows.map((row) => row.link.text), ['r00', 'r01', 'r02', 'r03', 'r04', 'r05']);
+  assert.deepEqual(many.rows.map((row) => row.link.text), ['r00', 'r01', 'r02', 'r03', 'r04']);
   /* A TIE between two pushes is resolved by the payload's own order rather
      than by chance: both instants are equal, the sort is stable, and the row
      the payload listed first is drawn first. */
@@ -1084,27 +1047,29 @@ test('the paired section composes no freshness line from either of its envelopes
  * field that I have to fight out of").
  *
  * Three separate decisions have to agree for that to be true, and each one is
- * pinned where it is made: the STYLESHEET stops giving the box a height and an
- * overflow of its own and reserves the collapsed log instead, the ADAPTER
- * decides whether there is anything to reveal, and the COMPONENT slices
- * against the adapter's own number and draws a real control. The rendered
- * proof at both widths is the browser lane; what is pinned here is that each
- * decision is made at all, and made from one constant.
+ * pinned where it is made: the component's STYLE stops giving the box a height
+ * and an overflow of its own and reserves the collapsed log instead, the
+ * ADAPTER decides whether there is anything to reveal, and the component's
+ * MARKUP slices against the adapter's own number and draws a real control. The
+ * rendered proof at both widths is the browser lane; what is pinned here is
+ * that each decision is made at all, and made from one constant.
  * ------------------------------------------------------------------------ */
 
-/* The phone block that holds the log, whitespace-normalised. The sheet states
- * ONE phone WIDTH (tests/sections.test.mjs pins that) across more than one
- * block, so the block is selected by the rule it is being read for rather than
- * by position — slicing from the first `max-width` would read the base rules
- * that sit between the two. Normalised because the declarations below are
- * written across lines for reading, and a pin that matched the line breaks
- * would be a pin on the formatting rather than on the rule. */
+/* The phone block that holds the log, whitespace-normalised. It is the
+ * component's own block since the owner's direction of 2026-10-16 moved the
+ * section's geometry into LedgerSpread.svelte, and it states the sheet's ONE
+ * phone width (tests/sections.test.mjs pins that width in styles.css, and the
+ * last test in this file holds the two equal). Selected by the rule it is
+ * being read for rather than by position, and normalised because the
+ * declarations below are written across lines for reading, and a pin that
+ * matched the line breaks would be a pin on the formatting rather than on the
+ * rule. */
 const phoneBlock = (() => {
-  const blocks = sheet
+  const blocks = spreadStyle
     .split('@media (max-width: 45rem) {')
     .slice(1)
-    .map((block) => block.split(/\n@media /)[0].replace(/\s+/g, ' '));
-  const holdingTheLog = blocks.filter((block) => block.includes('.commit-rows {'));
+    .map((block) => block.split(/\n\s*@media /)[0].replace(/\s+/g, ' '));
+  const holdingTheLog = blocks.filter((block) => block.includes('.log-box {'));
   assert.equal(
     holdingTheLog.length,
     1,
@@ -1114,7 +1079,7 @@ const phoneBlock = (() => {
 })();
 
 test('on a phone the log reserves its collapsed self and takes no overflow (owner 2026-09-12)', () => {
-  const phoneRule = /\.commit-rows \{([^}]*)\}/.exec(phoneBlock)?.[1] ?? '';
+  const phoneRule = /\.log-box \{([^}]*)\}/.exec(phoneBlock)?.[1] ?? '';
   assert.ok(phoneRule !== '', 'the phone block no longer overrides the log box at all');
   /* NO HEIGHT OF ITS OWN and NO OVERFLOW OF ITS OWN — the two halves of "this
      is not a scroll region". Both are stated rather than merely absent,
@@ -1126,24 +1091,38 @@ test('on a phone the log reserves its collapsed self and takes no overflow (owne
     /overflow-y: visible;/,
     'the phone box still takes an overflow of its own; the inner scroll is the trap the owner reported'
   );
-  /* IT STILL RESERVES, and the reserve is the COLLAPSED log: five rows plus
-     the control under them and the gap above it. Recomputed from
-     `phoneLogRows` — the same constant the component slices with — and from the
-     two tokens the control is actually laid out with, so a box computed from
-     one set of numbers while its contents are drawn from another is not
-     expressible here either. */
+  /* IT STILL RESERVES, and the reserve is the COLLAPSED log: five entries at
+     the phone's pitch plus the control under them and the gap above it.
+     Recomputed from `phoneLogRows` — the same constant the component slices
+     with — and from the two tokens the control is actually laid out with, so a
+     box computed from one set of numbers while its contents are drawn from
+     another is not expressible here either. */
   assert.match(
     phoneRule,
     new RegExp(
-      `min-block-size: calc\\( ${phoneLogRows} \\* var\\(--commit-row-height\\) \\+ var\\(--control-target\\) \\+ var\\(--ledger-cell-gap\\) \\);`
+      `min-block-size: calc\\( ?${phoneLogRows} \\* var\\(--ongoing-pitch-tall\\) \\+ var\\(--control-target\\) \\+ var\\(--ongoing-pad\\) ?\\);`
     ),
-    'the collapsed reserve is no longer five rows plus the control it is drawn with'
+    'the collapsed reserve is no longer five entries plus the control it is drawn with'
+  );
+  /* And every phone entry IS that pitch — fixed, not a minimum — so the
+     reserve is exact whatever the payload's subjects say: a subject that takes
+     its second line and one that does not are the same height. */
+  assert.match(phoneBlock, /\.log-entry \{ block-size: var\(--ongoing-pitch-tall\); \}/);
+  assert.match(
+    spreadStyle.replace(/\s+/g, ' '),
+    /--ongoing-pitch-tall: calc\(2 \* var\(--ongoing-line\) \+ var\(--ongoing-sub\) \+ 2 \* var\(--ongoing-pad\)\);/,
+    'the phone pitch no longer holds two subject lines and the supporting line'
+  );
+  assert.match(
+    /(?:^|\n)\s*\.log-message \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '',
+    /max-block-size: calc\(2 \* var\(--ongoing-line\)\);/,
+    'a subject can grow past the two lines the pitch holds'
   );
   // And the control IS laid out with exactly those two tokens, or the reserve
   // and the thing it reserves for are two different measurements.
-  const control = /\.commit-disclosure \{([^}]*)\}/.exec(sheet.replace(/\s+/g, ' '))?.[1] ?? '';
+  const control = /\.log-more \{([^}]*)\}/.exec(spreadStyle.replace(/\s+/g, ' '))?.[1] ?? '';
   assert.match(control, /min-block-size: var\(--control-target\);/);
-  assert.match(control, /margin-block-start: var\(--ledger-cell-gap\);/);
+  assert.match(control, /margin-block-start: var\(--ongoing-pad\);/);
   /* The control declares no width, which is how every other full-width control
      on this sheet takes its column — and it is what keeps the touch-floor sweep
      in tests/experience.test.mjs able to measure both of its axes. */
@@ -1231,22 +1210,21 @@ test('the log draws its collapsed slice and a real disclosure, and neither on a 
   /* A REAL BUTTON, with the disclosure's two required attributes and the
      list's own id in `aria-controls`. A div with a click handler would carry
      none of the keyboard operation or the role this brings for free. */
-  assert.match(spread, /<button\s+class="commit-disclosure"\s+type="button"\s+aria-expanded=\{expanded\}\s+aria-controls=\{logListId\}/);
+  assert.match(spread, /<button\s+class="log-more"\s+type="button"\s+aria-expanded=\{expanded\}\s+aria-controls=\{logListId\}/);
   assert.match(spread, /onclick=\{\(\) => \(expanded = !expanded\)\}/);
   /* WORDS, NOT A MARK: the control prints the adapter's two words and draws no
      glyph, so a reader who cannot see a drawing still reads what pressing it
      does. */
   assert.match(spread, /\{expanded \? logDisclosure\.fewer : logDisclosure\.more\}<\/button>/);
   assert.ok(
-    !/class="commit-disclosure"[\s\S]*?<Icon/.test(spread),
+    !/class="log-more"[\s\S]*?<Icon/.test(spread),
     'the disclosure grew a mark; it is a control a reader reads'
   );
-  /* ABSENT ON A DESKTOP rather than hidden, for the reason the short identity
-     beside it is: a `display: none` control is still something a screen reader
-     can be walked into, and there is nothing for it to do where the box keeps
-     its reserve and scrolls. */
+  /* ABSENT ON A DESKTOP rather than hidden: a `display: none` control is still
+     something a screen reader can be walked into, and there is nothing for it
+     to do where the box keeps its reserve and scrolls. */
   assert.match(spread, /\{#if logDisclosure !== undefined && !wide\}/);
-  assert.doesNotMatch(sheet, /\.commit-disclosure \{[^}]*display: none/);
+  assert.doesNotMatch(spreadStyle, /\.log-more \{[^}]*display: none/);
   /* THE STATE IS COMPONENT-LOCAL AND NEVER PERSISTED (owner ruling: the log
      opens closed). A stored answer would decide the page's height before a
      reader has looked at it. */
@@ -1255,33 +1233,46 @@ test('the log draws its collapsed slice and a real disclosure, and neither on a 
   /* The list is a real element with the id the control names, and the rows sit
      inside it — so `aria-controls` points at the thing that grows rather than
      at the box around it. */
-  assert.match(spread, /<div class="commit-list" id=\{logListId\}>/);
+  assert.match(spread, /<div class="log-list" id=\{logListId\}>/);
 });
 
-/* THE SHORT IDENTITY IS NOT RENDERED ON A PHONE (owner directive, 2026-09-11:
- * a commit row is two lines there, and a seven-character hash has no room on
- * either). Absent from the DOM rather than hidden — a `display: none` cell is
- * still an element a screen reader can be walked into — which is why the
- * decision is made in the markup against a media seam rather than in CSS. The
- * rendered proof at both widths is the browser lane; what is pinned here is
- * that the decision is structural at all. */
-test('the commit row renders its short identity only where there is a cell for it', () => {
+/* THE SHORT IDENTITY IS ON EVERY ENTRY NOW (owner direction, 2026-10-16:
+ * "give more information"). It was absent from a phone's row since the
+ * directive of 2026-09-11 — a commit row was two lines there and a
+ * seven-character hash had room on neither. The entry's supporting line is
+ * that room: the repository takes the slack and ellipsizes first, and the age
+ * and the identity hold the line's end. What did NOT change is how a hidden
+ * cell would be hidden: never by CSS, which leaves it in the accessibility
+ * tree — so the identity is rendered unconditionally and hidden nowhere. The
+ * width seam stays, for the one decision still made against it: the phone's
+ * disclosure. */
+test('every commit entry renders its short identity, and nothing hides it', () => {
   assert.match(
     spread,
-    /\{#if wide\}<span class="commit-mark">\{row\.mark\}<\/span>\{\/if\}/,
-    'the short identity is unconditional again; a phone reader hears a hash their row does not show'
+    /<span class="log-mark">\{row\.mark\}<\/span>/,
+    'the short identity left the entry'
   );
+  assert.doesNotMatch(spread, /\{#if wide\}<span class="log-mark">/, 'the identity is conditional on the width again');
   assert.doesNotMatch(
-    sheet,
-    /\.commit-mark \{\s*display: none/,
-    'the identity is hidden by CSS again, which leaves it in the accessibility tree'
+    spreadStyle,
+    /\.log-mark \{[^}]*display: none/,
+    'the identity is hidden by CSS, which leaves it in the accessibility tree'
   );
-  // The decision reads the shared seam rather than a literal of its own.
+  /* THE LINE ENDS WHERE THE COLUMN DOES: the repository is the one flexible
+     track, so a long name ellipsizes before the identity is pushed off. */
+  assert.match(
+    /\.log-meta \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '',
+    /grid-template-columns: minmax\(0, 1fr\) auto auto;/
+  );
+  // The disclosure's decision reads the shared seam rather than a literal of its own.
   assert.match(spread, /import \{ browserMedia, spreadMediaQuery, watchMedia \} from '\.\.\/columnWidth'/);
   assert.match(spread, /let wide = \$state\(browserMedia\(spreadMediaQuery\)\.matches\)/);
   assert.match(spread, /\$effect\(\(\) => watchMedia\(browserMedia, spreadMediaQuery, \(matches\) => \(wide = matches\)\)\)/);
-  // And the stylesheet asks the same number the script does.
+  // And the stylesheet and the component ask the same number the script does.
   assert.match(sheet, new RegExp(`@media \\(max-width: ${spreadFromRem - 0.0625}rem\\)`));
+  assert.match(spreadStyle, new RegExp(`@media \\(max-width: ${spreadFromRem - 0.0625}rem\\)`));
+  const widths = new Set([...spreadStyle.matchAll(/@media \(max-width: ([^)]+)\)/g)].map(([, width]) => width));
+  assert.deepEqual([...widths], [`${spreadFromRem - 0.0625}rem`], 'the component disagrees with the sheet about where a phone ends');
 });
 
 test('every entry-row href is built by the validated helpers, and the component builds none', () => {
@@ -1317,10 +1308,14 @@ test('every entry-row href is built by the validated helpers, and the component 
     }
   ]);
   const [badRepo, noReference, referenced, shaOnly, badSha] = hostile.logRows;
-  assert.equal(badRepo.source.href, null, 'a hostile repo must never become an href');
-  assert.equal(badRepo.source.text, 'evil.com/x', 'the text still renders, as text');
+  /* The repository is the supporting line's TEXT on every entry (owner
+     direction, 2026-10-16: one link per entry, the subject's), so a hostile
+     name has no address to become — it is a string, and it renders verbatim
+     as text. What it still poisons is the entry's one link. */
+  assert.equal(badRepo.source, 'evil.com/x', 'the text still renders, as text');
+  assert.equal(typeof badRepo.source, 'string', 'a repository became something other than text');
   assert.equal(badRepo.title.href, null, 'a hostile repo poisons the entry link too');
-  assert.equal(noReference.source.href, `${projectHost}/naranjo.online`);
+  assert.equal(noReference.source, 'naranjo.online');
   assert.equal(
     noReference.title.href,
     null,
@@ -1329,7 +1324,6 @@ test('every entry-row href is built by the validated helpers, and the component 
   // /issues/N, never /pull/N, and a neutral "reference" accessible name —
   // the destination and label commitReferenceUrl's own tests justify above.
   assert.equal(referenced.title.href, `${projectHost}/naranjo.online/issues/152`);
-  assert.equal(referenced.source.label, commitRepoLinkLabel('naranjo.online'));
   assert.equal(referenced.title.label, commitReferenceLinkLabel('release (#152)'));
   assert.match(referenced.age, /\S/, 'an entry states its age');
   // The sha-permalink branch: a row with a proven identity and no reference
@@ -1349,45 +1343,56 @@ test('every entry-row href is built by the validated helpers, and the component 
      or renders text — it never assembles one. Any interpolation beyond the
      data fields would fail these pins. The component is LedgerSpread since the
      sheet paired the columns (owner design decision, 2026-09-11, issue 318),
-     and it renders THREE validated hrefs rather than two: the commit row's
-     two, and the repository row's own — every one of them built and labelled
-     by an adapter, none of them assembled here. */
+     and it renders TWO validated hrefs since the entries became two-line
+     entries with one link each (owner direction, 2026-10-16): the repository
+     entry's and the commit entry's — both built and labelled by an adapter,
+     neither assembled here. */
   const hrefs = [...spread.matchAll(/href=\{([^}]*)\}/g)].map(([, expression]) => expression);
   assert.deepEqual(
     hrefs.sort(),
-    ['row.link.href', 'row.source.href', 'row.title.href'],
+    ['row.link.href', 'row.title.href'],
     'the component may render exactly the validated hrefs and construct none'
   );
-  assert.match(spread, /\{#if row\.source\.href\}/);
-  assert.match(spread, /<span class="commit-source-text">\{row\.source\.text\}<\/span>/);
+  assert.doesNotMatch(spread, /row\.source\.(?:href|label|text)/, 'the repository became a link again');
   assert.match(spread, /\{#if row\.title\.href\}/);
-  assert.match(spread, /<span class="commit-title-text">\{row\.title\.text\}<\/span>/);
+  assert.match(spread, /<span class="log-source"[^>]*>\{row\.source\}<\/span>/);
+  assert.match(spread, /<span class="log-message">\{row\.title\.text\}<\/span>/);
   /* The short identity is DISPLAY-ONLY and the adapter decides it: a row whose
      identity this module cannot vouch for prints the honest dash rather than a
      truncated guess, and the component prints whatever it is handed. */
   assert.equal(shaOnly.mark, validSha.slice(0, 7));
   assert.equal(badSha.mark, '—');
-  assert.match(spread, /<span class="commit-mark">\{row\.mark\}<\/span>/);
+  assert.match(spread, /<span class="log-mark">\{row\.mark\}<\/span>/);
   // Text, never markup: neither component may reach for {@html} anywhere, now
   // that several of their fields are payload-controlled link targets.
-  for (const [name, source] of Object.entries({ component, spread })) {
+  for (const [name, source] of Object.entries({ chronicle, spread })) {
     assert.doesNotMatch(source, /\{@html/, `${name} renders entry fields as markup`);
   }
   // Every outbound link closes the same way: a new tab that says so, and the
   // two attributes the threat model requires on anything leaving the page.
-  // THREE of them on this sheet — the repository, the commit's repository and
-  // the commit's subject.
+  // TWO of them on this sheet — the repository entry and the commit entry.
   const targetBlank = spread.match(/target="_blank"/g) ?? [];
   const relSafe = spread.match(/rel="noopener noreferrer"/g) ?? [];
-  assert.equal(targetBlank.length, 3, 'every outbound anchor on the sheet must open a new tab');
-  assert.equal(relSafe.length, 3, 'every outbound anchor must carry rel="noopener noreferrer"');
-  assert.match(spread, /aria-label=\{row\.source\.label\}/);
+  assert.equal(targetBlank.length, 2, 'every outbound anchor on the sheet must open a new tab');
+  assert.equal(relSafe.length, 2, 'every outbound anchor must carry rel="noopener noreferrer"');
   assert.match(spread, /aria-label=\{row\.title\.label\}/);
   assert.match(spread, /aria-label=\{row\.link\.label\}/);
+  /* AND EACH LINK SAYS WHAT ITS SUPPORTING LINE SAYS. The label is the
+     adapter's (where the link goes); the entry's other text reaches a screen
+     reader as the link's description, by ids the component ties to that same
+     entry — the repository's description, and the commit's repository and
+     age. An entry whose words a reader could see and not hear would be the
+     entry hiding its new information from exactly one kind of reader. */
+  assert.match(spread, /aria-describedby="\{uid\}-about-\{index\}"/);
+  assert.match(spread, /<span\s+class="repo-about"\s+id="\{uid\}-about-\{index\}">\{row\.about\}<\/span/);
+  assert.match(spread, /aria-describedby="\{uid\}-source-\{index\} \{uid\}-age-\{index\}"/);
+  assert.match(spread, /<span class="log-source" id="\{uid\}-source-\{index\}">\{row\.source\}<\/span>/);
+  assert.match(spread, /class="log-age"\s+id="\{uid\}-age-\{index\}">\{row\.age\}<\/span/);
+  assert.match(spread, /const uid = \$props\.id\(\);/, 'the ids are not unique to the instance');
 });
 
 test('activity sources stay local-origin and provider-neutral', () => {
-  for (const [name, source] of Object.entries({ component, spread, helpers, grid })) {
+  for (const [name, source] of Object.entries({ chronicle, spread, helpers })) {
     // Protocol-relative origins still fail this; a line comment no longer
     // does. The lookahead and the reasoning behind it are documented once, on
     // the same sweep in tests/experience.test.mjs.
@@ -1398,92 +1403,7 @@ test('activity sources stay local-origin and provider-neutral', () => {
   }
 });
 
-/* The scrollbar gutter (issue 130), executed rather than pattern matched.
- *
- * The strip reserves room for a horizontal scrollbar inside a FIXED box,
- * because the box has to be identical before and after its data arrives. A
- * reserve is a guess about a length only the platform knows, and the guess was
- * short: 9px of real reserve against a 15px classic scrollbar, so the month
- * axis clipped on Linux and Windows. lib/scrollbar.ts measures it instead —
- * and the DECISION it makes from that measurement is a plain function, driven
- * here with the values a real platform produces. */
-test('the scrollbar gutter is measured, floors at the shipped reserve, and never shrinks a strip', () => {
-  // The stylesheet's fallback and the module's floor are ONE fact in two
-  // places (the strip's calc() writes `0.75rem`, this module writes 12), so
-  // the pin converts one into the other rather than restating either.
-  assert.equal(scrollbarGutterFallbackPx, 12);
-  const fallbackRem = /var\(--grid-scrollbar-size, ([\d.]+)rem\)/.exec(grid);
-  assert.ok(fallbackRem, 'the strip no longer reads the measured gutter at all');
-  assert.equal(
-    Number(fallbackRem[1]) * 16,
-    scrollbarGutterFallbackPx,
-    'the stylesheet reserve and lib/scrollbar.ts’s floor disagree; they are one number'
-  );
-
-  // Overlay scrollbars (macOS, phones) measure zero and keep exactly the box
-  // the page has always had: this may widen a strip, never narrow one, so no
-  // platform loses layout to the fix.
-  assert.equal(scrollbarGutterPx(0), scrollbarGutterFallbackPx);
-  assert.equal(scrollbarGutterPx(11), scrollbarGutterFallbackPx);
-  // A classic scrollbar is honoured, and a fractional one is rounded UP: a
-  // gutter half a pixel short is a clipped row.
-  assert.equal(scrollbarGutterPx(15), 15);
-  assert.equal(scrollbarGutterPx(17), 17);
-  assert.equal(scrollbarGutterPx(15.2), 16);
-  // Nothing a host can fail to report is read as "no gutter".
-  for (const nonsense of [Number.NaN, Number.POSITIVE_INFINITY, -4]) {
-    assert.equal(scrollbarGutterPx(nonsense), scrollbarGutterFallbackPx);
-  }
-
-  // The probe itself, against a hand-written document: it must force the box
-  // to scroll (`overflow: scroll`, not `auto` — the probe has no content, and
-  // the question is how thick THIS platform's bar is, not whether one strip
-  // happens to overflow), take it out of view, and remove it again.
-  const events = [];
-  const probe = {
-    style: { cssText: '' },
-    offsetHeight: 100,
-    clientHeight: 85,
-    remove: () => events.push('remove'),
-  };
-  const written = {};
-  const doc = {
-    createElement: (tag) => {
-      events.push(`create:${tag}`);
-      return probe;
-    },
-    body: { appendChild: () => events.push('append') },
-    documentElement: { style: { setProperty: (name, value) => (written[name] = value) } },
-  };
-  assert.equal(measureScrollbarPx(doc), 15);
-  assert.deepEqual(events, ['create:div', 'append', 'remove']);
-  assert.match(probe.style.cssText, /overflow:scroll/);
-  assert.doesNotMatch(probe.style.cssText, /overflow:auto/);
-  assert.match(probe.style.cssText, /position:absolute/);
-
-  // And the whole application: measure, decide, publish, under the name the
-  // stylesheet reads.
-  events.length = 0;
-  assert.equal(applyScrollbarGutter(doc), 15);
-  assert.deepEqual(written, { [scrollbarGutterProperty]: '15px' });
-  // The same host with an overlay scrollbar publishes the floor instead.
-  probe.clientHeight = probe.offsetHeight;
-  assert.equal(applyScrollbarGutter(doc), scrollbarGutterFallbackPx);
-  assert.deepEqual(written, { [scrollbarGutterProperty]: `${scrollbarGutterFallbackPx}px` });
-});
-
-test('the gutter is published before the application mounts, so no grid is re-laid', async () => {
-  const main = await readFile(new URL('../src/main.ts', import.meta.url), 'utf8');
-  const applied = main.indexOf('applyScrollbarGutter(document)');
-  const mounted = main.indexOf('mount(App');
-  assert.ok(applied > 0, 'main.ts never publishes the measured scrollbar gutter');
-  assert.ok(
-    applied < mounted,
-    'the gutter is published after the application mounts, so every strip is laid out twice'
-  );
-});
-
-test('the manifest mounts the calendar block exactly once, bound to both its panels', () => {
+test('the manifest mounts the chronicle exactly once, bound to the calendar’s two panels', async () => {
   /* The fences retired with the table-of-contents App (issue 165): the
      manifest IS the mount list, so the pin lives on it. What moved (owner
      design decision, 2026-09-11, issue 318) is WHICH section the calendar is
@@ -1492,25 +1412,40 @@ test('the manifest mounts the calendar block exactly once, bound to both its pan
      many panels its block reads — two, because the segmented control cycles
      the same grid between the contributions and each token source's daily
      series. Exactly one block module does that binding, and the stack lists it
-     exactly once. */
+     exactly once.
+
+     The calendar is drawn INSIDE the chronicle now (owner direction,
+     2026-10-16): the token lines over the year's cells, one timeline, one
+     cursor. The chronicle reads the calendar's two panels in the
+     calendar's own order, named once, so the two cannot disagree. */
   const importLines = manifest.match(
-    /^import \{ contributionCalendar \} from '\.\/lib\/blocks\/contributionCalendar\.ts';$/gm
+    /^import \{ trackerChronicle \} from '\.\/lib\/blocks\/trackerChronicle\.ts';$/gm
   );
-  assert.equal(importLines?.length, 1, 'exactly one import line for the calendar block');
+  assert.equal(importLines?.length, 1, 'exactly one import line for the chronicle block');
   const body = manifest.replace(/^import[^\n]*\n/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.equal(
-    (body.match(/\bcontributionCalendar\b/g) ?? []).length,
+    (body.match(/\btrackerChronicle\b/g) ?? []).length,
     1,
-    'the manifest lists the calendar block exactly once'
+    'the manifest lists the chronicle block exactly once'
   );
   assert.match(
     manifest,
-    /section\('trackers', 'Trackers', \[tokenBoard, contributionCalendar, bossTicker\], \{/,
-    'the calendar sits between the board and the ticker in the trackers stack'
+    /section\('trackers', 'Trackers', \[trackerChronicle, bossTicker\], \{/,
+    'the chronicle leads the trackers stack, with the ticker under it'
   );
+  const [chronicleBinding, chronicleAdapter] = await Promise.all([
+    readFile(new URL('../src/lib/blocks/trackerChronicle.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/chronicle.ts', import.meta.url), 'utf8')
+  ]);
   assert.match(
-    binding,
-    /panelsBlock\(\s*'contribution-calendar',\s*ContributionCalendar,\s*calendarPanelIds,/
+    chronicleBinding,
+    /panelsBlock\(\s*'tracker-chronicle',\s*Chronicle,\s*chroniclePanelIds,/
+  );
+  // …plus the projects panel, for the pull requests its repositories closed
+  // (owner direction, 2026-10-16: "Pull Requests Closed").
+  assert.match(
+    chronicleAdapter,
+    /export const chroniclePanelIds: readonly string\[\] = \[\.\.\.calendarPanelIds, codingProjectsPanelId\];/
   );
   // The ids the binding declares are the ids the adapter unpacks, in order,
   // named once so the two cannot disagree.

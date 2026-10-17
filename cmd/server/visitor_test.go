@@ -738,10 +738,12 @@ func TestVisitorReadsTheProjectFeed(t *testing.T) {
 			bundled = append(bundled, response.Body...)
 		}
 		// Structure and markers, never copy: the panel id the block subscribes
-		// to, the table-count class the ledger table's figures render in (the
-		// entry-count class went with the card feed, owner directive 2026-09-03,
-		// issue 287), and the provenance mark a captured figure carries.
-		for _, marker := range []string{"coding-projects", "table-count", "recorded"} {
+		// to, the repo-figure class each repository's figures render in (the
+		// ledger table's table-count went with the table when Ongoing Work
+		// replaced it, owner direction 2026-10-16, as the card feed's
+		// entry-count went before it, issue 287), and the provenance mark a
+		// captured figure carries.
+		for _, marker := range []string{"coding-projects", "repo-figure", "recorded"} {
 			if !bytes.Contains(bundled, []byte(marker)) {
 				t.Errorf("built assets lack the project-feed marker %q", marker)
 			}

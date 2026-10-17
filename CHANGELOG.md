@@ -7,6 +7,61 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.96] - 2026-10-16
+
+### Changed
+
+- The page is redesigned ("The Keep", #375):
+  - A night sky is drawn behind it on a canvas: still under reduced motion,
+    paused when hidden, 30 frames a second at most.
+  - One framed glass sheet sits over the sky, with a pixel border on the
+    sheet only.
+  - The page opens on the name, with J flying beside it. The header bar,
+    the section nav and the picture bands are gone; the reading-mode
+    control lives in the footer, and every section keeps its id.
+  - One background on the sheet: no board, panel or control paints a
+    ground of its own.
+- The trackers are one diagram:
+  - Pull Requests Closed, Commits Pushed and Total Tokens Used sit beside a
+    daily line, over the year's calendar.
+  - Every day of the line stands over its own week's column.
+  - A switch picks what both show: contributions, or each tool's tokens.
+  - Pointing, touching or the arrow keys read one day across all of it.
+  - The Codex and Claude Code accounts carry the same rows, in the same
+    order.
+  - The boss log sits on the same board.
+  - The board holds the room its data will fill while that data is on its
+    way, so nothing below it moves when it lands.
+- Ongoing Work shows one entry fewer per column, with more on each.
+- The usage export gives Codex the same figures as Claude Code: input,
+  output, cache read and write, sessions, active and tracked days, and a
+  per-model split. It no longer counts the running total an auto-review
+  session opens with as usage. A stored day is lowered only where its
+  records are intact, so an inflated day whose records are gone keeps its
+  figure until it is corrected by hand.
+
+### Added
+
+- The origin serves every day's commit count with the contribution
+  calendar (`commitWeeks` and `totalCommits`, additive inside
+  `vcs-activity/v1`), which is what Commits Pushed reads. The year is asked
+  for in four sub-windows of the same request, so a repository committed to
+  on more days than the upstream's page size is never cut short. A count
+  that cannot be placed exactly is left out whole, never estimated.
+
+### Fixed
+
+- A hover detail opened beside the pointer again everywhere on the page.
+  The sheet's glass had made it the containing block of every detail,
+  which sent them off the screen.
+
+### Removed
+
+- The span buttons and the span outline. The graph is always the whole
+  calendar.
+- Eight components and modules the redesign retired, with about 1,100
+  lines of styles nothing read any more.
+
 ## [0.1.95] - 2026-10-13
 
 ### Changed

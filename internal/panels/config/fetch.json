@@ -43,13 +43,13 @@
     "minIntervalMinutes": 15,
     "calendar": {
       "endpoint": "https://api.github.com/graphql",
-      "query": "query($from: DateTime!, $to: DateTime!) { viewer { contributionsCollection(from: $from, to: $to) { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount } } } } } }",
+      "query": "query($from: DateTime!, $to: DateTime!, $seam1: DateTime!, $seam2: DateTime!, $seam3: DateTime!) { viewer { contributionsCollection(from: $from, to: $to) { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount } } } totalCommitContributions } commits1: contributionsCollection(from: $from, to: $seam1) { ...commitDays } commits2: contributionsCollection(from: $seam1, to: $seam2) { ...commitDays } commits3: contributionsCollection(from: $seam2, to: $seam3) { ...commitDays } commits4: contributionsCollection(from: $seam3, to: $to) { ...commitDays } } } fragment commitDays on ContributionsCollection { totalCommitContributions commitContributionsByRepository(maxRepositories: 25) { contributions(first: 100) { totalCount pageInfo { hasNextPage } nodes { at: occurredAt count: commitCount } } } }",
       "keyEnvName": "GITHUB_PANELS_TOKEN",
       "keyHeader": "Authorization",
       "keyPrefix": "Bearer ",
       "authenticatedMinIntervalMinutes": 1,
       "headers": { "Accept": "application/json", "Content-Type": "application/json" },
-      "maxBytes": 262144,
+      "maxBytes": 524288,
       "contentType": "application/json"
     },
     "commits": {

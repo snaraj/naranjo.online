@@ -964,6 +964,13 @@ export function sourceName(key: string): string {
   return sourceNames.get(key) ?? key;
 }
 
+/* Every source the vocabulary names, in its order: the sources a page can
+ * expect before any payload has said which of them reported. */
+export const knownSourceKeys: readonly string[] = sourceVocabulary.sources.map((entry) => entry.key);
+
+/* How many accounting classes a source's card prints as facts. */
+export const sourceClassFactCount = classKeys.length;
+
 /* The canonical SERVE order as a RANK, so a card lays its rows out in the
  * vocabulary's order whatever order a payload served them in. The residual
  * leads it, exactly as modelSlots does, because the two are the same list
@@ -1561,17 +1568,16 @@ function modelReadings(source: TokenUsageSource): ModelReading[] {
  * all nine set the height of its whole grid row. Every member stays recorded
  * in the payload; this is only what the card draws. The cut is taken from the
  * usage order, so what goes is always the tail. Five is the most the ruling
- * allows; the stylesheet (.board-models) then draws only the rows that fit
- * WHOLE in the space the card has, so the same five become four in a smaller
- * box without this adapter knowing the box at all. */
-const MAX_DRAWN_MODELS = 5;
+ * allows, and it is also the room each account under the trackers' diagram
+ * holds for its models (lib/chronicle.ts), filled or not. */
+export const maxDrawnModels = 5;
 
 /* Cards five and six, and one per later source that carries a split: the SAME
  * shape as each other, headed by the source whose numbers they are. A source
  * with nothing to split renders no card at all rather than an empty one — the
  * board is the cards the payload can fill. */
 function modelCard(source: TokenUsageSource): LedgerCard | undefined {
-  const readings = modelReadings(source).slice(0, MAX_DRAWN_MODELS);
+  const readings = modelReadings(source).slice(0, maxDrawnModels);
   if (readings.length === 0) {
     return undefined;
   }

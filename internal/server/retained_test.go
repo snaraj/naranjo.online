@@ -156,8 +156,8 @@ func TestFreshAdmissionProceedsPastAFIFORetainedCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	labels, modelKey := shippedSourceLabels(t, site1), shippedModelKey(t, site1)
-	sealSeriesFile(t, dataDir, labels, modelKey, first)
+	labels, modelKeys := shippedSourceLabels(t, site1), shippedModelKeys(t, site1)
+	sealSeriesFile(t, dataDir, labels, modelKeys, first)
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	if err := site1.StartPanelData(ctx1, dataDir, stateDir, env); err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestFreshAdmissionProceedsPastAFIFORetainedCopy(t *testing.T) {
 	site1.Close()
 
 	release := plantFIFO(t, stateDir, panelsRetainedName)
-	sealSeriesFile(t, dataDir, labels, modelKey, newer)
+	sealSeriesFile(t, dataDir, labels, modelKeys, newer)
 	site2, err := New(testsupport.FrontendFS())
 	if err != nil {
 		t.Fatal(err)

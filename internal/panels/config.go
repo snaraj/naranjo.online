@@ -412,11 +412,16 @@ func validateVCSActivitySpec(spec *vcsActivityFetchSpec) error {
 //
 // Two of these checks exist for reasons the field names do not carry:
 //
-//   - The QUERY must declare both window variables. This package computes the
+//   - The QUERY must declare every window variable. This package computes the
 //     window and posts it; a query that ignores the variables would be sent
 //     happily and answered with the upstream's own default range, which is not
 //     Sunday-aligned and would shift every cell's date. A missing variable is
 //     a silently wrong calendar, so it is refused at construction instead.
+//     The seams count as window variables: they are posted with every
+//     request (calendarVariables), so a query must declare them to receive
+//     only what it declares — and its commit half is then read over
+//     sub-windows this package computed, never over ranges the query text
+//     spelled out.
 //   - The header map is held to the CREDENTIALED producer's own allowlist, not
 //     the public one, and neither list may name a credential header. The
 //     credential travels through KeyHeader, which is filled from the
@@ -429,9 +434,9 @@ func validateVCSCalendarSpec(spec *vcsCalendarFetchSpec) error {
 	if spec.Endpoint == "" || spec.Query == "" || spec.KeyEnvName == "" || spec.KeyHeader == "" {
 		return errors.New("vcs-calendar fetch spec: endpoint, query, keyEnvName, and keyHeader are all required")
 	}
-	for _, variable := range []string{calendarFromVariable, calendarToVariable} {
+	for _, variable := range []string{calendarFromVariable, calendarToVariable, calendarSeam1Variable, calendarSeam2Variable, calendarSeam3Variable} {
 		if !strings.Contains(spec.Query, variable) {
-			return fmt.Errorf("vcs-calendar fetch spec: the query does not declare %s, so it would be answered over the upstream's own window", variable)
+			return fmt.Errorf("vcs-calendar fetch spec: the query does not declare %s, so it would be answered over a window this package did not compute", variable)
 		}
 	}
 	if spec.ContentType == "" {

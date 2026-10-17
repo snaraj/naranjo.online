@@ -753,6 +753,111 @@ drift review: read the vendor surface again, replace the entry's `total`
 and `asOf` together, and land it through review like any other artifact
 change.
 
+## The second tool's accounting, in parity with the first (2026-10-16)
+
+The owner's directive: show the second tool's usage with the same information
+as the first's. Until then the second source carried a lifetime, a peak day,
+its streaks and its longest session, and nothing else: no class tiles, no
+session count, no active or tracked days, no per-model split. Two things were
+missing, and both are fixed here: the shipped snapshot listed no such tiles
+for it (and the origin never ADDS a tile by push), and the capture measured
+none of them, because it assumed only a roll-up cache could.
+
+**What the machine actually keeps for that tool.** Every place was read before
+anything was concluded absent. The running-totals journals (one file per
+thread, 2026-08-09 onward) carry every token reading with all five class
+fields, every model declaration, and a session declaration naming the thread
+that spawned it, if any. The tool's own state databases hold a thread row
+with one model and its final running total, and a projection of the same
+journals with no token fields, over the same span. Its log database holds two
+days and no usage. No command the tool ships reports usage. The vendor's
+dashboard, read into the history store back to 2025-10-18, gives daily TOTALS
+only. Nothing on the machine holds a class split for any day before
+2026-08-09, so none is shown for one.
+
+**Opening balances bill nothing.** A file's first reading, read before any
+model declaration, whose running total exceeds the usage it reports for its
+own turn, is the accounting the file OPENED with. It sets the high-water mark
+and bills nothing (`opening_balance`; counted as `opened=` on the capture's
+summary line). Measured on the owner's tree: for every one of 194,242
+advancing readings the advance equals the reading's own turn figure, and so
+does every one of 89 restarts. The exceptions were 98 review threads, created
+from a compacted history between 2026-08-21 and 2026-09-26 (none since). Each
+first reading carried that history's running total: 4,121,447,105 tokens in
+all. Each was the file's third record, written in the same second as the
+session declaration, with no model declared before it, and the tool's own
+thread history records no turn before it. The carried figure matches no
+reading in any other local file, so its origin cannot be shown locally. But
+a thread that has run no turn has spent nothing, and on the six days the old
+walk exceeded the vendor's own daily figure the corrected walk sits nearer it
+(2026-08-23: vendor 941.7M, old walk 1.83B, corrected 0.99B).
+
+**A proven correction passes the store; a guess never does.** The history
+store keeps the larger figure, so a corrected walk alone would change nothing
+already stored. The merge therefore compares the fresh day as the OLD rule
+would have measured it, `fresh + set-aside balances`. When that reaches the
+stored figure, nothing the store remembers is lost, so the corrected figure
+wins and is written back. Once written, the same comparison keeps it on every
+later run. When it falls short, the day's journals have lost records since it
+was stored (the walk now measures less than the store on many days in this
+span), and the stored figure keeps winning, balance and all. On the owner's
+store this corrects 11 days by 1,912,331,046 tokens, which is exactly the
+store's former `~unidentified` bucket (the balances were read before any
+model declaration). About 2.02B more sits inside 15 stored days whose
+journals have since lost records. The store cannot tell which of a day's
+tokens were the balance, so it does not guess. Lowering those days is an
+owner decision through `<key>.verified.json`.
+
+**The accounting surface a source with no roll-up carries** (`walked_stats`):
+
+- the four class tiles, summed over every day of the served series whose
+  class split partitions its total: the walk's days and every remembered day
+  that kept its split. A day held as a total only contributes nothing. A
+  split is never scaled onto a day it does not cover;
+- `sessions`: the record files whose FIRST session declaration names no
+  parent thread and that billed a token. That is the first tool's own
+  definition, which counts sessions a person ran and none of the subagents
+  they spawned (its 81 against 1,378 transcript files, 1,300 of them
+  subagents). On the owner's tree, 91 such files, 87 of them billed; 1,803
+  name a parent. A record that declares no session states no count;
+- `longest-session`, as before;
+- `modelStats`: the per-model joint summed over every day the WALK owns. A
+  remembered day kept its class split and its model split separately, never
+  the joint, so it cannot be attributed by class. A split whose only member
+  is the residual stays off the wire (the daily partition's rule); the ledger
+  keeps it by raw identity under `modelIdStats`;
+- no `lifetime`. The committed baseline states that source's lifetime, and
+  the exporter refuses a collision.
+
+**How the figures relate, and what the page may not imply.** For the first
+tool the class tiles ARE its lifetime: both come from the cache, so their sum
+equals the lifetime tile. For the second tool, the class tiles plus
+`reasoning` sum to the split days only. The lifetime reaches back to the
+vendor's first day. So `Σ class tiles ≤ lifetime`, and on the owner's data
+it is 28.6B of 62.9B. The page must never present those tiles as a split of
+the lifetime: where `Σ class tiles < lifetime` it has to say the split covers
+part of it. `Σ members ≤ each class tile` holds for both tools, and the
+origin enforces it.
+
+**Two class words differ between the tools, and both stay as the record
+writes them.** `reasoning` is a category and a per-model class, but not a
+stat tile: the closed stat vocabulary has no key for it, so the four tiles
+exclude it and the per-model rows print it. The second tool's `output` is
+visible output; its reasoning is that output's subset, carried apart exactly
+as the daily categories carry it. The first tool's `output` includes its
+thinking. A reasoning tile is a vocabulary edit in the origin and the
+producer together (see the rollout order below).
+
+**Rollout order.** The shipped snapshot now lists these tiles and a per-model
+split for every source, and `TestEveryShippedUsageSourceShowsTheSameAccounting`
+pins that every source keeps the same inventory. The origin then REQUIRES
+every such tile on every push. Every key the new capture emits is already in
+the deployed origin's closed vocabularies, which admit it and discard what no
+tile shows. So the exporter goes first: once the main checkout fast-forwards,
+its next run says `SERVED`. Then the release with the snapshot deploys. In
+the other order, every push is refused until the exporter catches up, and
+the panel reads `stale` meanwhile.
+
 ## The lifelong ledger's material (issue #267)
 
 The panel serves a windowed, sealed, byte-bounded document. The workstation's
@@ -797,8 +902,9 @@ against the day's raw-identity split, and absent exactly when its twin is.
 Folding it through the vocabulary gives `modelCategories` back. **`modelIdStats`
 is the cache's lifetime classes by raw identity**, `[{id, totals: {class:
 count}}]`, accrued past the cache's as-of day through that joint exactly as
-`modelStats` is through its own; it is present only when a cache is read and
-never reaches the wire, where `modelStats` stays the folded split.
+`modelStats` is through its own. A source with no cache keeps the same
+section, built from the identity joint over the days the walk owns. It never
+reaches the wire, where `modelStats` stays the folded split.
 
 **`sessions` is one entry per record FILE the walk billed a token to** — one
 file is one session in both record shapes — carrying the span from its first
@@ -823,7 +929,8 @@ malformed refuses the run: absent is a state, broken is a fault.
 `modelStats` carries the lifetime token classes PER MODEL, folded through the
 model vocabulary exactly like every other identifier, accrued past the cache's
 own as-of day through the joint above so the split moves with the class tiles
-it sits under. The origin admits it under the captured-stats completeness
+it sits under. A source with no cache sums the same joint over every day the
+walk owns (see "The second tool's accounting" above). The origin admits it under the captured-stats completeness
 rule — a source whose snapshot ships the section must refresh it on every
 push, a source whose snapshot ships none owes nothing and cannot mint one —
 and enforces `Σ members ≤ each class tile`. It is `≤` and not `=` because the
