@@ -1133,9 +1133,12 @@
      holds the name to its own column on top of this (the Keep layer). */
   --keep-name-ceiling: clamp(2.5rem, 11.5vw, 12.5rem);
   --keep-name-size: var(--keep-name-ceiling);
-  /* The four mode-dependent values, light's here. */
+  /* The mode-dependent values, light's here. The blur is for glass only:
+     the parchment is opaque, so a blur behind it shows nothing and costs
+     every frame the sky or J paints (measured in WebKit without a GPU). */
   --keep-sheet: var(--keep-texture-parchment);
   --keep-sheet-ground: var(--color-surface);
+  --keep-sheet-blur: none;
   --keep-name-top: var(--palette-keep-bronze);
   --keep-name-bottom: var(--palette-keep-bronze-deep);
   --keep-ornament: var(--palette-keep-bronze);
@@ -1187,6 +1190,7 @@
     --gallery-stage-ground: var(--palette-projection-ground);
     --keep-sheet: none;
     --keep-sheet-ground: var(--palette-keep-glass);
+    --keep-sheet-blur: blur(6px) saturate(115%);
     --keep-name-top: var(--palette-keep-gilt-light);
     --keep-name-bottom: var(--palette-keep-gilt);
     --keep-ornament: var(--palette-keep-gilt);
@@ -1227,6 +1231,7 @@
   --gallery-stage-ground: var(--palette-projection-ground);
   --keep-sheet: none;
   --keep-sheet-ground: var(--palette-keep-glass);
+  --keep-sheet-blur: blur(6px) saturate(115%);
   --keep-name-top: var(--palette-keep-gilt-light);
   --keep-name-bottom: var(--palette-keep-gilt);
   --keep-ornament: var(--palette-keep-gilt);
@@ -1272,6 +1277,7 @@
   --gallery-stage-ground: var(--palette-projection-ground);
   --keep-sheet: none;
   --keep-sheet-ground: var(--palette-keep-glass);
+  --keep-sheet-blur: blur(6px) saturate(115%);
   --keep-name-top: var(--palette-keep-gilt-light);
   --keep-name-bottom: var(--palette-keep-gilt);
   --keep-ornament: var(--palette-keep-gilt);
@@ -1311,6 +1317,7 @@
   --gallery-stage-ground: var(--palette-projection-ground);
   --keep-sheet: none;
   --keep-sheet-ground: var(--palette-keep-glass);
+  --keep-sheet-blur: blur(6px) saturate(115%);
   --keep-name-top: var(--palette-keep-gilt-light);
   --keep-name-bottom: var(--palette-keep-gilt);
   --keep-ornament: var(--palette-keep-gilt);
@@ -2366,8 +2373,8 @@ main::before {
   border-image: var(--keep-frame-image) var(--keep-frame-slice) var(--keep-frame-repeat);
   background-color: var(--keep-sheet-ground);
   background-image: var(--keep-sheet);
-  -webkit-backdrop-filter: blur(6px) saturate(115%);
-  backdrop-filter: blur(6px) saturate(115%);
+  -webkit-backdrop-filter: var(--keep-sheet-blur);
+  backdrop-filter: var(--keep-sheet-blur);
   box-shadow: inset 0 0 7rem var(--keep-vignette-ink);
   pointer-events: none;
 }

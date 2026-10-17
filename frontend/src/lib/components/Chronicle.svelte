@@ -881,16 +881,20 @@
   }
 
   /* The narrowest phones set the names a size smaller and closer, so the
-     row fits its column rather than scrolling (still 44px tall). */
+     row fits its column rather than scrolling: about 8px to spare at 320px
+     (Linux sets the letters about 4px wider than macOS, and a row one pixel
+     over scrolls). Each button still clears the touch floor on both axes,
+     the short name's by its own minimum rather than by its letters. */
   @media (max-width: 22.5rem) {
     .chronicle-layers {
       gap: 0;
     }
 
     .chronicle-layers button {
-      padding-inline: 0.3125rem;
+      min-inline-size: 2.75rem;
+      padding-inline: 0.25rem;
       font-size: 0.625rem;
-      letter-spacing: 0.01em;
+      letter-spacing: 0;
     }
   }
 

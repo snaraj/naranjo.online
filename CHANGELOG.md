@@ -54,6 +54,13 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - A hover detail opened beside the pointer again everywhere on the page.
   The sheet's glass had made it the containing block of every detail,
   which sent them off the screen.
+- The page paints in its own faces. Their files are preloaded with the
+  document and the page appears once they are loaded, never more than a
+  second later, so a face landing late no longer moves the name, the
+  plaques or a ledger row.
+- Light mode no longer blurs behind its opaque parchment, which showed
+  nothing and slowed every frame where a browser draws without a GPU.
+- The diagram's layer names fit a 320px screen in every engine.
 
 ### Removed
 

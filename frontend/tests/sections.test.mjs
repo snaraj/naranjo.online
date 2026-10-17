@@ -721,6 +721,73 @@ test('the card token defaults are global, and resolve through the reading modes'
   assert.match(styles, /font-family:\s*var\(--font-sans\)/);
 });
 
+/* THE PAGE PAINTS IN ITS OWN FACES. A face that lands after the first paint
+ * swaps in and moves every line that wraps differently in it than in its
+ * fallback: on Linux Chromium the name, the plaques and a ledger role moved
+ * the page by 0.03 at 1440px and 0.06 at 390px, because the faces' bytes were
+ * here but the main thread took them up only after the application had
+ * painted. So the document asks for each face's latin file itself, and the
+ * application mounts once those faces are loaded or a short bound has passed,
+ * whichever is first. Text pins, because the browser lanes measure the shift
+ * and these hold the two halves it depends on. */
+test('the page asks for its faces with the document and paints in them', async () => {
+  const [index, entry] = await Promise.all([read('../index.html'), read('../src/main.ts')]);
+  const preloaded = [
+    ...withoutHtmlComments(index).matchAll(
+      /<link rel="preload" href="\/src\/assets\/fonts\/([^"]+)" as="font" type="font\/woff2" crossorigin \/>/g
+    ),
+  ].map((match) => match[1]);
+  const upright = [
+    ...styles.matchAll(/font-family: '([^']+)';\s*font-style: normal;[^}]*?src: url\('\.\/assets\/fonts\/([^']+-latin\.woff2)'\)/g),
+  ];
+  assert.equal(upright.length, 3, 'expected one upright latin file for each of the three families');
+  assert.deepEqual(
+    [...preloaded].sort(),
+    upright.map((match) => match[2]).sort(),
+    'the document preloads a different set of files than the faces the stylesheet declares'
+  );
+  const faces = /const faces = \[([^\]]*)\];/.exec(entry);
+  assert.ok(faces, 'main.ts no longer names the faces it waits for');
+  assert.deepEqual(
+    [...faces[1].matchAll(/'([^']+)'/g)].map((match) => match[1]).sort(),
+    upright.map((match) => match[1]).sort(),
+    'main.ts waits for a different set of faces than the stylesheet declares'
+  );
+  const wait = /const faceWait = (\d+);/.exec(entry);
+  assert.ok(wait && Number(wait[1]) > 0 && Number(wait[1]) <= 1000, 'the mount must wait for the faces a moment at most');
+  assert.match(
+    entry,
+    /Promise\.race\(\[\s*Promise\.all\(faces\.map\(\(face\) => document\.fonts\.load\(face\)\)\),\s*new Promise\(\(resolve\) => setTimeout\(resolve, faceWait\)\),\s*\]\)\.then\(start, start\);/,
+    'the mount no longer waits for the faces, or waits without a bound, or never runs when a face fails'
+  );
+  assert.equal(entry.match(/mount\(App/g)?.length, 1, 'the application mounts somewhere other than behind the faces');
+  assert.equal(entry.match(/\bstart\b/g)?.length, 3, 'start runs somewhere other than as the race’s two answers, so the page can mount before its faces');
+  assert.match(entry, /const start = \(\) => \{\s*target\.replaceChildren\(\);\s*mount\(App, \{ target \}\);\s*\};/);
+});
+
+/* The sheet blurs what is behind it only where it is glass. The parchment is
+ * opaque, so a blur behind it shows nothing, and it still cost every frame the
+ * sky or J painted: without a GPU, WebKit redid it each time. Every reading
+ * mode that sets the sheet's ground sets its blur beside it, and none blurs
+ * where the ground is opaque. */
+test('the sheet blurs what is behind it only where it is glass', () => {
+  assert.match(
+    styles,
+    /main::before \{[^}]*-webkit-backdrop-filter: var\(--keep-sheet-blur\);\s*backdrop-filter: var\(--keep-sheet-blur\);/
+  );
+  const grounds = [...styles.matchAll(/--keep-sheet-ground: ([^;]+);/g)];
+  const paired = [...styles.matchAll(/--keep-sheet-ground: ([^;]+);\s*--keep-sheet-blur: ([^;]+);/g)];
+  assert.equal(paired.length, grounds.length, 'a reading mode sets the sheet ground without saying whether it blurs');
+  assert.ok(paired.length >= 2, 'expected an opaque mode and a glass mode');
+  for (const [, ground, blur] of paired) {
+    if (ground.includes('--palette-keep-glass')) {
+      assert.match(blur, /^blur\(/, `the glass ground ${ground} lost its blur`);
+    } else {
+      assert.equal(blur, 'none', `the opaque ground ${ground} blurs what nobody can see behind it`);
+    }
+  }
+});
+
 /* Every content component instead of two (owner directive of 2026-09-03,
  * issue 287) — the structural closure got WIDER with the redesign, not
  * narrower: every surface the ledger introduced renders through the same card
