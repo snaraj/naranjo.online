@@ -2301,6 +2301,7 @@ h1 {
   --keep-shadow-deep: 0 1.5rem 3.5rem var(--keep-shadow-ink);
   --keep-shadow-ink: rgb(0 0 0 / 0.5);
   --keep-vignette-ink: rgb(0 0 0 / 0.16);
+  --keep-vignette-reach: 6rem;
   --ledger-rule: var(--color-border-strong);
   --ledger-section-gap: clamp(2.25rem, 4vw, 3.5rem);
   --card-border-color: var(--color-border);
@@ -2333,10 +2334,21 @@ main::before {
   border: var(--keep-frame-page) solid transparent;
   border-image: var(--keep-frame-image) var(--keep-frame-slice) var(--keep-frame-repeat);
   background-color: var(--keep-sheet-ground);
-  background-image: var(--keep-sheet);
+  /* The vignette darkens the sheet's edges with four gradients rather than an
+     inset shadow. WebKit without a GPU recomputed a 7rem blur over the whole
+     sheet, some 5000px of it, whenever anything on the sheet repainted: 1056ms
+     a frame on the CI runner with the ticker in view, 18ms without the shadow.
+     The gradients sit inside the frame, where the shadow did. */
+  background-image:
+    linear-gradient(to right, var(--keep-vignette-ink), transparent var(--keep-vignette-reach)),
+    linear-gradient(to left, var(--keep-vignette-ink), transparent var(--keep-vignette-reach)),
+    linear-gradient(to bottom, var(--keep-vignette-ink), transparent var(--keep-vignette-reach)),
+    linear-gradient(to top, var(--keep-vignette-ink), transparent var(--keep-vignette-reach)),
+    var(--keep-sheet);
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, repeat;
+  background-clip: padding-box, padding-box, padding-box, padding-box, border-box;
   -webkit-backdrop-filter: var(--keep-sheet-blur);
   backdrop-filter: var(--keep-sheet-blur);
-  box-shadow: inset 0 0 7rem var(--keep-vignette-ink);
   pointer-events: none;
 }
 

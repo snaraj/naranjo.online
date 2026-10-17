@@ -769,6 +769,17 @@ test('the page asks for its faces with the document and paints in them', async (
  * sky or J painted: without a GPU, WebKit redid it each time. Every reading
  * mode that sets the sheet's ground sets its blur beside it, and none blurs
  * where the ground is opaque. */
+/* The sheet's vignette is four gradients, never a blurred shadow: the sheet is
+ * the whole page tall, and WebKit without a GPU recomputed a 7rem inset blur
+ * over all of it whenever anything on the sheet repainted (1056ms a frame on
+ * the CI runner with the ticker in view; 18ms without it). */
+test('the sheet paints its vignette without a blur over its whole height', () => {
+  const sheet = /main::before \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.ok(sheet.length > 0, 'the sheet layer is not where this pin expects it');
+  assert.doesNotMatch(sheet, /box-shadow/, 'the sheet layer paints a blurred shadow again');
+  assert.equal((sheet.match(/linear-gradient\(to (?:right|left|bottom|top), var\(--keep-vignette-ink\), transparent var\(--keep-vignette-reach\)\)/g) ?? []).length, 4, 'the vignette lost an edge');
+});
+
 test('the sheet blurs what is behind it only where it is glass', () => {
   assert.match(
     styles,
