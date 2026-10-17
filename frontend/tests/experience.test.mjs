@@ -1643,16 +1643,25 @@ const jRule = (selector, moving) =>
   );
 const declared = (rule) =>
   Object.fromEntries(declarationsOf(rule.body).map(({ property, value }) => [property, value]));
+/* One block of a component's own source, cut at the tags the component
+   writes: what sits between `<tag …>` and `</tag>`, and the source without
+   the block. Cut by position rather than by pattern — this reads our own
+   file's structure, and it is not a sanitiser of anyone's markup. */
+const cutBlock = (source, tag) => {
+  const open = source.indexOf(`<${tag}`);
+  if (open < 0) return { inner: '', rest: source };
+  const start = source.indexOf('>', open) + 1;
+  const close = source.indexOf(`</${tag}>`, start);
+  if (start === 0 || close < 0) return { inner: '', rest: source };
+  return { inner: source.slice(start, close), rest: source.slice(0, open) + source.slice(close + tag.length + 3) };
+};
 
 test('J flies off the name from one seat, reserved, silent, still at rest, and flying with a gentle rock only where motion is welcome (owner 2026-09-11 issue 314, 2026-10-16)', () => {
   const mark = componentSources[jMarkFile];
   assert.ok(mark, 'the mark component is not where this pin expects it');
   /* The ELEMENT, without its script and its style: what a reader's tree gets. */
-  const markup = stripComments(mark)
-    .replace(/<script[\s\S]*?<\/script>/g, '')
-    .replace(/<style[\s\S]*?<\/style>/g, '')
-    .trim();
-  const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(mark)?.[1] ?? '';
+  const markup = cutBlock(cutBlock(stripComments(mark), 'script').rest, 'style').rest.trim();
+  const script = cutBlock(mark, 'script').inner;
   const style = (componentStyles[jMarkFile] ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.ok(style.trim(), 'J’s look is no longer stated in his own component');
 
