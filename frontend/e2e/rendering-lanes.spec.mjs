@@ -10820,9 +10820,14 @@ test('the contributions calendar trails today past a stalled payload, and says s
  * lets it go — a fixed delay could run out before the first measurement and
  * leave the lane measuring nothing — so the page mounts with both faces still
  * on their way. Then the faces are released, the lane waits until the engine
- * reports them loaded, and the name, the first role row and the page's height
- * must be exactly where they were. Swapped into painted text, the late face
- * widened the name by 78px and moved the roles by 4px at 1440px (0.013). */
+ * reports EACH family loaded (one family landing is not both: the review of
+ * 33f9817 held the mono face back and a wait for either one measured before it
+ * came), and the name, a role's date (set in the mono stack), the first role
+ * row and the page's height must be exactly where they were, with neither late
+ * family in the stack that sets them. Swapped into painted text, the late face
+ * widened the name by 78px and moved the roles by 4px at 1440px (0.013); the
+ * mono face, whose figures share its fallback's advance, moved the page by 1px
+ * in Chromium and nothing in WebKit, so for it the stack is the evidence. */
 for (const viewport of [
   { width: 1440, height: 900 },
   { width: 390, height: 844 },
@@ -10858,10 +10863,14 @@ for (const viewport of [
           const rect = node.getBoundingClientRect();
           return [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 100) / 100);
         };
+        const name = window.document.querySelector('h1');
+        const date = window.document.querySelector('#work .ledger-span');
         return {
-          name: box(window.document.querySelector('h1')),
+          name: box(name),
+          date: box(date),
           role: box(window.document.querySelector('#work .ledger-row')),
           height: window.document.documentElement.scrollHeight,
+          stacks: [getComputedStyle(name).fontFamily, getComputedStyle(date).fontFamily],
         };
       });
     /* The branch under test, proved rather than assumed: the bound won, so
@@ -10879,20 +10888,30 @@ for (const viewport of [
       window.__lateShift.armed = true;
     });
     release();
+    /* EACH family, by name: an engine may quote a family name, so the quotes
+       are dropped before it is compared. */
     await expect
       .poll(
         () =>
           page.evaluate(() =>
-            [...window.document.fonts]
-              .filter((face) => /Archivo|JetBrains Mono/.test(face.family) && face.style === 'normal')
-              .some((face) => face.status === 'loaded')
+            [
+              ...new Set(
+                [...window.document.fonts]
+                  .filter((face) => face.status === 'loaded' && face.style === 'normal')
+                  .map((face) => face.family.replace(/["']/g, ''))
+                  .filter((family) => family === 'Archivo' || family === 'JetBrains Mono')
+              ),
+            ].sort()
           ),
-        { message: 'the held faces never loaded after release; the lane measured nothing arriving' }
+        { message: 'a held face never loaded after release; the lane measured nothing arriving', timeout: 15_000 }
       )
-      .toBe(true);
+      .toEqual(['Archivo', 'JetBrains Mono']);
     await settled(page);
     const after = await geometry();
+    expect(after.stacks[0], 'the name is set in its late face').not.toMatch(/Archivo/);
+    expect(after.stacks[1], 'a role date is set in its late face').not.toMatch(/JetBrains Mono/);
     expect(after.name, 'the name moved when its late face landed').toEqual(before.name);
+    expect(after.date, 'a role date moved when its late face landed').toEqual(before.date);
     expect(after.role, 'the first role row moved when its late face landed').toEqual(before.role);
     expect(after.height, 'the page changed height when its late face landed').toBe(before.height);
     const shift = await page.evaluate(() => window.__lateShift);
