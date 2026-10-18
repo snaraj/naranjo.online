@@ -2467,22 +2467,34 @@ async function pickTokenLayer(page) {
 
 /* Put the pointer on one day of the graph. The day a viewport x names is the
  * graph's own arithmetic, so the pointer is aimed by proportion and then
- * corrected against what the slider reports, a few pixels at a time; the claim
- * under test is what a day READS, and an aim off by a pixel is not a finding. */
+ * corrected against what the slider reports; the claim under test is what a
+ * day READS, and an aim off by a pixel is not a finding.
+ *
+ * The correction BRACKETS rather than steps. The graph spans the calendar's
+ * whole weeks, so the days after today in the newest week are drawn and read
+ * as today: on a Sunday the right six sevenths of the last week answer the
+ * newest day, and an aim taken from the slider's range lands there. Stepping
+ * back half a day per try could not cross that in eight tries (every lane that
+ * scrubbed to yesterday failed the CI run that began on Sunday 2026-10-18 UTC).
+ * The day under the pointer never falls from left to right, so each reading
+ * halves the span the day must lie in, whatever the graph's geometry. */
 async function scrubTo(page, day) {
   const chart = page.locator('.chronicle-chart');
   const box = await chart.boundingBox();
   const start = Number(await chart.getAttribute('aria-valuemin'));
   const last = Number(await chart.getAttribute('aria-valuemax'));
-  const pitch = box.width / Math.max(1, last - start);
   const y = box.y + box.height / 2;
+  let left = box.x + 1;
+  let right = box.x + box.width - 1;
   let x = box.x + ((day - start) / Math.max(1, last - start)) * box.width;
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    x = Math.min(Math.max(x, box.x + 1), box.x + box.width - 1);
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    x = Math.min(Math.max(x, left), right);
     await page.mouse.move(x, y);
     const now = Number(await chart.getAttribute('aria-valuenow'));
     if (now === day && (await chart.getAttribute('data-scrubbing')) === 'true') return;
-    x += (day - now) * pitch * 0.5 || 1;
+    if (now < day) left = x;
+    if (now > day) right = x;
+    x = now === day ? x + 1 : (left + right) / 2;
   }
   expect(Number(await chart.getAttribute('aria-valuenow')), `the pointer could not be put on day ${day}`).toBe(day);
 }
