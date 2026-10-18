@@ -377,4 +377,3 @@ test('a cell label carries a payload string verbatim, never sanitised', () => {
   );
   assert.ok(cellLabel({ value: 1, date: hostile }, 'token').includes(hostile));
 });
-
