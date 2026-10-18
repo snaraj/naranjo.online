@@ -76,6 +76,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 - In Safari, a role row and an Ongoing Work heading take their new height
   when the window widens or a phone rotates, instead of keeping the taller
   height they had at the narrower width.
+- The moving trackers strip no longer makes the page repaint the whole sheet
+  on every frame: the sheet casts no shadow and the page column is no longer
+  its own layer. Without a GPU, WebKit with the strip on screen went from a
+  frame or two a second to the page's full rate.
 
 ### Removed
 

@@ -780,6 +780,21 @@ test('the sheet paints its vignette without a blur over its whole height', () =>
   assert.equal((sheet.match(/linear-gradient\(to (?:right|left|bottom|top), var\(--keep-vignette-ink\), transparent var\(--keep-vignette-reach\)\)/g) ?? []).length, 4, 'the vignette lost an edge');
 });
 
+/* main is not a stacking context and casts no shadow. The sheet layer needs
+ * neither to sit between the sky and the content (both are at z-index -1 in the
+ * root's context, the sky first in the document), and together they cost
+ * WebKit without a GPU a repaint of main's whole layer each time the ticker
+ * moved: 1156ms a frame on the CI runner's iPhone profile at 1440px, 25ms with
+ * the ticker still. */
+test('main paints no layer of its own for the ticker to repaint', () => {
+  const rules = [...styles.matchAll(/(?:^|\n)main \{([^}]*)\}/g)].map((match) => match[1]);
+  assert.ok(rules.length > 0, 'no main rule is where this pin expects it');
+  for (const rule of rules) {
+    assert.doesNotMatch(rule, /isolation|z-index|box-shadow|filter|opacity|transform|will-change|contain:/, 'main paints a layer of its own again');
+  }
+  assert.ok(app.indexOf('<NightSky') >= 0 && app.indexOf('<NightSky') < app.indexOf('<main'), 'the sky must come before main, or the sheet paints under it');
+});
+
 test('the sheet blurs what is behind it only where it is glass', () => {
   assert.match(
     styles,

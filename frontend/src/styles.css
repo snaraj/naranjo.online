@@ -2302,8 +2302,6 @@ h1 {
  * ======================================================================== */
 
 :root {
-  --keep-shadow-deep: 0 1.5rem 3.5rem var(--keep-shadow-ink);
-  --keep-shadow-ink: rgb(0 0 0 / 0.5);
   --keep-vignette-ink: rgb(0 0 0 / 0.16);
   --keep-vignette-reach: 6rem;
   --ledger-rule: var(--color-border-strong);
@@ -2321,13 +2319,20 @@ h1 {
    fixed, placed in viewport coordinates — so each one rendered shifted by
    main's box and the page's scroll, off the screen (measured by the browser
    lanes, 2026-10-16). main keeps a transparent border of the frame's width so
-   the content sits where the frame leaves room for it; `isolation` keeps the
-   layer above the night sky and below main's content. */
+   the content sits where the frame leaves room for it.
+
+   main is NOT a stacking context, and casts no shadow. The layer lands above
+   the night sky and below main's content without one: both sit at z-index -1
+   in the root's context, and the sky comes first in the document. Isolating
+   main, or giving it a z-index, cost WebKit without a GPU a repaint of main's
+   whole layer whenever the ticker moved — on the CI runner's iPhone profile at
+   1440px, 1156ms a frame with the trackers on screen, against 25ms with the
+   ticker still — and the shadow, a 3.5rem blur of the whole sheet, roughly
+   doubled what remained. Both measured in the pinned Linux image: 7 to 31
+   frames in 3s as built, 91 without either (main's own strip: 166). */
 main {
-  isolation: isolate;
   padding: var(--keep-sheet-pad);
   border: var(--keep-frame-page) solid transparent;
-  box-shadow: var(--keep-shadow-deep);
 }
 
 main::before {
