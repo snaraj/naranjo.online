@@ -89,6 +89,21 @@
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* A FACE THAT MISSED THE MOUNT IS NOT USED ON THIS VISIT. The application
+ * mounts once its faces are loaded or after a short bound (main.ts); a face
+ * still on its way then would swap into a painted page — measured by the
+ * review of eaa62d1 with the font bytes held 1.8s: a layout shift of 0.013 at
+ * 1440px, the name 78px wider and the roles 4px lower. So main.ts marks each
+ * stack whose face had not loaded, and the stack becomes its fallbacks alone:
+ * the late face has no text to swap into, and the next visit has it cached. */
+:root[data-face-sans='fallback'] {
+  --font-sans: var(--font-sans-fallback);
+}
+
+:root[data-face-mono='fallback'] {
+  --font-mono: var(--font-mono-fallback);
+}
+
 /* Reading-mode token layer (issue #22, the OSRS-wiki mechanism adapted):
  * every color lives in a custom property, and each reading mode is one
  * override block scoped by the data-theme attribute the origin stamps on
@@ -1003,8 +1018,10 @@
      own monospace so the swap-window text is at least the right SHAPE of
      type. The token is named for what it holds — a mono stack — because a
      token called sans holding a mono face is the kind of small lie the
-     dead-code audit exists to catch. */
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+     dead-code audit exists to catch. The fallbacks are their own token so a
+     visit whose face came too late can be set in them alone (main.ts). */
+  --font-mono-fallback: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --font-mono: 'JetBrains Mono', var(--font-mono-fallback);
 
   /* And the page's OTHER stack (owner directive, 2026-09-03, issue 287). The
      ledger sets two kinds of thing in two faces, which is the whole of its
@@ -1014,7 +1031,8 @@
      to have, so the swap window shows the right SHAPE of type rather than a
      serif that will jump when the real face lands. Named for what it holds,
      like its sibling. */
-  --font-sans: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  --font-sans-fallback: 'Helvetica Neue', Arial, sans-serif;
+  --font-sans: 'Archivo', var(--font-sans-fallback);
 
   /* The chrome-icon grammar (owner directive, 2026-08-24). The page's two
      header controls are LINE ICONS — a small glyph inside a 44px hit area,

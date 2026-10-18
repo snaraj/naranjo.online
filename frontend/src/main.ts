@@ -40,15 +40,29 @@ applyStoredColumnWidth(documentHost(), browserStore());
 // the face than in its fallback: the name, the plaques and a ledger role in
 // Archivo (measured on Linux Chromium: layout shifts of 0.03 at 1440px
 // and 0.06 at 390px). So the mount waits for the faces, never longer than
-// faceWait: the static shell stays painted meanwhile, and a face that has not
-// come by then swaps in later, as it always did.
+// faceWait, and the static shell stays painted meanwhile.
+//
+// A face that has not loaded by then is not used on this visit: its stack is
+// marked, and styles.css sets a marked stack in its fallbacks alone, so the
+// face has no text to swap into when it lands. Swapping it in late moved the
+// painted page (the review of eaa62d1, bytes held 1.8s: 0.013 at 1440px).
 const faceWait = 1000;
-const faces = ["1em 'Archivo'", "1em 'JetBrains Mono'"];
+const faces = { sans: "1em 'Archivo'", mono: "1em 'JetBrains Mono'" };
+const loaded = new Set<string>();
 const start = () => {
+  for (const stack of Object.keys(faces)) {
+    if (!loaded.has(stack)) document.documentElement.setAttribute(`data-face-${stack}`, 'fallback');
+  }
   target.replaceChildren();
   mount(App, { target });
 };
 Promise.race([
-  Promise.all(faces.map((face) => document.fonts.load(face))),
+  Promise.all(
+    Object.entries(faces).map(([stack, face]) =>
+      document.fonts.load(face).then((found) => {
+        if (found.length > 0) loaded.add(stack);
+      })
+    )
+  ),
   new Promise((resolve) => setTimeout(resolve, faceWait)),
 ]).then(start, start);

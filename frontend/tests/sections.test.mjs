@@ -745,10 +745,11 @@ test('the page asks for its faces with the document and paints in them', async (
     upright.map((match) => match[2]).sort(),
     'the document preloads a different set of files than the faces the stylesheet declares'
   );
-  const faces = /const faces = \[([^\]]*)\];/.exec(entry);
+  const faces = /const faces = \{([^}]*)\};/.exec(entry);
   assert.ok(faces, 'main.ts no longer names the faces it waits for');
+  const stacks = [...faces[1].matchAll(/(\w+): "1em '([^']+)'"/g)].map((match) => ({ stack: match[1], family: match[2] }));
   assert.deepEqual(
-    [...faces[1].matchAll(/'([^']+)'/g)].map((match) => match[1]).sort(),
+    stacks.map((face) => face.family).sort(),
     upright.map((match) => match[1]).sort(),
     'main.ts waits for a different set of faces than the stylesheet declares'
   );
@@ -756,12 +757,32 @@ test('the page asks for its faces with the document and paints in them', async (
   assert.ok(wait && Number(wait[1]) > 0 && Number(wait[1]) <= 1000, 'the mount must wait for the faces a moment at most');
   assert.match(
     entry,
-    /Promise\.race\(\[\s*Promise\.all\(faces\.map\(\(face\) => document\.fonts\.load\(face\)\)\),\s*new Promise\(\(resolve\) => setTimeout\(resolve, faceWait\)\),\s*\]\)\.then\(start, start\);/,
-    'the mount no longer waits for the faces, or waits without a bound, or never runs when a face fails'
+    /Promise\.race\(\[\s*Promise\.all\(\s*Object\.entries\(faces\)\.map\(\(\[stack, face\]\) =>\s*document\.fonts\.load\(face\)\.then\(\(found\) => \{\s*if \(found\.length > 0\) loaded\.add\(stack\);\s*\}\)\s*\)\s*\),\s*new Promise\(\(resolve\) => setTimeout\(resolve, faceWait\)\),\s*\]\)\.then\(start, start\);/,
+    'the mount no longer waits for the faces, or waits without a bound, or never runs when a face fails, or counts a face as loaded that did not load'
   );
   assert.equal(entry.match(/mount\(App/g)?.length, 1, 'the application mounts somewhere other than behind the faces');
   assert.equal(entry.match(/\bstart\b/g)?.length, 3, 'start runs somewhere other than as the race’s two answers, so the page can mount before its faces');
-  assert.match(entry, /const start = \(\) => \{\s*target\.replaceChildren\(\);\s*mount\(App, \{ target \}\);\s*\};/);
+  /* A FACE THAT MISSED THE MOUNT IS NOT USED ON THIS VISIT: before the
+     application mounts, every stack whose face had not loaded is marked, and
+     the stylesheet sets a marked stack in its fallbacks alone, so the face has
+     no painted text to swap into when it lands (the review of eaa62d1). */
+  assert.match(
+    entry,
+    /const start = \(\) => \{\s*for \(const stack of Object\.keys\(faces\)\) \{\s*if \(!loaded\.has\(stack\)\) document\.documentElement\.setAttribute\(`data-face-\$\{stack\}`, 'fallback'\);\s*\}\s*target\.replaceChildren\(\);\s*mount\(App, \{ target \}\);\s*\};/,
+    'the application mounts without first marking the stacks whose face has not loaded'
+  );
+  assert.equal(entry.match(/loaded\.add\(/g)?.length, 1, 'a face is counted as loaded somewhere other than on its own load');
+  for (const { stack, family } of stacks) {
+    const declared = new RegExp(`--font-${stack}: '${family}', var\\(--font-${stack}-fallback\\);`).test(styles);
+    assert.ok(declared, `--font-${stack} is not '${family}' over its own fallback token`);
+    const fallback = new RegExp(`--font-${stack}-fallback: ([^;]+);`).exec(styles);
+    assert.ok(fallback && !fallback[1].includes(family), `--font-${stack}-fallback is missing or still names ${family}`);
+    assert.match(
+      styles,
+      new RegExp(`:root\\[data-face-${stack}='fallback'\\] \\{\\s*--font-${stack}: var\\(--font-${stack}-fallback\\);\\s*\\}`),
+      `a marked ${stack} stack is not set in its fallbacks alone`
+    );
+  }
 });
 
 /* The sheet blurs what is behind it only where it is glass. The parchment is

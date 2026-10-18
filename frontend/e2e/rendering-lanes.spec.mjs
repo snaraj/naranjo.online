@@ -10812,6 +10812,96 @@ test('the contributions calendar trails today past a stalled payload, and says s
   );
 });
 
+/* A FACE THAT MISSES THE MOUNT MOVES NOTHING WHEN IT LANDS (the review of
+ * eaa62d1, finding 1). main.ts mounts the application once its faces load or
+ * after a short bound, and every ordinary load in these lanes finishes the
+ * preloads inside the bound, so none of them takes the branch where the bound
+ * wins. This lane takes it on purpose: every font file is HELD until the lane
+ * lets it go — a fixed delay could run out before the first measurement and
+ * leave the lane measuring nothing — so the page mounts with both faces still
+ * on their way. Then the faces are released, the lane waits until the engine
+ * reports them loaded, and the name, the first role row and the page's height
+ * must be exactly where they were. Swapped into painted text, the late face
+ * widened the name by 78px and moved the roles by 4px at 1440px (0.013). */
+for (const viewport of [
+  { width: 1440, height: 900 },
+  { width: 390, height: 844 },
+]) {
+  test(`a face that misses the mount moves nothing when it lands, at ${viewport.width}px`, async ({ page }) => {
+    let release = () => {};
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/*.woff2', async (route) => {
+      await released;
+      await route.continue();
+    });
+    await page.setViewportSize(viewport);
+    await page.addInitScript(() => {
+      window.__lateShift = { supported: false, armed: false, total: 0 };
+      const types = window.PerformanceObserver?.supportedEntryTypes ?? [];
+      if (!types.includes('layout-shift')) return;
+      window.__lateShift.supported = true;
+      new window.PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (window.__lateShift.armed && !entry.hadRecentInput) window.__lateShift.total += entry.value;
+        }
+      }).observe({ type: 'layout-shift', buffered: false });
+    });
+    /* Not visit(): the load event waits for the preloaded font files, and this
+       lane is holding them. settled() still waits for the application. */
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await settled(page);
+    const geometry = () =>
+      page.evaluate(() => {
+        const box = (node) => {
+          const rect = node.getBoundingClientRect();
+          return [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 100) / 100);
+        };
+        return {
+          name: box(window.document.querySelector('h1')),
+          role: box(window.document.querySelector('#work .ledger-row')),
+          height: window.document.documentElement.scrollHeight,
+        };
+      });
+    /* The branch under test, proved rather than assumed: the bound won, so
+       both stacks were marked before the application mounted. */
+    const marked = await page.evaluate(() => [
+      window.document.documentElement.getAttribute('data-face-sans'),
+      window.document.documentElement.getAttribute('data-face-mono'),
+    ]);
+    expect(marked, 'the page mounted as though its faces had loaded; the lane is not on the late branch').toEqual([
+      'fallback',
+      'fallback',
+    ]);
+    const before = await geometry();
+    await page.evaluate(() => {
+      window.__lateShift.armed = true;
+    });
+    release();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() =>
+            [...window.document.fonts]
+              .filter((face) => /Archivo|JetBrains Mono/.test(face.family) && face.style === 'normal')
+              .some((face) => face.status === 'loaded')
+          ),
+        { message: 'the held faces never loaded after release; the lane measured nothing arriving' }
+      )
+      .toBe(true);
+    await settled(page);
+    const after = await geometry();
+    expect(after.name, 'the name moved when its late face landed').toEqual(before.name);
+    expect(after.role, 'the first role row moved when its late face landed').toEqual(before.role);
+    expect(after.height, 'the page changed height when its late face landed').toBe(before.height);
+    const shift = await page.evaluate(() => window.__lateShift);
+    if (shift.supported) {
+      expect(shift.total, 'the engine recorded a layout shift as the late faces landed').toBe(0);
+    }
+  });
+}
+
 /* ===========================================================================
  * The Hairline icon family (owner design decision, 2026-09-11, issue 313)
  *
