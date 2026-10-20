@@ -1030,6 +1030,12 @@
   --palette-keep-torch-light: rgb(255 146 56 / 0.46);
   --palette-keep-torch-light-far: rgb(240 104 36 / 0.14);
   --palette-keep-torch-shadow: rgb(0 0 0 / 0.6);
+  /* A sword's blade (owner, 2026-10-19: "we should have swords"): its lit
+     edge, its steel and its shade, the three rows the hilt and the point draw
+     it in. */
+  --palette-keep-steel-edge: #dde3e8;
+  --palette-keep-steel: #8a959e;
+  --palette-keep-steel-shade: #6f7a83;
   /* THE BACKSPLASH IS A CASTLE WALL (owner, 2026-10-19: "stone, castle wall …
      that rugged medieval look … readable, very readable"; then, of ten mocks,
      "lets go with 8 … less pixelated and more sharp"). A dry-stone wall from
@@ -1093,7 +1099,18 @@
      lying under the name. */
   --keep-sword-underline: var(--keep-sword) center bottom 0.25rem / 40px 7px no-repeat;
   --keep-sword-hilt: url('./assets/images/props/sword-hilt.svg');
-  --keep-sword-blade: url('./assets/images/props/sword-blade.svg');
+  /* The blade between the hilt and the point: its three rows of steel as
+     bands, drawn once along the blade. It was a drawing one pixel wide,
+     repeated, and WebKit without a GPU drew that pixel column once for every
+     pixel of every blade, thousands of drawings whenever the accounts
+     repainted (2026-10-20). */
+  --keep-sword-blade: linear-gradient(
+    transparent 2px,
+    var(--palette-keep-steel-edge) 2px 3px,
+    var(--palette-keep-steel) 3px 4px,
+    var(--palette-keep-steel-shade) 4px 5px,
+    transparent 5px
+  );
   --keep-sword-tip: url('./assets/images/props/sword-tip.svg');
   --keep-ring: url('./assets/images/props/ring.svg');
   --keep-scroll-roll: url('./assets/images/props/scroll-roll.svg');

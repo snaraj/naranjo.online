@@ -1254,9 +1254,9 @@
      swords"): the hilt and the point are always whole, and the blade between
      them is the share — a model with every token draws a sword the full width
      of the account, one with almost none a hilt and its point. The blade is
-     one pixel column of steel repeated, so it lengthens without stretching,
-     and the share is printed beside it, so the length is never the only way
-     to read it. */
+     its three rows of steel as bands drawn along it (--keep-sword-blade), so
+     it lengthens without stretching, and the share is printed beside it, so
+     the length is never the only way to read it. */
   .chronicle-track {
     grid-column: 1 / -1;
     block-size: 7px;
@@ -1273,7 +1273,7 @@
     background:
       var(--keep-sword-hilt) left center / var(--sword-hilt) 100% no-repeat border-box,
       var(--keep-sword-tip) right center / var(--sword-tip) 100% no-repeat border-box,
-      var(--keep-sword-blade) left center / 1px 100% repeat-x content-box;
+      var(--keep-sword-blade) left center / 100% 100% no-repeat content-box;
   }
 
   /* A model's own figures hold one line, and two on a phone — by the

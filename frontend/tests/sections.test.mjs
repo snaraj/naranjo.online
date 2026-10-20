@@ -1194,11 +1194,41 @@ test('the keep’s props are vendored drawings at their own grain, and the calen
 
   // THE SWORD'S SHARE. The hilt and the point are fixed lengths, each its
   // drawing's own width, and the track is the sword's own height; the blade
-  // is the content box between them, one pixel column of steel repeated, and
-  // only it grows — by the unitless share, from nothing (a hilt and its point)
-  // to the whole track.
-  const [hilt, tip, blade] = await Promise.all(['sword-hilt.svg', 'sword-tip.svg', 'sword-blade.svg'].map(viewBox));
-  assert.ok(hilt.h === sword.h && tip.h === sword.h && blade.h === sword.h, 'the sword’s parts are not one height');
+  // is the content box between them, and only it grows — by the unitless
+  // share, from nothing (a hilt and its point) to the whole track.
+  const [hilt, tip] = await Promise.all(['sword-hilt.svg', 'sword-tip.svg'].map(viewBox));
+  assert.ok(hilt.h === sword.h && tip.h === sword.h, 'the sword’s parts are not one height');
+  // THE BLADE IS ITS ROWS OF STEEL, drawn once along it as bands (2026-10-20:
+  // a one-pixel drawing repeated cost WebKit without a GPU one drawing per
+  // pixel of blade). Each band is one pixel row inside the sword's height, in
+  // a steel token, and the rows are the hilt's own last column, so the blade
+  // still runs out of the hilt with no seam.
+  const bladeBands = /--keep-sword-blade:\s*linear-gradient\(([^;]*)\);/.exec(sheet)?.[1]?.replace(/\s+/g, ' ') ?? '';
+  const bands = [...bladeBands.matchAll(/var\(--(palette-keep-steel[a-z-]*)\) (\d+)px (\d+)px/g)].map(([, token, from, to]) => ({
+    token,
+    from: Number(from),
+    to: Number(to),
+  }));
+  assert.equal(bands.length, 3, 'the blade is not its three rows of steel');
+  for (const [index, band] of bands.entries()) {
+    assert.equal(band.to - band.from, 1, `the blade’s ${band.token} band is not one pixel row`);
+    assert.ok(band.from >= 0 && band.to <= sword.h, `the blade’s ${band.token} band lies outside the sword`);
+    if (index > 0) assert.equal(band.from, bands[index - 1].to, 'the blade’s rows of steel are not contiguous');
+  }
+  const hiltDrawing = await readFile(new URL('sword-hilt.svg', propsDir), 'utf8');
+  const hiltEnd = new Map();
+  for (const [, colour, path] of hiltDrawing.matchAll(/<path fill="(#[0-9a-f]{6})" d="([^"]+)"\/>/g)) {
+    for (const [, x, y, w, h] of path.matchAll(/M(\d+) (\d+)h(\d+)v(\d+)/g)) {
+      if (Number(x) <= hilt.w - 1 && hilt.w - 1 < Number(x) + Number(w)) {
+        for (let row = Number(y); row < Number(y) + Number(h); row += 1) hiltEnd.set(row, colour);
+      }
+    }
+  }
+  for (const band of bands) {
+    const colour = new RegExp(`--${band.token}:\\s*(#[0-9a-f]{6});`).exec(sheet)?.[1];
+    assert.ok(colour, `--${band.token} is not a colour in the token layer`);
+    assert.equal(colour, hiltEnd.get(band.from), `the blade’s row ${band.from} is not the hilt’s own steel there`);
+  }
   const track = /\.chronicle-track \{([^}]*)\}/.exec(cellStyle)?.[1] ?? '';
   assert.match(track, new RegExp(`block-size: ${sword.h}px;`), 'the share’s track is not the sword’s own height');
   assert.doesNotMatch(track, /background|border/, 'the share’s track paints a bar behind the sword again');
@@ -1221,12 +1251,13 @@ test('the keep’s props are vendored drawings at their own grain, and the calen
       'the point is not drawn once, whole, at the sword’s end'
     ],
     [
-      new RegExp(`var\\(--keep-sword-blade\\) left center / ${blade.w}px 100% repeat-x content-box`),
-      'the blade is not its one column of steel repeated between the hilt and the point'
+      /var\(--keep-sword-blade\) left center \/ 100% 100% no-repeat content-box/,
+      'the blade is not its rows of steel drawn once between the hilt and the point'
     ],
   ]) {
     assert.match(fill, pattern, message);
   }
+  assert.doesNotMatch(fill, /--keep-sword-blade\)[^,;]* (?:repeat|space|round)\b/, 'the blade is a picture repeated along it again');
 });
 
 /* Every content component instead of two (owner directive of 2026-09-03,
