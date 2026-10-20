@@ -1631,14 +1631,17 @@ test('J flies off the name from one seat, reserved, silent, still at rest, and f
     (stripComments(source).match(/<JMark\b[^>]*\/>/g) ?? []).map((tag) => [file, tag])
   );
   assert.deepEqual(seats, [['App.svelte', '<JMark />']], 'J is drawn somewhere other than exactly once, as rendered, by the page shell');
-  const heading = /<div class="page-intro">\s*<h1 id="page-title">(<span class="page-name-line">[^<]+<\/span> <span class="page-name-line">[^<]+<span class="page-name-j">j<\/span>[^<]*<span class="page-j-seat"><span class="page-j"><JMark \/><\/span><\/span><\/span>)<\/h1>/.exec(
+  /* Each text run of the heading is captured where the markup pins it — the
+     first word, the second word up to its j, the j, and the rest — so its
+     words are read without stripping any markup. */
+  const heading = /<div class="page-intro">\s*<h1 id="page-title"><span class="page-name-line">([^<]+)<\/span> <span class="page-name-line">([^<]+)<span class="page-name-j">(j)<\/span>([^<]*)<span class="page-j-seat"><span class="page-j"><JMark \/><\/span><\/span><\/span><\/h1>/.exec(
     stripComments(component)
   );
   assert.ok(heading, 'J is not seated inside the name’s own heading, at the end of its second word, after its j, each word a line of its own');
   const shell = /<div class="page-intro">\s*<h1 id="static-page-title">([^<]+)<\/h1>/.exec(fallback);
   assert.ok(shell, 'the static shell’s name is not the name alone in the same intro the page draws');
   assert.equal(
-    heading[1].replace(/<[^>]*>/g, ''),
+    `${heading[1]} ${heading[2]}${heading[3]}${heading[4]}`,
     shell[1],
     'the mounted heading’s words are not exactly the static shell’s, so the name moves, or reads differently, when the page mounts'
   );
