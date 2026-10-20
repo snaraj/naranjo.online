@@ -640,7 +640,9 @@ test('the light breaks on the stone’s grain, fixed to the wall, and the air st
   for (const { selectors, body } of rules.filter(({ selectors }) => selectors.some((selector) => /\.torch-glow$/.test(selector)))) {
     assert.doesNotMatch(body, /\b(transform|translate|rotate|scale|animation|transition|offset-path)\s*:/, `${selectors.join(', ')} moves the grain with the light`);
   }
-  const script = component.match(/<script[^>]*>([\s\S]*?)<\/script>/)?.[1] ?? '';
+  // Any spelling of the tag, and an end tag with whatever a parser ignores
+  // before its `>` (js/bad-tag-filter).
+  const script = component.match(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i)?.[1] ?? '';
   assert.doesNotMatch(script, /torch-glow/, 'the loop reaches for the grain box');
   // The air: a canvas of the motes' own field, a half unit a mote so every
   // mote is square, pixelated like the flame, inside a box clipped where the

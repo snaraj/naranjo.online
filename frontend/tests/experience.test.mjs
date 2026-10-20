@@ -79,7 +79,13 @@ function accessibleText(markup, depth = 0) {
     out = out.slice(0, open) + out.slice(cursor);
   }
   assert.doesNotMatch(out, /[{}]|<img\b|<svg\b|\baria-label(?:ledby)?=|\balt=/, 'this markup computes its name in a way this reader does not model');
-  return out.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  // Until a pass removes nothing, so no tag is left behind that a removal
+  // spliced together (js/incomplete-multi-character-sanitization).
+  let text = out;
+  while (text !== (text = text.replace(/<[^>]*>/g, ''))) {
+    /* until a pass removes nothing */
+  }
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 // Browser execution is deliberately outside this dependency-free test. These

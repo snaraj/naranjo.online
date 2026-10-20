@@ -1209,7 +1209,9 @@ test('the log scrolls with no bar, and fades only an edge with more past it (own
   );
 
   // The markup: the two marks on the box, from its own scroll metrics.
-  const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(spread)?.[1] ?? '';
+  // Any spelling of the tag, and an end tag with whatever a parser ignores
+  // before its `>` (js/bad-tag-filter).
+  const script = /<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i.exec(spread)?.[1] ?? '';
   assert.match(spread, /<div class="log-box" data-at-start=\{logEdges\.start\} data-at-end=\{logEdges\.end\} use:scrollEdges>/);
   assert.match(script, /const logEdges = \$state\(\{ start: 'true', end: 'false' \}\);/, 'the box does not start at its start with more below');
   const edges = /function scrollEdges\(node: HTMLElement\) \{([\s\S]*?)\n {2}\}/.exec(script)?.[1] ?? '';

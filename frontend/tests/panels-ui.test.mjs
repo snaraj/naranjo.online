@@ -42,7 +42,7 @@ const stripComments = (text) => {
 
 // The container image builds the frontend from a stage that holds ONLY the
 // frontend tree plus the few repo files the build DECLARES as inputs
-// (Dockerfile: COPY frontend/ ./, plus VERSION and the two vocabulary files), so
+// (Dockerfile: COPY frontend/ ./, plus the two vocabulary files), so
 // the rest of the repository does not exist there. The cross-tree pins below
 // are therefore capability-gated exactly like the provider-neutrality pin: in
 // a full checkout — the PR gate's application job, every local run — they are
@@ -1102,7 +1102,7 @@ test('the calendar is drawn once, inside the chronicle, and an unmeasured day is
  * no width brings the side-by-side back: no rule anywhere states another
  * track list for the top, and neither half sizes itself as a flex item. */
 test('the chronicle sets its figures above a full-width graph and calendar at every width (owner 2026-10-19)', () => {
-  const markup = chronicle.replace(/<!--[\s\S]*?-->/g, '');
+  const markup = stripComments(chronicle);
   const side = markup.indexOf('<div class="chronicle-side">');
   const plotting = markup.indexOf('<div class="chronicle-plotting">');
   const top = markup.indexOf('<div class="chronicle-top">');
