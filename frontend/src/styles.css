@@ -113,6 +113,38 @@
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* THE TOME'S FACES (owner, 2026-10-20, of the chained tome: "what I like the
+ * most here is the font … this fixture looks great"). Its leaves are set in
+ * Cormorant Garamond, a variable face drawn from 300 to 700, by the same two
+ * ranges as every other family; its initials in UnifrakturMaguntia, a
+ * blackletter of one cut that only ever draws a capital, so the latin range
+ * alone. Both are Google Fonts' compiled files, vendored beside their OFL
+ * licences (ATTRIBUTION.md). */
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('./assets/fonts/CormorantGaramond-Variable-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('./assets/fonts/CormorantGaramond-Variable-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'UnifrakturMaguntia';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/UnifrakturMaguntia-Regular-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 /* A FACE THAT MISSED THE MOUNT IS NOT USED ON THIS VISIT. The application
  * mounts once its faces are loaded or after a short bound (main.ts); a face
  * still on its way then would swap into a painted page — measured by the
@@ -130,6 +162,14 @@
 
 :root[data-face-display='fallback'] {
   --font-display: var(--font-display-fallback);
+}
+
+:root[data-face-tome='fallback'] {
+  --font-tome: var(--font-tome-fallback);
+}
+
+:root[data-face-initial='fallback'] {
+  --font-initial: var(--font-initial-fallback);
 }
 
 /* The colour token layer (issue #22, the OSRS-wiki mechanism adapted): every
@@ -1015,6 +1055,11 @@
      are declared below and in every mode block. */
   --font-display-fallback: Georgia, 'Times New Roman', serif;
   --font-display: 'Instrument Serif', var(--font-display-fallback);
+  /* The chained tome's leaves and its initials (Tome.svelte). */
+  --font-tome-fallback: Garamond, Georgia, 'Times New Roman', serif;
+  --font-tome: 'Cormorant Garamond', var(--font-tome-fallback);
+  --font-initial-fallback: 'Old English Text MT', Georgia, serif;
+  --font-initial: 'UnifrakturMaguntia', var(--font-initial-fallback);
   --palette-keep-backdrop: #050505;
   /* The torches on the frame (owner, 2026-10-19; Torches.svelte): iron cups
      and brackets in the frame's own greys, oak handles, a charred rim where
@@ -1036,6 +1081,55 @@
   --palette-keep-steel-edge: #dde3e8;
   --palette-keep-steel: #8a959e;
   --palette-keep-steel-shade: #6f7a83;
+  /* THE CHAINED TOME (owner, 2026-10-20: T3, the corbel; Tome.svelte, whose
+     canvas reads these by name): vellum leaves written in the day parchment's
+     own ink (--palette-light-text), with a rubric and an initial in lapis on
+     a square of that rubric; oxblood boards; an oak desk on a corbel of the
+     wall's own stone; the cloth in the initial's rubric, shaded in madder and
+     worked in bone; a chain of the torches' iron (--palette-keep-torch-iron
+     and its dark), lit at one end and black at the other; and the torchlight
+     and the dark it leaves. The leaves are the one light ground on the
+     night's sheet, so their ink is the darkest brown and reads at well over
+     7:1 on them. */
+  --palette-keep-vellum: #ece6d6;
+  --palette-keep-vellum-deep: #d6ccb4;
+  --palette-keep-vellum-edge: #b9ad92;
+  --palette-keep-gutter: rgb(70 42 14 / 0.42);
+  --palette-keep-ink-brown: #4a3420;
+  --palette-keep-rubric: #93261c;
+  --palette-keep-lapis: #8fb2e3;
+  --palette-keep-lapis-mid: #3d6cab;
+  --palette-keep-lapis-deep: #1d3a68;
+  --palette-keep-lapis-rule: rgb(84 120 168 / 0.28);
+  --palette-keep-lapis-wash: rgb(143 178 227 / 0.09);
+  --palette-keep-bone: #ece2cc;
+  --palette-keep-bone-mid: #cfc3a6;
+  --palette-keep-bone-deep: #a3967a;
+  --palette-keep-oxblood: #5c1f18;
+  --palette-keep-oxblood-deep: #36100b;
+  --palette-keep-leather-dark: #1c0e06;
+  --palette-keep-madder-deep: #6a1810;
+  --palette-keep-madder-dark: #3f0d08;
+  --palette-keep-oak-1: #6e4a2c;
+  --palette-keep-oak-2: #4f331d;
+  --palette-keep-oak-3: #33200f;
+  --palette-keep-oak-4: #1d1208;
+  --palette-keep-stone-1: #57544d;
+  --palette-keep-stone-2: #3d3b37;
+  --palette-keep-stone-3: #2a2926;
+  --palette-keep-stone-4: #171614;
+  --palette-keep-iron-1: #8d8d8d;
+  --palette-keep-iron-4: #1c1c1c;
+  --palette-keep-umbra: #070402;
+  /* The roll of the trackers (owner, 2026-10-20: "The Rotulus"): its green
+     wax, the seal that picks the calendar's own layer and the ink its line
+     is written in on the parchment. */
+  --palette-keep-verdigris: #4f9a6e;
+  --palette-keep-tome-shadow: rgb(7 4 2 / 0.7);
+  --palette-keep-tome-crease: rgb(7 4 2 / 0.4);
+  --palette-keep-lamp: #ffa851;
+  --palette-keep-lamp-glaze: #cdb08a;
+  --palette-keep-sheen: #fff6e6;
   /* THE BACKSPLASH IS A CASTLE WALL (owner, 2026-10-19: "stone, castle wall …
      that rugged medieval look … readable, very readable"; then, of ten mocks,
      "lets go with 8 … less pixelated and more sharp"). A dry-stone wall from
@@ -1116,6 +1210,11 @@
   --keep-scroll-roll: url('./assets/images/props/scroll-roll.svg');
   --keep-scroll-knob-start: url('./assets/images/props/scroll-knob-start.svg');
   --keep-scroll-knob-end: url('./assets/images/props/scroll-knob-end.svg');
+  /* The same roller stood upright, for the roll the trackers are written on:
+     the drawings above turned a quarter, pixel for pixel. */
+  --keep-scroll-roll-upright: url('./assets/images/props/scroll-roll-upright.svg');
+  --keep-scroll-knob-top: url('./assets/images/props/scroll-knob-top.svg');
+  --keep-scroll-knob-bottom: url('./assets/images/props/scroll-knob-bottom.svg');
   /* The scroll's parchment and inks are the day's, which the contrast floors
      already hold to this paper, so a role's words are as legible on the
      scroll at night as the day's are on its sheet. */
@@ -1124,11 +1223,6 @@
   --keep-parchment-ink: var(--palette-light-text);
   --keep-parchment-muted: var(--palette-light-accent);
   --keep-parchment-mark: var(--palette-brand-orange-on-light);
-  --keep-stone-0: url('./assets/images/props/stone-0.svg');
-  --keep-stone-1: url('./assets/images/props/stone-1.svg');
-  --keep-stone-2: url('./assets/images/props/stone-2.svg');
-  --keep-stone-3: url('./assets/images/props/stone-3.svg');
-  --keep-stone-4: url('./assets/images/props/stone-4.svg');
   /* The stone's roughness, a mask the torches' light falls through: the light
      breaks up on the wall as it does on rough stone, rather than lying on it
      like a wash. */
@@ -1152,11 +1246,11 @@
   --keep-sheet-pad: clamp(1rem, min(4.5vw, var(--page-column-width) * 0.055), 4rem);
   --keep-title-size: clamp(1.25rem, 2.6vw, 2.125rem);
   /* The floor fits "NARANJO" inside a 320px phone's framed sheet. The intro
-     holds the name to its own column on top of this (the Keep layer), which
-     is what binds on a wide screen: 291px at 1440px since the owner asked
-     for the name to "take more of the top" (2026-10-19), 237px before that
-     and 165px before that. */
-  --keep-name-ceiling: clamp(2.5rem, 24vw, 22rem);
+     holds the name to its own column on top of this (the Keep layer). The
+     ceiling is 7.5rem since the owner set J as the dot of the j and asked
+     for the name to be "not GIGANTIC" (2026-10-20): 120px on a desk, where
+     it had been 237px, 291px and 165px through 2026-10-19. */
+  --keep-name-ceiling: clamp(2.5rem, 24vw, 7.5rem);
   --keep-name-size: var(--keep-name-ceiling);
   /* The mode-dependent values, light's here: the pale wall. Every mode's
      wall is opaque, so nothing behind the sheet is blurred or shown through. */
@@ -2327,7 +2421,15 @@ main::after {
    A LITTLE SMALLER, WITH LESS ROOM ROUND IT (the same evening: "make my name
    a bit more smaller and the padding around it also smaller"): 23cqi, so the
    pair spans about two thirds of the column at 1440px, over a thinner margin
-   above and under it. */
+   above and under it.
+
+   J AS THE DOT OF THE J, AND NOT GIGANTIC (owner, 2026-10-20, picking "the
+   dot of the j, stacked" of six settings mocked on the real wall, and of its
+   size: "make the title not be GIGANTIC"). The two words stand centred on
+   two lines with J hovering over the j's stem, so the name is centred on the
+   sheet by itself and no room is kept beside it. It is held to the 7.5rem
+   ceiling on a desk, and on a phone to 30cqi, so "naranjo" spans about two
+   thirds of a 390px phone's column. */
 .page-intro {
   --keep-name-size: var(--keep-name-ceiling);
   container-type: inline-size;
@@ -2335,7 +2437,7 @@ main::after {
 
 @supports (width: 1cqi) {
   .page-intro {
-    --keep-name-size: min(var(--keep-name-ceiling), 23cqi);
+    --keep-name-size: min(var(--keep-name-ceiling), 30cqi);
   }
 }
 
@@ -2346,17 +2448,35 @@ main::after {
 }
 
 /* The masthead's own face, weight and tracking (the rule above), held to the
-   intro's size, with J's room at its end. Measured in the name's own size
-   (an em here is one name-size): J is half a name-size, but never past 7.5rem
+   intro's size, its two lines centred one name-size apart, which leaves J the
+   room over the second line's x-height to hover in without meeting the first
+   line's letters. The static shell's heading (index.html) is one text that
+   breaks at its space, and takes this same rule, so it is laid out exactly
+   as the mounted one.
+
+   Measured in the name's own size (an em here is one name-size). J is 0.46
+   of a name-size, the dot's place scaled to a dragon, but never past 7.5rem
    — his flight is drawn in 80px frames, so past that he is a blur rather than
-   a dragon — and never under 3rem, so a phone still sees him. */
+   a dragon — and never under 2.5rem, so a phone still sees him. The face's
+   own facts seat him, read off the vendored Instrument Serif in Chromium,
+   Gecko and WebKit alike. His seat is the end of the second word (App.svelte
+   says why), and the dotless j's stem stands 0.1125 of a name-size into the
+   letter, so it is back from the seat by the j's 0.215 advance and the o's
+   0.408, each with the name's tracking after it, and in again by the
+   0.1125. The x-height is 0.51, so his feet hover at 0.545, a breath over
+   it. His drawn body is 0.7375 of his square, so he is
+   never more than 0.55 of a name-size: at that his head is at 0.95, inside
+   the one name-size between the lines with room for his rock, and however
+   small a phone sets the name he never reaches the letters of the line
+   above. */
 h1 {
-  --j-size: clamp(3rem, 0.5em, 7.5rem);
-  --j-gap: 0.15em;
-  position: relative;
-  margin-inline-end: calc(var(--j-gap) + var(--j-size));
+  --j-size: min(0.55em, clamp(2.5rem, 0.46em, 7.5rem));
+  --j-stem: calc(0.1125em - 0.215em - 0.408em - 2 * var(--masthead-tracking));
+  --j-hover: 0.545em;
   font-family: var(--font-display);
   font-size: var(--keep-name-size);
+  line-height: 1;
+  text-align: center;
   color: var(--ledger-ink);
 }
 

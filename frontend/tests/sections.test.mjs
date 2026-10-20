@@ -146,9 +146,12 @@ const [workBinding, mediaBinding, projectsBinding, galleryModule] = await Promis
    the board left the sweep with the components themselves when the Chronicle
    took over drawing them (owner direction, 2026-10-16); the Chronicle is in
    it, so the surfaces they drew are still swept. */
-const [chronicle, ticker] = await Promise.all([
+const [chronicle, ticker, tome] = await Promise.all([
   read('../src/lib/components/Chronicle.svelte'),
   read('../src/lib/components/Ticker.svelte'),
+  /* The accounts' leaves, which the Chronicle hands to the chained tome
+     (owner, 2026-10-20); their swords are drawn there. */
+  read('../src/lib/components/Tome.svelte'),
 ]);
 
 const contentComponents = {
@@ -408,13 +411,13 @@ test('the page opens on the name, then the sections, in one column (owner direct
      the reading mode and J at both ends — and the picture band under it are
      gone, so the sheet's first child is the name. The row is gone "for now":
      bringing a nav back is a conscious edit of this pin, which is the point of
-     pinning a decision where it is made. J flies inside the heading since
-     2026-10-19, after its words — placed from the name's own edge, and
-     aria-hidden, so the heading still opens on the name and still names the
-     page with it (experience.test.mjs computes that name). */
+     pinning a decision where it is made. J flies inside the heading, as the
+     dot of its j since 2026-10-20 — aria-hidden, so the heading still opens
+     on the name and still names the page with it (experience.test.mjs
+     computes that name and pins his seat). */
   assert.match(
     withoutHtmlComments(app),
-    /<main aria-labelledby="page-title">\s*<div class="page-intro">\s*<h1 id="page-title">[^<]+<span class="page-j"><JMark \/><\/span><\/h1>/,
+    /<main aria-labelledby="page-title">\s*<div class="page-intro">\s*<h1 id="page-title"><span class="page-name-line">/,
     'the sheet no longer opens on the name'
   );
   assert.doesNotMatch(app, /<PageHeader\b|<SectionNav\b|<TextureBand\b/, 'the chrome row or the picture band is back above the name');
@@ -702,8 +705,28 @@ test('the card token defaults are global, and resolve through the reading modes'
      is Instrument Serif since the owner's pick of 2026-10-19 (over Fraunces),
      two more faces by the same two ranges. It is the one family drawn in a
      single weight, so its faces declare exactly that weight rather than a
-     span; the span pin below holds every other face. */
-  assert.equal(faces.length, 8, 'expected four JetBrains Mono faces, two Archivo faces and two Instrument Serif faces');
+     span; the span pin below holds every other face.
+
+     The chained tome (owner, 2026-10-20: T3, "what I like the most here is
+     the font … this fixture looks great") is set in Cormorant Garamond, by
+     the same two ranges, and its initials in UnifrakturMaguntia, whose one
+     latin file is all a capital ever needs. Cormorant's variable file draws
+     300 to 700 and claims exactly that; the blackletter is one cut at 400. */
+  assert.equal(
+    faces.length,
+    11,
+    'expected four JetBrains Mono faces, two Archivo, two Instrument Serif, two Cormorant Garamond and one UnifrakturMaguntia'
+  );
+  const tomeFaces = faces.filter((face) => /font-family: 'Cormorant Garamond';/.test(face));
+  assert.equal(tomeFaces.length, 2, 'the tome face is two files, the latin and latin-ext ranges');
+  for (const face of tomeFaces) {
+    assert.match(face, /font-weight: 300 700;/, 'the tome face claims a weight span its file does not draw');
+  }
+  const initialFaces = faces.filter((face) => /font-family: 'UnifrakturMaguntia';/.test(face));
+  assert.equal(initialFaces.length, 1, 'the initial face is its one latin file');
+  assert.match(initialFaces[0], /font-weight: 400;/, 'the initial face claims a weight its one cut does not draw');
+  assert.match(styles, /--font-tome:\s*'Cormorant Garamond', var\(--font-tome-fallback\);/);
+  assert.match(styles, /--font-initial:\s*'UnifrakturMaguntia', var\(--font-initial-fallback\);/);
   const displayFaces = faces.filter((face) => /font-family: 'Instrument Serif';/.test(face));
   assert.equal(displayFaces.length, 2, 'the display face is two files, the latin and latin-ext ranges');
   for (const face of displayFaces) {
@@ -715,7 +738,7 @@ test('the card token defaults are global, and resolve through the reading modes'
   let variableWidthFaces = 0;
   for (const face of faces) {
     assert.match(face, /src: url\('\.\/assets\/fonts\//, 'a webfont loads from outside the bundle');
-    if (!displayFaces.includes(face)) {
+    if (![...displayFaces, ...tomeFaces, ...initialFaces].includes(face)) {
       assert.match(face, /font-weight: (?:100|400) (?:800|900)/, 'a face lost its variable weight span');
     }
     assert.match(face, /font-display: swap/, 'a face would hold first paint invisible');
@@ -754,7 +777,7 @@ test('the page asks for its faces with the document and paints in them', async (
   const upright = [
     ...styles.matchAll(/font-family: '([^']+)';\s*font-style: normal;[^}]*?src: url\('\.\/assets\/fonts\/([^']+-latin\.woff2)'\)/g),
   ];
-  assert.equal(upright.length, 3, 'expected one upright latin file for each of the three families');
+  assert.equal(upright.length, 5, 'expected one upright latin file for each of the five families');
   assert.deepEqual(
     [...preloaded].sort(),
     upright.map((match) => match[2]).sort(),
@@ -964,11 +987,11 @@ test('the frame wears its greenery as scenery, and each title is plain type at t
  *     the folder holds no drawing nothing names, and every token is read;
  *   · the props that tile are drawn at their own size times one whole-pixel
  *     grain, read from each drawing's own viewBox, so every pixel is square;
- *   · the calendar and its key are one set of stones: the cell patterns and
- *     the key's steps come from the same five files, level for level;
+ *   · the trackers' roll stands the role scroll's own rollers upright, and
+ *     its calendar and key are one set of inks, level for level;
  *   · a model's share is a sword whose hilt and point are always whole, and
  *     only its blade grows, by a unitless share. */
-test('the keep’s props are vendored drawings at their own grain, and the calendar and its key are one set of stones', async () => {
+test('the keep’s props are vendored drawings at their own grain, and the trackers’ roll is the role scroll stood upright', async () => {
   const sheet = styles.replace(/\/\*[\s\S]*?\*\//g, '');
   const propsDir = new URL('../src/assets/images/props/', import.meta.url);
   const files = (await readdir(propsDir)).sort();
@@ -1076,121 +1099,101 @@ test('the keep’s props are vendored drawings at their own grain, and the calen
     new RegExp(`--keep-sword-underline: var\\(--keep-sword\\) center bottom 0\\.25rem / ${sword.w}px ${sword.h}px no-repeat;`),
     'the underline sword is not drawn at its own size'
   );
-  for (const [name, source, selector] of [
-    ['Chronicle', chronicle, /\.chronicle-layers button\[aria-pressed='true'\] \{([^}]*)\}/],
-    ['MediaGallery', mediaGallery, /\.gallery-set\[aria-pressed='true'\] \{([^}]*)\}/],
-  ]) {
+  /* The trackers' layers are wax seals now (owner, 2026-10-20), so the
+     sword lies under the gallery's picked set alone. */
+  for (const [name, source, selector] of [['MediaGallery', mediaGallery, /\.gallery-set\[aria-pressed='true'\] \{([^}]*)\}/]]) {
     const picked = selector.exec(source)?.[1] ?? '';
     assert.match(picked, /background: var\(--keep-sword-underline\);/, `${name}’s picked choice is not underlined by the sword`);
     assert.doesNotMatch(picked, /border/, `${name}’s picked choice draws a coloured rule under it again`);
   }
 
-  // ONE SET OF STONES. The calendar paints a stone per level, in the order of
-  // an array of the five stone files; every day lays the stone of its own
-  // level, and the key's steps draw the same files through the tokens, level
-  // for level.
-  const stoneList = /const stones = \[([^\]]*)\];/.exec(chronicle)?.[1];
-  assert.ok(stoneList, 'the calendar no longer lists its stones in one array');
-  const stoneImports = Object.fromEntries(
-    imports.filter(({ name }) => name === 'lib/components/Chronicle.svelte').map(({ binding, file }) => [binding, file])
-  );
-  const stoneFiles = stoneList.split(',').map((binding) => stoneImports[binding.trim()]);
-  assert.deepEqual(
-    stoneFiles,
-    [0, 1, 2, 3, 4].map((level) => `stone-${level}.svg`),
-    'the calendar’s stones are not the five stone files, level for level'
-  );
-  /* THE STONES ARE ONE PICTURE (2026-10-19). Drawn inside the calendar's
-     SVG — a pattern per level, or a picture per day — WebKit without a GPU
-     rasterised every stone again whenever the calendar repainted, and the
-     page stalled. So each drawing is rasterised once at its own pixels and
-     every day's stone is painted from it onto one canvas under the cells:
-     the calendar draws no pattern and no picture, the canvas lies under the
-     SVG over the calendar's whole box and takes no pointer, and the cells are
-     bare but for their outlines. */
+  // THE TRACKERS' ROLL (owner, 2026-10-20: "The Rotulus") hangs between the
+  // role scroll's own rollers stood upright: the upright roll and its two
+  // knobs are the horizontal drawings turned a quarter, pixel for pixel, and
+  // each roller is drawn as the role's are, at the drawings' own size times
+  // the grain, the knobs once at each end of its border box and the roll
+  // repeated in the content box between them.
+  const rectsOf = async (file, turn) => {
+    const drawing = await readFile(new URL(file, propsDir), 'utf8');
+    const out = [];
+    for (const [, fill, data] of drawing.matchAll(/<path fill="(#[0-9a-f]{6})" d="([^"]+)"\/>/g)) {
+      for (const [, x, y, w, h] of data.matchAll(/M(\d+) (\d+)h(\d+)v(\d+)h-\d+z/g)) {
+        for (let dx = 0; dx < Number(w); dx += 1) {
+          for (let dy = 0; dy < Number(h); dy += 1) {
+            const [px, py] = [Number(x) + dx, Number(y) + dy];
+            out.push(`${turn ? py : px},${turn ? px : py} ${fill}`);
+          }
+        }
+      }
+    }
+    return out.sort();
+  };
+  for (const [flat, upright] of [
+    ['scroll-roll.svg', 'scroll-roll-upright.svg'],
+    ['scroll-knob-start.svg', 'scroll-knob-top.svg'],
+    ['scroll-knob-end.svg', 'scroll-knob-bottom.svg'],
+  ]) {
+    const [turned, drawn] = await Promise.all([rectsOf(flat, true), rectsOf(upright, false)]);
+    assert.ok(drawn.length > 0, `${upright} draws no pixel this pin can read`);
+    assert.deepEqual(drawn, turned, `${upright} is not ${flat} turned a quarter, pixel for pixel`);
+  }
+  const [upright, knobTop, knobBottom] = await Promise.all(['scroll-roll-upright.svg', 'scroll-knob-top.svg', 'scroll-knob-bottom.svg'].map(viewBox));
+  assert.ok(knobTop.w === upright.w && knobBottom.w === upright.w && knobTop.h === knobBottom.h, 'the upright roll and its knobs are not one width, or its knobs not one height');
   const cellStyle = chronicle.replace(/\/\*[\s\S]*?\*\//g, '');
-  const calendarMarkup = /<div\s+class="chronicle-calendar"[\s\S]*?<\/svg>/.exec(chronicle)?.[0] ?? '';
-  assert.ok(calendarMarkup.length > 0, 'the calendar is not where this pin expects it');
-  assert.match(
-    calendarMarkup,
-    /<canvas class="chronicle-stones" bind:this=\{stoneCanvas\} aria-hidden="true"><\/canvas>\s*<svg class="chronicle-svg" bind:this=\{calSvg\}/,
-    'the stones’ canvas is not laid under the calendar’s SVG, unannounced'
-  );
-  assert.doesNotMatch(calendarMarkup, /<(?:pattern|image|defs)\b/, 'the calendar draws its stones inside the SVG again');
-  assert.doesNotMatch(chronicle, /url\(#chronicle-stone/, 'a cell fills from a stone pattern again');
   const ruleOf = (selector) =>
-    new RegExp(`(?:^|\\n)\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(cellStyle)?.[1] ?? '';
+    new RegExp(`(?:^|\\n)\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(cellStyle)?.[1]?.replace(/\s+/g, ' ') ?? '';
+  assert.match(ruleOf('.chronicle-scroll'), new RegExp(`--chronicle-roller: ${grainOf(upright.w)};`), 'a roller is not its drawing’s width at the grain');
+  const uprightRoller = ruleOf('.chronicle-roller');
   for (const [pattern, message] of [
-    [/position: absolute;/, 'the stones’ canvas is in the flow'],
-    [/inset: 0;/, 'the stones’ canvas does not cover the calendar’s box'],
-    [/inline-size: 100%;/, 'the stones’ canvas is not the calendar’s width'],
-    [/block-size: 100%;/, 'the stones’ canvas is not the calendar’s height'],
-    [/pointer-events: none;/, 'the stones’ canvas takes the pointer'],
+    [/inline-size: var\(--chronicle-roller\);/, 'a roller is not the roll’s own width'],
+    [/box-sizing: border-box;/, 'a roller’s knobs are not drawn at its own ends'],
+    [new RegExp(`padding-block: ${grainOf(knobTop.h)};`), 'the roll does not run between the knobs'],
+    [new RegExp(`var\\(--keep-scroll-knob-top\\) center top / 100% ${grainOf(knobTop.h)} no-repeat border-box`), 'the top knob is not drawn once, whole, at the roller’s top'],
+    [new RegExp(`var\\(--keep-scroll-knob-bottom\\) center bottom / 100% ${grainOf(knobBottom.h)} no-repeat border-box`), 'the bottom knob is not drawn once, whole, at the roller’s foot'],
+    [new RegExp(`var\\(--keep-scroll-roll-upright\\) center top / 100% ${grainOf(upright.h)} repeat-y content-box`), 'the roll is not its own drawing repeated between the knobs'],
   ]) {
-    assert.match(ruleOf('.chronicle-stones'), pattern, message);
+    assert.match(uprightRoller, pattern, message);
   }
-  assert.match(ruleOf('.chronicle-calendar'), /position: relative;/, 'the stones’ canvas is not placed in the calendar’s own box');
-  assert.match(ruleOf('.chronicle-calendar > .chronicle-svg'), /position: relative;/, 'the cells do not lie over the stones');
-  assert.match(cellStyle, /\.chronicle-cell \{\s*fill: transparent;\s*\}/, 'a cell paints a ground over its stone');
-  for (const [, selector, value] of cellStyle.matchAll(/(\.chronicle-cell[^{}]*)\{[^}]*?\bfill: ([^;]+);/g)) {
-    assert.equal(value.trim(), 'transparent', `"${selector.trim()}" paints over its day’s stone`);
+  // Its parchment is the role scroll's: the same tokens, darkening the same
+  // four props where it curls onto each roller.
+  const sheetRule = ruleOf('.chronicle-sheet');
+  for (const token of ['--keep-parchment-edge', '--keep-parchment', '--keep-parchment-ink']) {
+    assert.match(sheetRule, new RegExp(`var\\(${token}\\)`), `the roll’s parchment is not the role scroll’s ${token}`);
   }
-  // Each drawing rasterised once at its own pixels, from the five in order;
-  // a day lays its own level's stone, and a day nobody measured lays none.
-  assert.match(chronicle, /const loads = stones\.map\(/, 'the stones are not each the calendar’s own drawing');
-  assert.match(chronicle, /art\.width = image\.naturalWidth;\s*art\.height = image\.naturalHeight;/, 'a stone is not rasterised at its own pixels');
-  assert.match(chronicle, /const to = cell\.measured \? cell\.level : null;/, 'a day’s stone is not its own level’s, or a day nobody measured lays one');
-  // Laid where its cell is drawn, by the calendar's own transform, the cell's
-  // own square, at the screen's own pixels, its pixels kept square.
-  for (const [pattern, message] of [
-    [/const matrix = svg\.getScreenCTM\(\);/, 'the stones do not follow the calendar’s own transform'],
-    [/matrix\.a \* cell\.x \+ matrix\.e - box\.left/, 'a stone is not laid at its cell’s x'],
-    [/matrix\.d \* cell\.y \+ matrix\.f - box\.top/, 'a stone is not laid at its cell’s y'],
-    [/matrix\.a \* CELL \* ratio/, 'a stone is not its cell’s size'],
-    [/const width = Math\.round\(box\.width \* ratio\);\s*const height = Math\.round\(box\.height \* ratio\);/, 'the stones are not painted at the screen’s own pixels'],
-    [/context\.imageSmoothingEnabled = false;/, 'a stone’s pixels are smoothed rather than kept square'],
-  ]) {
-    assert.match(chronicle, pattern, message);
+  assert.match(sheetRule, /var\(--keep-parchment\) calc\(4 \* var\(--keep-prop\)\)/, 'the roll’s parchment does not curl over the role scroll’s four props');
+
+  // ONE SET OF INKS. A day is a square inked on the roll, a quiet one in the
+  // parchment's own ink, faint, and a busier one in the calendar's greens,
+  // the darkest last; the key's five steps are the same five inks, level for
+  // level; and the busiest day wears nothing of its own (owner, 2026-10-20:
+  // "we don't need to highlight the highest day like that").
+  const inkOf = (body, paint, strength) => [
+    new RegExp(`${paint}: ([^;]+);`).exec(body)?.[1] ?? null,
+    new RegExp(`${strength}: ([^;]+);`).exec(body)?.[1] ?? null,
+  ];
+  assert.deepEqual(inkOf(ruleOf('.chronicle-cell'), 'fill', 'fill-opacity'), ['var(--keep-parchment-ink)', '0.09'], 'a quiet day is not the parchment’s ink, faint');
+  assert.deepEqual(inkOf(ruleOf('.chronicle-step'), 'background', 'opacity'), ['var(--keep-parchment-ink)', '0.09'], 'the key’s quiet step is not the quiet day’s ink');
+  const greens = [];
+  for (const level of [1, 2, 3, 4]) {
+    const cell = inkOf(ruleOf(`.chronicle-cell[data-grid-level='${level}']`), 'fill', 'fill-opacity');
+    const step = inkOf(ruleOf(`.chronicle-step[data-grid-level='${level}']`), 'background', 'opacity');
+    assert.ok(cell[0] !== null && cell[1] !== null, `a level-${level} day is inked with nothing`);
+    assert.deepEqual(step, cell, `the key’s level-${level} step is not the level-${level} day’s ink`);
+    greens.push(cell[0]);
   }
-  assert.match(chronicle, /<rect\s+class="chronicle-cell"[\s\S]*?x=\{cell\.x\}\s+y=\{cell\.y\}\s+width=\{CELL\}\s+height=\{CELL\}/, 'a cell is not the CELL square at its own place');
-  // The stones arrive with their cells' outlines, week by week at the same
-  // pace; under reduced motion they are simply there, and with motion none is
-  // laid before the calendar is seen.
-  const rise = /const STONE_RISE = \{ length: (\d+), step: (\d+) \};/.exec(chronicle);
-  const outlineRise = /\.chronicle\[data-shown='true'\] \.chronicle-cell \{[^}]*animation: chronicle-cell (\d+)ms[^}]*animation-delay: calc\(var\(--chronicle-column, 0\) \* (\d+)ms\);/.exec(chronicle);
-  assert.ok(rise && outlineRise, 'the stones’ or the cells’ arrival is not where this pin expects it');
-  assert.deepEqual([rise[1], rise[2]], [outlineRise[1], outlineRise[2]], 'the stones arrive out of step with their cells’ outlines');
-  assert.match(chronicle, /const quiet = matchMedia\('\(prefers-reduced-motion: reduce\)'\)\.matches;/, 'the stones do not ask whether motion is welcome');
-  assert.match(
-    chronicle,
-    /if \(quiet \|\| \(!rising && motion === undefined\)\) \{\s*stoneMotions\.set\(cell\.index, \{ from: to, to, start: 0, length: 0, rise: false \}\);/,
-    'under reduced motion a stone is not simply there'
+  assert.deepEqual(
+    greens,
+    ['var(--palette-dark-grid-4)', 'var(--palette-dark-grid-3)', 'var(--palette-dark-grid-2)', 'var(--palette-dark-grid-1)'],
+    'the days are not the calendar’s greens, deepening as a day was busier'
   );
-  assert.match(chronicle, /const rising = !quiet && open && !stonesRisen;/, 'the stones rise more than once, or before the calendar is seen');
-  assert.match(chronicle, /const laid = quiet \|\| open;/, 'with motion welcome, stones are laid before the calendar is seen');
-  assert.match(
-    cellStyle,
-    /\.chronicle-step \{[^}]*background: var\(--keep-stone-0\) center \/ 100% 100% no-repeat;/,
-    'the key’s quiet step is not the bare stone'
-  );
+  assert.doesNotMatch(cellStyle, /\.chronicle-cell\[data-peak='true'\]/, 'the busiest day wears a mark of its own again');
   assert.match(
     chronicle,
     /\{#each \[0, 1, 2, 3, 4\] as level \(level\)\}<i class="chronicle-step" data-grid-level=\{level\}><\/i>\{\/each\}/,
     'the key no longer draws one step per level'
   );
-  for (const level of [1, 2, 3, 4]) {
-    assert.match(
-      cellStyle,
-      new RegExp(`\\.chronicle-step\\[data-grid-level='${level}'\\] \\{\\s*background-image: var\\(--keep-stone-${level}\\);\\s*\\}`),
-      `the key’s level-${level} step is not its own stone`
-    );
-  }
-  for (const level of [0, 1, 2, 3, 4]) {
-    assert.ok(
-      tokens.some(({ token, file }) => token === `--keep-stone-${level}` && file === stoneFiles[level]),
-      `the key’s level-${level} stone and the calendar’s are not the same file`
-    );
-  }
+  assert.doesNotMatch(chronicle, /stone/i, 'the calendar paints stones again');
+  assert.match(chronicle, /<rect\s+class="chronicle-cell"[\s\S]*?x=\{cell\.x\}\s+y=\{cell\.y\}\s+width=\{CELL\}\s+height=\{CELL\}/, 'a cell is not the CELL square at its own place');
 
   // THE SWORD'S SHARE. The hilt and the point are fixed lengths, each its
   // drawing's own width, and the track is the sword's own height; the blade
@@ -1229,10 +1232,12 @@ test('the keep’s props are vendored drawings at their own grain, and the calen
     assert.ok(colour, `--${band.token} is not a colour in the token layer`);
     assert.equal(colour, hiltEnd.get(band.from), `the blade’s row ${band.from} is not the hilt’s own steel there`);
   }
-  const track = /\.chronicle-track \{([^}]*)\}/.exec(cellStyle)?.[1] ?? '';
+  const swordStyle = tome.replace(/\/\*[\s\S]*?\*\//g, '');
+  const track = /\.chronicle-track \{([^}]*)\}/.exec(swordStyle)?.[1] ?? '';
   assert.match(track, new RegExp(`block-size: ${sword.h}px;`), 'the share’s track is not the sword’s own height');
   assert.doesNotMatch(track, /background|border/, 'the share’s track paints a bar behind the sword again');
-  const fill = /\.chronicle-fill \{([^}]*)\}/.exec(cellStyle)?.[1]?.replace(/\s+/g, ' ') ?? '';
+  const fill = /\.chronicle-fill \{([^}]*)\}/.exec(swordStyle)?.[1]?.replace(/\s+/g, ' ') ?? '';
+  assert.doesNotMatch(cellStyle, /\.chronicle-(?:track|fill) \{/, 'the Chronicle draws a sword of its own beside the tome\u2019s');
   for (const [pattern, message] of [
     [new RegExp(`--sword-hilt: ${hilt.w}px;`), 'the hilt is not a fixed length of its own drawing’s width'],
     [new RegExp(`--sword-tip: ${tip.w}px;`), 'the point is not a fixed length of its own drawing’s width'],

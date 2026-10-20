@@ -629,6 +629,9 @@ export type ChronicleHeadline = {
 export type ChronicleAccount = {
   readonly key: string;
   readonly label: string;
+  /* The lifetime the account opens on, worded ("62.9B"); a dash where the
+     source reports none, and nothing while its payload is on its way. */
+  readonly total: string;
   readonly facts: readonly LedgerFact[];
   readonly lines: readonly string[];
   readonly models: readonly LedgerBar[];

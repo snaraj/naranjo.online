@@ -45,7 +45,13 @@ applyStoredColumnWidth(documentHost(), browserStore());
 // face has no text to swap into when it lands. Swapping it in late moved the
 // painted page (the review of eaa62d1, bytes held 1.8s: 0.013 at 1440px).
 const faceWait = 1000;
-const faces = { sans: "1em 'Archivo'", mono: "1em 'JetBrains Mono'", display: "1em 'Instrument Serif'" };
+const faces = {
+  sans: "1em 'Archivo'",
+  mono: "1em 'JetBrains Mono'",
+  display: "1em 'Instrument Serif'",
+  tome: "1em 'Cormorant Garamond'",
+  initial: "1em 'UnifrakturMaguntia'",
+};
 const loaded = new Set<string>();
 const start = () => {
   for (const stack of Object.keys(faces)) {

@@ -7,7 +7,7 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
-## [0.1.96] - 2026-10-19
+## [0.1.96] - 2026-10-20
 
 ### Changed
 
@@ -36,12 +36,13 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
     falls on, frame and ivy included, and each flame throws sparks and lights
     the dust drifting through its glow, never over the words.
   - No gold: the name and the section titles are set in Instrument Serif in
-    the page's own ink. The name is stacked large across the top of the
-    sheet, and each title starts its section with a fine line running on to
-    the column's end.
-  - The page opens on the name, stacked and centred with J flying beside
-    it, close under the frame. The header bar, the section nav, the picture bands and the footer
-    are gone, and every section keeps its id.
+    the page's own ink, and each title starts its section with a fine line
+    running on to the column's end.
+  - The page opens on the name, close under the frame: its two words on two
+    centred lines, set no larger than 120px, with the j drawn without its dot and
+    J flying where the dot would be. Screen readers still read the name as
+    written. The header bar, the section nav, the picture bands and the
+    footer are gone, and every section keeps its id.
   - One background on the sheet: no board, panel or control paints a
     ground of its own, and pointing at a row brightens its ink rather than
     painting one under it.
@@ -49,19 +50,13 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
     section title to the column's end, a branch parts the roles and a twig
     the rows of a list — four branches, one leafy, one heavy with moss, one
     a thorn stem hung with sloes and one forked in blossom, and three twigs,
-    taking turns so no two rows in sight share one — each model's share is
-    the blade of a sword and the
-    picked layer is underlined by one, and each calendar day is a wall stone
-    that grows moss as the day gets busier, in the night's moss and lichen
-    greens. The calendar's stones are painted together as one picture, so a
-    phone's browser keeps the page moving smoothly while they show.
+    taking turns so no two rows in sight share one — and each model's share
+    is the blade of a sword.
   - A role opens from an iron ring and unrolls as a parchment scroll, its
     words in the day's inks and clear of the paper's darkened edges.
   - Ongoing Work's two lists stand without their headings, and the commit log
     has no scrollbar: its entries fade at an edge with more beyond it, and
     reaching its end no longer scrolls the page.
-  - The trackers' figures sit in a row above the graph, and the graph and its
-    calendar take the column's whole width.
   - The boss log follows the hiscores' order, as RuneLite's Hiscore panel
     lists the bosses, and reads 15% larger, with space rather than a rule
     between bosses and no lead figure before them.
@@ -70,14 +65,29 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   its slate and sepia modes are gone,
   and the origin no longer stamps a chosen mode into the page from a cookie,
   so a reader who picked one earlier gets the same page as everyone else.
-- The trackers are one diagram:
-  - Pull Requests Closed, Commits Pushed and Total Tokens Used sit beside a
-    daily line, over the year's calendar.
-  - Every day of the line stands over its own week's column.
-  - A switch picks what both show: contributions, or each tool's tokens.
-  - Pointing, touching or the arrow keys read one day across all of it.
-  - The Codex and Claude Code accounts carry the same rows, in the same
-    order.
+- The trackers are one diagram, written on a roll of parchment hung on the
+  wall between two upright rollers, which unrolls from its middle the first
+  time it is seen:
+  - Pull Requests Closed, Commits Pushed and Total Tokens Used open the roll
+    under one illuminated initial, beside a daily line on a desk and above it
+    on a phone, over the year's calendar; the line and the calendar run to
+    the end of the parchment.
+  - Every day of the line stands over its own week's column, and every
+    calendar day is a square inked in the calendar's greens, deeper as the
+    day was busier, with no mark of its own for the busiest.
+  - Three wax seals pick what both show: contributions, or each tool's
+    tokens.
+  - Pointing, touching or the arrow keys read one day across all of it; a
+    green seal hangs under the roll at that day, and the day's reading over
+    the line stays inside it on the narrowest phone.
+  - The Codex and Claude Code accounts are the leaves of a chained tome
+    open on a lectern built out from the wall. Each opens on its lifetime
+    total, then its cache read and written, today, this week and its
+    records, in the same rows in the same order, and each model's share is
+    a sword. Pressing the tome, or Enter on its turned-up corner, turns the
+    leaf to each model's own figures; a phone turns one page at a time. The
+    leaves are set in Cormorant Garamond with blackletter initials in
+    UnifrakturMaguntia, both vendored with their licences.
   - The boss log sits on the same board.
   - The board holds the room its data will fill while that data is on its
     way, so nothing below it moves when it lands.

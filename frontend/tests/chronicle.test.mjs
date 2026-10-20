@@ -316,9 +316,20 @@ test('every account carries the same rows in the same order', () => {
   assert.equal(props.accounts.length, 2);
   const terms = props.accounts.map((account) => account.facts.map((fact) => fact.term));
   assert.deepEqual(terms[0], terms[1], 'the two accounts print different rows');
-  for (const term of ['input', 'output', 'cache read', 'cache write', 'itemised', 'sessions', 'streak', 'longest streak', 'longest session']) {
-    assert.ok(terms[0].includes(term), `the account lost its ${term} row`);
+  assert.deepEqual(
+    terms[0],
+    ['cache read', 'cache write', 'today', 'sessions', 'streak', 'longest session'],
+    'the account no longer reads its cache, its window and its records in that order'
+  );
+  /* The tome's leaf (owner, 2026-10-20: "remove 'itemised' insted just put
+     cache write and cache read"): the input and output totals and the row
+     saying how much of the lifetime they itemised are retired, and the
+     longest streak rides the streak's own row. */
+  for (const term of ['input', 'output', 'itemised', 'longest streak']) {
+    assert.ok(!terms[0].includes(term), `the account still prints a ${term} row`);
   }
+  const streak = props.accounts[0].facts.find((fact) => fact.term === 'streak').value;
+  assert.match(streak, /, longest 9$/, 'the streak no longer carries the longest one beside it');
   // Each account prints its OWN sessions, not the first source's.
   const sessions = props.accounts.map((account) => account.facts.find((fact) => fact.term === 'sessions').value);
   assert.notEqual(sessions[0], sessions[1]);
@@ -365,10 +376,11 @@ test('payloads still in flight hold the room they will fill, and an empty answer
   for (const account of waiting.accounts) {
     assert.equal(account.label, '', 'a pending account names a source before its payload said it reported');
     assert.equal(account.facts.length + account.models.length, 0);
+    assert.equal(account.total, '', 'a pending account claims a lifetime before its payload said one');
   }
   assert.equal(waiting.factSlots, accountFactSlots);
   assert.equal(waiting.modelSlots, accountModelSlots);
-  assert.equal(accountFactSlots, 11, 'four classes, two windows, the itemised row and four records');
+  assert.equal(accountFactSlots, 7, 'two cache classes, two windows and three records');
   assert.equal(accountModelSlots, 5);
 
   // Arrived: real accounts only, and the same room around them.
@@ -382,16 +394,17 @@ test('payloads still in flight hold the room they will fill, and an empty answer
   assert.equal(empty.accounts.length, 0);
 });
 
-/* A split that covers only part of a lifetime says so (the second tool's local
- * record splits only the days since its logs began; earlier days survive as
- * totals only). The row is the same for every account, so the accounts stay
- * aligned and neither implies a split of a lifetime it does not cover. */
-test('each account says how much of its lifetime its split itemises', () => {
+/* AN ACCOUNT OPENS ON ITS LIFETIME, IN ALL, and itemises only its cache
+ * (owner, 2026-10-20). Two cache rows beside a lifetime claim no split of it,
+ * so neither account implies a split of a lifetime it does not cover; a
+ * source that reported no lifetime says so with the figure for no reading
+ * rather than with a zero. */
+test('each account opens on its lifetime and itemises only its cache', () => {
   const source = (label, lifetime, classes) => ({
     label,
     windows: [],
     stats: [
-      { key: 'lifetime', label: 'Lifetime', unit: 'tokens', value: lifetime },
+      ...(lifetime === null ? [] : [{ key: 'lifetime', label: 'Lifetime', unit: 'tokens', value: lifetime }]),
       ...Object.entries(classes).map(([key, value]) => ({ key, label: key, unit: 'tokens', value }))
     ],
     series: { startDate: '2026-08-01', totals: [1, 2, 3] }
@@ -399,13 +412,14 @@ test('each account says how much of its lifetime its split itemises', () => {
   const props = chronicleProps(
     [null, usage([
       source(first.key, 100_000_000, { input: 10_000_000, output: 20_000_000, 'cache-read': 60_000_000, 'cache-write': 10_000_000 }),
-      source(second.key, 100_000_000, { input: 5_000_000, output: 5_000_000, 'cache-read': 20_000_000, 'cache-write': 0 })
+      source(second.key, null, { input: 5_000_000, output: 5_000_000, 'cache-read': 20_000_000, 'cache-write': 0 })
     ]), null],
     now
   );
-  const itemised = Object.fromEntries(
-    props.accounts.map((account) => [account.key, account.facts.find((fact) => fact.term === 'itemised')?.value])
-  );
-  assert.equal(itemised[first.key], '100M of 100M', 'a split that covers the lifetime says so');
-  assert.equal(itemised[second.key], '30M of 100M', 'a partial split says how much it covers');
+  const [whole, partial] = props.accounts;
+  assert.equal(whole.total, '100.0M', 'the lifetime is not the leaf\u2019s figure');
+  assert.equal(partial.total, noReading, 'a lifetime nobody reported reads as a figure');
+  const facts = (account) => Object.fromEntries(account.facts.map((fact) => [fact.term, fact.value]));
+  assert.deepEqual(facts(whole), { 'cache read': '60.0M', 'cache write': '10.0M' });
+  assert.deepEqual(facts(partial), { 'cache read': '20.0M', 'cache write': '0' });
 });

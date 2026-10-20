@@ -51,12 +51,15 @@ import {
  * every ADAPTER pin below is unchanged — tokenBoardProps still proves every
  * rule it always did — and the component pins that described behaviour the
  * Chronicle shares (the shell, the slider, the CSP-safe custom properties, the
- * absence sweeps) read Chronicle.svelte instead.
+ * absence sweeps) read Chronicle.svelte instead — and the accounts' leaves,
+ * since the accounts became the chained tome (owner, 2026-10-20), read the
+ * tome the Chronicle hands them to.
  *
  * styles.css joins it because the page-level tokens these figures are drawn
  * with are stated there. */
-const [chronicle, helper, manifest, sheet] = await Promise.all([
+const [chronicle, tome, helper, manifest, sheet] = await Promise.all([
   readFile(new URL('../src/lib/components/Chronicle.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../src/lib/components/Tome.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/token-usage.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/page.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
@@ -336,8 +339,10 @@ describe('the board of cards: source contract', () => {
        from the vocabulary file rather than from the wire: the wire carries a
        machine key, and the page prints the written name that key resolves
        to. */
-    assert.match(chronicle, /\{#each accounts as account \(account\.key\)\}/);
-    assert.match(chronicle, /\{account\.label\}/);
+    assert.match(chronicle, /<Tome \{accounts\} \{factSlots\} \{modelSlots\} \/>/);
+    assert.match(tome, /const leaves = \$derived\(tomeLeaves\(accounts\)\);/);
+    assert.match(tome, /\{#each leaves as leaf, index \(`\$\{leaf\.kind\}-\$\{leaf\.account\.key\}`\)\}/);
+    assert.match(tome, /leaf\.account\.label/);
     const rendered = tokenBoardProps(envelopeFor(shippedPayload));
     const perSource = rendered.cards.filter((card) => card.key.startsWith('source-'));
     assert.deepEqual(
@@ -454,8 +459,10 @@ describe('the board of cards: source contract', () => {
        blade's length by it, and a percentage there is not a number calc() can
        multiply a length by. The percentage the adapter composes is divided
        once, here, and nowhere else (sections.test.mjs holds the sword). */
-    assert.match(chronicle, /style:--chronicle-share=\{model\.fillPct \/ 100\}/);
-    assert.doesNotMatch(chronicle, /--chronicle-fill\b/, 'the retired percentage fill is still written or read');
+    assert.match(tome, /style:--chronicle-share=\{model\.fillPct \/ 100\}/);
+    for (const source of [chronicle, tome]) {
+      assert.doesNotMatch(source, /--chronicle-fill\b/, 'the retired percentage fill is still written or read');
+    }
     assert.match(chronicle, /node\.style\.setProperty\('--chronicle-stamp-x', /);
     assert.match(chronicle, /style:--chronicle-column=\{cell\.column\}/);
     for (const [name, source] of Object.entries({ chronicle })) {
@@ -1999,8 +2006,8 @@ describe('the models card is one card per source', () => {
     /* The dataviz floor, carried onto the rows: every one prints its own name
        and its own reading beside the rule, and the rule is the redundant
        channel. */
-    assert.match(chronicle, /<span class="chronicle-model-name">\{model\.label\}<\/span>/);
-    assert.match(chronicle, /<span class="chronicle-model-reading">\{model\.reading\}<\/span>/);
+    assert.match(tome, /<span class="chronicle-model-name">\{model\.label\}<\/span>/);
+    assert.match(tome, /<span class="chronicle-model-reading">\{model\.reading\}<\/span>/);
   });
 
 });
@@ -2326,8 +2333,10 @@ describe('the card surface renders payload strings as data', () => {
        the adapter, rendered verbatim by the Chronicle's accounts — so nothing
        is readable only by looking. (The board's record mark, its two-column
        ladder and their sheet rules retired with the board, 2026-10-16.) */
-    assert.match(chronicle, /<div class="chronicle-fact"><dt>\{fact\.term\}<\/dt><dd>\{fact\.value\}<\/dd><\/div>/);
-    assert.doesNotMatch(chronicle, /\stitle=/, 'a title attribute has no touch trigger in any engine');
+    assert.match(tome, /<div class="chronicle-fact"><dt>\{fact\.term\}<\/dt><dd>\{fact\.value\}<\/dd><\/div>/);
+    for (const source of [chronicle, tome]) {
+      assert.doesNotMatch(source, /\stitle=/, 'a title attribute has no touch trigger in any engine');
+    }
   });
 
   it('renders every payload string as text, never markup', () => {

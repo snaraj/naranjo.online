@@ -1618,25 +1618,29 @@ test('J flies off the name from one seat, reserved, silent, still at rest, and f
     'J’s style names something other than exactly the vendored sheet and still, by relative path'
   );
 
-  /* ONE SEAT, BESIDE THE NAME. The page shell draws him once, inside the
-     name's own heading, after its words — and no other component draws him,
-     so there is no second request and no second dragon. The mirrored seat
-     left with the row it faced into: no prop, no flip rule, anywhere. The
-     static shell's heading has no J at all: it is the name alone, inside the
-     same intro, so the stylesheet that places the name places it there too. */
+  /* ONE SEAT, AS THE DOT OF THE J (owner, 2026-10-20). The page shell draws
+     him once, inside the name's own heading, in a seat at the end of its
+     second word, after its dotless j — and no other component draws him, so there is no
+     second request and no second dragon. The mirrored seat left with the row
+     it faced into: no prop, no flip rule, anywhere. The static shell's
+     heading has no J at all: it is the name alone, inside the same intro, and
+     the mounted heading's words are exactly its words, so the stylesheet that
+     places the name places it there too and the page mounts without moving
+     a letter. */
   const seats = Object.entries(componentSources).flatMap(([file, source]) =>
     (stripComments(source).match(/<JMark\b[^>]*\/>/g) ?? []).map((tag) => [file, tag])
   );
   assert.deepEqual(seats, [['App.svelte', '<JMark />']], 'J is drawn somewhere other than exactly once, as rendered, by the page shell');
-  assert.match(
-    stripComments(component),
-    /<div class="page-intro">\s*<h1 id="page-title">[^<]+<span class="page-j"><JMark \/><\/span><\/h1>/,
-    'J is not seated inside the name’s own heading, after its words'
+  const heading = /<div class="page-intro">\s*<h1 id="page-title">(<span class="page-name-line">[^<]+<\/span> <span class="page-name-line">[^<]+<span class="page-name-j">j<\/span>[^<]*<span class="page-j-seat"><span class="page-j"><JMark \/><\/span><\/span><\/span>)<\/h1>/.exec(
+    stripComments(component)
   );
-  assert.match(
-    fallback,
-    /<div class="page-intro">\s*<h1 id="static-page-title">[^<]+<\/h1>/,
-    'the static shell’s name is not the name alone in the same intro the page draws'
+  assert.ok(heading, 'J is not seated inside the name’s own heading, at the end of its second word, after its j, each word a line of its own');
+  const shell = /<div class="page-intro">\s*<h1 id="static-page-title">([^<]+)<\/h1>/.exec(fallback);
+  assert.ok(shell, 'the static shell’s name is not the name alone in the same intro the page draws');
+  assert.equal(
+    heading[1].replace(/<[^>]*>/g, ''),
+    shell[1],
+    'the mounted heading’s words are not exactly the static shell’s, so the name moves, or reads differently, when the page mounts'
   );
   assert.doesNotMatch(
     stripComments(mark).replace(/\/\*[\s\S]*?\*\//g, ''),
@@ -1700,78 +1704,104 @@ test('J flies off the name from one seat, reserved, silent, still at rest, and f
   assert.equal(boxed['--j-sheet-inline'], 'calc(var(--j-box) * 20)');
   assert.equal(boxed['--j-sheet-block'], 'calc(var(--j-box) * 24)');
 
-  /* THE SEAT (owner, 2026-10-19: "put J on the white space flying", then, of
-     the name stacked at the column's start, "way too much to the left"). The
-     name and J are ONE CENTRED GROUP: the name keeps a room at its end exactly
-     the size of his flight, and the intro centres the name with that room, so
-     the pair is balanced and J flies in the room. Each fact the seat rests on
-     is pinned where it is decided:
-       · the room is the name's own margin, in the stylesheet, so the static
-         shell — which has no J — places the name exactly where the mounted
-         page does, and his arrival moves nothing;
-       · the room is the gap plus his size, and he is placed one gap past the
-         name's edge at his size, so he fills the room exactly — never into
-         the letters, never past the room's end;
-       · he is centred on the name's lines, out of the flow, placed from the
-         name's own box (the name is his containing block), by ONE rule at
-         every width, so the room and the flight cannot part at a breakpoint;
+  /* THE SEAT, AS THE DOT OF THE J (owner, 2026-10-20, picking "the dot of the
+     j, stacked", and of its size: "make the title not be GIGANTIC"). The name
+     is its two words centred on two lines, its j drawn dotless, and J hovers
+     where the dot would be. Each fact the seat rests on is pinned where it is
+     decided:
+       · the seat is a box with no font at the second word's END: a box of
+         no height on the baseline in every engine, so J is placed from the
+         letters and not from a line box each engine derives differently, and
+         at the end because a placed box INSIDE a word splits it in the
+         heading's accessible name (measured in all three engines: "Samuel
+         Naran jo", then "Samuel Naranj o");
+       · he is carried back over the stem and his feet are lifted to the
+         hover, by the face's facts stated once on the name, in its own size —
+         the stem as its derivation from the j's and the o's advances and the
+         name's tracking after each;
+       · he is out of the flow and takes no pointer, by ONE rule at every
+         width, and nothing about the seat moves;
        · his size is a share of the name's own size, capped where his 80px
-         flight frames would blur, and smaller than the name's two lines;
-       · and he takes no pointer, and his seat never moves. */
+         flight frames would blur, and never so large that his body, from the
+         hover up, reaches the line above;
+       · and the j is still a j: the dotless letter is only DRAWN over it,
+         in the face's own glyph, spoken as nothing. */
+  const seatRules = sweptRules.filter((rule) => rule.file === 'App.svelte' && selectorParts(rule.selector).includes('.page-j-seat'));
+  assert.equal(seatRules.length, 1, 'J’s seat is shaped by more than one rule, or none');
+  const seat = declared(seatRules[0]);
+  assert.ok(!seatRules[0].enclosing.some((at) => at.startsWith('@')), 'J’s seat sits inside a condition, so some reader gets no seat');
+  assert.ok(!('display' in seat), 'J’s seat is not an ordinary inline box, so it splits the name for a screen reader or leaves the baseline');
+  assert.equal(seat['font-size'], '0', 'J’s seat has a font, so it is not a box of no height on the baseline');
+  assert.equal(seat.position, 'relative', 'J is not placed from his seat');
+  const lines = sweptRules.filter((rule) => rule.file === 'App.svelte' && selectorParts(rule.selector).includes('.page-name-line'));
+  assert.equal(lines.length, 1, 'the name’s lines are shaped by more than one rule, or none');
+  assert.deepEqual(
+    [declared(lines[0]).display, declared(lines[0])['white-space']],
+    ['block', 'nowrap'],
+    'a word of the name is not a whole line of its own, so the seat — a place a line may break — can split it'
+  );
   const pageJRules = sweptRules.filter((rule) => rule.file === 'App.svelte' && selectorParts(rule.selector).includes('.page-j'));
-  assert.equal(pageJRules.length, 1, 'J is seated by more than one rule, so the room and the flight can part at some width');
+  assert.equal(pageJRules.length, 1, 'J is seated by more than one rule, so the seat and the flight can part at some width');
   const [wideSeat] = pageJRules;
   assert.ok(!wideSeat.enclosing.some((at) => at.startsWith('@')), 'J’s one seat sits inside a condition, so some reader gets no seat');
   const seated = declared(wideSeat);
   assert.deepEqual(
     Object.keys(seated).filter((property) => /^(?:position|inset(?:-.+)?|top|right|bottom|left)$/.test(property)).sort(),
-    ['inset-block-start', 'inset-inline-start', 'position'],
-    'J is placed by something other than one start offset on each axis'
+    ['inset-block-end', 'inset-inline-start', 'position'],
+    'J is placed by something other than one offset on each axis'
   );
   assert.equal(seated.position, 'absolute', 'J is in the flow, so his arrival moves the name');
-  assert.equal(seated['inset-inline-start'], 'calc(100% + var(--j-gap))', 'J is not one gap past the name’s own edge');
-  assert.equal(seated['inset-block-start'], 'calc(50% - var(--j-size) / 2)', 'J is not centred on the name’s lines');
+  assert.equal(seated['inset-inline-start'], 'calc(var(--j-stem) - var(--j-size) / 2)', 'J is not centred over the j’s stem');
+  assert.equal(
+    seated['inset-block-end'],
+    'calc(var(--j-hover) - 0.1125 * var(--j-size))',
+    'J’s feet (0.1125 of his square above its foot) are not lifted to the hover'
+  );
   assert.equal(seated['pointer-events'], 'none');
   assert.equal(seated['line-height'], '0', 'J’s seat sets a line box of its own inside the name');
-  assert.ok(!('font-size' in seated), 'J’s seat re-sizes his em, so his size is no longer a share of the name’s');
+  assert.equal(seated['font-size'], 'var(--keep-name-size)', 'J does not take the name’s size back from a seat of none, so his size is no longer a share of the name’s');
   assert.ok(
     !sweptRules.some((rule) => rule.file === jMarkFile && declarationsOf(rule.body).some(({ property }) => property === 'font-size' || property === 'font')),
     'J’s own component re-sizes his em, so his size is no longer a share of the name’s'
   );
-  assert.ok(
-    !declarationsOf(wideSeat.body).some(({ property }) => /^(?:animation|transition|transform)/.test(property)),
-    'the seat moves; motion is J’s own, inside the no-preference block'
-  );
+  for (const rule of [...seatRules, wideSeat]) {
+    assert.ok(
+      !declarationsOf(rule.body).some(({ property }) => /^(?:animation|transition|transform)/.test(property)),
+      'the seat moves; motion is J’s own, inside the no-preference block'
+    );
+  }
 
-  // The name, with his room: the keep layer's one masthead rule that sizes J.
+  // The name, with J's measures: the keep layer's one masthead rule that sizes J.
   const names = sweptRules.filter(
     (rule) =>
       rule.file === 'styles' &&
       selectorParts(rule.selector).includes('h1') &&
       declarationsOf(rule.body).some(({ property }) => /^--j-/.test(property))
   );
-  assert.equal(names.length, 1, 'J’s size and gap are not stated once, on the name');
+  assert.equal(names.length, 1, 'J’s measures are not stated once, on the name');
   const [nameRule] = names;
-  assert.ok(!nameRule.enclosing.some((at) => at.startsWith('@media')), 'the name keeps J’s room only at some widths');
+  assert.ok(!nameRule.enclosing.some((at) => at.startsWith('@media')), 'the name seats J only at some widths');
   const name = declared(nameRule);
-  assert.equal(name['--j-size'], 'clamp(3rem, 0.5em, 7.5rem)', 'J is no longer half a name-size, held between 3rem and 7.5rem');
-  const cap = /^clamp\([\d.]+rem, [\d.]+em, ([\d.]+)rem\)$/.exec(name['--j-size']);
-  assert.ok(cap && Number(cap[1]) <= 7.5, 'J is allowed past 7.5rem, where his 80px flight frames blur');
-  const gap = /^([\d.]+)em$/.exec(name['--j-gap'] ?? '');
-  assert.ok(gap && Number(gap[1]) > 0, 'J’s gap from the name is not a positive share of the name’s size, so he can touch its letters');
-  assert.equal(name.position, 'relative', 'J is not placed from the name’s own box');
-  assert.equal(
-    name['margin-inline-end'],
-    'calc(var(--j-gap) + var(--j-size))',
-    'the room the name keeps at its end is not exactly J’s gap and J'
+  const size = /^min\(([\d.]+)em, clamp\(([\d.]+)rem, ([\d.]+)em, ([\d.]+)rem\)\)$/.exec(name['--j-size'] ?? '');
+  assert.ok(size, `J is ${name['--j-size']}, not a share of the name held between two sizes and under a share it may never pass`);
+  const [, most, , share, cap] = size.map(Number);
+  assert.ok(cap <= 7.5, 'J is allowed past 7.5rem, where his 80px flight frames blur');
+  assert.ok(share <= most, 'J’s share of the name is past the most he may ever be');
+  const stem = /^calc\(([\d.]+)em - ([\d.]+)em - ([\d.]+)em - 2 \* var\(--masthead-tracking\)\)$/.exec(name['--j-stem'] ?? '');
+  const hover = /^([\d.]+)em$/.exec(name['--j-hover'] ?? '');
+  assert.ok(
+    stem && hover,
+    'the face’s facts that seat J are not stated in the name’s own size, the stem as its way back from the word’s end over two tracked letters'
   );
   assert.equal(name['font-size'], 'var(--keep-name-size)', 'the name is no longer set in --keep-name-size');
+  assert.equal(name['text-align'], 'center', 'the name’s two lines are not centred on each other');
+  assert.ok(!('margin-inline-end' in name), 'the name keeps a room at its end again, so it is no longer centred by itself');
   for (const rule of sweptRules.filter((entry) => entry.file === 'styles' && selectorParts(entry.selector).includes('h1'))) {
     for (const property of ['grid-area', 'grid-column', 'justify-self']) {
-      assert.ok(!(property in declared(rule)), `the name sets ${property}, so it leaves the centred group it forms with J`);
+      assert.ok(!(property in declared(rule)), `the name sets ${property}, so it leaves the intro’s centre`);
     }
   }
-  // The intro centres the name WITH its room: the last word on its items.
+  // The intro centres the name: the last word on its items.
   const introAlign = sweptRules
     .filter(
       (rule) =>
@@ -1781,25 +1811,58 @@ test('J flies off the name from one seat, reserved, silent, still at rest, and f
         'justify-items' in declared(rule)
     )
     .map((rule) => declared(rule)['justify-items']);
-  assert.equal(introAlign.at(-1), 'center', 'the intro no longer centres the name and J’s room as one group');
-  /* ...and half a name-size is less than the name's two lines are tall, so
-     centred on them he never reaches past the name's own block. Read from the
-     masthead rule's own leading rather than restated here. */
-  const leadingToken = /--masthead-leading:\s*([\d.]+);/.exec(stylesCode);
-  assert.ok(leadingToken, 'the masthead leading is no longer a plain number this pin can read');
-  const nameLeadings = sweptRules
+  assert.equal(introAlign.at(-1), 'center', 'the intro no longer centres the name');
+  /* ...and J never reaches the line above. His drawn body is 0.7375 of his
+     square (measured off the still and every flight frame: from 0.15 to
+     0.8875 of it), standing on the hover, so at the most he may ever be his
+     head is at hover + 0.7375 × most, which must sit inside the name's own
+     leading — the last leading the name is set at, read rather than
+     restated. */
+  const leading = sweptRules
     .filter((rule) => rule.file === 'styles' && selectorParts(rule.selector).includes('h1'))
     .map((rule) => declared(rule)['line-height'])
-    .filter((value) => value !== undefined);
+    .filter((value) => value !== undefined)
+    .at(-1);
+  assert.match(leading ?? '', /^[\d.]+$/, `the name is set at ${leading ?? 'no leading'}, not a plain number this pin can read`);
+  const head = Number(hover[1]) + 0.7375 * most;
   assert.ok(
-    nameLeadings.length > 0 && nameLeadings.every((value) => value === 'var(--masthead-leading)'),
-    `the name is set at ${nameLeadings.join(', ') || 'no leading'} rather than the masthead leading alone, so its height is not what this pin measures`
+    head <= Number(leading),
+    `J’s head reaches ${head.toFixed(3)} of a name-size, past the ${leading} between the name’s lines: he meets the line above`
   );
-  const share = /^clamp\([\d.]+rem, ([\d.]+)em,/.exec(name['--j-size'])?.[1];
-  assert.ok(
-    share !== undefined && Number(share) < 2 * Number(leadingToken[1]),
-    `J is ${share}em tall beside a name two lines of ${leadingToken[1]} tall; he reaches past the name’s block`
+  /* The x-height the hover stands over, and the stem, are the face's: the
+     hover is a breath over 0.51, the stem sits inside the dotless j's own
+     advance, and the way back is that advance (0.215, as the dotless j's)
+     and the o's (0.408) — the browser lanes measure where it lands. */
+  assert.ok(Number(hover[1]) > 0.51 && Number(hover[1]) < 0.6, `J hovers at ${hover[1]}, not a breath over the face’s 0.51 x-height`);
+  assert.deepEqual(
+    stem.slice(2, 4).map(Number),
+    [0.215, 0.408],
+    'J’s way back from the word’s end is not the face’s j and o advances'
   );
+  assert.ok(Number(stem[1]) > 0 && Number(stem[1]) < 0.215, `J’s stem at ${stem[1]} is outside the dotless j’s 0.215 advance`);
+
+  /* THE J IS STILL A J. Its letter stays in the text at no size, carrying no
+     tracking of its own, and the dotless j is drawn in its place from the
+     face itself (a vendored face whose range covers it), at the name's size
+     and with the name's tracking, spoken as nothing. */
+  const letter = sweptRules.find((rule) => rule.file === 'App.svelte' && rule.selector === '.page-name-j');
+  assert.ok(letter, 'the j has no rule of its own');
+  assert.deepEqual([declared(letter)['font-size'], declared(letter)['letter-spacing']], ['0', '0'], 'the j’s own letter still takes room or tracking');
+  const drawn = sweptRules.find((rule) => rule.file === 'App.svelte' && rule.selector === '.page-name-j::before');
+  assert.ok(drawn, 'no dotless j is drawn over the j');
+  const drawnContents = declarationsOf(drawn.body).filter(({ property }) => property === 'content').map(({ value }) => value);
+  assert.deepEqual(drawnContents, ["'\\0237'", "'\\0237' / ''"], 'the drawn letter is not the dotless j, spoken as nothing where an engine reads generated text');
+  assert.equal(declared(drawn)['font-size'], 'var(--keep-name-size)', 'the dotless j is not drawn at the name’s size');
+  assert.equal(declared(drawn)['letter-spacing'], 'var(--masthead-tracking)', 'the dotless j does not carry the name’s tracking');
+  const covered = [...stylesCode.matchAll(/@font-face\s*\{([^}]*)\}/g)]
+    .map(([, body]) => body)
+    .filter((body) => /font-family:\s*'Instrument Serif'/.test(body))
+    .some((body) =>
+      [...(/unicode-range:\s*([^;]+);/.exec(body)?.[1] ?? '').matchAll(/U\+([0-9A-F]+)(?:-([0-9A-F]+))?/gi)].some(
+        ([, from, to]) => parseInt(from, 16) <= 0x237 && 0x237 <= parseInt(to ?? from, 16)
+      )
+    );
+  assert.ok(covered, 'no vendored Instrument Serif face covers the dotless j, so it is drawn in some other face');
 
   /* THE FLIGHT AND THE ROCK, and only inside no-preference. The sweep below
      proves no rule animates outside that block; this proves the sheet
@@ -1885,10 +1948,10 @@ test('the stylesheet no longer dresses the J it retired (owner direction, 2026-1
      kept warm for a render the owner swapped away. */
   assert.doesNotMatch(stylesCode, /j-typing/, 'styles.css still names the typing render');
   assert.doesNotMatch(stylesCode, /\.j-mark\b/, 'styles.css still styles the retired .j-mark');
-  /* The sheet states only his SEAT's two measures, on the name that keeps his
-     room (2026-10-19): his size and his gap from the letters. Every token his
-     own component declares — his box, his sheet, his flight, his rock — stays
-     his component's alone. */
+  /* The sheet states only his SEAT's measures, on the name he is the dot of
+     (2026-10-20): his size, and the face's stem and hover that seat him. Every
+     token his own component declares — his box, his sheet, his flight, his
+     rock — stays his component's alone. */
   const ownTokens = new Set(
     [...(componentStyles[jMarkFile] ?? '').matchAll(/(--j-[a-z-]+)\s*:/g)].map(([, token]) => token)
   );
@@ -1901,7 +1964,7 @@ test('the stylesheet no longer dresses the J it retired (owner direction, 2026-1
   for (const { property, selector } of sheetJ) {
     assert.ok(!ownTokens.has(property), `styles.css declares ${property}, which J’s own component owns`);
     assert.ok(
-      ['--j-size', '--j-gap'].includes(property) && selectorParts(selector).includes('h1'),
+      ['--j-size', '--j-stem', '--j-hover'].includes(property) && selectorParts(selector).includes('h1'),
       `styles.css declares ${property} on "${selector}"; the sheet states only J’s seat, on the name`
     );
   }

@@ -1055,22 +1055,17 @@ test('the calendar is drawn once, inside the chronicle, and an unmeasured day is
   // is marked as such in the DOM, so it can never be read as a quiet day.
   assert.match(chronicle, /data-measured=\{cell\.measured \? 'true' : 'false'\}/);
   assert.match(gridSource, /export function measuredCell\(/);
-  // The busiest day keeps the ramp's peak green (the mark is never the peak;
-  // the busiest tile is, experience.test.mjs "NO RED ANYWHERE"). A day is a
-  // wall stone now (owner, 2026-10-19: "castle wall fixtures"), so the peak is
-  // the mossiest stone RINGED in that green: the stone says how busy, the ring
-  // says busiest, and the green still belongs to the busiest tile alone. The
-  // stone is the day's own level, laid on the calendar's canvas (sections),
-  // and the busiest day's value is the peak, whose level is the top one at
-  // any peak — so its stone is the mossiest without a rule of its own.
+  // The busiest day is simply the deepest green (owner, 2026-10-20: "we
+  // don't need to highlight the highest day like that"): its value is the
+  // peak, whose level is the top one at any peak, so it is inked darkest
+  // without a rule of its own, and it wears no ring. It is still marked in
+  // the DOM, so the browser lanes can find it and prove it is the deepest.
   assert.match(chronicle, /data-peak=\{cell\.busiest \? 'true' : 'false'\}/);
   assert.match(chronicle, /busiest: peak > 0 && value === peak,/, 'the busiest day is not the day whose value is the peak');
   for (const peakValue of [1, 7, 12.5, 4096]) {
-    assert.equal(gridLevel(peakValue, peakValue), gridLevels - 1, `a busiest day of ${peakValue} is not the top level, the mossiest stone`);
+    assert.equal(gridLevel(peakValue, peakValue), gridLevels - 1, `a busiest day of ${peakValue} is not the top level, the deepest green`);
   }
-  const peak = /\.chronicle-cell\[data-peak='true'\] \{([^}]*)\}/.exec(chronicle)?.[1] ?? '';
-  assert.match(peak, /stroke: var\(--grid-cell-peak\);/, 'the busiest day lost the calendar’s peak green');
-  assert.match(peak, /stroke-width: 1;/, 'the busiest day’s ring is not the one-unit ring the unmeasured outline is drawn at');
+  assert.doesNotMatch(chronicle, /\.chronicle-cell\[data-peak='true'\]/, 'the busiest day wears a mark of its own again');
   // And no cell carries the browser tooltip (issue 219): it has no touch
   // trigger in any engine, so on a phone it said nothing at all.
   assert.doesNotMatch(chronicle, /\stitle=/, 'a calendar cell carries the browser tooltip again');
@@ -1093,33 +1088,37 @@ test('the calendar is drawn once, inside the chronicle, and an unmeasured day is
   );
 });
 
-/* THE FIGURES SIT ABOVE A FULL-WIDTH GRAPH, AT EVERY WIDTH (owner,
- * 2026-10-19: "large awkward gap in between here, either expand the heatmap
- * or find a way to present the information in a better way"). Beside the
- * graph the figures were a tall, narrow column that left the calendar a third
- * of the room. So the board's top is ONE column at every width — the figures
- * first, the graph and its calendar under them across the whole board — and
- * no width brings the side-by-side back: no rule anywhere states another
- * track list for the top, and neither half sizes itself as a flex item. */
-test('the chronicle sets its figures above a full-width graph and calendar at every width (owner 2026-10-19)', () => {
+/* THE FIGURES OPEN THE ROLL (owner, 2026-10-20, picking "The Rotulus"):
+ * its incipit, first in the roll's top, beside the writing on a desk and over
+ * it on a phone. Beside the graph the figures once left the calendar a third
+ * of the room (owner, 2026-10-19: "large awkward gap in between here"), so
+ * the incipit's column is held narrow — at most 13rem, the writing taking
+ * every other track — and nothing sizes itself as a flex item. */
+test('the chronicle opens its roll with the figures, beside the writing on a desk and over it on a phone (owner 2026-10-20)', () => {
   const markup = stripComments(chronicle);
-  const side = markup.indexOf('<div class="chronicle-side">');
+  const side = markup.indexOf('<dl class="chronicle-headlines">');
   const plotting = markup.indexOf('<div class="chronicle-plotting">');
   const top = markup.indexOf('<div class="chronicle-top">');
-  assert.ok(top >= 0 && side > top && plotting > side, 'the figures no longer come before the graph inside the board’s top');
+  assert.ok(top >= 0 && side > top && plotting > side, 'the figures no longer come before the graph inside the roll’s top');
   const style = (/<style[^>]*>([\s\S]*?)<\/style>/.exec(chronicle)?.[1] ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
   const rules = (selector) =>
     [...style.matchAll(/(?:^|\n)\s*([^{}\n][^{}]*?)\s*\{([^{}]*)\}/g)]
       .filter(([, selectors]) => selectors.split(',').some((part) => part.trim() === selector))
       .map(([, , body]) => body.replace(/\s+/g, ' '));
   const topRules = rules('.chronicle-top');
-  assert.ok(topRules.length > 0, 'nothing lays out the board’s top');
-  assert.match(topRules[0], /display: grid;/, 'the board’s top is no longer a grid');
-  assert.match(topRules[0], /grid-template-columns: minmax\(0, 1fr\);/, 'the board’s top is no longer one column');
+  assert.equal(topRules.length, 2, 'the roll’s top is laid out other than once for a desk and once for a phone');
+  assert.match(topRules[0], /display: grid;/, 'the roll’s top is no longer a grid');
+  assert.match(topRules[0], /grid-template-columns: minmax\(9\.5rem, 13rem\) minmax\(0, 1fr\);/, 'on a desk the incipit is not a narrow column beside the writing');
+  assert.match(topRules[1], /^ ?grid-template-columns: minmax\(0, 1fr\);/, 'on a phone the incipit is not over the writing');
+  assert.match(
+    /@media \(max-width: 47\.99rem\) \{\s*\.chronicle-top \{/.exec(style)?.[0] ?? '',
+    /47\.99rem/,
+    'the incipit goes over the writing at some width other than the page’s phone width'
+  );
   for (const body of topRules) {
-    assert.doesNotMatch(body, /display: flex|flex-direction|grid-template-columns: (?!minmax\(0, 1fr\);)|grid-auto-flow: column/, 'some width lays the figures beside the graph again');
+    assert.doesNotMatch(body, /display: flex|flex-direction|grid-auto-flow: column/, 'some width lays the roll’s top out as flex items');
   }
-  for (const half of ['.chronicle-side', '.chronicle-plotting']) {
+  for (const half of ['.chronicle-headlines', '.chronicle-plotting']) {
     for (const body of rules(half)) {
       assert.doesNotMatch(body, /(?:^|; |\s)flex(?:-basis|-grow|-shrink)?:|grid-column: (?!1 \/ -1)/, `${half} sizes itself beside its sibling again`);
     }
@@ -1168,7 +1167,7 @@ test('every calendar shares one window, and no display control survives', () => 
      paints, in the same grammar the gallery's set switch speaks. */
   assert.match(
     chronicle,
-    /<div class="chronicle-layers" role="group" aria-label="Diagram layer">[\s\S]*?<button\s+type="button"\s+aria-pressed=\{option\.key === layer\?\.key\}/
+    /<div class="chronicle-layers" role="group" aria-label="Diagram layer">[\s\S]*?<button\s+type="button"\s+data-tone=\{option\.tone\}\s+data-initial=\{option\.label\.charAt\(0\)\}\s+aria-pressed=\{option\.key === layer\?\.key\}/
   );
 
   /* THE ABSENCES, one per retired mechanism, swept over every component that

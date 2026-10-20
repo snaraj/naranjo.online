@@ -44,6 +44,32 @@ latin-ext character ranges by the Google Fonts pipeline from the same OFL
 sources (fonts.gstatic.com), and vendored here for the same reason: no visitor
 request leaves the origin to fetch a letterform.
 
+## Cormorant Garamond webfont
+
+The leaves of the chained tome (owner's pick, 2026-10-20) are set in
+[Cormorant Garamond](https://fonts.google.com/specimen/Cormorant+Garamond),
+copyright 2015 the Cormorant Project Authors
+(https://github.com/CatharsisFonts/Cormorant), used under the SIL Open Font
+License 1.1 — the same licence and convention as the faces above. The licence
+text ships beside the files as
+`frontend/src/assets/fonts/OFL-CormorantGaramond.txt`. The two `.woff2` files
+are the family's upright variable cut (weights 300 to 700), split into the
+latin and latin-ext character ranges by the Google Fonts pipeline from the same
+OFL sources (fonts.gstatic.com), and vendored here for the same reason.
+
+## UnifrakturMaguntia webfont
+
+The tome's illuminated initials are set in
+[UnifrakturMaguntia](https://fonts.google.com/specimen/UnifrakturMaguntia),
+copyright 2009 and 2010 its authors as named in its licence file, with Reserved
+Font Name UnifrakturMaguntia, used under the SIL Open Font License 1.1. The
+licence text, with its copyright lines in full, ships beside the file as
+`frontend/src/assets/fonts/OFL-UnifrakturMaguntia.txt`. The one `.woff2` file
+is the family's one cut (Regular, weight 400) in the latin character range,
+which holds every capital an initial can be, as the Google Fonts pipeline
+serves it from the same OFL sources (fonts.gstatic.com), vendored here for the
+same reason.
+
 ## Castle wall photograph
 
 The sheet's castle wall (owner's pick, 2026-10-19) is derived from

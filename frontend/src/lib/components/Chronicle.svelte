@@ -2,6 +2,17 @@
   large figures beside the graph, the picked layer's daily line, and the same
   layer's calendar of cells under it, with each source's account below.
 
+  IT IS WRITTEN ON A ROLL (owner, 2026-10-20, picking "The Rotulus" of ten
+  ways to make the trackers one piece with the tome under them): parchment
+  hung level on the wall by a cord between two upright rollers, the role
+  scroll's own rollers stood on end. The figures open it as its incipit under
+  one illuminated initial; the line is inked across it and the days are
+  squares inked in the calendar's greens, darker as a day was busier, with no
+  mark for the busiest ("we don't need to highlight the highest day like
+  that"). Three wax seals hanging from its first roller pick what it shows,
+  and a green seal hangs under its edge at the day being read. It unrolls
+  from its middle the first time it is seen.
+
   The line IS the calendar read as a line ("make the graph represent the entire
   heatmap not just a subsection"): it covers exactly the weeks the calendar
   shows, each day standing over its own week's column, and picking a layer
@@ -23,29 +34,7 @@
   import { isChord } from '../keys.ts';
   import FeedCard from './FeedCard.svelte';
   import PanelShell from './PanelShell.svelte';
-  import stone0 from '../../assets/images/props/stone-0.svg';
-  import stone1 from '../../assets/images/props/stone-1.svg';
-  import stone2 from '../../assets/images/props/stone-2.svg';
-  import stone3 from '../../assets/images/props/stone-3.svg';
-  import stone4 from '../../assets/images/props/stone-4.svg';
-
-  /* A day on the calendar is a wall stone, bare on a quiet day and mossier as
-     the day gets busier (owner, 2026-10-19: "castle wall fixtures").
-
-     THE STONES ARE ONE PICTURE. Drawn inside the calendar's SVG — a pattern
-     per level, or a picture per day — WebKit without a GPU rasterised every
-     stone again whenever the calendar repainted: on the iPhone profile, in the
-     1200ms after the page was resized to 1440px, J drew 5 or 6 frames of his
-     flight in five runs out of five, and with the stones on one canvas 9 to
-     31, what he draws with no texture at all. So each stone drawing is
-     rasterised once, at its own pixels, and every day's stone is painted from
-     it onto one canvas under the cells, at the screen's own pixels; the cells
-     keep only their outlines and the reader's pointer. The canvas brings the
-     stones in week by week and repaints a chosen layer as a wave, with the
-     cells' own timings, and under reduced motion they are simply there. */
-  const stones = [stone0, stone1, stone2, stone3, stone4];
-  const STONE_RISE = { length: 480, step: 14 };
-  const STONE_WAVE = { length: 420, step: 9 };
+  import Tome from './Tome.svelte';
 
   let {
     status,
@@ -62,11 +51,6 @@
     emptyNote,
     ariaLabel
   }: ChronicleProps = $props();
-
-  /* The rows an account holds beyond the ones it filled. */
-  function room(slots: number, filled: number): number[] {
-    return Array.from({ length: Math.max(0, slots - filled) }, (_, index) => index);
-  }
 
   const uid = $props.id();
 
@@ -89,8 +73,7 @@
   let chartW = $state(0);
   let chartH = $state(0);
   let calBox = $state<HTMLElement>();
-  let calSvg = $state<SVGSVGElement>();
-  let stoneCanvas = $state<HTMLCanvasElement>();
+  let scroll = $state<HTMLElement>();
   let calW = $state(0);
   let cursor = $state<number | null>(null);
   let layerKey = $state<string | null>(null);
@@ -268,7 +251,9 @@
   }
 
   /* What rides above the cursor: the day's reading, then the day. */
-  const stamp = $derived(cursor === null ? '' : `${layer?.readings[cursor] ?? ''} · ${days[cursor]?.label ?? ''}`);
+  const stampReading = $derived(cursor === null ? '' : (layer?.readings[cursor] ?? ''));
+  const stampDay = $derived(cursor === null ? '' : (days[cursor]?.label ?? ''));
+  const stamp = $derived(cursor === null ? '' : `${stampReading} · ${stampDay}`);
 
   const valueText = $derived(
     cursor === null
@@ -341,9 +326,12 @@
   );
 
   /* The diagram draws itself the first time it is seen — and only then. A
-     host with no observer shows it at once. */
+     host with no observer shows it at once. What is watched is the roll, not
+     the graph: until it unrolls, the roll clips the graph to nothing, and an
+     observer of the graph would never see it. */
   $effect(() => {
-    if (chartBox === undefined || shown) {
+    const roll = scroll;
+    if (chartBox === undefined || roll === undefined || shown) {
       return;
     }
     if (typeof IntersectionObserver === 'undefined') {
@@ -359,170 +347,9 @@
       },
       { threshold: 0.3 }
     );
-    observer.observe(chartBox);
+    observer.observe(roll);
     return () => observer.disconnect();
   });
-
-  /* --- The stones, painted ---------------------------------------------- */
-
-  /* Each stone drawing rasterised once at its own pixels, by level. */
-  let stoneArt = $state<HTMLCanvasElement[] | null>(null);
-
-  $effect(() => {
-    let live = true;
-    const loads = stones.map(
-      (href) =>
-        new Promise<HTMLCanvasElement>((resolve, reject) => {
-          const image = new Image();
-          image.onload = () => {
-            const art = document.createElement('canvas');
-            art.width = image.naturalWidth;
-            art.height = image.naturalHeight;
-            art.getContext('2d')?.drawImage(image, 0, 0);
-            resolve(art);
-          };
-          image.onerror = reject;
-          image.src = href;
-        })
-    );
-    Promise.all(loads).then(
-      (art) => {
-        if (live) {
-          stoneArt = art;
-        }
-      },
-      () => undefined
-    );
-    return () => {
-      live = false;
-    };
-  });
-
-  /* How each day's stone is moving: from one level to another (null is no
-     stone, a day nobody measured), starting at a time, for a length; a rise is
-     the stone arriving, growing in as it brightens. Kept across redraws, so a
-     resize mid-wave carries the wave on rather than restarting it. */
-  type StoneMotion = { from: number | null; to: number | null; start: number; length: number; rise: boolean };
-  const stoneMotions = new Map<number, StoneMotion>();
-  let stonesRisen = false;
-
-  $effect(() => {
-    const canvas = stoneCanvas;
-    const svg = calSvg;
-    const art = stoneArt;
-    const list = cells;
-    const open = shown;
-    void calW;
-    const context = canvas?.getContext('2d');
-    if (canvas === undefined || svg === undefined || art === null || context === null || context === undefined) {
-      return;
-    }
-    const quiet = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const now = performance.now();
-    /* Before the calendar is seen, with motion welcome, no stone is laid. */
-    const rising = !quiet && open && !stonesRisen;
-    const listed = new Set<number>();
-    for (const cell of list) {
-      listed.add(cell.index);
-      const to = cell.measured ? cell.level : null;
-      const motion = stoneMotions.get(cell.index);
-      if (quiet || (!rising && motion === undefined)) {
-        stoneMotions.set(cell.index, { from: to, to, start: 0, length: 0, rise: false });
-      } else if (rising) {
-        stoneMotions.set(cell.index, { from: null, to, start: now + cell.column * STONE_RISE.step, length: STONE_RISE.length, rise: true });
-      } else if (motion !== undefined && motion.to !== to) {
-        const halfway = now >= motion.start + motion.length * 0.5;
-        stoneMotions.set(cell.index, {
-          from: halfway ? motion.to : motion.from,
-          to,
-          start: now + cell.column * STONE_WAVE.step,
-          length: STONE_WAVE.length,
-          rise: false
-        });
-      }
-    }
-    for (const index of [...stoneMotions.keys()]) {
-      if (!listed.has(index)) {
-        stoneMotions.delete(index);
-      }
-    }
-    if (rising) {
-      stonesRisen = true;
-    }
-    const laid = quiet || open;
-    let frame = 0;
-    const paint = (time: number): void => {
-      if (paintStones(context, canvas, svg, list, art, laid, time)) {
-        frame = requestAnimationFrame(paint);
-      }
-    };
-    paint(now);
-    return () => cancelAnimationFrame(frame);
-  });
-
-  /* One frame of the stones: the canvas sized to its box at the screen's own
-     pixels, each day's stone placed where its cell is drawn on screen (the
-     calendar's own transform, so the SVG's scaling is followed exactly) and
-     snapped to whole pixels, the drawing's pixels kept square. True while a
-     stone is still moving. */
-  function paintStones(
-    context: CanvasRenderingContext2D,
-    canvas: HTMLCanvasElement,
-    svg: SVGSVGElement,
-    list: typeof cells,
-    art: HTMLCanvasElement[],
-    laid: boolean,
-    time: number
-  ): boolean {
-    const ratio = window.devicePixelRatio || 1;
-    const box = canvas.getBoundingClientRect();
-    const width = Math.round(box.width * ratio);
-    const height = Math.round(box.height * ratio);
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-    }
-    context.clearRect(0, 0, width, height);
-    const matrix = svg.getScreenCTM();
-    if (!laid || matrix === null) {
-      return false;
-    }
-    context.imageSmoothingEnabled = false;
-    let moving = false;
-    for (const cell of list) {
-      const motion = stoneMotions.get(cell.index);
-      if (motion === undefined) {
-        continue;
-      }
-      const raw = motion.length > 0 ? (time - motion.start) / motion.length : 1;
-      const progress = Math.min(1, Math.max(0, raw));
-      moving ||= progress < 1;
-      const x = Math.round((matrix.a * cell.x + matrix.e - box.left) * ratio);
-      const y = Math.round((matrix.d * cell.y + matrix.f - box.top) * ratio);
-      const size = Math.round(matrix.a * CELL * ratio);
-      if (motion.rise) {
-        const grown = 1 - (1 - progress) ** 3;
-        if (motion.to === null || grown <= 0) {
-          continue;
-        }
-        const side = size * (0.4 + 0.6 * grown);
-        context.globalAlpha = grown;
-        context.drawImage(art[motion.to], x + (size - side) / 2, y + (size - side) / 2, side, side);
-        continue;
-      }
-      const eased = progress * progress * (3 - 2 * progress);
-      if (motion.from !== null && eased < 1) {
-        context.globalAlpha = motion.to === null ? 1 - eased : 1;
-        context.drawImage(art[motion.from], x, y, size, size);
-      }
-      if (motion.to !== null) {
-        context.globalAlpha = eased;
-        context.drawImage(art[motion.to], x, y, size, size);
-      }
-    }
-    context.globalAlpha = 1;
-    return moving;
-  }
 
   const chartBinding = {
     read(clientX: number): void {
@@ -604,175 +431,165 @@
       {#if days.length === 0 && headlines.length === 0}
         <p class="chronicle-note">{emptyNote}</p>
       {:else}
-        <div class="chronicle-top">
-          <div class="chronicle-side">
+        <!-- THE ROLL: a cord between two pegs, two upright rollers, and the
+          parchment between them; all but the parchment is drawn, and none of
+          it takes a pointer. -->
+        <div class="chronicle-scroll" bind:this={scroll}>
+          <i class="chronicle-cord" aria-hidden="true"></i>
+          <div class="chronicle-roll">
+          <i class="chronicle-reel" data-side="start" aria-hidden="true"><i class="chronicle-roller" data-side="start"></i></i>
+          <i class="chronicle-reel" data-side="end" aria-hidden="true"><i class="chronicle-roller" data-side="end"></i></i>
+          <div class="chronicle-sheet">
+            <div class="chronicle-top">
+              <!-- The incipit: the figures open the roll, the first under its
+                illuminated initial (the letter is the label's own first, so
+                the label reads whole). -->
+              <dl class="chronicle-headlines">
+                {#each headlines as headline, index (headline.key)}
+                  <div class="chronicle-headline" data-opening={index === 0 ? 'true' : 'false'}>
+                    <dt class="chronicle-label">
+                      {#if index === 0}<span class="chronicle-initial">{headline.label.charAt(0)}</span>{headline.label.slice(1)}{:else}{headline.label}{/if}
+                    </dt>
+                    <dd class="chronicle-figure">{headlineFigure(headline.figure, headline.daily)}</dd>
+                    <dd class="chronicle-caption">{headlineCaption(headline.caption, headline.daily)}</dd>
+                  </div>
+                {/each}
+              </dl>
+
+              {#if weeks > 0}
+                <div class="chronicle-plotting">
+                  {#if days.length === 0}
+                    <!-- The graph's box, held while its days are on their way;
+                      nothing is drawn in it and nothing can be read from it. -->
+                    <div class="chronicle-chart" aria-hidden="true"></div>
+                  {:else}
+                  <div
+                    class="chronicle-chart"
+                    bind:this={chartBox}
+                    role="slider"
+                    tabindex="0"
+                    aria-label={ariaLabel}
+                    aria-valuemin={Math.max(0, low)}
+                    aria-valuemax={Math.max(0, lastDay)}
+                    aria-valuenow={cursor ?? Math.max(0, lastDay)}
+                    aria-valuetext={valueText}
+                    data-scrubbing={cursor !== null ? 'true' : 'false'}
+                    use:scrubAlong={chartBinding}
+                    onkeydown={onKeydown}
+                    onblur={() => (cursor = null)}>
+                    {#if chartW > 0 && chartH > 0}
+                      <svg class="chronicle-svg" viewBox={`0 0 ${chartW} ${chartH}`} aria-hidden="true" focusable="false">
+                        <defs>
+                          <clipPath id={`${uid}-past`}>
+                            <rect x="0" y="0" width={cursorX ?? chartW} height={chartH} />
+                          </clipPath>
+                        </defs>
+                        <!-- The ruling a scribe lays before writing. -->
+                        {#each [0.25, 0.5, 0.75] as rule (rule)}
+                          <line class="chronicle-rule" x1="0" y1={PAD_TOP + (baseline - PAD_TOP) * rule} x2={chartW} y2={PAD_TOP + (baseline - PAD_TOP) * rule} />
+                        {/each}
+                        <line class="chronicle-baseline" x1="0" y1={baseline} x2={chartW} y2={baseline} />
+                        <!-- A new layer is drawn afresh, the way the diagram first
+                          draws itself. -->
+                        {#key layer?.key}
+                          {#if drawn !== null}
+                            <g class="chronicle-plot" data-tone={layer?.tone}>
+                              {#if cursorX !== null}
+                                <path class="chronicle-line chronicle-ahead" d={drawn.line} />
+                              {/if}
+                              <g clip-path={`url(#${uid}-past)`}>
+                                <path class="chronicle-area" d={drawn.area} />
+                                <path class="chronicle-line" d={drawn.line} />
+                              </g>
+                            </g>
+                          {/if}
+                        {/key}
+                        {#if cursorX !== null}
+                          <line class="chronicle-cursor" x1={cursorX} y1={PAD_TOP - 6} x2={cursorX} y2={baseline} />
+                          {#if cursorValue !== null}
+                            <circle class="chronicle-dot" data-tone={layer?.tone} cx={dotX} cy={chartY(cursorValue)} r="4" />
+                          {/if}
+                        {/if}
+                      </svg>
+                    {/if}
+                    {#if cursorX !== null}
+                      <span class="chronicle-stamp" use:placeStamp={{ x: cursorX, width: chartW, words: stamp }}><span>{stampReading}</span> <span>· {stampDay}</span></span>
+                    {/if}
+                  </div>
+                  {/if}
+
+                  <div
+                    class="chronicle-calendar"
+                    bind:this={calBox}
+                    use:scrubAlong={calendarBinding}
+                    onpointermovecapture={trackY}
+                    onpointerdowncapture={press}>
+                    <svg class="chronicle-svg" viewBox={`0 0 ${calWidth} ${CAL_HEIGHT}`} aria-hidden="true" focusable="false">
+                      {#each cells as cell (cell.index)}
+                        <rect
+                          class="chronicle-cell"
+                          data-grid-cell
+                          data-grid-level={cell.level}
+                          data-measured={cell.measured ? 'true' : 'false'}
+                          data-peak={cell.busiest ? 'true' : 'false'}
+                          data-today={cell.index === lastDay ? 'true' : 'false'}
+                          data-picked={cell.index === cursor ? 'true' : 'false'}
+                          x={cell.x}
+                          y={cell.y}
+                          width={CELL}
+                          height={CELL}
+                          rx="1.5"
+                          style:--chronicle-column={cell.column} />
+                      {/each}
+                      {#each shownMonths as month (month.column)}
+                        <text class="chronicle-month" x={month.x} y={CAL_HEIGHT - 4} font-size={monthSize} text-anchor={month.anchor}>{month.label}</text>
+                      {/each}
+                    </svg>
+                  </div>
+
+                  <div class="chronicle-keys">
+                    <div class="chronicle-scale" aria-hidden="true">
+                      less{#each [0, 1, 2, 3, 4] as level (level)}<i class="chronicle-step" data-grid-level={level}></i>{/each}more
+                    </div>
+                  </div>
+
+                  <!-- The green seal on its ribbon, hanging under the roll's
+                    edge at the day being read. -->
+                  <i
+                    class="chronicle-seal"
+                    aria-hidden="true"
+                    data-on={cursorX !== null ? 'true' : 'false'}
+                    style:--chronicle-seal-x={`${cursorX ?? 0}px`}></i>
+                </div>
+              {/if}
+            </div>
+          </div>
+          </div>
+
           {#if days.length > 0 && layers.length > 1}
-            <!-- The diagram's layer, chosen at the top left of the board
-              (owner direction, 2026-10-16): what the line plots and the
-              calendar paints. -->
+            <!-- The diagram's layer (owner direction, 2026-10-16): three wax
+              seals hanging from the roll's first roller, each its layer's
+              name and nothing else; the picked one hangs lower, and its name
+              is written beside them. -->
             <div class="chronicle-layers" role="group" aria-label="Diagram layer">
               {#each layers as option (option.key)}
                 <button
                   type="button"
+                  data-tone={option.tone}
+                  data-initial={option.label.charAt(0)}
                   aria-pressed={option.key === layer?.key}
                   onclick={() => pickLayer(option.key)}>{option.label}</button>
               {/each}
             </div>
+            <span class="chronicle-layer-name" aria-hidden="true">{layer?.label ?? ''}</span>
           {:else if weeks > 0}
-            <!-- The switch's row, held while the layers are on their way. -->
+            <!-- The seals' room, held while the layers are on their way. -->
             <div class="chronicle-layers" aria-hidden="true"></div>
-          {/if}
-          <dl class="chronicle-headlines">
-            {#each headlines as headline (headline.key)}
-              <div class="chronicle-headline">
-                <dt class="chronicle-label">{headline.label}</dt>
-                <dd class="chronicle-figure">{headlineFigure(headline.figure, headline.daily)}</dd>
-                <dd class="chronicle-caption">{headlineCaption(headline.caption, headline.daily)}</dd>
-              </div>
-            {/each}
-          </dl>
-          </div>
-
-          {#if weeks > 0}
-            <div class="chronicle-plotting">
-              {#if days.length === 0}
-                <!-- The graph's box, held while its days are on their way;
-                  nothing is drawn in it and nothing can be read from it. -->
-                <div class="chronicle-chart" aria-hidden="true"></div>
-              {:else}
-              <div
-                class="chronicle-chart"
-                bind:this={chartBox}
-                role="slider"
-                tabindex="0"
-                aria-label={ariaLabel}
-                aria-valuemin={Math.max(0, low)}
-                aria-valuemax={Math.max(0, lastDay)}
-                aria-valuenow={cursor ?? Math.max(0, lastDay)}
-                aria-valuetext={valueText}
-                data-scrubbing={cursor !== null ? 'true' : 'false'}
-                use:scrubAlong={chartBinding}
-                onkeydown={onKeydown}
-                onblur={() => (cursor = null)}>
-                {#if chartW > 0 && chartH > 0}
-                  <svg class="chronicle-svg" viewBox={`0 0 ${chartW} ${chartH}`} aria-hidden="true" focusable="false">
-                    <defs>
-                      <clipPath id={`${uid}-past`}>
-                        <rect x="0" y="0" width={cursorX ?? chartW} height={chartH} />
-                      </clipPath>
-                    </defs>
-                    <line class="chronicle-baseline" x1="0" y1={baseline} x2={chartW} y2={baseline} />
-                    <!-- A new layer is drawn afresh, the way the diagram first
-                      draws itself. -->
-                    {#key layer?.key}
-                      {#if drawn !== null}
-                        <g class="chronicle-plot" data-tone={layer?.tone}>
-                          {#if cursorX !== null}
-                            <path class="chronicle-line chronicle-ahead" d={drawn.line} />
-                          {/if}
-                          <g clip-path={`url(#${uid}-past)`}>
-                            <path class="chronicle-area" d={drawn.area} />
-                            <path class="chronicle-line" d={drawn.line} />
-                          </g>
-                        </g>
-                      {/if}
-                    {/key}
-                    {#if cursorX !== null}
-                      <line class="chronicle-cursor" x1={cursorX} y1={PAD_TOP - 6} x2={cursorX} y2={baseline} />
-                      {#if cursorValue !== null}
-                        <circle class="chronicle-dot" data-tone={layer?.tone} cx={dotX} cy={chartY(cursorValue)} r="4" />
-                      {/if}
-                    {/if}
-                  </svg>
-                {/if}
-                {#if cursorX !== null}
-                  <span class="chronicle-stamp" use:placeStamp={{ x: cursorX, width: chartW, words: stamp }}>{stamp}</span>
-                {/if}
-              </div>
-              {/if}
-
-              <div
-                class="chronicle-calendar"
-                bind:this={calBox}
-                use:scrubAlong={calendarBinding}
-                onpointermovecapture={trackY}
-                onpointerdowncapture={press}>
-                <canvas class="chronicle-stones" bind:this={stoneCanvas} aria-hidden="true"></canvas>
-                <svg class="chronicle-svg" bind:this={calSvg} viewBox={`0 0 ${calWidth} ${CAL_HEIGHT}`} aria-hidden="true" focusable="false">
-                  {#each cells as cell (cell.index)}
-                    <rect
-                      class="chronicle-cell"
-                      data-grid-cell
-                      data-grid-level={cell.level}
-                      data-measured={cell.measured ? 'true' : 'false'}
-                      data-peak={cell.busiest ? 'true' : 'false'}
-                      data-today={cell.index === lastDay ? 'true' : 'false'}
-                      data-picked={cell.index === cursor ? 'true' : 'false'}
-                      x={cell.x}
-                      y={cell.y}
-                      width={CELL}
-                      height={CELL}
-                      style:--chronicle-column={cell.column} />
-                  {/each}
-                  {#each shownMonths as month (month.column)}
-                    <text class="chronicle-month" x={month.x} y={CAL_HEIGHT - 4} font-size={monthSize} text-anchor={month.anchor}>{month.label}</text>
-                  {/each}
-                </svg>
-              </div>
-            </div>
           {/if}
         </div>
 
-        {#if weeks > 0}
-          <div class="chronicle-keys">
-            <div class="chronicle-scale" aria-hidden="true">
-              less{#each [0, 1, 2, 3, 4] as level (level)}<i class="chronicle-step" data-grid-level={level}></i>{/each}more
-            </div>
-          </div>
-        {/if}
-
         {#if accounts.length > 0}
-          <div class="chronicle-accounts">
-            {#each accounts as account (account.key)}
-              <!-- An account holds the room of every row it can carry,
-                filled or not (an account with no name is one whose payload
-                is still on its way), so a payload landing never grows the
-                board under the reader. -->
-              <section
-                class="chronicle-account"
-                aria-label={account.label === '' ? undefined : account.label}
-                aria-hidden={account.label === '' ? 'true' : undefined}>
-                <h3 class="chronicle-account-name">{account.label}</h3>
-                <dl class="chronicle-facts">
-                  {#each account.facts as fact (fact.key)}
-                    <div class="chronicle-fact"><dt>{fact.term}</dt><dd>{fact.value}</dd></div>
-                  {/each}
-                  {#each room(factSlots, account.facts.length) as slot (slot)}
-                    <div class="chronicle-fact-room" aria-hidden="true"></div>
-                  {/each}
-                </dl>
-                {#each account.lines as line (line)}<p class="chronicle-line-note">{line}</p>{/each}
-                <ul class="chronicle-models">
-                  {#each account.models as model (model.key)}
-                    <li class="chronicle-model">
-                      <span class="chronicle-model-name">{model.label}</span>
-                      <span class="chronicle-model-reading">{model.reading}</span>
-                      <span class="chronicle-track"><span class="chronicle-fill" style:--chronicle-share={model.fillPct / 100}></span></span>
-                      <span class="chronicle-model-detail">{model.detail ?? ''}</span>
-                    </li>
-                  {/each}
-                  {#each room(modelSlots, account.models.length) as slot (slot)}
-                    <li class="chronicle-room" aria-hidden="true">
-                      <span class="chronicle-model-name"></span>
-                      <span class="chronicle-model-reading"></span>
-                      <span class="chronicle-track"></span>
-                      <span class="chronicle-model-detail"></span>
-                    </li>
-                  {/each}
-                </ul>
-              </section>
-            {/each}
-          </div>
+          <Tome {accounts} {factSlots} {modelSlots} />
         {/if}
 
       {/if}
@@ -797,70 +614,211 @@
     color: var(--ledger-muted);
   }
 
-  /* --- The figures above the graph ----------------------------------------- */
+  /* --- The roll ------------------------------------------------------------- */
 
-  /* The figures sit in one row above the graph at every width, and the graph
-     and its calendar take the column's whole width under them (owner,
-     2026-10-19: "large awkward gap in between here, either expand the heatmap
-     or find a way to present the information in a better way"). Beside the
-     graph the figures were a tall, narrow column that left the calendar a
-     third of the room: at 1100px a 490px calendar of 9px stones beside a wide
-     empty band. */
+  /* The roll hangs from its cord (the room above the parchment), and its
+     seals hang under it, the picked layer's name written beside them. Its
+     parchment and inks are the role scroll's (styles.css, the parchment
+     tokens), so both scrolls on the page are one material. */
+  .chronicle-scroll {
+    --chronicle-roller: calc(8 * var(--keep-prop));
+    --chronicle-pad-end: 1.25rem;
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    column-gap: 0.75rem;
+    padding-block-start: 1.75rem;
+  }
+
+  .chronicle-roll {
+    position: relative;
+    grid-column: 1 / -1;
+  }
+
+  /* The cord, from one peg to the other and down to each roller's knob. */
+  .chronicle-cord {
+    position: absolute;
+    inset-block-start: 0.35rem;
+    inset-inline: calc(4 * var(--keep-prop));
+    block-size: calc(1.4rem - 3 * var(--keep-prop));
+    border: 1px solid var(--palette-keep-bone-deep);
+    border-block-end: 0;
+    pointer-events: none;
+  }
+
+  .chronicle-cord::before,
+  .chronicle-cord::after {
+    content: '';
+    position: absolute;
+    inset-block-start: -5px;
+    inline-size: 9px;
+    block-size: 9px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, var(--palette-keep-iron-1), var(--palette-keep-torch-iron-dark) 70%);
+    box-shadow: 0 1px 2px var(--palette-keep-tome-shadow);
+  }
+
+  .chronicle-cord::before {
+    inset-inline-start: -5px;
+  }
+
+  .chronicle-cord::after {
+    inset-inline-end: -5px;
+  }
+
+  /* Each roller rides a reel half the roll wide, at its own end of it. The
+     reel is what travels as the roll opens — by its own width less a
+     roller's, since a transform's percentage is the box's own width — so the
+     travel is half the roll in the same layout as any resize. (A half
+     measured by script lagged a resize by a frame, and a desk-wide half held
+     for that frame on a phone threw both rollers clean off the page.) */
+  .chronicle-reel {
+    position: absolute;
+    z-index: 1;
+    inset-block: 0;
+    inline-size: 50%;
+    pointer-events: none;
+  }
+
+  .chronicle-reel[data-side='start'] {
+    inset-inline-start: 0;
+  }
+
+  .chronicle-reel[data-side='end'] {
+    inset-inline-end: 0;
+  }
+
+  /* Each roller is the role scroll's own roller stood upright: the rolled
+     edge tiled between two knobs, a little taller than the parchment. */
+  .chronicle-roller {
+    position: absolute;
+    inset-block: calc(-3 * var(--keep-prop));
+    inline-size: var(--chronicle-roller);
+    box-sizing: border-box;
+    padding-block: calc(5 * var(--keep-prop));
+    background:
+      var(--keep-scroll-knob-top) center top / 100% calc(5 * var(--keep-prop)) no-repeat border-box,
+      var(--keep-scroll-knob-bottom) center bottom / 100% calc(5 * var(--keep-prop)) no-repeat border-box,
+      var(--keep-scroll-roll-upright) center top / 100% var(--keep-prop) repeat-y content-box;
+    filter: drop-shadow(0 4px 3px var(--palette-keep-tome-shadow));
+    pointer-events: none;
+  }
+
+  .chronicle-roller[data-side='start'] {
+    inset-inline-start: 0;
+  }
+
+  .chronicle-roller[data-side='end'] {
+    inset-inline-end: 0;
+  }
+
+  /* The parchment darkens over a band four props wide where it curls onto
+     each roller, and its words begin well inside that band. */
+  .chronicle-sheet {
+    margin-inline: calc(6 * var(--keep-prop));
+    padding: 1.5rem calc(6 * var(--keep-prop) + 1.25rem) var(--chronicle-pad-end);
+    background: linear-gradient(
+      to right,
+      var(--keep-parchment-edge),
+      var(--keep-parchment) calc(4 * var(--keep-prop)),
+      var(--keep-parchment) calc(100% - 4 * var(--keep-prop)),
+      var(--keep-parchment-edge)
+    );
+    color: var(--keep-parchment-ink);
+    box-shadow: 0 1.25rem 1.75rem -1.1rem var(--palette-keep-tome-shadow);
+  }
+
+  /* --- The incipit: the figures open the roll -------------------------------- */
+
+  /* Beside the writing on a desk, the three figures down the roll's first
+     column; on a phone, above it. */
   .chronicle-top {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 1.25rem;
+    grid-template-columns: minmax(9.5rem, 13rem) minmax(0, 1fr);
+    gap: 1.25rem 2rem;
   }
 
-  .chronicle-side {
-    display: grid;
-    grid-template-rows: auto 1fr;
-    gap: 1.25rem;
-    min-inline-size: 0;
-  }
-
-  /* Side by side, three to a row where three fit. */
   .chronicle-headlines {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-    align-content: space-evenly;
+    align-content: space-between;
     gap: 1rem;
     margin: 0;
   }
 
   .chronicle-headline {
+    position: relative;
     display: grid;
-    gap: 0.125rem;
+    gap: 0.1rem;
     min-inline-size: 0;
+  }
+
+  /* The first figure sits beside the initial that opens the roll. */
+  .chronicle-headline[data-opening='true'] {
+    padding-inline-start: 3.4rem;
+    min-block-size: 2.9rem;
   }
 
   .chronicle-headline dd {
     margin: 0;
   }
 
+  /* Capitals drawn small: the vendored face carries no small capitals of its
+     own, and the page synthesises none. */
   .chronicle-label {
-    font-family: var(--font-display);
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    color: var(--ledger-muted);
+    font-family: var(--font-tome);
+    font-size: 0.74rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    line-height: 1.2;
+    color: var(--keep-parchment-muted);
+  }
+
+  /* The initial: a blackletter capital in lapis on a square of rubric dotted
+     in vellum, the tome's own fixture. */
+  .chronicle-initial {
+    position: absolute;
+    inset-inline-start: 0;
+    inset-block-start: 0.1rem;
+    display: grid;
+    place-items: center;
+    inline-size: 2.75rem;
+    block-size: 2.75rem;
+    border-radius: 2px;
+    font-family: var(--font-initial);
+    font-size: 2.2rem;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    line-height: 1;
+    color: var(--palette-keep-lapis);
+    text-shadow:
+      1px 1px 0 var(--palette-keep-lapis-deep),
+      -1px 0 0 var(--palette-keep-lapis-deep);
+    background: radial-gradient(circle, var(--palette-keep-vellum) 0 0.8px, transparent 1.3px) 0 0 / 6px 6px, var(--palette-keep-rubric);
+    box-shadow:
+      inset 0 0 0 2px var(--palette-keep-rubric),
+      inset 0 0 0 3px var(--palette-keep-vellum-edge);
   }
 
   .chronicle-figure {
-    font-family: var(--font-display);
-    font-size: clamp(1.625rem, 2.8vw, 2.375rem);
-    font-weight: 800;
+    font-family: var(--font-tome);
+    font-size: clamp(1.6rem, 2.6vw, 2.15rem);
+    font-weight: 600;
     line-height: 1.05;
-    font-variant-numeric: tabular-nums;
-    color: var(--ledger-ink);
+    font-variant-numeric: lining-nums tabular-nums;
+    color: var(--keep-parchment-ink);
   }
 
   .chronicle-caption {
-    min-block-size: 1.4em;
-    font-family: var(--font-mono);
-    font-size: var(--ledger-figure-size);
-    line-height: 1.4;
-    color: var(--ledger-muted);
+    min-block-size: 1.3em;
+    font-family: var(--font-tome);
+    font-size: 0.95rem;
+    font-style: italic;
+    font-weight: 500;
+    line-height: 1.3;
+    color: var(--keep-parchment-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -869,6 +827,7 @@
   /* --- The graph ------------------------------------------------------------ */
 
   .chronicle-plotting {
+    position: relative;
     display: grid;
     gap: 0.5rem;
     min-inline-size: 0;
@@ -876,7 +835,7 @@
 
   .chronicle-chart {
     position: relative;
-    block-size: clamp(11rem, 20vw, 15rem);
+    block-size: clamp(10rem, 18vw, 13.5rem);
     cursor: crosshair;
     touch-action: pan-y;
   }
@@ -900,26 +859,36 @@
     overflow: visible;
   }
 
-  .chronicle-baseline {
-    stroke: var(--color-border);
+  /* The scribe's ruling and the foot of the writing. */
+  .chronicle-rule {
+    stroke: var(--keep-parchment-muted);
+    stroke-opacity: 0.14;
     stroke-width: 1;
   }
 
-  /* The layer's ink: the first source's brand, the second's page ink, and the
-     contributions the calendar's own green. */
+  .chronicle-baseline {
+    stroke: var(--keep-parchment-muted);
+    stroke-opacity: 0.35;
+    stroke-width: 1;
+  }
+
+  /* The layer's ink on parchment: the first source's in the brand as the
+     page writes it on paper, the second's in lapis, the contributions in the
+     roll's green. */
   .chronicle-plot,
   .chronicle-dot {
-    --chronicle-ink: var(--color-brand);
-    --chronicle-wash: 0.14;
+    --chronicle-ink: var(--keep-parchment-mark);
+    --chronicle-wash: 0.12;
   }
 
   [data-tone='1'] {
-    --chronicle-ink: var(--ledger-ink);
-    --chronicle-wash: 0.08;
+    --chronicle-ink: var(--palette-keep-lapis-mid);
+    --chronicle-wash: 0.1;
   }
 
   [data-tone='grid'] {
-    --chronicle-ink: var(--color-highlight);
+    --chronicle-ink: var(--palette-keep-verdigris);
+    --chronicle-wash: 0.14;
   }
 
   .chronicle-line {
@@ -941,27 +910,40 @@
   }
 
   .chronicle-cursor {
-    stroke: var(--ledger-muted);
+    stroke: var(--keep-parchment-muted);
+    stroke-opacity: 0.6;
     stroke-width: 1;
   }
 
   .chronicle-dot {
-    fill: var(--ledger-raised);
+    fill: var(--keep-parchment);
     stroke: var(--chronicle-ink);
     stroke-width: 2;
   }
 
-  /* The day's reading above the cursor. */
+  /* The day's reading above the cursor. It is never wider than the graph (a
+     hair under it, for the half pixel the clamp allows an engine's rounding):
+     on a phone narrower than its one line, the day drops under the figure,
+     and it breaks there and nowhere else. */
   .chronicle-stamp {
     position: absolute;
     inset-block-start: 0;
     inset-inline-start: var(--chronicle-stamp-x, 0);
+    inline-size: max-content;
+    max-inline-size: calc(100% - 2px);
     transform: translateX(-50%);
-    font-family: var(--font-mono);
-    font-size: var(--ledger-figure-size);
-    color: var(--ledger-muted);
-    white-space: nowrap;
+    font-family: var(--font-tome);
+    font-size: 0.95rem;
+    font-style: italic;
+    font-weight: 600;
+    line-height: 1.3;
+    text-align: center;
+    color: var(--keep-parchment-ink);
     pointer-events: none;
+  }
+
+  .chronicle-stamp > span {
+    white-space: nowrap;
   }
 
   /* --- The calendar --------------------------------------------------------- */
@@ -972,148 +954,72 @@
     touch-action: pan-y;
   }
 
-  /* Each level is its stone, by how much moss covers it as well as by colour,
-     so a level never rests on colour alone; the key below draws the same
-     stones from the same files. The stones lie on one canvas under the cells,
-     over the calendar's whole box, and take no pointer; the cells above them
-     are bare but for their outlines. */
-  .chronicle-stones {
-    position: absolute;
-    inset: 0;
-    inline-size: 100%;
-    block-size: 100%;
-    pointer-events: none;
-  }
-
-  .chronicle-calendar > .chronicle-svg {
-    position: relative;
-  }
-
+  /* A day is a square inked on the parchment: a quiet day a faint square,
+     and a busier one in a deeper green, the calendar's greens from the
+     lightest to the darkest, as ink deepens on a skin. The busiest day is
+     simply the deepest (owner, 2026-10-20). The key below inks the same five
+     steps, and every day says its count in words when it is read. */
   .chronicle-cell {
-    fill: transparent;
+    fill: var(--keep-parchment-ink);
+    fill-opacity: 0.09;
   }
 
-  .chronicle-step[data-grid-level='1'] {
-    background-image: var(--keep-stone-1);
+  .chronicle-cell[data-grid-level='1'] {
+    fill: var(--palette-dark-grid-4);
+    fill-opacity: 0.75;
   }
 
-  .chronicle-step[data-grid-level='2'] {
-    background-image: var(--keep-stone-2);
+  .chronicle-cell[data-grid-level='2'] {
+    fill: var(--palette-dark-grid-3);
+    fill-opacity: 0.92;
   }
 
-  .chronicle-step[data-grid-level='3'] {
-    background-image: var(--keep-stone-3);
+  .chronicle-cell[data-grid-level='3'] {
+    fill: var(--palette-dark-grid-2);
+    fill-opacity: 0.92;
   }
 
-  .chronicle-step[data-grid-level='4'] {
-    background-image: var(--keep-stone-4);
+  .chronicle-cell[data-grid-level='4'] {
+    fill: var(--palette-dark-grid-1);
+    fill-opacity: 0.92;
   }
 
-  /* The busiest day shown: the mossiest stone, ringed in the ramp's own peak,
-     a step past its fourth. */
-  .chronicle-cell[data-peak='true'] {
-    stroke: var(--grid-cell-peak);
-    stroke-width: 1;
-  }
-
-  /* A day nobody measured: an outline, never the quiet-day fill. */
+  /* A day nobody measured: an outline, never the quiet-day square. */
   .chronicle-cell[data-measured='false'] {
-    fill: transparent;
-    stroke: var(--color-border);
+    fill: none;
+    stroke: var(--keep-parchment-muted);
+    stroke-opacity: 0.45;
     stroke-width: 1;
     stroke-dasharray: 2 1.5;
   }
 
   .chronicle-cell[data-today='true'] {
-    stroke: var(--ledger-ink);
+    stroke: var(--keep-parchment-ink);
     stroke-width: 1.4;
   }
 
   .chronicle-cell[data-picked='true'] {
-    stroke: var(--ledger-ink);
+    stroke: var(--keep-parchment-ink);
     stroke-width: 2;
   }
 
   .chronicle-month {
-    font-family: var(--font-display);
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    fill: var(--ledger-muted);
+    font-family: var(--font-tome);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    fill: var(--keep-parchment-muted);
   }
 
-  /* --- The scale and the layer switch ---------------------------------------- */
+  /* --- The key -------------------------------------------------------------- */
 
   .chronicle-keys {
     display: flex;
     justify-content: flex-end;
-    font-family: var(--font-mono);
-    font-size: var(--ledger-figure-size);
-    color: var(--ledger-muted);
-  }
-
-  /* The switch has no ground and no box: the chosen layer is marked by the
-     brand ink and its underline. */
-  /* One row at every width, so the row is the same height before its layers
-     arrive as after: where the names do not fit (a narrow phone) the row
-     scrolls inside its own box. */
-  .chronicle-layers {
-    display: flex;
-    flex-wrap: nowrap;
-    justify-self: start;
-    gap: 0.25rem;
-    min-block-size: 2.75rem;
-    max-inline-size: 100%;
-    overflow-x: auto;
-  }
-
-  .chronicle-layers button {
-    flex: 1 1 auto;
-    /* 44px on both axes at every width: a short layer name in a narrow face
-       came to 40px with its padding, and it is still a whole touch target. */
-    min-inline-size: 2.75rem;
-    min-block-size: 2.75rem;
-    padding-inline: 0.5rem;
-    border: 0;
-    border-block-end: 2px solid transparent;
-    background: none;
-    color: var(--ledger-muted);
-    font-family: var(--font-display);
-    font-size: 0.6875rem;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-
-  /* The picked layer is underlined by a sword (owner, 2026-10-19: "we should
-     have swords"), lying under its name. */
-  .chronicle-layers button[aria-pressed='true'] {
-    color: var(--color-brand);
-    background: var(--keep-sword-underline);
-  }
-
-  /* Drawn inside the button: the row scrolls, so an outline outside it would
-     be cut by the row's own edge. */
-  .chronicle-layers button:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: -2px;
-  }
-
-  /* The narrowest phones set the names a size smaller and closer, so the
-     row fits its column rather than scrolling: about 8px to spare at 320px
-     (Linux sets the letters about 4px wider than macOS, and a row one pixel
-     over scrolls). Each button still clears the touch floor on both axes,
-     the short name's by its own minimum rather than by its letters. */
-  @media (max-width: 22.5rem) {
-    .chronicle-layers {
-      gap: 0;
-    }
-
-    .chronicle-layers button {
-      padding-inline: 0.25rem;
-      font-size: 0.625rem;
-      letter-spacing: 0;
-    }
+    font-family: var(--font-tome);
+    font-size: 0.9rem;
+    font-style: italic;
+    color: var(--keep-parchment-muted);
   }
 
   .chronicle-scale {
@@ -1126,204 +1032,235 @@
     display: inline-block;
     inline-size: 0.6875rem;
     block-size: 0.6875rem;
-    background: var(--keep-stone-0) center / 100% 100% no-repeat;
+    border-radius: 2px;
+    background: var(--keep-parchment-ink);
+    opacity: 0.09;
   }
 
-  /* --- The accounts: one shape for every source ------------------------------ */
-
-  /* Parted from the diagram by a branch rather than a rule (owner,
-     2026-10-19: "the plain lines should be tree branches, or vines"). */
-  .chronicle-accounts {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
-    gap: 1.25rem 2.5rem;
-    padding-block-start: 1.25rem;
-    background: var(--keep-branch-3) left top / var(--keep-branch-tile) repeat-x;
+  .chronicle-step[data-grid-level='1'] {
+    background: var(--palette-dark-grid-4);
+    opacity: 0.75;
   }
 
-  /* Every row of an account is one fixed line box, so the account's height
-     is a function of its width alone — the same before its payload lands as
-     after. A value too long for its line is cut with an ellipsis rather than
-     taking a second one. */
-  .chronicle-account {
-    display: grid;
-    grid-template-rows: auto auto 1fr;
-    align-content: start;
-    gap: 0.625rem;
-    min-inline-size: 0;
+  .chronicle-step[data-grid-level='2'] {
+    background: var(--palette-dark-grid-3);
+    opacity: 0.92;
   }
 
-  .chronicle-account-name {
-    min-block-size: 1.5em;
-    line-height: 1.5;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin: 0;
-    font-family: var(--font-display);
-    font-size: 1rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    color: var(--ledger-ink);
+  .chronicle-step[data-grid-level='3'] {
+    background: var(--palette-dark-grid-2);
+    opacity: 0.92;
   }
 
-  .chronicle-facts {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
-    gap: 0.25rem 1.75rem;
-    margin: 0;
+  .chronicle-step[data-grid-level='4'] {
+    background: var(--palette-dark-grid-1);
+    opacity: 0.92;
   }
 
-  .chronicle-fact,
-  .chronicle-fact-room {
+  /* --- The seal at the day being read ---------------------------------------- */
+
+  /* A green seal on its ribbon, hanging under the roll's edge at the day the
+     reader is on; it is drawn, and takes no pointer. */
+  .chronicle-seal {
+    position: absolute;
+    inset-block-start: calc(100% + var(--chronicle-pad-end));
+    inset-inline-start: 0;
+    inline-size: 1.25rem;
+    block-size: 2rem;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(calc(var(--chronicle-seal-x, 0px) - 50%));
+  }
+
+  .chronicle-seal[data-on='true'] {
+    opacity: 1;
+  }
+
+  .chronicle-seal::before,
+  .chronicle-seal::after {
+    content: '';
+    position: absolute;
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
+  }
+
+  .chronicle-seal::before {
+    inset-block-start: 0;
+    inline-size: 4px;
+    block-size: 0.875rem;
+    background: var(--palette-keep-verdigris);
+  }
+
+  .chronicle-seal::after {
+    inset-block-start: 0.65rem;
+    inline-size: 1.25rem;
+    block-size: 1.25rem;
+    border-radius: 47% 53% 50% 48% / 52% 46% 54% 48%;
+    background: radial-gradient(circle at 50% 50%, var(--palette-keep-verdigris) 55%, var(--palette-dark-grid-1) 100%);
+    box-shadow: 0 2px 3px var(--palette-keep-tome-shadow);
+  }
+
+  /* --- The seals that pick the layer ----------------------------------------- */
+
+  /* Each seal is its layer's name and nothing else: the name is the button's
+     words, set at no size, and the wax is drawn over them with the name's
+     first letter pressed in it. 44px on both axes. */
+  .chronicle-layers {
     display: flex;
-    justify-content: space-between;
-    gap: 0.75rem;
-    min-block-size: 1.6em;
-    font-family: var(--font-mono);
-    font-size: var(--ledger-figure-size);
-    line-height: 1.6;
-    white-space: nowrap;
-  }
-
-  .chronicle-fact dt {
-    color: var(--ledger-muted);
-  }
-
-  .chronicle-fact dd {
-    min-inline-size: 0;
-    margin: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-variant-numeric: tabular-nums;
-    text-align: end;
-  }
-
-  .chronicle-line-note {
-    margin: 0;
-    font-family: var(--font-mono);
-    font-size: var(--ledger-figure-size);
-    color: var(--ledger-muted);
-  }
-
-  .chronicle-models {
-    display: grid;
-    align-content: start;
     gap: 0.5rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
+    min-block-size: 3.75rem;
+    padding-inline-start: calc(2 * var(--keep-prop));
+    margin-block-start: 0.5rem;
   }
 
-  .chronicle-model,
-  .chronicle-room {
+  .chronicle-layers button {
+    --chronicle-wax: var(--palette-keep-oak-1);
+    position: relative;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.1875rem 0.75rem;
-    align-items: baseline;
+    place-items: center;
+    inline-size: 2.75rem;
+    block-size: 2.75rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: transparent;
+    font-size: 0;
+    cursor: pointer;
   }
 
-  .chronicle-model-name,
-  .chronicle-model-reading {
-    min-block-size: 1.4em;
-    line-height: 1.4;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .chronicle-layers button[data-tone='grid'] {
+    --chronicle-wax: var(--palette-keep-verdigris);
   }
 
-  .chronicle-model-name {
-    font-size: 0.8125rem;
+  .chronicle-layers button[data-tone='1'] {
+    --chronicle-wax: var(--palette-keep-lapis-mid);
+  }
+
+  /* The cord the seal hangs on, up to the roll's foot. */
+  .chronicle-layers button::after {
+    content: '';
+    position: absolute;
+    inset-block-end: calc(50% + 1rem);
+    inset-inline-start: 50%;
+    inline-size: 1px;
+    block-size: 1.25rem;
+    background: var(--palette-keep-bone-deep);
+  }
+
+  .chronicle-layers button::before {
+    content: attr(data-initial);
+    display: grid;
+    place-items: center;
+    inline-size: 2.15rem;
+    block-size: 2.15rem;
+    border-radius: 47% 53% 50% 48% / 52% 46% 54% 48%;
+    font-family: var(--font-initial);
+    font-size: 1.15rem;
+    line-height: 1;
+    color: var(--palette-keep-tome-crease);
+    background: radial-gradient(circle at 50% 50%, var(--chronicle-wax) 55%, var(--palette-keep-umbra) 150%);
+    box-shadow: 0 3px 4px var(--palette-keep-tome-shadow);
+    opacity: 0.82;
+  }
+
+  /* The picked seal hangs lower, full in its colour. */
+  .chronicle-layers button[aria-pressed='true'] {
+    transform: translateY(0.5rem);
+  }
+
+  .chronicle-layers button[aria-pressed='true']::before {
+    opacity: 1;
+  }
+
+  .chronicle-layers button:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 50%;
+  }
+
+  .chronicle-layer-name {
+    align-self: center;
+    margin-block-start: 0.5rem;
+    font-family: var(--font-tome);
+    font-size: 0.78rem;
     font-weight: 600;
-  }
-
-  .chronicle-model-reading {
-    font-family: var(--font-mono);
-    font-size: var(--ledger-figure-size);
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* The room a model row holds when the account has fewer models than its
-     room: the same boxes, painted nothing, and no row a reader or a lane
-     counts as a member. */
-  .chronicle-room {
-    visibility: hidden;
-  }
-
-  /* A model's share is a sword (owner, 2026-10-19: "we should have
-     swords"): the hilt and the point are always whole, and the blade between
-     them is the share — a model with every token draws a sword the full width
-     of the account, one with almost none a hilt and its point. The blade is
-     its three rows of steel as bands drawn along it (--keep-sword-blade), so
-     it lengthens without stretching, and the share is printed beside it, so
-     the length is never the only way to read it. */
-  .chronicle-track {
-    grid-column: 1 / -1;
-    block-size: 7px;
-  }
-
-  .chronicle-fill {
-    --sword-hilt: 13px;
-    --sword-tip: 6px;
-    display: block;
-    box-sizing: border-box;
-    block-size: 100%;
-    inline-size: calc(var(--sword-hilt) + var(--sword-tip) + (100% - var(--sword-hilt) - var(--sword-tip)) * var(--chronicle-share, 0));
-    padding-inline: var(--sword-hilt) var(--sword-tip);
-    background:
-      var(--keep-sword-hilt) left center / var(--sword-hilt) 100% no-repeat border-box,
-      var(--keep-sword-tip) right center / var(--sword-tip) 100% no-repeat border-box,
-      var(--keep-sword-blade) left center / 100% 100% no-repeat content-box;
-  }
-
-  /* A model's own figures hold one line, and two on a phone — by the
-     screen's width, never by what the line says, so every model row is the
-     same height whatever it carries. (By the screen and not the account: a
-     size container on the account sent Blink's layout into a loop that never
-     returned, measured 2026-10-16.) */
-  .chronicle-model-detail {
-    grid-column: 1 / -1;
-    block-size: 1.5em;
-    overflow: hidden;
-    font-family: var(--font-mono);
-    font-size: 0.625rem;
-    line-height: 1.5;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--palette-keep-bone-mid);
     white-space: nowrap;
+    overflow: hidden;
     text-overflow: ellipsis;
-    color: var(--ledger-muted);
   }
 
-  /* --- A phone: the figures go above the graph, two to a row ---------------- */
+  /* --- A phone: the figures above the writing -------------------------------- */
   @media (max-width: 47.99rem) {
+    .chronicle-top {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* The writing starts just past the curl band, so a 320px phone keeps
+       its graph wide enough to read a day. */
+    .chronicle-sheet {
+      padding: 1.1rem calc(4 * var(--keep-prop) + 0.5rem) var(--chronicle-pad-end);
+    }
+
     .chronicle-headlines {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 0.75rem;
+      gap: 0.6rem;
     }
 
+    /* Each figure's day reads beside it, in a line that holds whatever it
+       says, so reading a day never moves the roll under it. */
+    .chronicle-headline {
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: baseline;
+      column-gap: 0.5rem;
+    }
+
+    .chronicle-label {
+      grid-column: 1 / -1;
+    }
+
+    /* The figure holds a column as wide as the widest figure it sets (a
+       grouped count to 999,999 or a compact 999.9M, measured in this face at
+       about 3.1em), so the day beside it starts in one place whatever day is
+       read. */
     .chronicle-figure {
-      font-size: clamp(0.9375rem, 4.6vw, 1.625rem);
+      font-size: 1.55rem;
+      min-inline-size: 3.25em;
     }
-
-    .chronicle-model-detail {
-      block-size: 3em;
-      white-space: normal;
-    }
-
-    /* Three to a row is narrow: a caption wraps rather than losing its
-       words, and holds three lines whatever it says, so reading a day — a
-       date in place of a total — never moves the diagram under it. */
-    .chronicle-caption {
-      white-space: normal;
-      min-block-size: 4.2em;
-    }
-
   }
 
-  /* --- Motion: the line writes itself the first time it is seen and again
-     on every layer chosen; the calendar's cells arrive week by week once, and
-     repaint as a wave when the layer changes. Everything moving is inside
-     this guard; with reduced motion the drawing is simply there. */
+  /* --- Motion: the roll unrolls from its middle the first time it is seen,
+     the line writes itself after it and again on every layer chosen, and the
+     calendar's days arrive week by week once. Everything moving is inside
+     this guard; with reduced motion the roll is simply open. */
   @media (prefers-reduced-motion: no-preference) {
+    .chronicle[data-shown='false'] .chronicle-sheet,
+    .chronicle[data-shown='false'] .chronicle-cord {
+      clip-path: inset(-3rem 50%);
+    }
+
+    .chronicle[data-shown='false'] .chronicle-reel[data-side='start'] {
+      transform: translateX(calc(100% - var(--chronicle-roller)));
+    }
+
+    .chronicle[data-shown='false'] .chronicle-reel[data-side='end'] {
+      transform: translateX(calc(var(--chronicle-roller) - 100%));
+    }
+
+    .chronicle[data-shown='true'] .chronicle-sheet,
+    .chronicle[data-shown='true'] .chronicle-cord {
+      animation: chronicle-unroll 1300ms cubic-bezier(0.45, 0.05, 0.25, 1) both;
+    }
+
+    .chronicle[data-shown='true'] .chronicle-reel[data-side='start'] {
+      animation: chronicle-roll-start 1300ms cubic-bezier(0.45, 0.05, 0.25, 1) both;
+    }
+
+    .chronicle[data-shown='true'] .chronicle-reel[data-side='end'] {
+      animation: chronicle-roll-end 1300ms cubic-bezier(0.45, 0.05, 0.25, 1) both;
+    }
+
     .chronicle[data-shown='false'] .chronicle-plot {
       clip-path: inset(-10% 100% -10% -2%);
     }
@@ -1358,10 +1295,46 @@
       animation-delay: calc(var(--chronicle-column, 0) * 14ms), 1600ms;
     }
 
-    .chronicle-figure,
-    .chronicle-caption,
+    .chronicle-seal {
+      transition:
+        opacity 200ms ease,
+        transform 240ms cubic-bezier(0.2, 0.8, 0.25, 1);
+    }
+
     .chronicle-layers button {
+      transition: transform 500ms cubic-bezier(0.3, 1.5, 0.5, 1);
+    }
+
+    .chronicle-figure,
+    .chronicle-caption {
       transition: color var(--ledger-hover) var(--ledger-ease);
+    }
+  }
+
+  @keyframes chronicle-unroll {
+    from {
+      clip-path: inset(-3rem 50%);
+    }
+    to {
+      clip-path: inset(-3rem 0);
+    }
+  }
+
+  @keyframes chronicle-roll-start {
+    from {
+      transform: translateX(calc(100% - var(--chronicle-roller)));
+    }
+    to {
+      transform: none;
+    }
+  }
+
+  @keyframes chronicle-roll-end {
+    from {
+      transform: translateX(calc(var(--chronicle-roller) - 100%));
+    }
+    to {
+      transform: none;
     }
   }
 

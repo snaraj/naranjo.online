@@ -73,13 +73,16 @@
   its section with no nav on the page to have linked it. -->
 <main aria-labelledby="page-title">
   <div class="page-intro">
-    <!-- J FLIES BESIDE THE NAME (owner, 2026-10-19: "put J on the white space
-      flying"), in the room the name keeps at its end (styles.css, the name).
-      He is inside the heading so he is placed from the name's own edge, out of
-      its flow so the name is exactly where the static shell put it, and a
-      picture and nothing else — aria-hidden inside his own component, so the
-      heading's accessible name is still exactly the name. -->
-    <h1 id="page-title">Samuel Naranjo<span class="page-j"><JMark /></span></h1>
+    <!-- J IS THE DOT OF THE J (owner, 2026-10-20, picking "the dot of the j,
+      stacked" of six ways to set the name with J in a place of his own). The
+      name is its two words on two centred lines, and its j is drawn dotless
+      so J can hover where the dot would be. The text is still exactly the
+      name — the j is a j, and the dotless letter is only drawn over it
+      (styles.css, the name) — and J is a picture inside a seat with no
+      size, so the heading reads and lays out just as the static shell's does.
+      He is aria-hidden inside his own component, so the heading's accessible
+      name is still exactly the name. -->
+    <h1 id="page-title"><span class="page-name-line">Samuel</span> <span class="page-name-line">Naran<span class="page-name-j">j</span>o<span class="page-j-seat"><span class="page-j"><JMark /></span></span></span></h1>
     <!-- The rule under the name is drawn rather than declared: a border would
       simply be there, and the owner asked for it to arrive. Under reduced
       motion it is already drawn on the first frame — the same rule, without
@@ -111,19 +114,59 @@
 </main>
 
 <style>
-  /* J'S SEAT is the room the name keeps at its end (styles.css, the name,
-     which states his size and the gap as --j-size and --j-gap): just past the
-     name's own edge, so in whichever face the name is drawn he never meets its
-     letters, and centred on its two lines. He is out of the flow, so his
-     arrival moves nothing the static shell (index.html) painted before he
-     existed, and his square is the --j-size his component reads as the box it
-     reserves. The rendering lane measures his picture against every line box
-     of the name in each engine, so a face or a size that moved the letters
-     into him is a red build rather than an overlap. */
+  /* Each word is a line of its own, kept whole: the name is two centred
+     lines (styles.css, the name), and the static shell's one text breaks at
+     its space onto the same two. */
+  .page-name-line {
+    display: block;
+    white-space: nowrap;
+  }
+
+  /* THE J, DRAWN DOTLESS. Its letter is kept in the text at no size, and
+     the dotless letter is drawn in its place — the same advance in this face,
+     so not a letter after it moves. The drawn letter is spoken as nothing, so
+     the heading's name stays the name in every engine that reads generated
+     text; an engine without the alternative-text form keeps the first
+     declaration. The tracking each letter carries is put back on the drawn
+     one, since a letter of no size still carries it. */
+  .page-name-j {
+    font-size: 0;
+    letter-spacing: 0;
+  }
+
+  .page-name-j::before {
+    content: '\0237';
+    content: '\0237' / '';
+    font-size: var(--keep-name-size);
+    letter-spacing: var(--masthead-tracking);
+  }
+
+  /* J'S SEAT is a box of no size at the end of the second word: a box with
+     no font is a box of no height ON THE BASELINE, so J is placed from the
+     letters themselves rather than from a line box whose height each engine
+     derives from the face differently. It is at the word's END because any
+     placed box inside a word splits it for a screen reader — measured in
+     Chromium, Gecko and WebKit alike, a seat at the j's own start named the
+     heading "Samuel Naran jo", and one inside the j "Samuel Naranj o" — while
+     at the end the word is whole. */
+  .page-j-seat {
+    position: relative;
+    font-size: 0;
+  }
+
+  /* From there he is carried back over the j's stem and lifted so his feet
+     hover a breath over the x-height (styles.css, the name, states the face's
+     facts as --j-stem and --j-hover; his feet are 0.1125 of his square above
+     its foot). He takes the name's size back, since his seat has none, so his
+     size and his place are shares of the name's own. He is out of the flow,
+     so his arrival moves nothing the static shell (index.html) painted before
+     he existed; his square is the --j-size his component reads as the box it
+     reserves. */
   .page-j {
     position: absolute;
-    inset-inline-start: calc(100% + var(--j-gap));
-    inset-block-start: calc(50% - var(--j-size) / 2);
+    inset-inline-start: calc(var(--j-stem) - var(--j-size) / 2);
+    inset-block-end: calc(var(--j-hover) - 0.1125 * var(--j-size));
+    font-size: var(--keep-name-size);
     line-height: 0;
     pointer-events: none;
   }

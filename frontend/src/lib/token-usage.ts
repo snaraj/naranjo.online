@@ -968,9 +968,6 @@ export function sourceName(key: string): string {
  * expect before any payload has said which of them reported. */
 export const knownSourceKeys: readonly string[] = sourceVocabulary.sources.map((entry) => entry.key);
 
-/* How many accounting classes a source's card prints as facts. */
-export const sourceClassFactCount = classKeys.length;
-
 /* The canonical SERVE order as a RANK, so a card lays its rows out in the
  * vocabulary's order whatever order a payload served them in. The residual
  * leads it, exactly as modelSlots does, because the two are the same list

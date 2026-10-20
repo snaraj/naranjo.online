@@ -1105,6 +1105,15 @@ test('the sheet opens on the name, under the sky the page keeps above it', async
  * stays inside the intro and inside the column's content box, and that the
  * group is centred.
  *
+ * AS THE DOT OF THE J since 2026-10-20 (the owner's pick of six settings,
+ * "the dot of the j, stacked", and of its size: "make the title not be
+ * GIGANTIC"). The name is two centred lines, its j drawn dotless, and J
+ * hovers where the dot would be: over the stem, his feet a breath over the
+ * second line's x-height and his head under the first line's letters. "He
+ * covers no letter" is measured on INK now rather than on line boxes — he is
+ * inside the name's block by design, between its lines — and the face's own
+ * facts are read off the engine's drawing of it, not off the stylesheet.
+ *
  * The source pins in tests/experience.test.mjs hold the declarations; this
  * holds what an engine did with them, which for a sprite beside a line of
  * display type is the only place the claims can be tested at all: "he covers
@@ -1176,14 +1185,16 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
       await page.evaluate(() => window.scrollTo(0, 0));
       await expect(page.locator('.j-flight'), `the page does not draw exactly one of him at ${width}px`).toHaveCount(1);
       /* HIS BOX IS RESERVED AND SQUARE, and its size is the one the source
-         states: half a name-size, but never past 120px — his flight is drawn
-         in 80px frames, and the owner saw him pixelated at 253px — and never
-         under 48px, so a phone still sees him (styles.css, the name:
-         clamp(3rem, 0.5em, 7.5rem) on the heading). Computed here from the
-         name's own font size as the engine resolved it, so the ratio half
-         ("a share of the name") and both bounds are one exact claim, held to
-         half a pixel. This replaced "0.78 to 0.82 of the name" (the in-flow
-         seat of the same day) and, before it, "more than 0.45 of the name". */
+         states: 0.46 of a name-size, but never past 120px — his flight is
+         drawn in 80px frames, and the owner saw him pixelated at 253px — and
+         never under 40px, so a phone still sees him, unless that would be
+         more than 0.55 of a name-size, where he would reach the line above
+         (styles.css, the name: min(0.55em, clamp(2.5rem, 0.46em, 7.5rem)) on
+         the heading). Computed here from the name's own font size as the
+         engine resolved it, so the share and every bound are one exact claim,
+         held to half a pixel. This replaced half a name-size between 48px and
+         120px (J beside the name, 2026-10-19), "0.78 to 0.82 of the name"
+         before it and "more than 0.45 of the name" before that. */
       const seat = await page.evaluate(() => {
         const node = window.document.querySelector('.j-flight');
         const box = node.getBoundingClientRect();
@@ -1196,7 +1207,7 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
         };
       });
       expect(Math.abs(seat.width - seat.height), `J's box is ${seat.width}x${seat.height} at ${width}px, not square`).toBeLessThan(0.5);
-      const stated = Math.min(7.5 * seat.rem, Math.max(3 * seat.rem, 0.5 * seat.name));
+      const stated = Math.min(0.55 * seat.name, Math.min(7.5 * seat.rem, Math.max(2.5 * seat.rem, 0.46 * seat.name)));
       expect(
         Math.abs(seat.width - stated),
         `J is ${seat.width}px beside a ${seat.name}px name at ${width}px; the source states ${stated}px`
@@ -1205,25 +1216,28 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
 
       /* HE COVERS NO LETTER OF THE NAME, the page does not scroll sideways
          because of him, his picture stays inside the intro and inside the
-         column's content box, and the name with him is one centred group —
-         each measured at the far ends of the rock, not wherever it happened to
-         be: the rotation widens the picture's box. Where the rock runs it is
+         column's content box, the name is centred, and he is the dot of its j
+         — each measured at the far ends of the rock, not wherever it happened
+         to be: the rotation widens his body's box. Where the rock runs it is
          held at BOTH extremes in turn (the swing's start and its end); with
-         the rock gone the still is level and measured once. The name's boxes
-         are its LINE boxes, from a Range over the heading's own TEXT — he is
-         inside the heading now, and a Range over the whole element would
-         count his box as a line of the name.
+         the rock gone the still is level and measured once.
 
-         Inside the intro and the column REPLACES the overhang this lane used
-         to hold on screen (he perched on the frame's corner on a phone and
-         hung half into the sheet's margin on a monitor until 2026-10-19).
+         ON INK. His drawn body is the part of his square from 0.075 to 0.8875
+         across and 0.15 to 0.8875 down (measured off the still and every
+         flight frame), turned about the square's centre by the rock. The
+         letters' ink is read off the engine's own drawing of the face: the
+         second word's baseline is his seat's top (a box with no font sits on
+         the baseline), the first word's is one line above it, the x-height is
+         the face's drawn x, and the dotless j's stem is found by drawing the
+         letter and reading its ink half way up the x-height. The name has no
+         ascender in its second word and no descender in its first, so between
+         the first line's baseline and the second's x-height there is no ink
+         at all — and his body must stay inside that band, over the stem.
 
-         THE GROUP IS CENTRED (owner, 2026-10-19): from the name's start edge
-         to J's end edge, the pair's middle is the intro's middle within 2px,
-         and J is centred on the name's two lines within a pixel. This
-         REPLACES "the name starts at the column's start", the stacked setting
-         of earlier the same day that the owner found "way too much to the
-         left". */
+         THE NAME IS CENTRED (owner, 2026-10-20: J no longer keeps a room at
+         its end): the heading's middle is the intro's middle within 2px. This
+         REPLACES "the name and J are one centred group" (2026-10-19), which
+         REPLACED "the name starts at the column's start". */
       const extremes = motion === 'reduce' ? [null] : [0, 1];
       for (const extreme of extremes) {
         /* Hold the rock (where it runs) and read the angle the engine drew. */
@@ -1242,18 +1256,63 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
         }, extreme);
         const picture = await page.locator('.j-flight').evaluate(jPictureBox, degrees);
         /* Measure the page there, then let the rock run again. */
-        const measured = await page.evaluate((box) => {
+        const measured = await page.evaluate((turned) => {
           const heading = window.document.querySelector('h1');
-          const lines = [];
-          for (const node of heading.childNodes) {
-            if (node.nodeType !== Node.TEXT_NODE) continue;
+          const size = parseFloat(getComputedStyle(heading).fontSize);
+          /* The name's lines: the distinct rows its text is drawn on, J's own
+             box aside. */
+          const rows = new Set();
+          const walker = window.document.createTreeWalker(heading, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+            if (node.parentElement?.closest('.page-j') !== null) continue;
             const range = window.document.createRange();
             range.selectNodeContents(node);
-            lines.push(...[...range.getClientRects()].filter((rect) => rect.width > 0));
+            for (const rect of range.getClientRects()) {
+              if (rect.width > 0) rows.add(Math.round(rect.top));
+            }
           }
-          const covered = lines.filter(
-            (line) => box.left < line.right && line.left < box.right && box.top < line.bottom && line.top < box.bottom
-          ).length;
+          /* The face, as this engine draws it. */
+          const canvas = window.document.createElement('canvas');
+          canvas.width = Math.ceil(size * 2);
+          canvas.height = Math.ceil(size * 2);
+          const ink = canvas.getContext('2d', { willReadFrequently: true });
+          ink.font = `400 ${size}px 'Instrument Serif'`;
+          const xHeight = ink.measureText('x').actualBoundingBoxAscent;
+          const pad = size / 2;
+          const base = size * 1.5;
+          ink.fillText('\u0237', pad, base);
+          const row = ink.getImageData(0, Math.round(base - xHeight / 2), canvas.width, 1).data;
+          let first = -1;
+          let last = -1;
+          for (let x = 0; x < canvas.width; x += 1) {
+            if (row[x * 4 + 3] > 128) {
+              if (first < 0) first = x;
+              last = x;
+            }
+          }
+          const lineNodes = [...heading.querySelectorAll('.page-name-line')].map((node) => node.getBoundingClientRect());
+          const seatNode = window.document.querySelector('.page-j-seat').getBoundingClientRect();
+          const letterNode = window.document.querySelector('.page-name-j').getBoundingClientRect();
+          const square = window.document.querySelector('.j-flight').getBoundingClientRect();
+          /* His body, turned about the square's centre. */
+          const centre = { x: square.left + square.width / 2, y: square.top + square.height / 2 };
+          const corners = [
+            [0.075, 0.15],
+            [0.8875, 0.15],
+            [0.075, 0.8875],
+            [0.8875, 0.8875],
+          ].map(([u, v]) => {
+            const dx = (u - 0.5) * square.width;
+            const dy = (v - 0.5) * square.height;
+            const turn = (turned * Math.PI) / 180;
+            return [centre.x + dx * Math.cos(turn) - dy * Math.sin(turn), centre.y + dx * Math.sin(turn) + dy * Math.cos(turn)];
+          });
+          const body = {
+            left: Math.min(...corners.map(([x]) => x)),
+            right: Math.max(...corners.map(([x]) => x)),
+            top: Math.min(...corners.map(([, y]) => y)),
+            bottom: Math.max(...corners.map(([, y]) => y)),
+          };
           const overflow = window.document.documentElement.scrollWidth - window.document.documentElement.clientWidth;
           const contentBox = (node) => {
             const rect = node.getBoundingClientRect();
@@ -1267,59 +1326,75 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
           const introNode = window.document.querySelector('.page-intro');
           const intro = introNode.getBoundingClientRect();
           const name = heading.getBoundingClientRect();
-          const seat = window.document.querySelector('.j-flight').getBoundingClientRect();
           for (const animation of window.document.querySelector('.j-flight').getAnimations({ subtree: true })) {
             animation.play();
           }
+          const secondBaseline = seatNode.top;
           return {
-            degrees: 0,
-            picture: box,
-            lines: lines.length,
-            covered,
+            rows: rows.size,
+            size,
+            xHeight,
+            stem: first < 0 ? null : letterNode.left + ((first + last) / 2 - pad),
+            body,
+            secondBaseline,
+            firstBaseline: secondBaseline - (lineNodes[1].top - lineNodes[0].top),
             overflow,
             viewport: window.document.documentElement.clientWidth,
             intro: { left: intro.left, right: intro.right, top: intro.top, bottom: intro.bottom },
             introContent: contentBox(introNode),
             column: contentBox(window.document.querySelector('main')),
-            group: { left: name.left, right: seat.right },
-            nameMiddle: (name.top + name.bottom) / 2,
-            jMiddle: (seat.top + seat.bottom) / 2,
+            name: { left: name.left, right: name.right },
           };
-        }, picture);
-        measured.degrees = degrees;
-        const where = `at ${width}px${extreme === null ? '' : ` with the rock held at its ${extreme === 0 ? 'start' : 'end'} (${measured.degrees.toFixed(2)}°)`}`;
-        expect(measured.lines, `the name is not two lines ${where}`).toBe(2);
-        expect(measured.covered, `J's picture covers ${measured.covered} line(s) of the name ${where}`).toBe(0);
+        }, degrees);
+        const where = `at ${width}px${extreme === null ? '' : ` with the rock held at its ${extreme === 0 ? 'start' : 'end'} (${degrees.toFixed(2)}°)`}`;
+        expect(measured.rows, `the name is not two lines ${where}`).toBe(2);
         expect(measured.overflow, `the page scrolls ${measured.overflow}px sideways ${where}`).toBeLessThanOrEqual(0);
-        expect(measured.picture.right, `J's picture runs past the viewport's end ${where}`).toBeLessThanOrEqual(
-          measured.viewport + subPixel
-        );
-        /* One centred group. */
-        const groupMiddle = (measured.group.left + measured.group.right) / 2;
-        const introMiddle = (measured.introContent.left + measured.introContent.right) / 2;
+        expect(picture.right, `J's picture runs past the viewport's end ${where}`).toBeLessThanOrEqual(measured.viewport + subPixel);
+        /* No ink of the name under his body. */
+        const xLine = measured.secondBaseline - measured.xHeight;
         expect(
-          Math.abs(groupMiddle - introMiddle),
-          `the name and J span ${measured.group.left.toFixed(1)}-${measured.group.right.toFixed(1)}px, centred ${(groupMiddle - introMiddle).toFixed(1)}px off the intro's middle ${where}`
+          measured.body.bottom,
+          `J's feet reach ${(measured.body.bottom - xLine).toFixed(1)}px into the second line's letters ${where}`
+        ).toBeLessThanOrEqual(xLine + subPixel);
+        expect(
+          measured.body.top,
+          `J's head reaches ${(measured.firstBaseline - measured.body.top).toFixed(1)}px into the first line's letters ${where}`
+        ).toBeGreaterThanOrEqual(measured.firstBaseline - subPixel);
+        /* The dot of the j: over its stem, and hovering a breath over the
+           x-height — no more than a tenth of a name-size — rather than
+           anywhere in the band. */
+        expect(measured.stem, `the dotless j drew no stem to measure ${where}`).not.toBeNull();
+        const bodyMiddle = (measured.body.left + measured.body.right) / 2;
+        expect(
+          Math.abs(bodyMiddle - measured.stem),
+          `J is ${(bodyMiddle - measured.stem).toFixed(1)}px off the j's stem ${where}`
         ).toBeLessThanOrEqual(2);
         expect(
-          Math.abs(measured.jMiddle - measured.nameMiddle),
-          `J is centred ${(measured.jMiddle - measured.nameMiddle).toFixed(1)}px off the name's two lines ${where}`
-        ).toBeLessThanOrEqual(1);
+          xLine - measured.body.bottom,
+          `J hovers ${(xLine - measured.body.bottom).toFixed(1)}px over the x-height ${where}, too far to be its dot`
+        ).toBeLessThanOrEqual(0.1 * measured.size);
+        /* The name is centred. */
+        const nameMiddle = (measured.name.left + measured.name.right) / 2;
+        const introMiddle = (measured.introContent.left + measured.introContent.right) / 2;
+        expect(
+          Math.abs(nameMiddle - introMiddle),
+          `the name spans ${measured.name.left.toFixed(1)}-${measured.name.right.toFixed(1)}px, centred ${(nameMiddle - introMiddle).toFixed(1)}px off the intro's middle ${where}`
+        ).toBeLessThanOrEqual(2);
         /* In his seat: inside the intro, inside the column. */
         for (const [edge, inside] of [
-          ['left', measured.picture.left >= measured.intro.left - subPixel],
-          ['right', measured.picture.right <= measured.intro.right + subPixel],
-          ['top', measured.picture.top >= measured.intro.top - subPixel],
-          ['bottom', measured.picture.bottom <= measured.intro.bottom + subPixel],
+          ['left', picture.left >= measured.intro.left - subPixel],
+          ['right', picture.right <= measured.intro.right + subPixel],
+          ['top', picture.top >= measured.intro.top - subPixel],
+          ['bottom', picture.bottom <= measured.intro.bottom + subPixel],
         ]) {
-          expect(inside, `J's picture leaves the intro on its ${edge} ${where}: ${JSON.stringify(measured.picture)} in ${JSON.stringify(measured.intro)}`).toBe(true);
+          expect(inside, `J's picture leaves the intro on its ${edge} ${where}: ${JSON.stringify(picture)} in ${JSON.stringify(measured.intro)}`).toBe(true);
         }
         for (const [edge, inside] of [
-          ['start', measured.picture.left >= measured.column.left - subPixel],
-          ['end', measured.picture.right <= measured.column.right + subPixel],
-          ['top', measured.picture.top >= measured.column.top - subPixel],
+          ['start', picture.left >= measured.column.left - subPixel],
+          ['end', picture.right <= measured.column.right + subPixel],
+          ['top', picture.top >= measured.column.top - subPixel],
         ]) {
-          expect(inside, `J's picture runs into the sheet's margin at its ${edge} ${where}: ${JSON.stringify(measured.picture)} in ${JSON.stringify(measured.column)}`).toBe(true);
+          expect(inside, `J's picture runs into the sheet's margin at its ${edge} ${where}: ${JSON.stringify(picture)} in ${JSON.stringify(measured.column)}`).toBe(true);
         }
       }
       /* THE PICTURE TAKES NO POINTER: a press at his very centre lands on
@@ -2442,18 +2517,24 @@ test('every account shows its content whole, and the full split as the five rows
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-/* THE DIAGRAM FILLS ITS BOARD AND ITS ACCOUNTS FILL THE DIAGRAM (the
- * no-dead-space rule; this lane was "the board is three cards across in two
- * equal rows, filling the column", re-aimed 2026-10-16 when the six cards
- * became the trackers' one diagram and its accounts).
+/* THE DIAGRAM FILLS ITS BOARD, AND ITS ACCOUNTS ARE THE LEAVES OF A TOME
+ * CENTRED ON ITS WALL (the no-dead-space rule; this lane was "the board is
+ * three cards across in two equal rows, filling the column", re-aimed
+ * 2026-10-16 when the six cards became the trackers' one diagram and its
+ * accounts, and again 2026-10-20 when the accounts became the chained tome:
+ * owner, T3, "the corbel").
  *
  * Measured rather than declared, and measured the way the gallery's fill lane
  * is: edges against edges and boxes against each other, so no token value can
- * satisfy it by moving expectation and behaviour together. On a desktop the
- * accounts sit side by side in equal tracks reaching both edges of the
- * diagram, and the diagram reaches both edges of its framed board; on a phone
- * they stack, one per row, and nothing takes the document sideways. */
-test('the diagram fills its board, and its accounts share the width in equal tracks (owner 2026-09-11; 2026-10-16)', async ({
+ * satisfy it by moving expectation and behaviour together. The diagram reaches
+ * both edges of its framed board and the tome's wall both edges of the
+ * diagram — the room either side of the book is the corbel's and the chain's,
+ * not dead space — and the book stands in the middle of it. On a desktop an
+ * opening's two leaves are equal, meet at the gutter and reach the book's
+ * page edges, and every leaf lies in its side's one place; on a phone every
+ * leaf lies in the one page's place and spans it, and nothing takes the
+ * document sideways. */
+test('the diagram fills its board, and its accounts are the leaves of a tome centred on it (owner 2026-09-11; 2026-10-16; 2026-10-20)', async ({
   page,
 }) => {
   await stageSixCards(page);
@@ -2470,6 +2551,8 @@ test('the diagram fills its board, and its accounts share the width in equal tra
       };
       const chronicle = window.document.querySelector('.chronicle').getBoundingClientRect();
       const grid = window.document.querySelector('.chronicle-accounts').getBoundingClientRect();
+      const book = window.document.querySelector('.tome-book').getBoundingClientRect();
+      const leaves = window.document.querySelector('.tome-pages').getBoundingClientRect();
       const accounts = [...window.document.querySelectorAll('.chronicle-account')].map((account) => {
         const box = account.getBoundingClientRect();
         return { x: round(box.x), y: round(box.y), width: round(box.width), right: round(box.right) };
@@ -2479,6 +2562,8 @@ test('the diagram fills its board, and its accounts share the width in equal tra
         board: { left: round(inner.left), right: round(inner.right) },
         chronicle: { left: round(chronicle.left), right: round(chronicle.right) },
         grid: { left: round(grid.left), right: round(grid.right) },
+        book: { left: round(book.left), right: round(book.right) },
+        leaves: { left: round(leaves.left), right: round(leaves.right) },
         accounts,
         rows: new Set(accounts.map((account) => Math.round(account.y))).size,
         columns: new Set(accounts.map((account) => Math.round(account.x))).size,
@@ -2493,12 +2578,19 @@ test('the diagram fills its board, and its accounts share the width in equal tra
     const at = `at ${width}px`;
     expect(observed.chronicle.left, `the diagram starts inside its board ${at}`).toBeCloseTo(observed.board.left, 0);
     expect(observed.chronicle.right, `the diagram stops short of its board ${at}`).toBeCloseTo(observed.board.right, 0);
-    expect(observed.grid.left, `the accounts start inside the diagram ${at}`).toBeCloseTo(observed.chronicle.left, 0);
-    expect(observed.grid.right, `the accounts stop short of the diagram ${at}`).toBeCloseTo(observed.chronicle.right, 0);
+    expect(observed.grid.left, `the tome's wall starts inside the diagram ${at}`).toBeCloseTo(observed.chronicle.left, 0);
+    expect(observed.grid.right, `the tome's wall stops short of the diagram ${at}`).toBeCloseTo(observed.chronicle.right, 0);
+    expect(
+      Math.abs(observed.book.left - observed.grid.left - (observed.grid.right - observed.book.right)),
+      `the tome stands ${observed.book.left - observed.grid.left}px from the left and ${observed.grid.right - observed.book.right}px from the right ${at}`
+    ).toBeLessThanOrEqual(1);
     expect(observed.accounts.length, `the diagram drew ${observed.accounts.length} accounts ${at}`).toBeGreaterThan(1);
     expect(observed.rows, `the accounts laid out on ${observed.rows} rows ${at}`).toBe(1);
-    expect(observed.accounts[0].x, `the first account starts inside its row ${at}`).toBeCloseTo(observed.grid.left, 0);
-    expect(observed.accounts.at(-1).right, `the last account stops short of its row ${at}`).toBeCloseTo(observed.grid.right, 0);
+    expect(observed.columns, `the leaves lie in ${observed.columns} places rather than the opening's two ${at}`).toBe(2);
+    const [left, right] = observed.accounts;
+    expect(left.x, `the first leaf starts inside the book's pages ${at}`).toBeCloseTo(observed.leaves.left, 0);
+    expect(right.right, `the second leaf stops short of the book's pages ${at}`).toBeCloseTo(observed.leaves.right, 0);
+    expect(right.x, `the opening's two leaves do not meet at the gutter ${at}`).toBeCloseTo(left.right, 0);
     for (const [index, account] of observed.accounts.entries()) {
       expect(
         account.width,
@@ -2509,10 +2601,10 @@ test('the diagram fills its board, and its accounts share the width in equal tra
   await page.setViewportSize({ width: 390, height: 900 });
   await settled(page);
   const phone = await read();
-  expect(phone.columns, 'the phone accounts are not a single column').toBe(1);
-  expect(phone.rows, 'the phone accounts stacked on top of each other').toBe(phone.accounts.length);
+  expect(phone.columns, 'the phone leaves are not a single page').toBe(1);
+  expect(phone.rows, 'a phone turns one page at a time, and its leaves lie in more than one place').toBe(1);
   for (const account of phone.accounts) {
-    expect(account.width, 'a phone account does not span the diagram').toBeCloseTo(phone.grid.right - phone.grid.left, 0);
+    expect(account.width, 'a phone leaf does not span the book\u2019s page').toBeCloseTo(phone.leaves.right - phone.leaves.left, 0);
   }
   expect(
     phone.scrollWidth,
@@ -2569,8 +2661,20 @@ async function stageChronicleWeek(page, totals = stagedWeek) {
 /* Wait until the diagram has finished arriving: its graph writes itself and
  * its days come in as a wave the first time it is seen, and a box read inside
  * that wave is a box mid-flight. Infinite animations (today's slow glow) never
- * end and move nothing, so only the finite ones are waited for. */
+ * end and move nothing, so only the finite ones are waited for.
+ *
+ * THE ROLL OPENS FIRST (2026-10-20). The diagram is written on a roll that
+ * unrolls from its middle the first time it is seen, and until it has, its
+ * sheet is clipped — and a clip takes the pointer with it, so a day aimed at
+ * near either end of the graph lands on nothing. The roll is seen a frame or
+ * more after it is scrolled to, which is why its own flag is waited for
+ * before the animations are gathered: gathered any earlier, the unroll is
+ * not running yet and there is nothing to wait for. */
 async function diagramAtRest(page) {
+  await expect(page.locator('.chronicle'), 'the roll never opened: the diagram was never seen').toHaveAttribute(
+    'data-shown',
+    'true'
+  );
   await page.evaluate(() => {
     const diagram = window.document.querySelector('.chronicle');
     return Promise.all(
@@ -2723,6 +2827,7 @@ test('the graph scrubs to a day and every figure reads it, moving nothing (owner
     /* ON SCREEN BEFORE ANYTHING IS MEASURED: a pointer is driven in viewport
        coordinates, and the diagram sits below the fold at both widths. */
     await chart.scrollIntoViewIfNeeded();
+    await diagramAtRest(page);
     await pickTokenLayer(page);
     await page.mouse.move(0, 0);
     const last = Number(await chart.getAttribute('aria-valuemax'));
@@ -2789,6 +2894,7 @@ test('the graph walks its days from the keyboard, clamped at both ends, and Esca
   const chart = page.locator('.chronicle-chart');
   const figure = tokenHeadline(page).locator('.chronicle-figure');
   await chart.scrollIntoViewIfNeeded();
+  await diagramAtRest(page);
   const first = Number(await chart.getAttribute('aria-valuemin'));
   const last = Number(await chart.getAttribute('aria-valuemax'));
   expect(last - first, 'the graph opens on a span of no days').toBeGreaterThan(stagedWeek.length);
@@ -2873,6 +2979,7 @@ test('a refresh drops the reading rather than re-pointing it at a different day 
   const chart = page.locator('.chronicle-chart');
   const figure = tokenHeadline(page).locator('.chronicle-figure');
   await chart.scrollIntoViewIfNeeded();
+  await diagramAtRest(page);
   /* The token line is the one the shorter series redraws. */
   await pickTokenLayer(page);
   const rest = (await figure.textContent()).trim();
@@ -2907,6 +3014,7 @@ test('a finger taps a day and the answer stays, without taking the page its scro
   const chart = page.locator('.chronicle-chart');
   const figure = tokenHeadline(page).locator('.chronicle-figure');
   await chart.scrollIntoViewIfNeeded();
+  await diagramAtRest(page);
   const box = await chart.boundingBox();
   const last = Number(await chart.getAttribute('aria-valuemax'));
   /* A TOUCH POINTER IS DESTROYED THE INSTANT IT LIFTS, so an answer cleared on
@@ -3038,6 +3146,7 @@ test('the reading over the cursor stays inside the graph at both ends, under eve
     await page.setViewportSize({ width, height: 900 });
     await settled(page);
     await chart.scrollIntoViewIfNeeded();
+    await diagramAtRest(page);
     const count = await layers.count();
     expect(count, `the diagram offers ${count} layers at ${width}px`).toBeGreaterThan(1);
     for (let index = 0; index < count; index += 1) {
@@ -3642,6 +3751,13 @@ test('the torches burn on both sides of the frame at night and hold still for le
  *   peak), and its peak green is measured as the engine resolved it — on its
  *   fill until 2026-10-19, on the ring it wears since the days became moss on
  *   stone. The token half stays: the mark must still not BE the peak green.
+ *
+ * RE-AIMED 2026-10-20 (the Rotulus; owner: "We don't need to highlight the
+ * highest day like that"). The days are squares inked on the roll's
+ * parchment in five steps, and the busiest day is simply the deepest: it
+ * wears no ring of its own, and its green is the deepest step's ink as the
+ * engine resolved it on the key, so the mark is held apart from THAT, the
+ * busiest green the page actually paints.
  */
 test('the page spends its one mark on its own green, legible as text, in every reading mode (owner 2026-09-11)', async ({
   page,
@@ -3712,106 +3828,44 @@ test('the page spends its one mark on its own green, legible as text, in every r
         ground = `rgb(${r}, ${g}, ${b})`;
       }
       const busiest = [...window.document.querySelectorAll('.chronicle-cell[data-peak="true"]')];
+      const step = (level) => window.document.querySelector(`.chronicle-step[data-grid-level="${level}"]`);
       return {
-        peak: resolve('--grid-cell-peak'),
+        /* The busiest green the page paints: the key's deepest step, and the
+           step under it, as the engine resolved them. */
+        peak: step(4) === null ? null : getComputedStyle(step(4)).backgroundColor,
+        under: step(3) === null ? null : getComputedStyle(step(3)).backgroundColor,
         mark: resolve('--ledger-highlight'),
         page: ground,
         ticker: figure === null ? null : getComputedStyle(figure).color,
         busiest: busiest.map((cell) => ({
+          level: cell.dataset.gridLevel,
           fill: getComputedStyle(cell).fill,
           stroke: getComputedStyle(cell).stroke,
-          /* Today's and the picked day's own rings are drawn over the peak's,
-             in the ledger's ink, so only a busiest day that is neither is
-             ringed in the peak. */
-          ringed: cell.dataset.today !== 'true' && cell.dataset.picked !== 'true',
+          /* Today's and the picked day's own rings are drawn in the ledger's
+             ink, so only a busiest day that is neither can show whether the
+             busiest day is ringed for being the busiest. */
+          plain: cell.dataset.today !== 'true' && cell.dataset.picked !== 'true',
         })),
       };
     });
     expect(observed.peak, `${mode}: the peak token resolves to nothing`).toMatch(/rgb/);
     expect(observed.busiest.length, `${mode}: the calendar marks no busiest day`).toBeGreaterThan(0);
-    /* THE BUSIEST DAY IS THE MOSSIEST STONE, RINGED IN THE PEAK GREEN (owner,
-       2026-10-19: the calendar's days became moss on stone). The stones are
-       the same pictures in both scenes, so the peak green this lane used to
-       read off the fill is read off the ring the busiest day wears instead.
-       The stones themselves are painted on one canvas under the cells (the
-       same day: WebKit without a GPU stalled rasterising them inside the
-       SVG), so the stone under the busiest day is read off that canvas once
-       it has arrived: the mean colour of its square must lie nearest the
-       mossiest of the five stone drawings, each read from the key's own
-       step, so a bare or half-mossed stone there fails. */
-    await page.locator('.chronicle-calendar').first().scrollIntoViewIfNeeded();
-    await expect
-      .poll(
-        () =>
-          page.evaluate(async () => {
-            const canvas = window.document.querySelector('.chronicle-stones');
-            const cell = window.document.querySelector('.chronicle-cell[data-peak="true"]');
-            if (canvas === null || cell === null || canvas.width === 0) {
-              return 'no stones canvas or no busiest day';
-            }
-            const mean = (data) => {
-              const sum = [0, 0, 0];
-              let count = 0;
-              for (let at = 0; at < data.length; at += 4) {
-                if (data[at + 3] > 200) {
-                  sum[0] += data[at];
-                  sum[1] += data[at + 1];
-                  sum[2] += data[at + 2];
-                  count += 1;
-                }
-              }
-              return count === 0 ? null : sum.map((channel) => channel / count);
-            };
-            const box = canvas.getBoundingClientRect();
-            const ratio = canvas.width / box.width;
-            const square = cell.getBoundingClientRect();
-            const laid = mean(
-              canvas
-                .getContext('2d')
-                .getImageData(
-                  Math.round((square.left - box.left) * ratio),
-                  Math.round((square.top - box.top) * ratio),
-                  Math.max(1, Math.round(square.width * ratio)),
-                  Math.max(1, Math.round(square.height * ratio))
-                ).data
-            );
-            if (laid === null) {
-              return 'no stone under the busiest day yet';
-            }
-            const drawings = await Promise.all(
-              [0, 1, 2, 3, 4].map(async (level) => {
-                const step = window.document.querySelector(`.chronicle-step[data-grid-level="${level}"]`);
-                const url = /url\("?([^")]+)"?\)/.exec(step === null ? '' : getComputedStyle(step).backgroundImage)?.[1];
-                if (url === undefined) {
-                  return null;
-                }
-                const image = new Image();
-                image.src = url;
-                await image.decode();
-                const art = window.document.createElement('canvas');
-                art.width = image.naturalWidth;
-                art.height = image.naturalHeight;
-                const context = art.getContext('2d');
-                context.drawImage(image, 0, 0);
-                return mean(context.getImageData(0, 0, art.width, art.height).data);
-              })
-            );
-            if (drawings.some((drawing) => drawing === null)) {
-              return 'the key does not draw all five stones';
-            }
-            const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-            const nearest = drawings.reduce((best, drawing, level) => (distance(laid, drawing) < distance(laid, drawings[best]) ? level : best), 0);
-            return `level ${nearest}`;
-          }),
-        { message: `${mode}: the stone under the busiest day is not the mossiest stone`, timeout: 8000 }
-      )
-      .toBe('level 4');
-    const ringed = observed.busiest.filter((day) => day.ringed);
-    expect(ringed.length, `${mode}: every busiest day is also today or picked, so no peak ring can be read`).toBeGreaterThan(0);
-    for (const day of ringed) {
-      expect(day.stroke, `${mode}: the busiest day is ringed ${day.stroke}, not in the calendar's peak green`).toBe(
+    /* THE BUSIEST DAY IS THE DEEPEST INK, AND NOTHING MORE (owner,
+       2026-10-20). Its square is the fifth step, inked exactly as the key
+       inks that step — a step the key draws apart from the one under it —
+       and a busiest day that is neither today nor picked wears no ring. */
+    expect(observed.under, `${mode}: the key draws no fourth step`).toMatch(/rgb/);
+    expect(observed.peak, `${mode}: the deepest step is inked as the one under it`).not.toBe(observed.under);
+    for (const day of observed.busiest) {
+      expect(day.level, `${mode}: the busiest day is not the deepest step`).toBe('4');
+      expect(day.fill, `${mode}: the busiest day is inked ${day.fill}, not the key's deepest ${observed.peak}`).toBe(
         observed.peak
       );
+    }
+    const plain = observed.busiest.filter((day) => day.plain);
+    expect(plain.length, `${mode}: every busiest day is also today or picked, so whether it is ringed cannot be read`).toBeGreaterThan(0);
+    for (const day of plain) {
+      expect(day.stroke, `${mode}: the busiest day is ringed ${day.stroke} for being the busiest`).toBe('none');
     }
     expect(observed.mark, `${mode}: the mark resolves to nothing`).toMatch(/rgb/);
     expect(observed.page, `${mode}: the ticker printed no peak figure to measure`).not.toBeNull();
@@ -3837,18 +3891,21 @@ test('the page spends its one mark on its own green, legible as text, in every r
   }
 });
 
-/* AN ACCOUNT IS NOT A CONTROL, AND CLICKING ONE CHANGES NOTHING (owner
- * directive, 2026-09-11, issue 316: "these shouldn't change colour when I click
- * on them"; re-aimed 2026-10-16 when the board's cards became the diagram's
- * accounts).
+/* CLICKING AN ACCOUNT REPAINTS NOTHING (owner directive, 2026-09-11, issue
+ * 316: "these shouldn't change colour when I click on them"; re-aimed
+ * 2026-10-16 when the board's cards became the diagram's accounts, and
+ * 2026-10-20 when the accounts became the leaves of the chained tome).
  *
- * The same measurement with the same expectation, on the surface that took the
- * cards' place: an account is pressed exactly as a card used to be, and every
- * paint the press could change is read before and after and must be IDENTICAL —
- * the account's and the board's. And every account wears the same paint (owner
- * directive, 2026-09-12, issue 323: "everything should follow the same
+ * A press on the tome now turns its leaf (owner, 2026-10-20: no "turn the
+ * leaf" button — the tome itself turns), so the press is no longer a press
+ * that does nothing, and this lane proves it reached the tome: the leaf it
+ * landed on closes. What the directive forbade is unchanged and measured the
+ * same way: every paint the press could change is read before and after and
+ * must be IDENTICAL — the account's and the board's — and an account offers
+ * no control's cursor or pressed state. And every account wears the same paint
+ * (owner directive, 2026-09-12, issue 323: "everything should follow the same
  * pattern"), read in both motion preferences. */
-test('an account never repaints when it is clicked, and every account wears one paint (owner 2026-09-11 issue 316, 2026-09-12 issue 323; 2026-10-16)', async ({
+test('an account never repaints when it is clicked, and every account wears one paint (owner 2026-09-11 issue 316, 2026-09-12 issue 323; 2026-10-16; 2026-10-20)', async ({
   browser,
 }) => {
   for (const motion of ['no-preference', 'reduce']) {
@@ -3879,8 +3936,13 @@ test('an account never repaints when it is clicked, and every account wears one 
     /* THE PRESS, and the paint that must not move. The pointer is taken off
        the account before the second read, so a hover paint left behind cannot
        read as the press having changed something. */
+    await expect(account, 'the first account is not the leaf the tome opens on').toHaveAttribute('data-open', 'true');
     await account.locator('.chronicle-account-name').click();
     await page.mouse.move(0, 0);
+    await expect(account, `the press did not reach the tome with motion ${motion}; nothing below proves a press repaints nothing`).toHaveAttribute(
+      'data-open',
+      'false'
+    );
     const after = await read(account);
     expect(after.background, `clicking an account repainted it with motion ${motion}`).toBe(before.background);
     expect(after.ink, `clicking an account repainted its ink with motion ${motion}`).toBe(before.ink);
@@ -3889,6 +3951,81 @@ test('an account never repaints when it is clicked, and every account wears one 
       const paint = await read(accounts.nth(index));
       expect(paint.background, `account ${index} wears a different paint with motion ${motion}`).toBe(before.background);
       expect(paint.ink, `account ${index} wears a different ink with motion ${motion}`).toBe(before.ink);
+    }
+    await context.close();
+  }
+});
+
+/* THE TOME TURNS ITS LEAF, SAYS WHERE IT IS, AND MOVES NOTHING (owner,
+ * 2026-10-20: T3, the chained tome on its corbel; "do not have a button that
+ * says turn the new leaf").
+ *
+ * A press anywhere on the tome turns its leaf, and Enter on its lifted corner
+ * — the keyboard's one way in — turns it the same; each turn says the opening
+ * it arrives at in a polite live region, so a reader who cannot see the leaf
+ * still learns where they are. Every leaf of a side lies in that side's one
+ * place, so the tome and the page under it are the same box before a turn,
+ * in the middle of one and after it, at a desk width and a phone width; and
+ * under reduced motion the leaf changes with no leaf in the air at all. */
+test('the tome turns its leaf on a press and on its corner, says the new opening, and moves nothing (owner 2026-10-20)', async ({
+  browser,
+}) => {
+  for (const motion of ['no-preference', 'reduce']) {
+    const context = await browser.newContext({ reducedMotion: motion });
+    const page = await context.newPage();
+    await visit(page);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await settled(page);
+      const at = `at ${width}px with motion ${motion}`;
+      const tome = page.locator('.tome');
+      await tome.scrollIntoViewIfNeeded();
+      const frame = () =>
+        page.evaluate(() => {
+          const round = (value) => Math.round(value * 100) / 100;
+          const box = (node) => {
+            const rect = node.getBoundingClientRect();
+            return [round(rect.x), round(rect.y + window.scrollY), round(rect.width), round(rect.height)];
+          };
+          return {
+            tome: box(window.document.querySelector('.tome')),
+            pages: box(window.document.querySelector('.tome-pages')),
+            height: window.document.documentElement.scrollHeight,
+            scrollWidth: window.document.documentElement.scrollWidth,
+            clientWidth: window.document.documentElement.clientWidth,
+          };
+        });
+      const open = () =>
+        page.locator('.tome-page[data-open="true"]').evaluateAll((leaves) => leaves.map((leaf) => leaf.dataset.leaf));
+      const before = await frame();
+      const first = await open();
+      expect(first.length, `the tome opens on no leaf ${at}`).toBeGreaterThan(0);
+      expect(before.scrollWidth, `the tome takes the document sideways ${at}`).toBeLessThanOrEqual(before.clientWidth + 1);
+
+      // A press on the leaf itself.
+      await page.locator('.tome-page[data-open="true"]').first().click({ position: { x: 24, y: 24 } });
+      if (motion === 'no-preference') {
+        await expect(page.locator('.tome-leaves .tome-leaf'), `a press lifted no leaf ${at}`).toHaveCount(1);
+        expect(await frame(), `a leaf in the air moved the tome ${at}`).toEqual(before);
+      } else {
+        expect(await page.locator('.tome-leaves .tome-leaf').count(), `a leaf is in the air for a reader who asked for less motion ${at}`).toBe(0);
+      }
+      await expect(page.locator('.tome-leaves .tome-leaf'), `the leaf never landed ${at}`).toHaveCount(0, { timeout: 5000 });
+      const second = await open();
+      expect(second, `a press did not turn the leaf ${at}`).not.toEqual(first);
+      await expect(page.locator('.tome-said'), `the turn said nothing ${at}`).toHaveText(/the (?:totals|models)/);
+      expect(await frame(), `a turn moved the tome or the page ${at}`).toEqual(before);
+
+      // Enter on the corner, until the tome is back where it opened.
+      const corner = page.locator('.tome-corner');
+      for (let turns = 0; turns < 8 && JSON.stringify(await open()) !== JSON.stringify(first); turns += 1) {
+        await expect(corner, `the corner did not come back after a turn ${at}`).toHaveAttribute('data-away', 'false', { timeout: 5000 });
+        await corner.focus();
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.tome-leaves .tome-leaf'), `the leaf never landed ${at}`).toHaveCount(0, { timeout: 5000 });
+      }
+      expect(await open(), `Enter on the corner never brought the tome back to its first opening ${at}`).toEqual(first);
+      expect(await frame(), `turning back moved the tome or the page ${at}`).toEqual(before);
     }
     await context.close();
   }
@@ -4034,8 +4171,11 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
      graph's accessible value once that layer is picked, and the head of its
      account. (The key beside the graph that named each line was the third
      surface until the legend was removed the same day — the graph draws one
-     layer at a time and the layer switch names it.) A string that became
-     markup in any of them is caught. */
+     layer at a time and the layer switch names it.) Since the accounts became
+     the chained tome (owner, 2026-10-20) the head is two: the account's totals
+     leaf and its models leaf, each titled with an illuminated initial — the
+     label's first letter in a span of the component's own, the rest in
+     another. A string that became markup in any of them is caught. */
   const hostileLayer = page.locator('.chronicle-layers button', { hasText: 'onerror' });
   await expect(hostileLayer, 'the hostile source was offered no layer').toHaveCount(1);
   await hostileLayer.click();
@@ -4045,7 +4185,11 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
       const read = (selector) =>
         [...diagram.querySelectorAll(selector)].map((node) => ({ text: node.textContent, children: node.children.length }));
       const layers = read('.chronicle-layers button');
-      const heads = read('.chronicle-account-name');
+      const heads = [...diagram.querySelectorAll('.tome-title')].map((node) => ({
+        text: node.textContent,
+        parts: [...node.children].map((child) => child.classList[0]),
+        children: [...node.children].reduce((count, child) => count + child.children.length, 0),
+      }));
       const value = diagram.querySelector('.chronicle-chart')?.getAttribute('aria-valuetext') ?? '';
       return {
         pwned: window.__pwned === undefined ? 'clean' : 'executed',
@@ -4056,6 +4200,7 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
           layer: layers.some((node) => node.text === label),
           value: value.endsWith(`: ${label}`),
           head: heads.some((node) => node.text === label),
+          models: heads.some((node) => node.text === `Models of ${label}`),
         },
         /* THE ACCOUNT IS NOT A RENDERED SURFACE. It is still admitted into the
            model (lib/token-usage.ts) and no component draws it, so the honest
@@ -4074,12 +4219,18 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
   expect(observed.matches.layer, 'the hostile label did not reach its layer button as its own literal text').toBe(true);
   expect(observed.matches.value, 'the hostile label did not reach the graph’s accessible value as its own literal text').toBe(true);
   expect(observed.matches.head, 'the hostile label did not reach its account as its own literal text').toBe(true);
+  expect(observed.matches.models, 'the hostile label did not reach its models leaf as its own literal text').toBe(true);
   expect(
     observed.accountAnywhere,
     'the account reached the document; no component draws it, so a string that arrives there is a surface nobody reviewed'
   ).toBe(false);
   for (const node of [...observed.layers, ...observed.heads]) {
     expect(node.children, 'a source name grew element children from its payload string').toBe(0);
+  }
+  /* A head's own elements are the component's two, never one the label
+     brought: its initial and the rest of the name. */
+  for (const head of observed.heads) {
+    expect(head.parts, `the head "${head.text}" is drawn from elements the component never wrote`).toEqual(['tome-initial', 'tome-rest']);
   }
   expect(observed.measured, 'the staged payload drew no calendar; this half proved nothing').toBeGreaterThan(0);
 
@@ -4422,17 +4573,20 @@ test('the boss strip keeps the payload’s order, reads 15% larger, and parts it
   }
 });
 
-/* THE TRACKERS' FIGURES SIT ABOVE A FULL-WIDTH GRAPH AND CALENDAR (owner,
- * 2026-10-19: "large awkward gap in between here, either expand the heatmap or
- * find a way to present the information in a better way"). At every width the
- * figures are one row, wholly above the graph, and the graph and the calendar
- * under it take the diagram's whole column: their boxes start at its start
- * and are its width, and the calendar's DRAWING does too — its first and last
- * days sit within their own half-gap of the column's two edges, at the scale
- * the engine drew them, so no empty band opens beside the stones however the
- * figures are set. Measured at the owner's 1100px, at a monitor, at the page's
+/* THE TRACKERS' FIGURES OPEN THE ROLL, AND THE WRITING FILLS THE REST OF IT
+ * (owner, 2026-10-19: "large awkward gap in between here, either expand the
+ * heatmap or find a way to present the information in a better way"; the
+ * Rotulus, picked 2026-10-20). The figures are the roll's incipit: on a desk
+ * they stand in one column at the start of the parchment, wholly beside the
+ * graph, and on a phone they stand above it. Whichever, the graph and the
+ * calendar under it run to the end of the parchment's writing — on a phone
+ * from its start as well — and the calendar's DRAWING does too: its first and
+ * last days sit within their own half-gap of its box's two edges, at the scale
+ * the engine drew them, so no empty band opens beside the days however the
+ * figures are set. The writing is the sheet's content box, read off its own
+ * padding. Measured at the owner's 1100px, at a monitor, at the page's
  * breakpoint and at two phones. */
-test('the trackers set their figures in one row above a graph and calendar that take the whole column, at every width (owner 2026-10-19)', async ({
+test('the trackers open their roll with the figures and fill the rest of it with the graph and calendar, at every width (owner 2026-10-19; 2026-10-20)', async ({
   page,
 }) => {
   await visit(page);
@@ -4444,7 +4598,9 @@ test('the trackers set their figures in one row above a graph and calendar that 
         const rect = node.getBoundingClientRect();
         return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width };
       };
-      const column = window.document.querySelector('.chronicle');
+      const sheet = window.document.querySelector('.chronicle-sheet');
+      const style = getComputedStyle(sheet);
+      const sheetBox = box(sheet);
       const calendar = window.document.querySelector('.chronicle-calendar');
       const drawing = calendar.querySelector('svg');
       const view = drawing.viewBox.baseVal;
@@ -4455,7 +4611,10 @@ test('the trackers set their figures in one row above a graph and calendar that 
       }));
       const drawn = drawing.getBoundingClientRect();
       return {
-        column: box(column),
+        writing: {
+          left: sheetBox.left + Number.parseFloat(style.paddingLeft),
+          right: sheetBox.right - Number.parseFloat(style.paddingRight),
+        },
         headlines: [...window.document.querySelectorAll('.chronicle-headline')].map(box),
         chart: box(window.document.querySelector('.chronicle-chart')),
         calendar: box(calendar),
@@ -4468,27 +4627,41 @@ test('the trackers set their figures in one row above a graph and calendar that 
       };
     });
     const at = `at ${width}px`;
-    expect(observed.headlines.length, `the diagram sets fewer than two figures ${at}`).toBeGreaterThan(1);
+    const phone = width < 768;
+    const { writing, headlines, chart, calendar } = observed;
+    expect(headlines.length, `the roll opens on fewer than two figures ${at}`).toBeGreaterThan(1);
     expect(observed.cells, `the calendar draws no days ${at}`).toBeGreaterThan(0);
-    for (const headline of observed.headlines) {
-      expect(Math.abs(headline.top - observed.headlines[0].top), `the figures are not one row ${at}`).toBeLessThanOrEqual(1);
-      expect(headline.bottom, `a figure reaches below the graph's top ${at}`).toBeLessThanOrEqual(observed.chart.top + subPixel);
+    /* The figures: one column from the writing's start, each under the last. */
+    for (const [index, headline] of headlines.entries()) {
+      expect(Math.abs(headline.left - writing.left), `figure ${index} starts ${(headline.left - writing.left).toFixed(1)}px into the writing ${at}`).toBeLessThanOrEqual(1);
+      if (index > 0) {
+        expect(headline.top, `figure ${index} is not under the one before it ${at}`).toBeGreaterThanOrEqual(headlines[index - 1].bottom - subPixel);
+      }
+      if (phone) {
+        expect(headline.bottom, `a figure reaches below the graph's top ${at}`).toBeLessThanOrEqual(chart.top + subPixel);
+      } else {
+        expect(headline.right, `a figure reaches into the graph ${at}`).toBeLessThanOrEqual(chart.left + subPixel);
+      }
     }
+    /* The graph and the calendar: one column, to the writing's end. */
     for (const [name, part] of [
-      ['graph', observed.chart],
-      ['calendar', observed.calendar],
+      ['graph', chart],
+      ['calendar', calendar],
     ]) {
-      expect(Math.abs(part.left - observed.column.left), `the ${name} starts ${(part.left - observed.column.left).toFixed(1)}px into the column ${at}`).toBeLessThanOrEqual(1);
-      expect(Math.abs(part.width - observed.column.width), `the ${name} is ${part.width.toFixed(1)}px of a ${observed.column.width.toFixed(1)}px column ${at}`).toBeLessThanOrEqual(1);
+      expect(Math.abs(part.right - writing.right), `the ${name} ends ${(writing.right - part.right).toFixed(1)}px short of the writing ${at}`).toBeLessThanOrEqual(1);
+      if (phone) {
+        expect(Math.abs(part.left - writing.left), `the ${name} starts ${(part.left - writing.left).toFixed(1)}px into the writing ${at}`).toBeLessThanOrEqual(1);
+      }
     }
-    expect(observed.calendar.top, `the calendar is not under the graph ${at}`).toBeGreaterThanOrEqual(observed.chart.bottom - subPixel);
+    expect(Math.abs(calendar.left - chart.left), `the calendar and the graph start apart ${at}`).toBeLessThanOrEqual(1);
+    expect(calendar.top, `the calendar is not under the graph ${at}`).toBeGreaterThanOrEqual(chart.bottom - subPixel);
     expect(
-      observed.firstDay - observed.column.left,
-      `the calendar's first day starts ${(observed.firstDay - observed.column.left).toFixed(1)}px into the column ${at}: an empty band`
+      observed.firstDay - calendar.left,
+      `the calendar's first day starts ${(observed.firstDay - calendar.left).toFixed(1)}px into its box ${at}: an empty band`
     ).toBeLessThanOrEqual(observed.halfGap + 1);
     expect(
-      observed.column.right - observed.lastDay,
-      `the calendar's last day ends ${(observed.column.right - observed.lastDay).toFixed(1)}px short of the column's end ${at}: an empty band`
+      calendar.right - observed.lastDay,
+      `the calendar's last day ends ${(calendar.right - observed.lastDay).toFixed(1)}px short of its box ${at}: an empty band`
     ).toBeLessThanOrEqual(observed.halfGap + 1);
   }
 });
@@ -7518,7 +7691,10 @@ test('a panel head with no title keeps the reserved row, and no head draws a fre
 /* THE PHONE CHROME AND THE MASTHEAD (owner directives, 2026-09-04, issue 294),
  * measured in every project so the phone viewports prove the same things the
  * desktop one does:
- *  - the name breaks after its first word at every width — two line boxes;
+ *  - the name breaks after its first word at every width — two lines, counted
+ *    as the distinct rows its text is drawn on (each word is its own line
+ *    since 2026-10-20, when J became the dot of its j, so the heading's first
+ *    text is one word and no longer the whole name);
  *  - (the chrome row's one rule and its reserve were measured here until the
  *    row was removed — owner direction, 2026-10-16: "do away with it for
  *    now"; and the rule drawn under the name, until THE KEEP set the name as
@@ -7535,14 +7711,28 @@ test('a panel head with no title keeps the reserved row, and no head draws a fre
 test('the name is two lines, the calendar opens on the contributions layer, and the toolbars wear the sheet (issue 294; 2026-10-16)', async ({
   page,
 }) => {
+  /* The rows the name's own text is drawn on, J's picture aside. */
+  await page.addInitScript(() => {
+    window.nameRows = () => {
+      const heading = window.document.querySelector('h1');
+      const rows = new Set();
+      const walker = window.document.createTreeWalker(heading, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+        if (node.parentElement?.closest('.page-j') !== null) continue;
+        const range = window.document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width > 0) rows.add(Math.round(rect.top));
+        }
+      }
+      return rows.size;
+    };
+  });
   await visit(page);
   await expect(page.locator('.chronicle-layers button').first()).toBeAttached();
   const observed = await page.evaluate(async () => {
     const heading = window.document.querySelector('h1');
-    const text = heading.firstChild;
-    const range = window.document.createRange();
-    range.selectNodeContents(text);
-    const lines = [...range.getClientRects()].filter((rect) => rect.width > 0).length;
+    const lines = window.nameRows();
     const main = window.document.querySelector('main').getBoundingClientRect();
     const diagram = window.document.querySelector('.chronicle').closest('.panel-shell');
     const layers = [...diagram.querySelectorAll('.chronicle-layers button')].map((node) => ({
@@ -7584,11 +7774,7 @@ test('the name is two lines, the calendar opens on the contributions layer, and 
   const before = page.viewportSize();
   const linesAt = async (width, height) => {
     await page.setViewportSize({ width, height });
-    return page.evaluate(() => {
-      const range = window.document.createRange();
-      range.selectNodeContents(window.document.querySelector('h1').firstChild);
-      return [...range.getClientRects()].filter((rect) => rect.width > 0).length;
-    });
+    return page.evaluate(() => window.nameRows());
   };
   expect(await linesAt(1920, 1080), 'on a wide monitor the name runs on one line').toBe(2);
   expect(await linesAt(390, 844), 'on a phone the name is not two lines').toBe(2);
@@ -7778,6 +7964,7 @@ test('a day the reader points at is named in words, never as a raw ISO date (iss
   test.skip(!(await followsPointer(page)), 'no fine pointer here; the tap lanes name a day for a finger');
   const chart = page.locator('.chronicle-chart');
   await chart.scrollIntoViewIfNeeded();
+  await diagramAtRest(page);
   /* A headline that reads days: the token one (the pull requests have no
      daily record, so their caption stays whole while a day is read). */
   const caption = tokenHeadline(page).locator('.chronicle-caption');
@@ -8519,8 +8706,14 @@ test('keyboard focus opens the detail', async ({ page }) => {
  * display control cannot come back wearing a button — and every source the
  * payload reports with a daily series is offered its layer and draws its line,
  * on the same calendar. A page that had simply lost its graphs would satisfy
- * the first half perfectly, which is why the second half is here. */
-test('the diagram offers its layers and no other control, and every reported source draws its line and layer (owner 2026-08-28; 2026-10-16)', async ({
+ * the first half perfectly, which is why the second half is here.
+ *
+ * The chained tome under the diagram (owner, 2026-10-20) turns its leaf on a
+ * press anywhere on it, with no "turn the leaf" button; its lifted corner is
+ * the keyboard's one way to the same turn, so it is the one other control the
+ * diagram may hold — exactly one, named for the leaf it turns to — and every
+ * other button is still a stray. */
+test('the diagram offers its layers, the tome its corner, and no other control, and every reported source draws its line and layer (owner 2026-08-28; 2026-10-16; 2026-10-20)', async ({
   page,
 }) => {
   await visit(page);
@@ -8536,8 +8729,13 @@ test('the diagram offers its layers and no other control, and every reported sou
       named: (group.getAttribute('aria-label') ?? '').trim() !== '',
     })),
     stray: [...node.querySelectorAll('button, [role="button"]')]
-      .filter((button) => button.closest('.chronicle-layers') === null)
+      .filter((button) => button.closest('.chronicle-layers') === null && !button.matches('.tome .tome-corner'))
       .map((button) => (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()),
+    corners: [...node.querySelectorAll('.tome .tome-corner')].map((corner) => ({
+      role: corner.getAttribute('role'),
+      focusable: corner.tabIndex === 0,
+      name: (corner.getAttribute('aria-label') ?? '').trim(),
+    })),
     unpressable: [...node.querySelectorAll('.chronicle-layers button')].filter(
       (button) => !['true', 'false'].includes(button.getAttribute('aria-pressed'))
     ).length,
@@ -8558,6 +8756,10 @@ test('the diagram offers its layers and no other control, and every reported sou
   expect(controls.radios, 'a radio is back on the diagram').toBe(0);
   expect(controls.menus, 'a menu is back on the diagram').toBe(0);
   expect(controls.stray, `the diagram holds a button outside its layer switch: ${controls.stray.join(', ')}`).toEqual([]);
+  expect(controls.corners, 'the tome does not offer exactly one corner to turn its leaf').toHaveLength(1);
+  expect(controls.corners[0].role, 'the tome\u2019s corner is not a control').toBe('button');
+  expect(controls.corners[0].focusable, 'the keyboard cannot reach the tome\u2019s corner').toBe(true);
+  expect(controls.corners[0].name, 'the tome\u2019s corner does not say which leaf it turns to').toMatch(/^The next leaf: \S/);
   expect(controls.groups, 'the diagram does not offer exactly its one named control group').toEqual([
     { sanctioned: true, named: true },
   ]);
@@ -10163,6 +10365,7 @@ test('the diagram answers a tap with a real reading on both of its surfaces, on 
   await visit(page);
   const chart = page.locator('.chronicle-chart');
   await chart.scrollIntoViewIfNeeded();
+  await diagramAtRest(page);
   const reading = () =>
     page.evaluate(() => {
       const chart = window.document.querySelector('.chronicle-chart');

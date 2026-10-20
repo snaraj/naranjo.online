@@ -33,7 +33,6 @@ import {
   formatStatValue,
   knownSourceKeys,
   maxDrawnModels,
-  sourceClassFactCount,
   sourceName,
   tokenBoardProps,
   tokenUsageSources
@@ -49,34 +48,35 @@ export const pullsLabel = 'Pull Requests Closed';
 export const commitsLabel = 'Commits Pushed';
 export const tokensLabel = 'Total Tokens Used';
 
-/* The records each account prints after its accounting, in this order, so the
- * two accounts read row for row (owner, 2026-10-16: "they must be aligned"). */
-/* The classes a lifetime is itemised into, and the row that says how much of
- * the lifetime they cover. One source's split covers its whole lifetime; the
- * other's covers only the days its local record splits, because earlier days
- * survive as totals only (docs/usage-export.md). Printing the split beside the
- * lifetime without saying so would imply it adds up, so EVERY account prints
- * the same row: "90.9B of 90.9B", "28.6B of 62.9B". */
-const splitClasses: readonly string[] = ['input', 'output', 'cache-read', 'cache-write', 'reasoning'];
-export const itemisedTerm = 'itemised';
+/* AN ACCOUNT IS A LEAF OF THE CHAINED TOME (owner, 2026-10-20, picking T3 of
+ * the tome's five settings, after "remove 'itemised' insted just put cache
+ * write and cache read"). It opens on its lifetime, in all, and then reads the
+ * same rows in the same order as every other account (owner, 2026-10-16:
+ * "they must be aligned"): its cache, read and written; the two windows every
+ * source reports; and its records. The input and output totals and the row
+ * that said how much of the lifetime they itemised are not printed — what
+ * each model took in and gave out reads on the tome's second leaf, model by
+ * model, and two cache rows beside a lifetime claim no split of it. */
+const tomeClasses: readonly string[] = ['cache-read', 'cache-write'];
 
+/* The streak reads as one row, the current run and the longest beside it. */
+export const streakTerm = 'streak';
 const accountRecords: readonly { key: string; term: string }[] = [
   { key: 'sessions', term: 'sessions' },
-  { key: 'current-streak', term: 'streak' },
-  { key: 'longest-streak', term: 'longest streak' },
+  { key: 'current-streak', term: streakTerm },
   { key: 'longest-session', term: 'longest session' }
 ];
 
 /* THE ROOM AN ACCOUNT HOLDS (AGENTS.md "Zero CLS": space for late content is
  * reserved up front; browser lanes, 2026-10-16: the trackers' board was 157px
  * while its data was in flight and 952px once it landed). An account's rows
- * are its accounting classes, the two usage windows every source reports
- * (today and this week), the itemised row and its four records — and the
- * board's five model rows. It holds that much room whether the payload has
- * arrived or not, and whether or not it filled every row; a payload carrying
- * more rows grows it rather than being cut. */
+ * are its two cache classes, the two usage windows every source reports
+ * (today and this week) and its three records — and the board's five model
+ * rows. It holds that much room whether the payload has arrived or not, and
+ * whether or not it filled every row; a payload carrying more rows grows it
+ * rather than being cut. */
 const reportedWindows = 2;
-export const accountFactSlots = sourceClassFactCount + reportedWindows + 1 + accountRecords.length;
+export const accountFactSlots = tomeClasses.length + reportedWindows + accountRecords.length;
 export const accountModelSlots = maxDrawnModels;
 
 export const chronicleEmptyNote = 'no tracker data captured yet';
@@ -301,7 +301,7 @@ export function chronicleProps(
      names holds its account's room, empty: it is coming, so its box is
      reserved rather than grown into when it lands. */
   const pendingAccounts: ChronicleAccount[] =
-    usageEnvelope === null ? knownSourceKeys.map((key) => ({ key, label: '', facts: [], lines: [], models: [] })) : [];
+    usageEnvelope === null ? knownSourceKeys.map((key) => ({ key, label: '', total: '', facts: [], lines: [], models: [] })) : [];
   const accountLabels = tokenSets.map(sourceLabelOf);
   for (const source of sources) {
     if (!accountLabels.includes(source.label)) {
@@ -318,26 +318,35 @@ export function chronicleProps(
         const stat = source?.stats?.find((candidate) => candidate.key === key);
         return stat === undefined || stat.value === null ? undefined : stat.value;
       };
-      const lifetime = statValue('lifetime');
-      const split = splitClasses.map(statValue).filter((value): value is number => value !== undefined);
-      if (lifetime !== undefined && split.length > 0) {
-        const itemised = Math.min(lifetime, split.reduce((sum, value) => sum + value, 0));
-        records.push({
-          key: `${label}-itemised`,
-          term: itemisedTerm,
-          value: `${formatMagnitude(itemised)} of ${formatMagnitude(lifetime)}`
-        });
-      }
+      const lifetime = source?.stats?.find((candidate) => candidate.key === 'lifetime');
       for (const record of accountRecords) {
         const stat = source?.stats?.find((candidate) => candidate.key === record.key);
-        if (stat !== undefined && stat.value !== null) {
-          records.push({ key: `${label}-${record.key}`, term: record.term, value: formatStatValue(stat.value, stat.unit) });
+        const current = stat === undefined || stat.value === null ? undefined : formatStatValue(stat.value, stat.unit);
+        if (record.term !== streakTerm) {
+          if (current !== undefined) {
+            records.push({ key: `${label}-${record.key}`, term: record.term, value: current });
+          }
+          continue;
+        }
+        const longest = statValue('longest-streak');
+        const value =
+          current === undefined
+            ? longest === undefined
+              ? undefined
+              : `longest ${formatWhole(longest)}`
+            : longest === undefined
+              ? current
+              : `${current}, longest ${formatWhole(longest)}`;
+        if (value !== undefined) {
+          records.push({ key: `${label}-${record.key}`, term: record.term, value });
         }
       }
+      const accounting = (card?.facts ?? []).filter((fact) => tomeClasses.includes(fact.key) || fact.key.startsWith('window-'));
       return {
         key: label,
         label: card?.label ?? sourceName(label),
-        facts: [...(card?.facts ?? []), ...records],
+        total: lifetime === undefined || lifetime.value === null ? noReading : formatStatValue(lifetime.value, lifetime.unit),
+        facts: [...accounting, ...records],
         lines: card?.sub ?? [],
         models: models?.models ?? []
       };
