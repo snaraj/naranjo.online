@@ -32,6 +32,22 @@ const sourceVocabulary = JSON.parse(
 const sourceName = (key) =>
   sourceVocabulary.sources.find((entry) => entry.key === key)?.name ?? key;
 
+/* The longest the sky and the fire wait between drawings (lib/sky.ts, pace):
+   where a frame is dear, as in WebKit without a GPU, each draws once every
+   ten times what its last drawing cost the page, down to this floor. A lane
+   that waits for them to move waits the floor and a drawing more, read from
+   the rule rather than typed here, so the window follows the rule; a loop
+   that never moves still fails. */
+const loopFloor = Number(
+  /export const skySlowestInterval = ([\d_]+);/
+    .exec(readFileSync(new URL('../src/lib/sky.ts', import.meta.url), 'utf8'))?.[1]
+    ?.replaceAll('_', '')
+);
+if (!(loopFloor > 0)) {
+  throw new Error('lib/sky.ts states no skySlowestInterval this spec can read');
+}
+const motionWindow = loopFloor + 5_000;
+
 /* The model group a served source belongs to (issue #369). A source may carry
    only its own vendor's models plus the residual, so a lane that stages model
    rows on a source takes them from that source's group, resolved through the
@@ -3280,6 +3296,8 @@ test('every layer button clears the touch floor at 320, 390 and 1440 (owner 2026
 test('the night sky is fixed behind the sheet, takes no room or pointer, and holds still for a reader who asked for less motion (owner 2026-10-16)', async ({
   page,
 }) => {
+  /* Room for one wait of the sky's pace on top of the lane's own budget. */
+  test.setTimeout(test.info().timeout + motionWindow);
   /* THE NIGHT, which is every visit's arrival (owner, 2026-10-19: "always set
      it to night by default"), and the only sky with stars to move — so the
      motion half below is about a sky that would otherwise move. The scene
@@ -3382,7 +3400,7 @@ test('the night sky is fixed behind the sheet, takes no room or pointer, and hol
       await expect
         .poll(async () => (await sample()).hash, {
           message: 'the sky never moved with motion welcome; the still half proves nothing',
-          timeout: 4_000,
+          timeout: motionWindow,
         })
         .not.toBe(first.hash);
     }
@@ -3450,6 +3468,10 @@ test('the sky ignores the reader’s hour and opens on the night (owner 2026-10-
 test('the torches burn on both sides of the frame at night and hold still for less motion (owner 2026-10-19)', async ({
   page,
 }) => {
+  /* Room for a wait of the fire's pace at each of the four polls below (the
+     flame, then its light, at each of two widths) on top of the lane's own
+     budget. */
+  test.setTimeout(test.info().timeout + 4 * motionWindow);
   /* No page error while they burn: the torches' effects once wrote state they
      also read, and Svelte stopped the loop with effect_update_depth_exceeded
      while the page went on looking right. */
@@ -3559,14 +3581,14 @@ test('the torches burn on both sides of the frame at night and hold still for le
     await expect
       .poll(async () => (await read()).torches[0].hash, {
         message: 'the flame never moved with motion welcome',
-        timeout: 4_000,
+        timeout: motionWindow,
       })
       .not.toBe(first.hash);
     /* The light on the stone moves with the fire: it brightens and dims. */
     await expect
       .poll(async () => (await read()).torches[0].light, {
         message: 'the torchlight never moved with the flame',
-        timeout: 4_000,
+        timeout: motionWindow,
       })
       .not.toBe(first.light);
 
