@@ -18,6 +18,7 @@
     glintReach,
     nebulaPixels,
     nextSkyInterval,
+    pace,
     skyFrameInterval,
     skyMaxPixelRatio,
     skyMoves,
@@ -50,10 +51,8 @@
     let ratio = 1;
     let glow: HTMLCanvasElement | null = null;
     let frame = 0;
-    let last = 0;
-    let interval = skyFrameInterval;
-    // When the sky last drew, so the next frame can say what it cost.
-    let drawnAt = -1;
+    // When to draw, by what the page has paid for the last drawing.
+    const paced = pace(skyFrameInterval, nextSkyInterval);
     const started = performance.now();
 
     function glowSprite(): HTMLCanvasElement {
@@ -176,22 +175,17 @@
         return;
       }
       frame = requestAnimationFrame(tick);
-      if (drawnAt >= 0) {
-        interval = nextSkyInterval(interval, now - drawnAt);
-        drawnAt = -1;
-      }
-      if (now - last < interval) {
+      if (!paced.frame(now)) {
         return;
       }
-      last = now;
       draw((now - started) / 1000);
-      drawnAt = now;
+      paced.drew(now);
     }
 
     function start(): void {
       cancelAnimationFrame(frame);
       frame = 0;
-      drawnAt = -1;
+      paced.restart();
       draw((performance.now() - started) / 1000);
       if (!document.hidden && !quiet.matches && moving) {
         frame = requestAnimationFrame(tick);

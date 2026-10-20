@@ -171,20 +171,86 @@ export const skyFrameInterval = 1000 / 30;
  * frame, and the page took 95ms a frame with the sky moving against 17ms
  * with it still, so a reader there got a page that answered a few times a
  * second. So when the page takes longer than skyFrameBudget to answer a sky
- * frame, the sky waits at least skyCostShare times that long before its next
- * one (and at least twice its last wait), so it takes no more than a tenth of
- * the page's time, down to one frame each skySlowestInterval; when the page
- * answers in time the sky doubles back towards its ceiling. It slows at once,
- * so the page is quick within a frame or two of loading; where frames are
- * cheap, as in any browser with a GPU, the sky never leaves the ceiling. */
+ * frame, the sky waits skyCostShare times that long before its next one, so
+ * it takes no more than a tenth of the page's time, down to one frame each
+ * skySlowestInterval; when the page answers in time the sky doubles back
+ * towards its ceiling. It slows at once, so the page is quick within a frame
+ * or two of loading; where frames are cheap, as in any browser with a GPU,
+ * the sky never leaves the ceiling.
+ *
+ * The floor is half a minute, not a second. Once the sheet carried its wall,
+ * its frame, its greenery and the torches (2026-10-19), a sky frame cost
+ * WebKit without a GPU some 400ms on the iPhone profile and over a second on
+ * the desktop one, and at a frame a second the sky and the fire together took
+ * most of the page's time: J and the trackers' lanes missed their frames. A
+ * sky that waits ten times its cost keeps its tenth however dear a frame
+ * gets, up to three seconds of one. It waits exactly that, no longer: the
+ * wait used to double on every late answer as well, which under a floor of
+ * half a minute would have stilled the sky on a phone whose frames merely run
+ * a little late, far below the tenth it can afford. */
 export const skyFrameBudget = 50;
 export const skyCostShare = 10;
-export const skySlowestInterval = 1000;
+export const skySlowestInterval = 30_000;
 
 export function nextSkyInterval(interval: number, answeredIn: number): number {
   return answeredIn > skyFrameBudget
-    ? Math.min(skySlowestInterval, Math.max(interval * 2, answeredIn * skyCostShare))
+    ? Math.min(skySlowestInterval, answeredIn * skyCostShare)
     : Math.max(skyFrameInterval, interval / 2);
+}
+
+/* A LOOP'S PACE, kept between its frames: the sky's and the fire's alike.
+ *
+ * A drawing is paid for until the page answers in time again. Where a browser
+ * draws without a GPU, one drawing on a canvas under the sheet is paid for
+ * over the frames after it, not in the first: one pixel drawn on the sky cost
+ * WebKit on Linux two slow frames and some 400ms before J's frames were quick
+ * again. A pace that read only the first frame saw half of that, and the sky
+ * and the fire each took twice their share. So the cost of a drawing runs from
+ * the drawing to the end of the first frame after it that took no more than
+ * skyFrameBudget, and the loop draws nothing while it is still being paid
+ * for. Where frames are cheap that is the next frame, as before. */
+export type Pace = {
+  /* Called once a frame: whether the loop draws in this one. */
+  frame(now: number): boolean;
+  /* The loop drew in this frame. */
+  drew(now: number): void;
+  /* The loop started again: the frames before are forgotten, so a hidden
+     spell or a resize is not read as a slow drawing. */
+  restart(): void;
+  /* The wait before the next drawing, as it stands. */
+  readonly interval: number;
+};
+
+export function pace(ceiling: number, next: (interval: number, answeredIn: number) => number): Pace {
+  let interval = ceiling;
+  let last = -Infinity;
+  let drawnAt = -1;
+  let previous = -1;
+  return {
+    frame(now) {
+      const took = previous >= 0 ? now - previous : 0;
+      previous = now;
+      if (drawnAt >= 0) {
+        if (took > skyFrameBudget) {
+          return false;
+        }
+        interval = next(interval, now - drawnAt);
+        drawnAt = -1;
+      }
+      return now - last >= interval;
+    },
+    drew(now) {
+      last = now;
+      drawnAt = now;
+    },
+    restart() {
+      drawnAt = -1;
+      previous = -1;
+    },
+    get interval() {
+      return interval;
+    }
+  };
 }
 /* The canvas resolution ceiling: a soft background gains nothing past it. */
 export const skyMaxPixelRatio = 1.5;

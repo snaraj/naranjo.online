@@ -15,6 +15,7 @@ import {
   nebulaPixels,
   nextSkyInterval,
   noiseField,
+  pace,
   seeded,
   skyCostShare,
   skyFrameBudget,
@@ -61,8 +62,13 @@ test('a reader who asked for less motion gets one still frame', () => {
 test('the loop is capped, and the canvas never draws past what a soft background needs', () => {
   assert.ok(skyFrameInterval >= 1000 / 30, 'a slow sky needs no more than thirty frames a second');
   assert.ok(skyMaxPixelRatio <= 2);
-  assert.match(component, /let interval = skyFrameInterval;/);
-  assert.match(component, /if \(now - last < interval\) \{/);
+  // The loop's pace starts at the ceiling and never draws sooner than it.
+  assert.match(component, /const paced = pace\(skyFrameInterval, nextSkyInterval\);/);
+  const paced = pace(skyFrameInterval, nextSkyInterval);
+  assert.equal(paced.frame(1000), true);
+  paced.drew(1000);
+  assert.equal(paced.frame(1016), false, 'the sky drew twice inside its ceiling');
+  assert.equal(paced.frame(1001 + skyFrameInterval), true);
   assert.match(component, /Math\.min\(devicePixelRatio \|\| 1, skyMaxPixelRatio\)/);
 });
 
@@ -74,31 +80,116 @@ test('the sky slows down where the page cannot afford it, and only there', () =>
   assert.equal(nextSkyInterval(skyFrameInterval, 17), skyFrameInterval);
   assert.equal(nextSkyInterval(skyFrameInterval, skyFrameBudget), skyFrameInterval);
   // A slow answer gives the page ten times the sky frame's cost before the
-  // next one, at once, and at least halves the rate; repeated ones stop at
-  // the floor.
+  // next one, at once, whatever the wait was; repeated ones hold there, at a
+  // tenth, rather than creeping towards the floor.
   assert.equal(nextSkyInterval(skyFrameInterval, 60), 60 * skyCostShare);
-  assert.equal(nextSkyInterval(400, 60), 800);
-  assert.equal(nextSkyInterval(skyFrameInterval, 300), skySlowestInterval);
+  assert.equal(nextSkyInterval(400, 60), 60 * skyCostShare);
+  assert.equal(nextSkyInterval(skyFrameInterval, 300), 300 * skyCostShare);
   assert.ok(skyCostShare >= 10, 'the sky takes more than a tenth of a slow page');
   let interval = skyFrameInterval;
   for (let frame = 0; frame < 20; frame += 1) {
     interval = nextSkyInterval(interval, 88);
   }
-  assert.equal(interval, skySlowestInterval);
-  assert.ok(skySlowestInterval <= 1000, 'the slowest sky still moves once a second');
+  assert.equal(interval, 88 * skyCostShare, 'a page whose frames run steadily late stills its sky below its share');
+  // The share holds however dear a frame gets, up to three seconds of one:
+  // the wait is never less than the share asks for until the floor, and the
+  // floor still moves the sky twice a minute. (Until 2026-10-20 the floor was
+  // a second, and a frame that cost the page 400ms took 40% of it.)
+  for (const answeredIn of [60, 120, 400, 1300, 3000]) {
+    const wait = nextSkyInterval(skyFrameInterval, answeredIn);
+    assert.ok(
+      wait >= answeredIn * skyCostShare,
+      `a sky frame that cost ${answeredIn}ms waits ${wait}ms, more than a tenth of the page`
+    );
+  }
+  assert.ok(skySlowestInterval / skyCostShare >= 3000, 'the floor gives up the share for frames under three seconds');
+  assert.ok(skySlowestInterval <= 30_000, 'a sky the page cannot afford still moves twice a minute');
+  assert.equal(nextSkyInterval(skyFrameInterval, 20_000), skySlowestInterval);
   // When the page answers in time again, the sky climbs back to its ceiling.
   for (let frame = 0; frame < 20; frame += 1) {
     interval = nextSkyInterval(interval, 17);
   }
   assert.equal(interval, skyFrameInterval);
-  // The loop measures the frame after each drawing, and forgets it when the
-  // loop restarts, so a hidden spell is not read as a slow frame.
-  assert.match(
-    component,
-    /if \(drawnAt >= 0\) \{\s*interval = nextSkyInterval\(interval, now - drawnAt\);\s*drawnAt = -1;\s*\}/
-  );
-  assert.match(component, /draw\(\(now - started\) \/ 1000\);\s*drawnAt = now;/);
-  assert.match(component, /function start\(\): void \{\s*cancelAnimationFrame\(frame\);\s*frame = 0;\s*drawnAt = -1;/);
+  // The loop asks its pace before every drawing, tells it of each, and
+  // restarts it when the loop restarts, so a hidden spell is not read as a
+  // slow drawing.
+  assert.match(component, /const paced = pace\(skyFrameInterval, nextSkyInterval\);/);
+  assert.match(component, /if \(!paced\.frame\(now\)\) \{\s*return;\s*\}\s*draw\(\(now - started\) \/ 1000\);\s*paced\.drew\(now\);/);
+  assert.match(component, /function start\(\): void \{\s*cancelAnimationFrame\(frame\);\s*frame = 0;\s*paced\.restart\(\);/);
+});
+
+/* A page that pays for a drawing over several frames: every drawing is
+ * followed by `slow` frames of `cost` ms each, and every other frame takes
+ * 16ms. The pace runs the loop over ten minutes of such frames (long enough
+ * that a wait of half a minute is not one drawing more or less) and reports
+ * the share of the time the page spent paying for it. */
+const simulate = ({ slow, cost, seconds = 600, next = nextSkyInterval, ceiling = skyFrameInterval }) => {
+  const paced = pace(ceiling, next);
+  let now = 0;
+  let owed = 0;
+  let paying = 0;
+  let drawings = 0;
+  let drewWhileOwed = 0;
+  while (now < seconds * 1000) {
+    const took = owed > 0 ? cost : 16;
+    if (owed > 0) {
+      paying += cost;
+      owed -= 1;
+    }
+    now += took;
+    if (paced.frame(now)) {
+      if (owed > 0) drewWhileOwed += 1;
+      paced.drew(now);
+      drawings += 1;
+      owed = slow;
+    }
+  }
+  return { share: paying / now, drawings, drewWhileOwed, interval: paced.interval };
+};
+
+/* THE PACE COUNTS THE WHOLE BILL (2026-10-20). Where a browser draws without
+ * a GPU, one drawing on the sky cost WebKit on Linux two slow frames before
+ * J's frames were quick again, and a pace that read only the first saw half
+ * of it. So a drawing is paid for until the page answers in time again, and
+ * the loop draws nothing until then. */
+test('a loop takes no more than its share however many frames a drawing costs', () => {
+  // Cheap frames: the loop keeps its ceiling, a drawing on the first 16ms
+  // frame past each wait.
+  const cheap = simulate({ slow: 0, cost: 16 });
+  assert.equal(cheap.interval, skyFrameInterval);
+  assert.equal(cheap.share, 0);
+  const atCeiling = 600_000 / (Math.ceil(skyFrameInterval / 16) * 16);
+  assert.ok(cheap.drawings >= atCeiling - 1, `a cheap sky drew ${cheap.drawings} times in ten minutes, not ${atCeiling}`);
+  // Dear drawings, paid over one frame or several: never more than a tenth
+  // of the page (and a whisker for the frame that ends the bill).
+  for (const [slow, cost] of [[1, 200], [2, 200], [3, 400], [2, 1300], [6, 120]]) {
+    const dear = simulate({ slow, cost });
+    assert.ok(
+      dear.share <= 1 / skyCostShare + 0.01,
+      `a drawing paid over ${slow} frames of ${cost}ms took ${(dear.share * 100).toFixed(1)}% of the page`
+    );
+    assert.ok(dear.drawings > 0, 'a dear sky stopped drawing altogether');
+    assert.equal(dear.drewWhileOwed, 0, 'the loop drew again before the page had paid for its last drawing');
+  }
+  // The fire paces itself by the same rule (lib/fire.ts).
+  const fire = simulate({ slow: 2, cost: 300, next: (interval, answeredIn) => nextSkyInterval(interval, answeredIn) });
+  assert.ok(fire.share <= 1 / skyCostShare + 0.01);
+});
+
+test('a pace forgets the frames before a restart', () => {
+  const paced = pace(skyFrameInterval, nextSkyInterval);
+  assert.equal(paced.frame(0), true);
+  paced.drew(0);
+  // The loop stops (a hidden page) and starts again ten seconds on: the
+  // spell is not a slow frame, and the pace stays at its ceiling.
+  paced.restart();
+  assert.equal(paced.frame(10_000), true);
+  assert.equal(paced.interval, skyFrameInterval);
+  paced.drew(10_000);
+  // A slow frame after a drawing is still being paid for: no drawing yet.
+  assert.equal(paced.frame(10_300), false);
+  assert.equal(paced.frame(10_316), false, 'the frame that ends the bill is not yet past the new wait');
+  assert.ok(paced.interval >= 316 * skyCostShare, `a drawing that cost 316ms left a wait of ${paced.interval}ms`);
 });
 
 test('the same sky on every load: the generator, the noise and the stars are seeded', () => {

@@ -46,6 +46,7 @@ import {
   stillGlow,
   torchTemper
 } from '../src/lib/fire.ts';
+import { skySlowestInterval } from '../src/lib/sky.ts';
 
 const component = await readFile(new URL('../src/lib/components/Torches.svelte', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
@@ -486,19 +487,19 @@ test('the fire slows down rather than the page, and keeps its own rate where fra
   assert.equal(nextFireInterval(fireFrameInterval, 16), fireFrameInterval);
   assert.equal(nextFireInterval(800, 16), 400);
   assert.equal(nextFireInterval(fireFrameInterval * 2, 16), fireFrameInterval);
-  // A late answer backs off at once, to a tenth of the page's time…
+  // A late answer backs off at once, to a tenth of the page's time, whatever
+  // the wait was, and holds there…
   assert.equal(nextFireInterval(fireFrameInterval, 75), 750);
-  // …at least doubling, and never slower than a step a second.
-  assert.equal(nextFireInterval(600, 60), 1000);
-  assert.equal(nextFireInterval(1000, 400), 1000);
-  // The loop measures each step's answer and waits the paced interval.
-  assert.match(
-    component,
-    /if \(drawnAt >= 0\) \{\s*interval = nextFireInterval\(interval, now - drawnAt\);\s*drawnAt = -1;\s*\}\s*if \(now - last < interval\) \{\s*return;\s*\}/
-  );
-  // Once every torch on screen has been drawn, the frame is marked to be
-  // measured.
-  assert.match(component, /scatter\(index, field, glow\.light\);\s*\}\s*drawnAt = now;\s*\};/, 'a step is never measured');
+  assert.equal(nextFireInterval(600, 60), 600);
+  assert.equal(nextFireInterval(1000, 400), 4000);
+  // …down to the sky's floor and no further.
+  assert.equal(nextFireInterval(fireFrameInterval, 20_000), skySlowestInterval);
+  // The loop asks its pace (the sky's, lib/sky.ts) before every step and
+  // tells it of each once every torch on screen has been drawn.
+  assert.match(component, /const paced = pace\(fireFrameInterval, nextFireInterval\);/);
+  assert.match(component, /frame = requestAnimationFrame\(tick\);\s*if \(!paced\.frame\(now\)\) \{\s*return;\s*\}/);
+  assert.match(component, /scatter\(index, field, glow\.light\);\s*\}\s*paced\.drew\(now\);\s*\};/, 'a step is never measured');
+  assert.match(component, /const start = \(\): void => \{\s*cancelAnimationFrame\(frame\);\s*frame = 0;\s*paced\.restart\(\);/);
 });
 
 test('the torches are scenery: no room, no pointer, nothing past the sheet’s edge', () => {

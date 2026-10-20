@@ -71,6 +71,7 @@
     type Mote,
     type Temper
   } from '../fire.ts';
+  import { pace } from '../sky.ts';
 
   let { lit }: { lit: boolean } = $props();
 
@@ -176,9 +177,8 @@
     /* Dust glows in the fire's own colour at three quarters of its heat. */
     const dustHeat = Math.round(fireHeat * 0.75);
     let frame = 0;
-    let last = 0;
-    let interval = fireFrameInterval;
-    let drawnAt = -1;
+    /* When to step, by what the page has paid for the last step. */
+    const paced = pace(fireFrameInterval, nextFireInterval);
 
     const paint = (index: number, fire: Fire | null): void => {
       const context = canvases.get(index)?.getContext('2d');
@@ -265,14 +265,9 @@
         return;
       }
       frame = requestAnimationFrame(tick);
-      if (drawnAt >= 0) {
-        interval = nextFireInterval(interval, now - drawnAt);
-        drawnAt = -1;
-      }
-      if (now - last < interval) {
+      if (!paced.frame(now)) {
         return;
       }
-      last = now;
       /* Every torch's light and air move each frame; its flame steps only on
          its own beat, so each burns at its temper's tempo. */
       for (const index of onScreen) {
@@ -290,13 +285,13 @@
         stepMotes(field, glow.light, glow.sway, fire.random, fire.temper);
         scatter(index, field, glow.light);
       }
-      drawnAt = now;
+      paced.drew(now);
     };
 
     const start = (): void => {
       cancelAnimationFrame(frame);
       frame = 0;
-      drawnAt = -1;
+      paced.restart();
       if (!lit) {
         fires.clear();
       }

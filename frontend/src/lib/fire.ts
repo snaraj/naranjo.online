@@ -52,12 +52,13 @@ export const fireFrameInterval = 1000 / 14;
    torches burning and 16ms with them out (37 frames in 3s against 167), and
    J, drawn in the same frames, missed his. So a step the page answers later
    than the budget pushes the next one back until the fire takes no more than
-   a tenth of the page's time, down to a step a second; a step answered in
-   time brings it back towards its own rate. A browser with a GPU never leaves
-   that rate. */
+   a tenth of the page's time, down to a step each skySlowestInterval; a step
+   answered in time brings it back towards its own rate. A step's answer is
+   read as the sky reads its own (pace, lib/sky.ts): every frame until the
+   page is quick again. A browser with a GPU never leaves that rate. */
 export function nextFireInterval(interval: number, answeredIn: number): number {
   return answeredIn > skyFrameBudget
-    ? Math.min(skySlowestInterval, Math.max(interval * 2, answeredIn * skyCostShare))
+    ? Math.min(skySlowestInterval, answeredIn * skyCostShare)
     : Math.max(fireFrameInterval, interval / 2);
 }
 
