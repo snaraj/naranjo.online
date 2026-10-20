@@ -713,25 +713,42 @@ test('the log box owns fixed geometry and its own overflow', () => {
   assert.match(sheet, new RegExp(`--control-target: ${rowFloorRem}rem;`));
   const pitchRem = length('line') + length('sub') + 2 * length('pad');
   assert.ok(pitchRem >= rowFloorRem, `the entry pitch (${pitchRem}rem) dropped under the touch floor`);
-  /* AND FIVE OF THEM PLUS THE HEAD ARE NO TALLER THAN THE SIX ONE-LINE ROWS
+  /* AND FIVE OF THEM ARE NO TALLER THAN THE SIX ONE-LINE ROWS AND THE HEAD
      THEY REPLACED (2.75rem each, plus the 1px rule a row drew under itself, and
      the 2.125rem head row): the direction was more information in the same
-     height, not a larger block. */
+     height, not a larger block. The column draws no head of its own now
+     (owner, 2026-10-19: "remove this heading"): its word is clipped OUT OF
+     THE FLOW for a screen reader, so it takes no height, and the column is its
+     entries alone — which this reads from the clipping rule rather than
+     assumes. */
+  const clipped = spreadRule('.ongoing-clipped');
+  assert.match(clipped, /position: absolute;/, 'the column’s word is back in the flow, so it is a head with a height again');
+  assert.doesNotMatch(spreadStyle, /\.ongoing-head\b/, 'a column head is drawn again, and this sum leaves its height out');
   const replacedPx = 6 * (rowFloorRem * 16 + 1) + 2.125 * 16;
-  const nowPx = (length('head') + shownProjectRows * pitchRem) * 16;
-  assert.ok(nowPx <= replacedPx, `the section grew: ${nowPx}px of head and entries against the ${replacedPx}px it replaced`);
+  const nowPx = shownProjectRows * pitchRem * 16;
+  assert.ok(nowPx <= replacedPx, `the section grew: ${nowPx}px of entries against the ${replacedPx}px it replaced`);
   // The links themselves declare the floor as their minimum, from the token.
   assert.match(spreadRule('.log-link'), /min-block-size: var\(--control-target\);/);
   assert.match(spreadRule('.repo-link'), /min-block-size: var\(--control-target\);/);
-  // The entry separator is an INSET SHADOW, never a border (owner directive,
+  // The entry separator is PAINTED, never a border (owner directive,
   // 2026-08-25): a border would add its pixel to every entry's box and five of
   // them would push the last entry out of a reserve that is exactly five
-  // entries tall — the zero-CLS reserve turned into a clipped entry.
-  assert.match(spreadRule('.log-entry'), /box-shadow: inset 0 -1px 0 var\(--color-border\)/);
-  assert.match(spreadRule('.log-entry:last-child'), /box-shadow: none/);
+  // entries tall — the zero-CLS reserve turned into a clipped entry. It was an
+  // inset shadow; it is a twig now (owner, 2026-10-19: "the plain lines should
+  // be tree branches, or vines"), drawn as the entry's own background along
+  // its bottom edge, which costs the box no pixel either — one of the three
+  // twigs, which the rows take turns with. The last entry draws none, as the
+  // shadow's last entry did.
+  const declarationsIn = (body) => body.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(
+    declarationsIn(spreadRule('.log-entry')),
+    /background: var\(--keep-twig-\d+\) left bottom \/ var\(--keep-twig-tile\) repeat-x;/,
+    'an entry is no longer parted from the next by a twig along its bottom edge'
+  );
+  assert.match(declarationsIn(spreadRule('.log-entry:last-child')), /background: none;/, 'the last entry draws a twig under nothing');
   assert.doesNotMatch(
-    spreadRule('.log-entry'),
-    /border-block-end/,
+    declarationsIn(spreadRule('.log-entry')),
+    /border-block-end|border-bottom|border:/,
     'an entry separator drawn as a border grows the entry box the reservation is built on'
   );
   // THE RESERVE IS NOT A CAP (owner directive, 2026-09-11, issue #315). The
@@ -1127,6 +1144,88 @@ test('on a phone the log reserves its collapsed self and takes no overflow (owne
      on this sheet takes its column — and it is what keeps the touch-floor sweep
      in tests/experience.test.mjs able to measure both of its axes. */
   assert.doesNotMatch(control, /inline-size:/);
+});
+
+/* THE LOG SCROLLS WITH NO BAR, AND ITS EDGES FADE (owner, 2026-10-19: "this
+ * scroll wheel is quite the eyesore, and the elements at the topmost and
+ * bottom most of the table don't have any cool transition"). Four promises:
+ *   · no scrollbar is drawn in any engine, while the box still scrolls by
+ *     wheel, finger and keys, and reaching its end does not carry the page;
+ *   · an edge fades only when there is more past it — never the list's own
+ *     first or last entry — one fade length either way;
+ *   · the box learns where it is from its own scroll metrics, on every scroll
+ *     and whenever it or its list changes size, and lets go of both on the
+ *     way out; what it learns is a data attribute, so nothing moves a box;
+ *   · the fades ease only where motion is welcome, which needs them to be
+ *     registered lengths (an unregistered custom property snaps). */
+test('the log scrolls with no bar, and fades only an edge with more past it (owner 2026-10-19)', () => {
+  const code = spreadStyle.replace(/\/\*[\s\S]*?\*\//g, '');
+  const rule = (selector) =>
+    new RegExp(`(?:^|\\n)\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(code)?.[1]?.replace(/\s+/g, ' ') ?? '';
+  const box = rule('.log-box');
+  assert.match(box, /overflow-y: auto;/, 'the desktop log no longer scrolls');
+  assert.match(box, /overscroll-behavior: contain;/, 'reaching the log’s end carries the scroll into the page');
+  assert.match(box, /scrollbar-width: none;/, 'the log draws its scrollbar again');
+  assert.match(rule('.log-box::-webkit-scrollbar'), /display: none;/, 'WebKit and Blink draw the log’s scrollbar again');
+  assert.match(
+    box,
+    /mask-image: linear-gradient\(to bottom, transparent, currentColor var\(--log-fade-start\), currentColor calc\(100% - var\(--log-fade-end\)\), transparent\);/,
+    'the log’s edges are not faded by its two fade lengths'
+  );
+  // At rest the box is at its start with more below: no fade over the first
+  // entry, one fade length over the last one shown.
+  const fade = /--log-fade-end: ([\d.]+rem);/.exec(box)?.[1];
+  assert.ok(fade, 'the log has no fade length of its own');
+  assert.match(box, /--log-fade-start: 0px;/, 'the log fades its first entry before anything is scrolled past');
+  assert.match(rule(".log-box[data-at-start='false']"), new RegExp(`--log-fade-start: ${fade.replace('.', '\\.')};`), 'scrolling past the start does not fade the top by the same length');
+  assert.match(rule(".log-box[data-at-end='true']"), /--log-fade-end: 0px;/, 'the last entry of the list fades with nothing past it');
+  for (const name of ['--log-fade-start', '--log-fade-end']) {
+    const registered = rule(`@property ${name}`);
+    assert.match(registered, /syntax: '<length>';/, `${name} is not a registered length, so it snaps rather than eases`);
+    assert.match(registered, /inherits: false;/, `${name} leaks into the entries`);
+    assert.match(registered, /initial-value: 0px;/, `${name} has no resting length`);
+  }
+  // The fades ease ONLY inside no-preference: the one transition that names
+  // them sits in that block and nowhere else.
+  const motionBlocks = code
+    .split('@media (prefers-reduced-motion: no-preference) {')
+    .slice(1)
+    .map((rest) => {
+      let depth = 1;
+      let index = 0;
+      while (depth > 0 && index < rest.length) {
+        if (rest[index] === '{') depth += 1;
+        if (rest[index] === '}') depth -= 1;
+        index += 1;
+      }
+      return rest.slice(0, index);
+    });
+  const easing = motionBlocks.join('\n').replace(/\s+/g, ' ');
+  assert.match(easing, /\.log-box \{ transition: --log-fade-start var\(--ledger-hover\), --log-fade-end var\(--ledger-hover\); \}/, 'the fades do not ease where motion is welcome');
+  assert.equal(
+    (code.match(/transition:[^;]*--log-fade/g) ?? []).length,
+    (easing.match(/transition:[^;]*--log-fade/g) ?? []).length,
+    'the fades ease outside the no-preference block, for a reader who asked for less motion'
+  );
+
+  // The markup: the two marks on the box, from its own scroll metrics.
+  const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(spread)?.[1] ?? '';
+  assert.match(spread, /<div class="log-box" data-at-start=\{logEdges\.start\} data-at-end=\{logEdges\.end\} use:scrollEdges>/);
+  assert.match(script, /const logEdges = \$state\(\{ start: 'true', end: 'false' \}\);/, 'the box does not start at its start with more below');
+  const edges = /function scrollEdges\(node: HTMLElement\) \{([\s\S]*?)\n {2}\}/.exec(script)?.[1] ?? '';
+  assert.ok(edges, 'the box no longer learns its own edges');
+  assert.match(edges, /logEdges\.start = node\.scrollTop <= 1 \? 'true' : 'false';/, 'the start is not read from the box’s own scroll');
+  assert.match(
+    edges,
+    /logEdges\.end = node\.scrollTop \+ node\.clientHeight >= node\.scrollHeight - 1 \? 'true' : 'false';/,
+    'the end is not read from the box’s own scroll'
+  );
+  assert.match(edges, /node\.addEventListener\('scroll', mark, \{ passive: true \}\);/, 'the edges are not re-read on every scroll, or the listener blocks the scroll');
+  assert.match(edges, /new ResizeObserver\(mark\)/, 'the edges are not re-read when the box or its list changes size');
+  assert.match(edges, /observer\.observe\(node\);/);
+  assert.match(edges, /observer\.observe\(node\.firstElementChild\);/, 'a list that grows under a still box leaves its edges stale');
+  assert.match(edges, /node\.removeEventListener\('scroll', mark\);/, 'the scroll listener outlives the box');
+  assert.match(edges, /observer\.disconnect\(\);/, 'the size observer outlives the box');
 });
 
 test('the adapter builds a disclosure only when the log hides rows (owner 2026-09-12)', () => {

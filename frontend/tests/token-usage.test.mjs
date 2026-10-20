@@ -438,8 +438,8 @@ describe('the board of cards: source contract', () => {
 
   it('sets every dynamic value through a custom property, never an inline style string', () => {
     /* The CSP floor (default-src 'self' admits no style attribute): a model
-       row's fill, the date stamp riding the cursor and a calendar cell's
-       column (the delay its arrival waits) are the genuinely dynamic lengths
+       row's share, the date stamp riding the cursor and a calendar cell's
+       column (the delay its arrival waits) are the genuinely dynamic values
        on the Chronicle, and each reaches the DOM as a custom property Svelte
        writes with setProperty rather than as a style string. Everything else
        — which level a cell paints, whether a day is measured, whether the
@@ -447,8 +447,15 @@ describe('the board of cards: source contract', () => {
        fills and the daily line's marks retired with them, 2026-10-16.) The
        stamp's position is written by its own placement action, which must
        measure the reading after its words are in, so it calls setProperty
-       itself — the same custom property, the same CSSOM write. */
-    assert.match(chronicle, /style:--chronicle-fill=\{`\$\{model\.fillPct\}%`\}/);
+       itself — the same custom property, the same CSSOM write.
+
+       The share is a UNITLESS fraction since the bar became a sword (owner,
+       2026-10-19: "we should have swords"): the stylesheet multiplies the
+       blade's length by it, and a percentage there is not a number calc() can
+       multiply a length by. The percentage the adapter composes is divided
+       once, here, and nowhere else (sections.test.mjs holds the sword). */
+    assert.match(chronicle, /style:--chronicle-share=\{model\.fillPct \/ 100\}/);
+    assert.doesNotMatch(chronicle, /--chronicle-fill\b/, 'the retired percentage fill is still written or read');
     assert.match(chronicle, /node\.style\.setProperty\('--chronicle-stamp-x', /);
     assert.match(chronicle, /style:--chronicle-column=\{cell\.column\}/);
     for (const [name, source] of Object.entries({ chronicle })) {
@@ -1548,20 +1555,24 @@ describe('the model vocabulary is one data file', () => {
     /* A member whose slot has no declared token would silently draw the
        residual's neutral, which is the one colour that means "we could not
        attribute this". The stylesheet must therefore cover every slot the
-       vocabulary can return, in every reading mode. */
+       vocabulary can return, in every reading mode — the day, the :root
+       default, and the night every visit opens on, mapped over it unless the
+       sky's control has turned the page to day (owner, 2026-10-19). Each mode
+       declares the swatch AND maps the active slot onto it, so neither can
+       fall through to the other's. */
     const slots = new Set([
       vocabulary.residual.slot,
       ...vocabularyMembers.map((member) => member.slot)
     ]);
     for (const slot of slots) {
       assert.match(sheet, new RegExp(`--usage-cat-${slot}: var\\(--color-cat-${slot}\\)`));
-      for (const mode of ['light', 'dark', 'slate', 'sepia']) {
+      for (const mode of ['light', 'dark']) {
         assert.match(sheet, new RegExp(`--palette-${mode}-cat-${slot}: #[0-9a-f]{6}`));
+        assert.match(
+          sheet,
+          new RegExp(`--color-cat-${slot}: var\\(--palette-${mode}-cat-${slot}\\)`)
+        );
       }
-      assert.match(
-        sheet,
-        new RegExp(`--color-cat-${slot}: var\\(--palette-light-cat-${slot}\\)`)
-      );
     }
   });
 });

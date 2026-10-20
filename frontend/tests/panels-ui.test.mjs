@@ -19,6 +19,7 @@ import {
   unrankedLabel,
 } from '../src/lib/bossLog.ts';
 import { contributionCalendarProps } from '../src/lib/commits.ts';
+import { gridLevel, gridLevels } from '../src/lib/grid.ts';
 import { unavailablePanel } from '../src/lib/panels.ts';
 import { projects } from '../src/lib/projects.ts';
 
@@ -72,7 +73,6 @@ const [
   gridSource,
   chronicle,
   styles,
-  themeMenu,
   detailTip,
   manifest,
   pageSection,
@@ -89,7 +89,6 @@ const [
   read('../src/lib/grid.ts'),
   read('../src/lib/components/Chronicle.svelte'),
   read('../src/styles.css'),
-  read('../src/lib/ThemeMenu.svelte'),
   read('../src/lib/components/DetailTip.svelte'),
   read('../src/page.ts'),
   read('../src/lib/components/PageSection.svelte'),
@@ -176,7 +175,7 @@ test('the panels are one centered column, not a rail', () => {
   );
   // Nothing anywhere still reaches for the rail's geometry or its published
   // open-state attribute; a leftover reference is a gutter nobody reserves.
-  for (const [name, source] of Object.entries({ app, styles, themeMenu, chronicle, ticker, pageSection })) {
+  for (const [name, source] of Object.entries({ app, styles, chronicle, ticker, pageSection })) {
     assert.doesNotMatch(source, /data-rail-open|--page-rail-gutter|--panel-rail-|SideRail/, `${name} still references the retired rail`);
   }
   // The stack owns the column width and the gap; panels own neither, so a
@@ -370,8 +369,10 @@ test('no card announces its own age, and none keeps a control', () => {
 // directive, issue 179): "the site is expected to be responsive on its own;
 // a data-retrieval failure logs an error … it is not an expected state a
 // visitor manages with a manual refresh control." It used to sit beside the
-// reading mode in the header's corner (issue 127); the reading mode is now
-// the page chrome's only control, and nothing it left behind survives as
+// reading mode in the header's corner (issue 127); the reading mode has since
+// left with the footer (owner, 2026-10-19), the sky's toggle that followed it
+// went the same day ("do away with this all together"), so the page's chrome
+// carries no control at all, and nothing the refresh left behind survives as
 // reachable code.
 test('the refresh control is gone, and nothing it owned survives as dead code', async () => {
   assert.equal(
@@ -379,19 +380,15 @@ test('the refresh control is gone, and nothing it owned survives as dead code', 
     false,
     'the refresh component must not come back'
   );
-  /* What issue 179 decided is that the reading mode is the only ACTION the
-     page's own chrome carries. That chrome was the header row until the owner
-     removed it (owner direction, 2026-10-16: "do away with it for now"); the
-     reading mode moved to the footer, so the pin follows it there: the page
-     shell mounts ThemeMenu inside its footer and declares no button of its
-     own. */
-  const footer = /<footer class="page-footer">([\s\S]*?)<\/footer>/.exec(app)?.[1];
-  assert.ok(footer, 'the page footer is not where this pin expects it');
-  assert.match(footer, /<ThemeMenu \/>/, 'the reading mode is no longer in the footer');
+  /* What issue 179 decided is that the page's own chrome carries no refresh
+     ACTION. That chrome was the header row until the owner removed it (owner
+     direction, 2026-10-16: "do away with it for now"), then the footer, which
+     the owner removed too (2026-10-19), and with it every control the
+     chrome had — so the page shell declares no button of its own at all. */
   assert.equal(
     (app.match(/<button/g) ?? []).length,
     0,
-    'the page shell declares a button of its own again; its one action is the reading mode, which ThemeMenu owns'
+    'the page shell declares a button of its own again; its chrome carries no control'
   );
   assert.doesNotMatch(app, /RefreshAll/, 'the refresh must not head the panel stack again either');
   // THE FAN-OUT EXISTS ONLY WITH A CALLER — that condition is the pin, in
@@ -464,7 +461,6 @@ test('no page chrome floats over the document', () => {
   // with the suite green.
   for (const [name, source] of Object.entries({
     app,
-    themeMenu,
     chronicle,
     ticker,
     pageSection,
@@ -550,23 +546,61 @@ test('the ticker renders the tallies through the tested renderers, formatting no
     'a figure is being formatted in the component instead of by the tested renderers'
   );
   const { items } = bossTickerFixture();
-  assert.equal(items[0].figure, tally(1192), 'tallies must go through the tested renderer');
-  assert.equal(items[0].label, cellLabel({ name: 'Zulrah', kc: 1192, rank: 111737 }));
-  assert.deepEqual(items[0].detail, bossDetail({ name: 'Zulrah', kc: 1192, rank: 111737 }));
-  // MOST KILLED FIRST, then by name — a stable order, so a redraw of the same
-  // payload is byte-identical and two rows on one count never swap places.
-  assert.deepEqual(items.map((item) => item.key), ['Zulrah', 'Hespori', 'Artio']);
+  const item = (key) => items.find((entry) => entry.key === key);
+  assert.equal(item('Zulrah').figure, tally(1192), 'tallies must go through the tested renderer');
+  assert.equal(item('Zulrah').label, cellLabel({ name: 'Zulrah', kc: 1192, rank: 111737 }));
+  assert.deepEqual(item('Zulrah').detail, bossDetail({ name: 'Zulrah', kc: 1192, rank: 111737 }));
+  /* IN THE HISCORES' ORDER (owner, 2026-10-19: "do not arrange the bosses by
+     alphabetical order but instead by the order in which they appear in the
+     runelite plugin viewer" — RuneLite's Hiscore panel, which lists them as
+     the hiscores do). The origin keeps the upstream order, so the strip keeps
+     the payload's: no count and no name moves a boss. The fixture's order is
+     neither alphabetical nor by count, so either sort coming back fails here,
+     and the reversed payload proves the order is the payload's own rather
+     than this one fixture's. A redraw of the same payload is byte-identical. */
+  const payloadOrder = ['Zulrah', 'Artio', 'Hespori'];
+  assert.deepEqual(items.map((entry) => entry.key), payloadOrder, 'the strip reorders the hiscores’ bosses');
+  assert.notDeepEqual(payloadOrder, [...payloadOrder].sort(), 'the fixture is already alphabetical, so it cannot tell the orders apart');
+  const reversed = bossTickerProps(
+    {
+      schema: 'panel/v1',
+      id: bossLogPanelId,
+      kind: 'boss-log/v1',
+      title: 'x',
+      status: 'ok',
+      data: {
+        account: 'f',
+        bosses: [
+          { name: 'Hespori', kc: 0, rank: null },
+          { name: 'Artio', kc: null, rank: null },
+          { name: 'Zulrah', kc: 1192, rank: 111737 },
+        ],
+      },
+    },
+    new Map()
+  );
+  assert.deepEqual(reversed.items.map((entry) => entry.key), [...payloadOrder].reverse(), 'the strip’s order is not the payload’s own');
+  assert.doesNotMatch(
+    bossLogStripLabel,
+    /most|alphabet|by (?:count|name)|ranked/i,
+    'the strip’s accessible name claims a sort the strip no longer does'
+  );
   // A row the hiscores list with nothing against it is DIMMED, never dropped,
   // and the two absences stay different claims: a reported zero renders "0"
   // and an unreported figure renders the no-figure marker.
-  assert.equal(items[1].figure, tally(0));
-  assert.equal(items[1].quiet, true, 'a zero row is dimmed, never hidden');
-  assert.equal(items[2].figure, tally(null), 'a null tally arrives as the no-figure marker');
-  assert.equal(items[2].quiet, true);
+  assert.equal(item('Hespori').figure, tally(0));
+  assert.equal(item('Hespori').quiet, true, 'a zero row is dimmed, never hidden');
+  assert.equal(item('Artio').figure, tally(null), 'a null tally arrives as the no-figure marker');
+  assert.equal(item('Artio').quiet, true);
   // The peak is the page's one highlight, and it is a peak only when
-  // something was actually killed.
-  assert.equal(items[0].peak, true);
-  assert.equal(items[1].peak, false);
+  // something was actually killed — wherever in the order it stands.
+  assert.equal(item('Zulrah').peak, true);
+  assert.equal(item('Hespori').peak, false);
+  assert.deepEqual(
+    reversed.items.map((entry) => entry.peak),
+    [false, false, true],
+    'the peak follows the strip’s first place rather than the largest count'
+  );
   assert.equal(bossTickerProps({
     schema: 'panel/v1',
     id: bossLogPanelId,
@@ -636,14 +670,47 @@ test('the boss icons are locked exactly as they render', () => {
     'the painted icon box is square and never distorts the art inside it'
   );
   assert.match(styles, /--ticker-icon: 22px;/);
+  /* FIFTEEN PERCENT LARGER ON THE TRACKERS (owner, 2026-10-19: "increase the
+     size of this by 15%"): the boss log's strip restates the icon, the item's
+     padding on both axes and the figure, each the base measure times 1.15 to
+     the nearest step its unit allows, and the painted icon stays square. The
+     shorthand padding token is restated whole because a custom property that
+     reads others is computed where it is declared: inherited, it would still
+     carry the base's padding. */
+  const sheetCode = styles.replace(/\/\*[\s\S]*?\*\//g, '');
+  const strip = /#trackers \.ticker-strip \{([^}]*)\}/.exec(sheetCode)?.[1] ?? '';
+  assert.ok(strip, 'the trackers’ strip states no measures of its own');
+  const measure = (source, token) => {
+    const found = new RegExp(`${token}: ([\\d.]+)(px|rem);`).exec(source);
+    assert.ok(found, `${token} is not a plain length this pin can read`);
+    return { value: Number(found[1]), unit: found[2] };
+  };
+  for (const token of ['--ticker-icon', '--ticker-item-pad-block', '--ticker-item-pad-inline']) {
+    const base = measure(sheetCode, token);
+    const scaled = measure(strip, token);
+    assert.equal(scaled.unit, base.unit, `${token} changes unit on the trackers`);
+    const ratio = scaled.value / base.value;
+    assert.ok(Math.abs(ratio - 1.15) <= 0.02, `${token} is ${ratio.toFixed(3)} of its base on the trackers, not 15% larger`);
+  }
+  assert.match(
+    strip,
+    /--ticker-item-pad: var\(--ticker-item-pad-block\) var\(--ticker-item-pad-inline\);/,
+    'the strip’s padding shorthand is inherited, so the items keep the base padding'
+  );
+  assert.match(
+    /#trackers \.ticker-figure \{([^}]*)\}/.exec(sheetCode)?.[1] ?? '',
+    /font-size: calc\(var\(--ledger-figure-size\) \* 1\.15\);/,
+    'the strip’s figures are not 15% larger'
+  );
   // The designed hole for a row that ships upstream before its art does.
   assert.match(ticker, /<span class="ticker-icon ticker-glyph" aria-hidden="true">\{item\.glyph\}<\/span>/);
   // WHICH art a row shows is the adapter's slug lookup, executed: a mapped
   // slug arrives as the icon URL, an unmapped row arrives as its initials.
   const { items } = bossTickerFixture();
-  assert.equal(items[0].icon, '/assets/zulrah.png', 'a vendored icon is selected by slug');
-  assert.equal(items[2].icon, undefined, 'a row without art carries none');
-  assert.equal(items[2].glyph, bossInitials('Artio'));
+  const item = (key) => items.find((entry) => entry.key === key);
+  assert.equal(item('Zulrah').icon, '/assets/zulrah.png', 'a vendored icon is selected by slug');
+  assert.equal(item('Artio').icon, undefined, 'a row without art carries none');
+  assert.equal(item('Artio').glyph, bossInitials('Artio'));
 });
 
 // The initials fallback stays in the component regardless: a boss shipped
@@ -989,13 +1056,21 @@ test('the calendar is drawn once, inside the chronicle, and an unmeasured day is
   assert.match(chronicle, /data-measured=\{cell\.measured \? 'true' : 'false'\}/);
   assert.match(gridSource, /export function measuredCell\(/);
   // The busiest day keeps the ramp's peak green (the mark is never the peak;
-  // the busiest tile is, experience.test.mjs "NO RED ANYWHERE").
+  // the busiest tile is, experience.test.mjs "NO RED ANYWHERE"). A day is a
+  // wall stone now (owner, 2026-10-19: "castle wall fixtures"), so the peak is
+  // the mossiest stone RINGED in that green: the stone says how busy, the ring
+  // says busiest, and the green still belongs to the busiest tile alone. The
+  // stone is the day's own level, laid on the calendar's canvas (sections),
+  // and the busiest day's value is the peak, whose level is the top one at
+  // any peak — so its stone is the mossiest without a rule of its own.
   assert.match(chronicle, /data-peak=\{cell\.busiest \? 'true' : 'false'\}/);
-  assert.match(
-    /\.chronicle-cell\[data-peak='true'\] \{([^}]*)\}/.exec(chronicle)?.[1] ?? '',
-    /fill: var\(--grid-cell-peak\)/,
-    'the busiest day lost the calendar’s peak green'
-  );
+  assert.match(chronicle, /busiest: peak > 0 && value === peak,/, 'the busiest day is not the day whose value is the peak');
+  for (const peakValue of [1, 7, 12.5, 4096]) {
+    assert.equal(gridLevel(peakValue, peakValue), gridLevels - 1, `a busiest day of ${peakValue} is not the top level, the mossiest stone`);
+  }
+  const peak = /\.chronicle-cell\[data-peak='true'\] \{([^}]*)\}/.exec(chronicle)?.[1] ?? '';
+  assert.match(peak, /stroke: var\(--grid-cell-peak\);/, 'the busiest day lost the calendar’s peak green');
+  assert.match(peak, /stroke-width: 1;/, 'the busiest day’s ring is not the one-unit ring the unmeasured outline is drawn at');
   // And no cell carries the browser tooltip (issue 219): it has no touch
   // trigger in any engine, so on a phone it said nothing at all.
   assert.doesNotMatch(chronicle, /\stitle=/, 'a calendar cell carries the browser tooltip again');
@@ -1016,6 +1091,39 @@ test('the calendar is drawn once, inside the chronicle, and an unmeasured day is
     /\(index - firstDay \+ 0\.5\) \/ Math\.max\(1, shownWeeks \* 7\)\) \* chartW/,
     'the line is scaled to something other than the calendar’s shown weeks'
   );
+});
+
+/* THE FIGURES SIT ABOVE A FULL-WIDTH GRAPH, AT EVERY WIDTH (owner,
+ * 2026-10-19: "large awkward gap in between here, either expand the heatmap
+ * or find a way to present the information in a better way"). Beside the
+ * graph the figures were a tall, narrow column that left the calendar a third
+ * of the room. So the board's top is ONE column at every width — the figures
+ * first, the graph and its calendar under them across the whole board — and
+ * no width brings the side-by-side back: no rule anywhere states another
+ * track list for the top, and neither half sizes itself as a flex item. */
+test('the chronicle sets its figures above a full-width graph and calendar at every width (owner 2026-10-19)', () => {
+  const markup = chronicle.replace(/<!--[\s\S]*?-->/g, '');
+  const side = markup.indexOf('<div class="chronicle-side">');
+  const plotting = markup.indexOf('<div class="chronicle-plotting">');
+  const top = markup.indexOf('<div class="chronicle-top">');
+  assert.ok(top >= 0 && side > top && plotting > side, 'the figures no longer come before the graph inside the board’s top');
+  const style = (/<style[^>]*>([\s\S]*?)<\/style>/.exec(chronicle)?.[1] ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = (selector) =>
+    [...style.matchAll(/(?:^|\n)\s*([^{}\n][^{}]*?)\s*\{([^{}]*)\}/g)]
+      .filter(([, selectors]) => selectors.split(',').some((part) => part.trim() === selector))
+      .map(([, , body]) => body.replace(/\s+/g, ' '));
+  const topRules = rules('.chronicle-top');
+  assert.ok(topRules.length > 0, 'nothing lays out the board’s top');
+  assert.match(topRules[0], /display: grid;/, 'the board’s top is no longer a grid');
+  assert.match(topRules[0], /grid-template-columns: minmax\(0, 1fr\);/, 'the board’s top is no longer one column');
+  for (const body of topRules) {
+    assert.doesNotMatch(body, /display: flex|flex-direction|grid-template-columns: (?!minmax\(0, 1fr\);)|grid-auto-flow: column/, 'some width lays the figures beside the graph again');
+  }
+  for (const half of ['.chronicle-side', '.chronicle-plotting']) {
+    for (const body of rules(half)) {
+      assert.doesNotMatch(body, /(?:^|; |\s)flex(?:-basis|-grow|-shrink)?:|grid-column: (?!1 \/ -1)/, `${half} sizes itself beside its sibling again`);
+    }
+  }
 });
 
 /* ONE WINDOW FOR EVERY SERIES, AND NO WAY TO RE-ASK IT (owner directive,

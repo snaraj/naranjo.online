@@ -22,15 +22,13 @@ if (!target) {
 //     in Chromium: first paint at 28ms, this line at 44ms) moves nothing when
 //     this line lands.
 //
-// It is deliberately NOT the mechanism the reading mode uses. That one is a
-// server-side stamp: the origin precomputes one index.html per registered
-// theme and picks between them on a cookie (internal/server/server.go,
-// stampReadingTheme), which works precisely because there are four themes and
-// a document can be prepared for each. A width the reader drags is continuous
-// — there is no finite set of documents to precompute — and the site's
-// Content-Security-Policy (default-src 'self') forbids the inline script the
-// usual pre-paint trick would need. So the width is applied here, and the
-// browser lanes MEASURE the resulting layout shift rather than asserting it.
+// Nothing earlier can do it. A width the reader drags is continuous, so the
+// origin cannot prepare a document per width the way it once prepared one per
+// reading mode (that stamp went with the control, owner 2026-10-19), and the
+// site's Content-Security-Policy (default-src 'self') forbids the inline
+// script the usual pre-paint trick would need. So the width is applied here,
+// and the browser lanes MEASURE the resulting layout shift rather than
+// asserting it.
 applyStoredColumnWidth(documentHost(), browserStore());
 
 // The application paints in its own faces rather than swapping to them. Their
@@ -47,7 +45,7 @@ applyStoredColumnWidth(documentHost(), browserStore());
 // face has no text to swap into when it lands. Swapping it in late moved the
 // painted page (the review of eaa62d1, bytes held 1.8s: 0.013 at 1440px).
 const faceWait = 1000;
-const faces = { sans: "1em 'Archivo'", mono: "1em 'JetBrains Mono'" };
+const faces = { sans: "1em 'Archivo'", mono: "1em 'JetBrains Mono'", display: "1em 'Instrument Serif'" };
 const loaded = new Set<string>();
 const start = () => {
   for (const stack of Object.keys(faces)) {

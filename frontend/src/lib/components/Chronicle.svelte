@@ -23,6 +23,29 @@
   import { isChord } from '../keys.ts';
   import FeedCard from './FeedCard.svelte';
   import PanelShell from './PanelShell.svelte';
+  import stone0 from '../../assets/images/props/stone-0.svg';
+  import stone1 from '../../assets/images/props/stone-1.svg';
+  import stone2 from '../../assets/images/props/stone-2.svg';
+  import stone3 from '../../assets/images/props/stone-3.svg';
+  import stone4 from '../../assets/images/props/stone-4.svg';
+
+  /* A day on the calendar is a wall stone, bare on a quiet day and mossier as
+     the day gets busier (owner, 2026-10-19: "castle wall fixtures").
+
+     THE STONES ARE ONE PICTURE. Drawn inside the calendar's SVG — a pattern
+     per level, or a picture per day — WebKit without a GPU rasterised every
+     stone again whenever the calendar repainted: on the iPhone profile, in the
+     1200ms after the page was resized to 1440px, J drew 5 or 6 frames of his
+     flight in five runs out of five, and with the stones on one canvas 9 to
+     31, what he draws with no texture at all. So each stone drawing is
+     rasterised once, at its own pixels, and every day's stone is painted from
+     it onto one canvas under the cells, at the screen's own pixels; the cells
+     keep only their outlines and the reader's pointer. The canvas brings the
+     stones in week by week and repaints a chosen layer as a wave, with the
+     cells' own timings, and under reduced motion they are simply there. */
+  const stones = [stone0, stone1, stone2, stone3, stone4];
+  const STONE_RISE = { length: 480, step: 14 };
+  const STONE_WAVE = { length: 420, step: 9 };
 
   let {
     status,
@@ -66,6 +89,8 @@
   let chartW = $state(0);
   let chartH = $state(0);
   let calBox = $state<HTMLElement>();
+  let calSvg = $state<SVGSVGElement>();
+  let stoneCanvas = $state<HTMLCanvasElement>();
   let calW = $state(0);
   let cursor = $state<number | null>(null);
   let layerKey = $state<string | null>(null);
@@ -277,9 +302,17 @@
     if (node === undefined || typeof ResizeObserver === 'undefined') {
       return undefined;
     }
+    /* A reported size is written on the next frame, not inside the
+       observer's delivery: the write re-cuts the calendar to the weeks that
+       fit, which changes the sheet's height, and the torches watch the sheet.
+       A box shallower than the one reported that changes during the delivery
+       is skipped, and the engine reports a loop — WebKit did, resizing from
+       1440px to 320px (2026-10-19). */
+    let pending = 0;
     const observer = new ResizeObserver((entries) => {
       const box = entries[0]?.contentRect;
-      write(box?.width ?? 0, box?.height ?? 0);
+      cancelAnimationFrame(pending);
+      pending = requestAnimationFrame(() => write(box?.width ?? 0, box?.height ?? 0));
     });
     observer.observe(node);
     /* The first size now, not at the observer's first report: that comes with
@@ -289,7 +322,10 @@
        border, so its box is its content box. */
     const box = node.getBoundingClientRect();
     write(box.width, box.height);
-    return () => observer.disconnect();
+    return () => {
+      cancelAnimationFrame(pending);
+      observer.disconnect();
+    };
   }
 
   $effect(() =>
@@ -326,6 +362,167 @@
     observer.observe(chartBox);
     return () => observer.disconnect();
   });
+
+  /* --- The stones, painted ---------------------------------------------- */
+
+  /* Each stone drawing rasterised once at its own pixels, by level. */
+  let stoneArt = $state<HTMLCanvasElement[] | null>(null);
+
+  $effect(() => {
+    let live = true;
+    const loads = stones.map(
+      (href) =>
+        new Promise<HTMLCanvasElement>((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => {
+            const art = document.createElement('canvas');
+            art.width = image.naturalWidth;
+            art.height = image.naturalHeight;
+            art.getContext('2d')?.drawImage(image, 0, 0);
+            resolve(art);
+          };
+          image.onerror = reject;
+          image.src = href;
+        })
+    );
+    Promise.all(loads).then(
+      (art) => {
+        if (live) {
+          stoneArt = art;
+        }
+      },
+      () => undefined
+    );
+    return () => {
+      live = false;
+    };
+  });
+
+  /* How each day's stone is moving: from one level to another (null is no
+     stone, a day nobody measured), starting at a time, for a length; a rise is
+     the stone arriving, growing in as it brightens. Kept across redraws, so a
+     resize mid-wave carries the wave on rather than restarting it. */
+  type StoneMotion = { from: number | null; to: number | null; start: number; length: number; rise: boolean };
+  const stoneMotions = new Map<number, StoneMotion>();
+  let stonesRisen = false;
+
+  $effect(() => {
+    const canvas = stoneCanvas;
+    const svg = calSvg;
+    const art = stoneArt;
+    const list = cells;
+    const open = shown;
+    void calW;
+    const context = canvas?.getContext('2d');
+    if (canvas === undefined || svg === undefined || art === null || context === null || context === undefined) {
+      return;
+    }
+    const quiet = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const now = performance.now();
+    /* Before the calendar is seen, with motion welcome, no stone is laid. */
+    const rising = !quiet && open && !stonesRisen;
+    const listed = new Set<number>();
+    for (const cell of list) {
+      listed.add(cell.index);
+      const to = cell.measured ? cell.level : null;
+      const motion = stoneMotions.get(cell.index);
+      if (quiet || (!rising && motion === undefined)) {
+        stoneMotions.set(cell.index, { from: to, to, start: 0, length: 0, rise: false });
+      } else if (rising) {
+        stoneMotions.set(cell.index, { from: null, to, start: now + cell.column * STONE_RISE.step, length: STONE_RISE.length, rise: true });
+      } else if (motion !== undefined && motion.to !== to) {
+        const halfway = now >= motion.start + motion.length * 0.5;
+        stoneMotions.set(cell.index, {
+          from: halfway ? motion.to : motion.from,
+          to,
+          start: now + cell.column * STONE_WAVE.step,
+          length: STONE_WAVE.length,
+          rise: false
+        });
+      }
+    }
+    for (const index of [...stoneMotions.keys()]) {
+      if (!listed.has(index)) {
+        stoneMotions.delete(index);
+      }
+    }
+    if (rising) {
+      stonesRisen = true;
+    }
+    const laid = quiet || open;
+    let frame = 0;
+    const paint = (time: number): void => {
+      if (paintStones(context, canvas, svg, list, art, laid, time)) {
+        frame = requestAnimationFrame(paint);
+      }
+    };
+    paint(now);
+    return () => cancelAnimationFrame(frame);
+  });
+
+  /* One frame of the stones: the canvas sized to its box at the screen's own
+     pixels, each day's stone placed where its cell is drawn on screen (the
+     calendar's own transform, so the SVG's scaling is followed exactly) and
+     snapped to whole pixels, the drawing's pixels kept square. True while a
+     stone is still moving. */
+  function paintStones(
+    context: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    svg: SVGSVGElement,
+    list: typeof cells,
+    art: HTMLCanvasElement[],
+    laid: boolean,
+    time: number
+  ): boolean {
+    const ratio = window.devicePixelRatio || 1;
+    const box = canvas.getBoundingClientRect();
+    const width = Math.round(box.width * ratio);
+    const height = Math.round(box.height * ratio);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    context.clearRect(0, 0, width, height);
+    const matrix = svg.getScreenCTM();
+    if (!laid || matrix === null) {
+      return false;
+    }
+    context.imageSmoothingEnabled = false;
+    let moving = false;
+    for (const cell of list) {
+      const motion = stoneMotions.get(cell.index);
+      if (motion === undefined) {
+        continue;
+      }
+      const raw = motion.length > 0 ? (time - motion.start) / motion.length : 1;
+      const progress = Math.min(1, Math.max(0, raw));
+      moving ||= progress < 1;
+      const x = Math.round((matrix.a * cell.x + matrix.e - box.left) * ratio);
+      const y = Math.round((matrix.d * cell.y + matrix.f - box.top) * ratio);
+      const size = Math.round(matrix.a * CELL * ratio);
+      if (motion.rise) {
+        const grown = 1 - (1 - progress) ** 3;
+        if (motion.to === null || grown <= 0) {
+          continue;
+        }
+        const side = size * (0.4 + 0.6 * grown);
+        context.globalAlpha = grown;
+        context.drawImage(art[motion.to], x + (size - side) / 2, y + (size - side) / 2, side, side);
+        continue;
+      }
+      const eased = progress * progress * (3 - 2 * progress);
+      if (motion.from !== null && eased < 1) {
+        context.globalAlpha = motion.to === null ? 1 - eased : 1;
+        context.drawImage(art[motion.from], x, y, size, size);
+      }
+      if (motion.to !== null) {
+        context.globalAlpha = eased;
+        context.drawImage(art[motion.to], x, y, size, size);
+      }
+    }
+    context.globalAlpha = 1;
+    return moving;
+  }
 
   const chartBinding = {
     read(clientX: number): void {
@@ -500,7 +697,8 @@
                 use:scrubAlong={calendarBinding}
                 onpointermovecapture={trackY}
                 onpointerdowncapture={press}>
-                <svg class="chronicle-svg" viewBox={`0 0 ${calWidth} ${CAL_HEIGHT}`} aria-hidden="true" focusable="false">
+                <canvas class="chronicle-stones" bind:this={stoneCanvas} aria-hidden="true"></canvas>
+                <svg class="chronicle-svg" bind:this={calSvg} viewBox={`0 0 ${calWidth} ${CAL_HEIGHT}`} aria-hidden="true" focusable="false">
                   {#each cells as cell (cell.index)}
                     <rect
                       class="chronicle-cell"
@@ -559,7 +757,7 @@
                     <li class="chronicle-model">
                       <span class="chronicle-model-name">{model.label}</span>
                       <span class="chronicle-model-reading">{model.reading}</span>
-                      <span class="chronicle-track"><span class="chronicle-fill" style:--chronicle-fill={`${model.fillPct}%`}></span></span>
+                      <span class="chronicle-track"><span class="chronicle-fill" style:--chronicle-share={model.fillPct / 100}></span></span>
                       <span class="chronicle-model-detail">{model.detail ?? ''}</span>
                     </li>
                   {/each}
@@ -599,30 +797,29 @@
     color: var(--ledger-muted);
   }
 
-  /* --- The figures beside the graph -------------------------------------- */
+  /* --- The figures above the graph ----------------------------------------- */
 
-  /* The figures beside the graph while the graph keeps room to be read, and
-     above it once it would not: the plotting side wraps to its own line
-     whenever it would get less than its basis, at whatever width the column
-     is — a phone, or a desktop column dragged narrow, alike. On one line the
-     figures keep their basis and the graph takes the rest. */
+  /* The figures sit in one row above the graph at every width, and the graph
+     and its calendar take the column's whole width under them (owner,
+     2026-10-19: "large awkward gap in between here, either expand the heatmap
+     or find a way to present the information in a better way"). Beside the
+     graph the figures were a tall, narrow column that left the calendar a
+     third of the room: at 1100px a 490px calendar of 9px stones beside a wide
+     empty band. */
   .chronicle-top {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1.25rem 2.25rem;
-    align-items: stretch;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.25rem;
   }
 
   .chronicle-side {
-    flex: 1 1 18rem;
     display: grid;
     grid-template-rows: auto 1fr;
     gap: 1.25rem;
     min-inline-size: 0;
   }
 
-  /* One figure under another beside the graph; side by side once the
-     figures have a line of their own. */
+  /* Side by side, three to a row where three fit. */
   .chronicle-headlines {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
@@ -672,7 +869,6 @@
   /* --- The graph ------------------------------------------------------------ */
 
   .chronicle-plotting {
-    flex: 999 1 26rem;
     display: grid;
     gap: 0.5rem;
     min-inline-size: 0;
@@ -771,42 +967,53 @@
   /* --- The calendar --------------------------------------------------------- */
 
   .chronicle-calendar {
+    position: relative;
     cursor: crosshair;
     touch-action: pan-y;
   }
 
+  /* Each level is its stone, by how much moss covers it as well as by colour,
+     so a level never rests on colour alone; the key below draws the same
+     stones from the same files. The stones lie on one canvas under the cells,
+     over the calendar's whole box, and take no pointer; the cells above them
+     are bare but for their outlines. */
+  .chronicle-stones {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    pointer-events: none;
+  }
+
+  .chronicle-calendar > .chronicle-svg {
+    position: relative;
+  }
+
   .chronicle-cell {
-    fill: var(--grid-cell-0);
-    rx: 1.5px;
+    fill: transparent;
   }
 
-  .chronicle-cell[data-grid-level='1'],
   .chronicle-step[data-grid-level='1'] {
-    fill: var(--grid-cell-1);
-    background: var(--grid-cell-1);
+    background-image: var(--keep-stone-1);
   }
 
-  .chronicle-cell[data-grid-level='2'],
   .chronicle-step[data-grid-level='2'] {
-    fill: var(--grid-cell-2);
-    background: var(--grid-cell-2);
+    background-image: var(--keep-stone-2);
   }
 
-  .chronicle-cell[data-grid-level='3'],
   .chronicle-step[data-grid-level='3'] {
-    fill: var(--grid-cell-3);
-    background: var(--grid-cell-3);
+    background-image: var(--keep-stone-3);
   }
 
-  .chronicle-cell[data-grid-level='4'],
   .chronicle-step[data-grid-level='4'] {
-    fill: var(--grid-cell-4);
-    background: var(--grid-cell-4);
+    background-image: var(--keep-stone-4);
   }
 
-  /* The busiest day shown: the ramp's own peak, a step past its fourth. */
+  /* The busiest day shown: the mossiest stone, ringed in the ramp's own peak,
+     a step past its fourth. */
   .chronicle-cell[data-peak='true'] {
-    fill: var(--grid-cell-peak);
+    stroke: var(--grid-cell-peak);
+    stroke-width: 1;
   }
 
   /* A day nobody measured: an outline, never the quiet-day fill. */
@@ -861,6 +1068,9 @@
 
   .chronicle-layers button {
     flex: 1 1 auto;
+    /* 44px on both axes at every width: a short layer name in a narrow face
+       came to 40px with its padding, and it is still a whole touch target. */
+    min-inline-size: 2.75rem;
     min-block-size: 2.75rem;
     padding-inline: 0.5rem;
     border: 0;
@@ -875,9 +1085,11 @@
     cursor: pointer;
   }
 
+  /* The picked layer is underlined by a sword (owner, 2026-10-19: "we should
+     have swords"), lying under its name. */
   .chronicle-layers button[aria-pressed='true'] {
     color: var(--color-brand);
-    border-block-end-color: var(--color-brand);
+    background: var(--keep-sword-underline);
   }
 
   /* Drawn inside the button: the row scrolls, so an outline outside it would
@@ -898,7 +1110,6 @@
     }
 
     .chronicle-layers button {
-      min-inline-size: 2.75rem;
       padding-inline: 0.25rem;
       font-size: 0.625rem;
       letter-spacing: 0;
@@ -915,18 +1126,19 @@
     display: inline-block;
     inline-size: 0.6875rem;
     block-size: 0.6875rem;
-    background: var(--grid-cell-0);
-    border-radius: 1.5px;
+    background: var(--keep-stone-0) center / 100% 100% no-repeat;
   }
 
   /* --- The accounts: one shape for every source ------------------------------ */
 
+  /* Parted from the diagram by a branch rather than a rule (owner,
+     2026-10-19: "the plain lines should be tree branches, or vines"). */
   .chronicle-accounts {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
     gap: 1.25rem 2.5rem;
-    padding-block-start: 1rem;
-    border-block-start: 1px solid var(--color-border);
+    padding-block-start: 1.25rem;
+    background: var(--keep-branch-3) left top / var(--keep-branch-tile) repeat-x;
   }
 
   /* Every row of an account is one fixed line box, so the account's height
@@ -1038,17 +1250,30 @@
     visibility: hidden;
   }
 
+  /* A model's share is a sword (owner, 2026-10-19: "we should have
+     swords"): the hilt and the point are always whole, and the blade between
+     them is the share — a model with every token draws a sword the full width
+     of the account, one with almost none a hilt and its point. The blade is
+     one pixel column of steel repeated, so it lengthens without stretching,
+     and the share is printed beside it, so the length is never the only way
+     to read it. */
   .chronicle-track {
     grid-column: 1 / -1;
-    block-size: 0.3125rem;
-    background: var(--grid-cell-0);
+    block-size: 7px;
   }
 
   .chronicle-fill {
+    --sword-hilt: 13px;
+    --sword-tip: 6px;
     display: block;
+    box-sizing: border-box;
     block-size: 100%;
-    inline-size: var(--chronicle-fill, 0%);
-    background: var(--ledger-ink);
+    inline-size: calc(var(--sword-hilt) + var(--sword-tip) + (100% - var(--sword-hilt) - var(--sword-tip)) * var(--chronicle-share, 0));
+    padding-inline: var(--sword-hilt) var(--sword-tip);
+    background:
+      var(--keep-sword-hilt) left center / var(--sword-hilt) 100% no-repeat border-box,
+      var(--keep-sword-tip) right center / var(--sword-tip) 100% no-repeat border-box,
+      var(--keep-sword-blade) left center / 1px 100% repeat-x content-box;
   }
 
   /* A model's own figures hold one line, and two on a phone — by the
@@ -1116,7 +1341,7 @@
     }
 
     .chronicle-cell {
-      transition: fill 420ms ease calc(var(--chronicle-column, 0) * 9ms), opacity 300ms ease;
+      transition: opacity 300ms ease;
     }
 
     .chronicle[data-shown='true'] .chronicle-cell {

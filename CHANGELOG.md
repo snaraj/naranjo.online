@@ -7,25 +7,69 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
-## [0.1.96] - 2026-10-16
+## [0.1.96] - 2026-10-19
 
 ### Changed
 
 - The page is redesigned ("The Keep", #375):
-  - A night sky is drawn behind it on a canvas: still under reduced motion,
-    paused when hidden, 30 frames a second at most, and slower wherever the
-    page cannot afford it (a browser drawing without a GPU), so the sky
-    slows down rather than the page.
-  - One framed glass sheet sits over the sky, with a pixel border on the
-    sheet only.
-  - Black and grey, with no gold: the sky, the sheet and its stone frame
-    carry no hue, and the name and the section titles are set in Archivo
-    in the page's own ink.
-  - The page opens on the name, with J flying beside it. The header bar,
-    the section nav and the picture bands are gone; the reading-mode
-    control lives in the footer, and every section keeps its id.
+  - A night sky is drawn behind it on a canvas. It is still under reduced
+    motion, paused when hidden, 30 frames a second at most, and slower
+    wherever the page cannot afford it (a browser drawing without a GPU), so
+    the sky slows down rather than the page. Over its fine stars, crisp pixel
+    stars twinkle, some flaring as a little cross that grows and goes out,
+    each on its own beat.
+  - One sheet sits over the sky: a castle wall, from a dry-stone wall
+    photograph made seamless and kept sharp, dark stone at night and pale
+    limestone by day, each held to a narrow band of brightness so every text
+    colour keeps its contrast on it. Its frame is dressed castle stone drawn
+    in pixels, with a keystone at each corner, ivy over its top corners and
+    grass at its foot.
+  - Torches hang on both sides of the frame, leaning out over the sheet. At
+    night they burn with a pixel fire built from scratch; their light on
+    the stone brightens, dims and leans with the flame while each handle's
+    shadow swings the other way, and it fades before the sheet's words
+    begin. By day they are out, and under reduced motion a lit torch holds
+    still.
+  - No two torches burn alike: each has its own flame height, tempo, lean
+    and draught, its light reaches and dims its own way, and held still it
+    rests at its own brightness. The light breaks up on the rough stone it
+    falls on, frame and ivy included, and each flame throws sparks and lights
+    the dust drifting through its glow, never over the words.
+  - No gold: the name and the section titles are set in Instrument Serif in
+    the page's own ink. The name is stacked large across the top of the
+    sheet, and each title starts its section with a fine line running on to
+    the column's end.
+  - The page opens on the name, stacked and centred with J flying beside
+    it, close under the frame. The header bar, the section nav, the picture bands and the footer
+    are gone, and every section keeps its id.
   - One background on the sheet: no board, panel or control paints a
-    ground of its own.
+    ground of its own, and pointing at a row brightens its ink rather than
+    painting one under it.
+  - The sheet's lines and bars are the castle's: a vine runs from each
+    section title to the column's end, a branch parts the roles and a twig
+    the rows of a list — four branches, one leafy, one heavy with moss, one
+    a thorn stem hung with sloes and one forked in blossom, and three twigs,
+    taking turns so no two rows in sight share one — each model's share is
+    the blade of a sword and the
+    picked layer is underlined by one, and each calendar day is a wall stone
+    that grows moss as the day gets busier, in the night's moss and lichen
+    greens. The calendar's stones are painted together as one picture, so a
+    phone's browser keeps the page moving smoothly while they show.
+  - A role opens from an iron ring and unrolls as a parchment scroll, its
+    words in the day's inks and clear of the paper's darkened edges.
+  - Ongoing Work's two lists stand without their headings, and the commit log
+    has no scrollbar: its entries fade at an edge with more beyond it, and
+    reaching its end no longer scrolls the page.
+  - The trackers' figures sit in a row above the graph, and the graph and its
+    calendar take the column's whole width.
+  - The boss log follows the hiscores' order, as RuneLite's Hiscore panel
+    lists the bosses, and reads 15% larger, with space rather than a rule
+    between bosses and no lead figure before them.
+- The page is the night on every visit, whatever the device prefers: the
+  night sky, the dark wall and the torches lit. The reading-mode control and
+  its slate and sepia modes are gone,
+  and the origin no longer stamps a chosen mode into the page from a cookie,
+  so a reader who picked one earlier gets the same page as everyone else.
 - The trackers are one diagram:
   - Pull Requests Closed, Commits Pushed and Total Tokens Used sit beside a
     daily line, over the year's calendar.
@@ -67,8 +111,6 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   document and the page appears once they are loaded, never more than a
   second later, so a face landing late no longer moves the name, the
   plaques or a ledger row.
-- Light mode no longer blurs behind its opaque parchment, which showed
-  nothing and slowed every frame where a browser draws without a GPU.
 - The diagram's layer names fit a 320px screen in every engine.
 - The calendar is laid out at its own width from its first frame, rather
   than a year wide and then cut to the weeks that fit once the browser

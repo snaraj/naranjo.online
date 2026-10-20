@@ -469,9 +469,11 @@
     text-transform: uppercase;
     cursor: pointer;
   }
+  /* The chosen set is underlined by a sword, like the trackers' picked layer
+     (owner, 2026-10-19: "we should have swords"). */
   .gallery-set[aria-pressed='true'] {
     color: var(--color-brand);
-    border-block-end-color: var(--color-brand);
+    background: var(--keep-sword-underline);
   }
   .gallery-set:focus-visible {
     outline: 2px solid var(--color-accent);

@@ -1,6 +1,7 @@
-/* The night sky behind the page (owner direction, 2026-10-16): "a starry night
+/* The sky behind the page (owner direction, 2026-10-16): "a starry night
  * … not super scary, fast, flashy … subtle. But you can tell that in the
- * background … the background is flashing in and out with the stars".
+ * background … the background is flashing in and out with the stars" — and,
+ * since 2026-10-19, a day sky kept for the scene's day.
  *
  * Drawn in code on one canvas rather than shipped as a GIF: a GIF bands a soft
  * nebula into 256 colours, weighs megabytes, and cannot pause or honour Reduce
@@ -43,6 +44,31 @@ export type SkyStars = {
   /* Parallax layers drifting right to left, in CSS pixels a second, far to
      near; each star belongs to one. */
   readonly drift?: readonly number[];
+  /* Pixel stars over the fine field (SkyGlints, below). */
+  readonly glints?: SkyGlints;
+};
+
+/* PIXEL STARS (owner, 2026-10-19, of a title-card mock: "I really like the
+ * animation and style of N9 title card, in particular for how the stars have
+ * bigger sizes, bigger trinkles. They look much more realistic yet playful").
+ * A sprinkle of crisp square stars over the fine field, drawn on whole screen
+ * pixels: most are a plain square, and some flare — a pixel cross one square
+ * out from the core, then a second square out, then the core alone — stepping
+ * between the three rather than easing, each on its own period and phase, so
+ * no two flare together. They drift with the field's layers. */
+export type SkyGlints = {
+  /* Glints per square CSS pixel. */
+  readonly density: number;
+  /* The share that flare. */
+  readonly flaring: number;
+  /* A flaring star's square, and a plain one's, in CSS pixels. */
+  readonly unit: number;
+  readonly plain: number;
+  /* A flare's cycle range, seconds. */
+  readonly period: readonly [number, number];
+  /* "r,g,b" triples: the core, and the arms of the cross. */
+  readonly core: string;
+  readonly arm: string;
 };
 
 export type SkyPreset = {
@@ -53,35 +79,88 @@ export type SkyPreset = {
   readonly stars: SkyStars;
 };
 
-/* The sky the page wears — the owner's pick from the gallery (2026-10-16):
- * "I like midnight blue … fine static looks good, clean and space like, and I
- * like drift's movement … maybe 15% faster", then, of the three takes on that,
- * "midnight drift deeper", made hueless on 2026-10-17 ("not happy with the
- * blue background color"): a black sky, so the stars carry more; a dense
- * field of fine stars flickering gently, in three layers gliding right to left
- * at 1.15 times the gallery's drift. */
-export const skyPreset: SkyPreset = {
-  id: 'midnight-drift-deeper',
-  sky: ['#060606', '#141414', '#242424'],
-  nebula: {
-    seed: 83,
-    res: 7,
-    scale: 1.8,
-    warp: 1.2,
-    floor: 0.5,
-    gamma: 1.6,
-    opacity: 0.2,
-    colors: ['#101010', '#2d2d2d', '#5c5c5c']
+/* THE NIGHT, WITH THE DAY KEPT (owner, 2026-10-19: "always set it to night
+ * by default", then "do away with [the control] all together but keep the
+ * logic"). The sky no longer reads the reader's clock, and every visit is the
+ * night; the day sky stays drawn for the phase App.svelte would hand down if
+ * a control came back. The dawn the clock used to show went with the clock. */
+export type SkyPhase = 'day' | 'night';
+
+/* The two skies.
+ *
+ * NIGHT is the owner's pick from the gallery (2026-10-16): "I like midnight
+ * blue … fine static looks good, clean and space like, and I like drift's
+ * movement … maybe 15% faster", then, of the three takes on that, "midnight
+ * drift deeper", made hueless on 2026-10-17: a black sky, so the stars carry
+ * more; a dense field of fine stars flickering gently, in three layers gliding
+ * right to left at 1.15 times the gallery's drift.
+ *
+ * DAY is bright blue, lighter toward the horizon, with soft white cloud in the
+ * nebula's place and no stars — so the day sky is one still picture and runs
+ * no loop at all. */
+export const skyPresets: Readonly<Record<SkyPhase, SkyPreset>> = {
+  day: {
+    id: 'bright-day',
+    sky: ['#1c68d4', '#3f93ea', '#8cc8fb'],
+    nebula: {
+      seed: 61,
+      res: 6,
+      scale: 1.3,
+      warp: 1.3,
+      floor: 0.46,
+      gamma: 1.2,
+      opacity: 0.5,
+      colors: ['#d7ebff', '#f1f8ff', '#ffffff']
+    },
+    stars: {
+      density: 0,
+      colors: ['255,255,255'],
+      period: [2, 5],
+      flicker: 0
+    }
   },
-  stars: {
-    density: 0.0014,
-    colors: ['255,255,255', '230,230,230'],
-    period: [2, 5],
-    flicker: 0.4,
-    fine: true,
-    drift: [2.3, 5.75, 10.35]
+  night: {
+    id: 'midnight-drift-deeper',
+    sky: ['#060606', '#141414', '#242424'],
+    nebula: {
+      seed: 83,
+      res: 7,
+      scale: 1.8,
+      warp: 1.2,
+      floor: 0.5,
+      gamma: 1.6,
+      opacity: 0.2,
+      colors: ['#101010', '#2d2d2d', '#5c5c5c']
+    },
+    stars: {
+      density: 0.0014,
+      colors: ['255,255,255', '230,230,230'],
+      period: [2, 5],
+      flicker: 0.4,
+      fine: true,
+      drift: [2.3, 5.75, 10.35],
+      /* The title card's own stars: one in seven thousand square pixels,
+         about the spacing its sky showed, since the page shows sky only round
+         the sheet; three in ten of them flaring, 4px squares with arms of its
+         lilac (greyed a little toward the night's own white), plain ones at
+         3px, on a cycle near its 2.8s. */
+      glints: {
+        density: 1 / 7000,
+        flaring: 0.3,
+        unit: 4,
+        plain: 3,
+        period: [2.4, 3.6],
+        core: '244,241,255',
+        arm: '168,170,218'
+      }
+    }
   }
 };
+
+/* A sky with no stars has nothing that moves: it is drawn once and holds. */
+export function skyMoves(preset: SkyPreset): boolean {
+  return preset.stars.density > 0;
+}
 
 /* The loop's ceiling: a slow sky needs no more than this. */
 export const skyFrameInterval = 1000 / 30;
@@ -248,9 +327,63 @@ export function twinkle(star: Star, t: number, steps?: number): number {
   return star.base * wave;
 }
 
+export type Glint = {
+  readonly x: number;
+  readonly y: number;
+  readonly flares: boolean;
+  /* Its flare's cycle, seconds, and where in it the page opens. */
+  readonly period: number;
+  readonly phase: number;
+  readonly layer: number;
+};
+
+/* The pixel stars for a viewport, the same ones for the same size every
+ * load, from their own seed so the fine field is the field it always was. */
+export function glintField(
+  width: number,
+  height: number,
+  glints: SkyGlints,
+  seed: number,
+  drift: readonly number[] | undefined
+): Glint[] {
+  const random = seeded(seed);
+  const count = Math.round(width * height * glints.density);
+  const [shortest, longest] = glints.period;
+  const field: Glint[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const period = shortest + random() * (longest - shortest);
+    field.push({
+      x: random() * width,
+      y: random() * height,
+      flares: random() < glints.flaring,
+      period,
+      phase: random() * period,
+      layer: drift === undefined ? 0 : Math.floor(random() * drift.length)
+    });
+  }
+  return field;
+}
+
+/* How far a flaring star's cross reaches at time t, in squares: one for the
+ * first half of its cycle, two for the next quarter, none for the last —
+ * the title card's own keyframes (0%, 50%, 75%), stepped. A plain star's
+ * reach is always none. */
+export function glintReach(glint: Glint, t: number): 0 | 1 | 2 {
+  if (!glint.flares) {
+    return 0;
+  }
+  const at = (((t + glint.phase) % glint.period) + glint.period) % glint.period / glint.period;
+  return at < 0.5 ? 1 : at < 0.75 ? 2 : 0;
+}
+
 /* Where a drifting star is at time t: it glides right to left at its layer's
  * speed and re-enters on the right, for as long as the page is open. */
-export function driftX(star: Star, t: number, width: number, drift: readonly number[] | undefined): number {
+export function driftX(
+  star: Pick<Star, 'x' | 'layer'>,
+  t: number,
+  width: number,
+  drift: readonly number[] | undefined
+): number {
   if (drift === undefined || width <= 0) {
     return star.x;
   }

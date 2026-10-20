@@ -109,31 +109,35 @@
           <span class="ledger-place">{row.place}</span>
           <!-- The chevron POINTS at what it does: down to open, up to close.
             It is a glyph swap rather than a rotation (owner design decision,
-            2026-09-11, issue 313) because the disc it sits in already answers
-            the open state by inverting, and inverting AND spinning is two
-            announcements of one fact — and a swap adds no transform, so a
-            reader who asked for less motion sees the same thing everyone
-            else does. -->
+            2026-09-11, issue 313): a swap adds no transform, so a reader who
+            asked for less motion sees the same thing everyone else does, and
+            the iron ring it hangs in (owner, 2026-10-19) never turns over. -->
           <span class="ledger-chevron" aria-hidden="true">
             <Icon name={open ? 'chevron-up' : 'chevron-down'} slot="row" />
           </span>
         </button>
         <div class="ledger-drawer" data-open={open ? 'true' : 'false'} inert={!open}>
           <div class="ledger-drawer-clip">
-            <ul class="ledger-points">
-              {#each row.points as point, index (index)}
-                <li class="ledger-point">{point}</li>
-              {/each}
-            </ul>
-            {#if row.link && row.link.href}
-              <a
-                class="ledger-link"
-                href={row.link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label={row.link.label}>{row.link.text}</a>
-            {/if}
+            <!-- The role unrolls as a parchment scroll (owner, 2026-10-19):
+              the paper and its upper roller here, the lower roller after the
+              clip (styles.css, "a role opens as a scroll"). -->
+            <div class="ledger-scroll">
+              <ul class="ledger-points">
+                {#each row.points as point, index (index)}
+                  <li class="ledger-point">{point}</li>
+                {/each}
+              </ul>
+              {#if row.link && row.link.href}
+                <a
+                  class="ledger-link"
+                  href={row.link.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={row.link.label}>{row.link.text}</a>
+              {/if}
+            </div>
           </div>
+          <span class="ledger-scroll-end" aria-hidden="true"></span>
         </div>
       </div>
     {/each}

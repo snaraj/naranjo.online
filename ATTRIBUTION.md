@@ -30,6 +30,33 @@ local-origin-only, so no visitor request may leave the origin to fetch a
 letterform. Two axes in two files is what lets the masthead be set at 900 and
 the prose at 400 with no second download.
 
+## Instrument Serif webfont
+
+The name and the headings (owner's pick, 2026-10-19) are set in
+[Instrument Serif](https://fonts.google.com/specimen/Instrument+Serif),
+copyright 2022 The Instrument Serif Project Authors
+(https://github.com/Instrument/instrument-serif), used under the SIL Open Font
+License 1.1 — the same licence and convention as the faces above. The licence
+text ships beside the files as
+`frontend/src/assets/fonts/OFL-InstrumentSerif.txt`. The two `.woff2` files are
+the family's one upright cut (Regular, weight 400), split into the latin and
+latin-ext character ranges by the Google Fonts pipeline from the same OFL
+sources (fonts.gstatic.com), and vendored here for the same reason: no visitor
+request leaves the origin to fetch a letterform.
+
+## Castle wall photograph
+
+The sheet's castle wall (owner's pick, 2026-10-19) is derived from
+[a photograph of a rustic stone wall by Y](https://images.unsplash.com/photo-1779636826516-955b8b293989)
+on Unsplash (published 2026-05-24), used under the
+[Unsplash License](https://unsplash.com/license), which permits free use,
+including modification, without permission. The photograph itself is not
+vendored: `frontend/src/assets/images/keep/wall-night.webp` and
+`wall-day.webp` are 2160x1440 derivatives of the wall above the grass, made
+seamless, sharpened by local contrast and toned to two narrow bands of
+brightness so the page's text keeps its contrast on them. Thanks to the
+photographer.
+
 ## Old School RuneScape boss icons
 
 The images under `frontend/src/assets/icons/bosses/` are small downscaled
@@ -47,16 +74,9 @@ The page no longer prints that sentence under the boss strip (owner directive,
 2026-09-04, issue #292); this document is where the attribution is kept, and a
 frontend test holds it here word for word.
 
-### The strip's lead figure (2026-09-04, issue #292)
-
-`frontend/src/assets/icons/gnome.png` leads the boss strip: the owner's pick,
-the wiki's own 64px thumbnail of `Gnome_(2).png` (the lead image of the Gnome
-page), **64×131, 8,864 bytes, unmodified**, requested through the same
-MediaWiki thumbnail path as the boss icons below. Same artwork owner, same
-licence story, same notice above. It stands the full height of the strip's
-lead item, and its dimensions are stated beside the file in
-`frontend/src/lib/blocks/bossTicker.ts` so the lead reserves its box before
-the picture arrives.
+The strip's lead figure, the wiki's 64px thumbnail of `Gnome_(2).png`
+vendored on 2026-09-04 (issue #292), left the repository on 2026-10-19 with
+the strip's lead, at the owner's word; it remains in the history.
 
 ### The reviewed batch (2026-08-20, issue #78)
 

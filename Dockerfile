@@ -8,14 +8,10 @@
 # the final stage is per-target.
 FROM --platform=$BUILDPLATFORM docker.io/library/node:24.19.0-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d AS frontend
 WORKDIR /src/frontend
-# The build bakes the footer's version in from the repository's VERSION file
-# (vite.config.ts), so that file is a build input of the frontend stage.
-COPY VERSION /src/VERSION
 # The model vocabulary is one data file every consumer reads rather than three
 # hand-kept tables (issue #302), and the source vocabulary is its sibling
 # (issue #267); src/lib/token-usage.ts imports both, so they are build inputs
-# of this stage exactly as VERSION is. Nothing else under internal/ enters the
-# frontend context.
+# of this stage. Nothing else under internal/ enters the frontend context.
 COPY internal/panels/config/models.json /src/internal/panels/config/models.json
 COPY internal/panels/config/sources.json /src/internal/panels/config/sources.json
 COPY frontend/package.json frontend/package-lock.json ./

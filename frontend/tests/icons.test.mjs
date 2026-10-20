@@ -96,9 +96,9 @@ const literalNames = callSites
 const dataDrivenNames = {
   /* The four section marks, beside the labels they stand for. The `commit`
      mark left this list with the section it named (owner design decision,
-     2026-09-11, issue 318) and did not leave the page: the commit column's own
-     ruled head draws it, spelled at its call site in LedgerSpread.svelte, so
-     it is covered by the literal walk above rather than declared here. */
+     2026-09-11, issue 318), lived on in the commit column's ruled head, and
+     left the page with that head (owner, 2026-10-19: "remove this heading …
+     remove the icons there as well"), so the family no longer carries it. */
   '../src/page.ts': ['work', 'folder', 'chip', 'photo'],
   /* The repositories' figure glyphs (issue 317), chosen by the adapter. The
      component's own row of head marks that spelled the same four left with
@@ -110,8 +110,6 @@ const dataDrivenNames = {
      itself did not leave the page — the Trackers section head draws it, one
      line above, which is where the page names the thing this board counts. */
   '../src/lib/token-usage.ts': ['sessions'],
-  /* The strip's lead mark, in the binding layer where the domain lives. */
-  '../src/lib/blocks/bossTicker.ts': ['sword'],
   /* The gallery segment's mark, derived from what the set holds. */
   '../src/lib/components/MediaGallery.svelte': ['photo', 'film'],
   /* The disclosure chevron, which points at what pressing the row does. */
@@ -217,7 +215,7 @@ test('a glyph is geometry and nothing else', () => {
       }
       /* Paint is the shell's, always. A part says only WHETHER it is filled;
          it never names an ink, so no glyph can escape currentColor and the
-         family stays theme-branch-free in all four reading modes. */
+         family stays theme-branch-free in both reading modes. */
       assert.ok(
         part.solid === undefined || part.solid === true,
         `"${name}" has a solid flag that is neither absent nor true`
@@ -493,13 +491,14 @@ test('the words the marks replaced are still on the page or in its accessibility
      holds that). The role rows keep their own "Irvine, CA", a different fact
      in a different place (lib/work.ts). */
 
-  // The owner removed the footer credits in issue 345; keep the build version.
-  // The reading mode joined the footer (owner direction, 2026-10-16) and draws
-  // its own mark inside ThemeMenu, so the footer's own markup still draws none.
-  const footer = markup(componentSources['App.svelte']).match(/<footer\b[^>]*>([\s\S]*?)<\/footer>/)?.[1];
-  assert.ok(footer, 'the footer is missing');
-  assert.match(footer, /naranjo\.online v\{__SITE_VERSION__\}/, 'the footer lost its build version');
-  assert.doesNotMatch(footer, /<Icon\b|\bMIT\b|snaraj|github\.com|footer-meta/, 'the footer credits returned');
+  // The owner removed the footer credits in issue 345, and then the footer
+  // itself — its build version and its reading mode with it (owner,
+  // 2026-10-19). The credits stay gone from the page shell, footer or not.
+  assert.doesNotMatch(
+    markup(componentSources['App.svelte']),
+    /\bMIT\b|snaraj|github\.com|footer-meta/,
+    'the footer credits returned'
+  );
 
   /* THE SECTION'S WORD IS PRINTED ON ITS HEAD. It was printed twice — by the
      nav link (owner ruling, 2026-09-12, issue 325: words, not icons) and by
@@ -529,10 +528,11 @@ test('the words the marks replaced are still on the page or in its accessibility
   assert.doesNotMatch(log, /class="ledger-mark"[^>]*alt="[^"]*"/, 'the mark tile carries a literal alt instead of the row\u2019s name');
   assert.match(log, /aria-label=\{`\$\{open \? collapseLabel : expandLabel\} \$\{row\.name\}`\}/);
 
-  /* The strip's lead: a second decorative mark beside the picture, with the
-     collection's name still on the panel head above it and in the strip's own
-     label. The component names neither — the binding layer hands both over. */
+  /* The strip has no lead (owner, 2026-10-19, of the lead's figure and its
+     blade: "remove this"), so no mark stands in for its name: the collection
+     is named by the panel head above it and by the strip's own label, and the
+     strip draws no picture or glyph of its own. */
   const ticker = componentSources['lib/components/Ticker.svelte'];
-  assert.match(ticker, /\{#if mark\.glyph\}\s*<Icon name=\{mark\.glyph\} slot="row" \/>/);
-  assert.doesNotMatch(markup(ticker), /<Icon name="/, 'the strip names a glyph of its own');
+  assert.match(ticker, /<div class="ticker-strip" aria-label=\{label\}/, 'the strip lost its own name');
+  assert.doesNotMatch(markup(ticker), /<Icon\b|ticker-lead|ticker-mark|\bmark\b/, 'the strip grew a lead or a mark again');
 });

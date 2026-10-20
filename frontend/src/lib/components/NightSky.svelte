@@ -1,24 +1,35 @@
 <!-- NightSky is the page's background (owner direction, 2026-10-16): a starry
-  night that twinkles slowly behind the sheet. It is decorative — hidden from
+  night that twinkles slowly behind the sheet, and since 2026-10-19 a bright
+  day kept for the scene's day (lib/sky.ts; App.svelte hands the phase down).
+  It is decorative — hidden from
   assistive technology, never a target for the pointer — and it is fixed, so it
   takes no room in the layout and cannot shift anything.
 
-  The loop runs only while the page is visible, at most at skyFrameInterval and
-  slower where the page cannot afford it (nextSkyInterval), and not at all for
-  a reader who asked for reduced motion: they get one still frame of the same
-  sky, redrawn only when the window's size changes. -->
+  The loop runs only while the page is visible and the sky has stars to move,
+  at most at skyFrameInterval and slower where the page cannot afford it
+  (nextSkyInterval), and not at all for a reader who asked for reduced motion:
+  they get one still frame of the same sky, redrawn only when the window's size
+  or the phase changes. The day sky has no stars, so it is one still picture
+  for everyone. -->
 <script lang="ts">
   import {
     driftX,
+    glintField,
+    glintReach,
     nebulaPixels,
     nextSkyInterval,
     skyFrameInterval,
     skyMaxPixelRatio,
-    skyPreset,
+    skyMoves,
+    skyPresets,
     starField,
     twinkle,
+    type Glint,
+    type SkyPhase,
     type Star
   } from '../sky.ts';
+
+  let { phase }: { phase: SkyPhase } = $props();
 
   let canvas = $state<HTMLCanvasElement>();
 
@@ -28,12 +39,15 @@
     if (node === undefined || context === null || context === undefined) {
       return;
     }
-    const preset = skyPreset;
+    const preset = skyPresets[phase];
+    const moving = skyMoves(preset);
     const quiet = matchMedia('(prefers-reduced-motion: reduce)');
     let width = 0;
     let height = 0;
     let still: HTMLCanvasElement | null = null;
     let stars: Star[] = [];
+    let glints: Glint[] = [];
+    let ratio = 1;
     let glow: HTMLCanvasElement | null = null;
     let frame = 0;
     let last = 0;
@@ -61,7 +75,7 @@
     function build(): void {
       width = innerWidth;
       height = innerHeight;
-      const ratio = Math.min(devicePixelRatio || 1, skyMaxPixelRatio);
+      ratio = Math.min(devicePixelRatio || 1, skyMaxPixelRatio);
       node!.width = Math.round(width * ratio);
       node!.height = Math.round(height * ratio);
       context!.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -90,7 +104,42 @@
         }
       }
       stars = starField(width, height, preset.stars, 17);
+      glints = preset.stars.glints === undefined ? [] : glintField(width, height, preset.stars.glints, 29, preset.stars.drift);
       glow ??= glowSprite();
+    }
+
+    /* The pixel stars, on whole screen pixels so a square stays a square at
+       any density: a plain star is its square; a flaring one is its core and
+       the cross its reach spells out, square by square, and under reduced
+       motion it holds its first reach, the cross one square out. */
+    function drawGlints(t: number): void {
+      const sparkle = preset.stars.glints;
+      if (sparkle === undefined || glints.length === 0) {
+        return;
+      }
+      context!.setTransform(1, 0, 0, 1, 0, 0);
+      const unit = Math.max(1, Math.round(sparkle.unit * ratio));
+      const plain = Math.max(1, Math.round(sparkle.plain * ratio));
+      for (const glint of glints) {
+        const x = Math.round(driftX(glint, t, width, preset.stars.drift) * ratio);
+        const y = Math.round(glint.y * ratio);
+        context!.fillStyle = `rgb(${sparkle.core})`;
+        if (!glint.flares) {
+          context!.fillRect(x, y, plain, plain);
+          continue;
+        }
+        context!.fillRect(x, y, unit, unit);
+        const reach = quiet.matches ? 1 : glintReach(glint, t);
+        context!.fillStyle = `rgb(${sparkle.arm})`;
+        for (let step = 1; step <= reach; step += 1) {
+          const out = step * unit;
+          context!.fillRect(x - out, y, unit, unit);
+          context!.fillRect(x + out, y, unit, unit);
+          context!.fillRect(x, y - out, unit, unit);
+          context!.fillRect(x, y + out, unit, unit);
+        }
+      }
+      context!.setTransform(ratio, 0, 0, ratio, 0, 0);
     }
 
     function draw(t: number): void {
@@ -118,11 +167,12 @@
       }
       context!.globalAlpha = 1;
       context!.globalCompositeOperation = 'source-over';
+      drawGlints(t);
     }
 
     function tick(now: number): void {
       frame = 0;
-      if (document.hidden || quiet.matches) {
+      if (document.hidden || quiet.matches || !moving) {
         return;
       }
       frame = requestAnimationFrame(tick);
@@ -143,7 +193,7 @@
       frame = 0;
       drawnAt = -1;
       draw((performance.now() - started) / 1000);
-      if (!document.hidden && !quiet.matches) {
+      if (!document.hidden && !quiet.matches && moving) {
         frame = requestAnimationFrame(tick);
       }
     }
@@ -175,10 +225,12 @@
 <canvas class="night-sky" bind:this={canvas} aria-hidden="true"></canvas>
 
 <style>
+  /* Under everything: the sheet's wall and greenery sit at -2 and the
+     torches at -1, all in the root's context. */
   .night-sky {
     position: fixed;
     inset: 0;
-    z-index: -1;
+    z-index: -3;
     display: block;
     inline-size: 100%;
     block-size: 100%;

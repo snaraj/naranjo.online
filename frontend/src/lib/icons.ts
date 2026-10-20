@@ -17,7 +17,7 @@
  * makes every drawing repeat the family's weight.
  *
  * The family is a 24 grid, 1.25 line weight, round caps and joins, painted
- * in currentColor only — so a mark follows all four reading modes with no
+ * in currentColor only — so a mark follows both reading modes with no
  * theme branch and the family adds no colour token. The shell writes every
  * one of those, which is why no part below states a stroke or a fill: a
  * `solid` part is the same one ink, filled instead of stroked.
@@ -28,7 +28,6 @@
  * an unknown name can survive a build. Names are the source package's own. */
 
 export type IconName =
-  | 'mode-dark'
   | 'close'
   | 'chevron-down'
   | 'chevron-up'
@@ -37,7 +36,6 @@ export type IconName =
   | 'star'
   | 'pull'
   | 'clock'
-  | 'commit'
   | 'tag'
   | 'chip'
   | 'sessions'
@@ -45,8 +43,7 @@ export type IconName =
   | 'film'
   | 'play'
   | 'work'
-  | 'folder'
-  | 'sword';
+  | 'folder';
 
 /* One shape of one glyph. The three elements below are every element the
  * family draws; admitting a fourth takes an edit here AND a branch in
@@ -64,7 +61,6 @@ export type IconPart = {
 
 export const icons: Record<IconName, readonly IconPart[]> = {
   /* chrome */
-  'mode-dark': [{ tag: 'path', attrs: { d: 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z' } }],
   'close': [{ tag: 'path', attrs: { d: 'M6 6l12 12M18 6L6 18' } }],
 
   /* rows */
@@ -86,10 +82,6 @@ export const icons: Record<IconName, readonly IconPart[]> = {
   'clock': [
     { tag: 'circle', attrs: { cx: '12', cy: '12', r: '9' } },
     { tag: 'path', attrs: { d: 'M12 7v5l3 2' } }
-  ],
-  'commit': [
-    { tag: 'circle', attrs: { cx: '12', cy: '12', r: '3.5' } },
-    { tag: 'path', attrs: { d: 'M3 12h5.5M15.5 12H21' } }
   ],
   'tag': [
     { tag: 'path', attrs: { d: 'M3 12V4h8l10 10-8 8z' } },
@@ -122,14 +114,7 @@ export const icons: Record<IconName, readonly IconPart[]> = {
     { tag: 'rect', attrs: { x: '3', y: '7', width: '18', height: '13' } },
     { tag: 'path', attrs: { d: 'M9 7V4h6v3M3 12h18' } }
   ],
-  'folder': [{ tag: 'path', attrs: { d: 'M3 5h7l2 2h9v13H3z' } }, { tag: 'path', attrs: { d: 'M3 10h18' } }],
-
-  /* feed */
-  'sword': [
-    { tag: 'path', attrs: { d: 'M18 3l3 3-10.5 10.5-3-3z' } },
-    { tag: 'path', attrs: { d: 'M6.5 14.5l3 3M4 20l3.5-3.5' } },
-    { tag: 'path', attrs: { d: 'M13.5 13l-3 3' } }
-  ]
+  'folder': [{ tag: 'path', attrs: { d: 'M3 5h7l2 2h9v13H3z' } }, { tag: 'path', attrs: { d: 'M3 10h18' } }]
 };
 
 /* The three places a mark appears, each one size token in styles.css: the

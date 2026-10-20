@@ -7,7 +7,7 @@
  * the next build inherits, including on engines nobody can run here; a lane
  * proves this build's declarations survived a real cascade — that env() was
  * understood rather than dropped, that 44px of CSS became 44px of box, that
- * a reduced-motion preference actually reaches the popover.
+ * a reduced-motion preference actually reaches the motion it governs.
  */
 import { readFileSync } from 'node:fs';
 
@@ -286,6 +286,17 @@ async function settled(page) {
     .toBe(true);
 }
 
+/* Today at a given hour of the clock the browser reads (the runner's own
+ * zone), for page.clock.setFixedTime. The sky followed the reader's hour for
+ * part of 2026-10-19 and no longer does (the owner asked for night by default
+ * and a toggle instead), so the one lane that sets the clock sets it to prove
+ * the page ignores it. */
+function atHour(hour) {
+  const at = new Date();
+  at.setHours(hour, 0, 0, 0);
+  return at;
+}
+
 async function visit(page) {
   await page.goto('/');
   await settled(page);
@@ -366,43 +377,55 @@ function contrastRatio(foreground, background) {
  * relativeLuminance, contrastRatio) are the colour machinery this file
  * actually uses. */
 
-const openReadingModes = async (page) => {
-  await page.getByRole('button', { name: 'Reading mode' }).click();
-  await expect(page.locator('#reading-mode-menu')).toBeVisible();
+/* THE NIGHT, AND THE DAY KEPT AS LOGIC (owner, 2026-10-19: "always set it to
+ * night by default", then, of the control that turned it to day, "do away
+ * with this all together but keep the logic"). Every visit opens on the night
+ * whatever the device prefers, and nothing on the page turns it. The day is
+ * still whole in the stylesheet, keyed on the root's data-sky, and the app
+ * writes that attribute once and never again — so writing it here uncovers the
+ * day palette and nothing overwrites it. That is the only way a lane can
+ * change the page's colours now. It is NOT the reader's day: the sky canvas
+ * and the torches take their phase from the app's constant, so they stay the
+ * night's (the scene lane states what follows and what does not).
+ *
+ * Nothing is pressed, so nothing can scroll or take focus on the way, and the
+ * turn is proved the way the page states it — the root names the scene asked
+ * for — two rendered frames later, before anything is measured. */
+const turnScene = async (page, sky) => {
+  await page.evaluate((wanted) => {
+    window.document.documentElement.dataset.sky = wanted;
+  }, sky);
+  await sceneIs(page, sky);
 };
 
-/* THE READING MODE CLOSES THE SHEET (owner direction, 2026-10-16: the header
- * row it sat in is gone, and it lives in the page's footer). A lane that
- * proves a mode swap moves NOTHING — not a box, not the scroll — has to bring
- * the control into view before it takes its first measurement: opening it
- * from the top of the page would scroll to it, and that is the reader's own
- * journey to the footer, not something the swap did. Settled, so the first
- * reading is of a page that has stopped moving. */
-const bringReadingModeIntoView = async (page) => {
-  await page.getByRole('button', { name: 'Reading mode' }).scrollIntoViewIfNeeded();
+/* The root names the scene, two rendered frames after whatever turned it. */
+const sceneIs = (page, sky) =>
+  expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => resolve(window.document.documentElement.dataset.sky))
+              );
+            })
+        ),
+      { message: `the page never turned to ${sky}` }
+    )
+    .toBe(sky);
+
+/* A subject brought near the top of the viewport and settled, so the scroll
+ * position a turn is held to is a real offset into the document, where a nudge
+ * either way would show, and the first reading is of a page that has stopped
+ * moving. A whole-pixel offset a little above the subject: scrollIntoView
+ * lands on a fraction an engine then rounds. */
+const readFrom = async (page, selector) => {
+  await page.evaluate((target) => {
+    const top = window.document.querySelector(target).getBoundingClientRect().top + window.scrollY;
+    window.scrollTo(0, Math.max(0, Math.floor(top) - 16));
+  }, selector);
   await settled(page);
-};
-
-/* These zero-scroll lanes must measure the page, not Playwright's locator
- * actionability. Playwright 1.63.0 can call scrollIntoView on an already
- * visible, absolutely positioned swatch before pointerdown; WebKit then
- * scrolls the document to its maximum and the test attributes the driver's
- * move to the theme choice. A real pointer has no such pre-action step. Pin
- * the control inside the viewport first, then press its visible centre. */
-const clickVisibleControl = async (page, control, label) => {
-  const box = await control.boundingBox();
-  expect(box, `${label} has no painted box to press`).not.toBeNull();
-  const viewport = page.viewportSize();
-  expect(viewport, `${label} has no viewport to be visible in`).not.toBeNull();
-  expect(box.x, `${label} starts outside the viewport`).toBeGreaterThanOrEqual(0);
-  expect(box.y, `${label} starts above the viewport`).toBeGreaterThanOrEqual(0);
-  expect(box.x + box.width, `${label} ends outside the viewport`).toBeLessThanOrEqual(
-    viewport.width
-  );
-  expect(box.y + box.height, `${label} ends below the viewport`).toBeLessThanOrEqual(
-    viewport.height
-  );
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 };
 
 /* The token panel's display controls are GONE (owner directive, 2026-08-28,
@@ -505,7 +528,6 @@ test('wide panel content scrolls inside its own container', async ({ page }) => 
 
 test('every control clears the touch floor on both axes', async ({ page }) => {
   await visit(page);
-  await openReadingModes(page);
   /* Controls, meaning things with an activation behavior. A focusable scroll
      region, or a boss cell that takes focus only so its tooltip can appear
      ("there is no action to perform", StatTracker.svelte), is not a target you tap
@@ -600,25 +622,14 @@ test('the page keeps its gutters and its dynamic height in this engine', async (
   ).toBeCloseTo(observed.viewportHeight, 0);
 });
 
-/* SUPERSEDED twice over, and superseded rather than deleted both times so the
- * reason stays on the record.
- *
- * First by "every swatch still says which palette it selects, in every
- * reading mode" (2026-08-24 restyle): this lane guarded a color-mix() that no
- * longer exists, measuring only that the sepia glyph had not fallen back to
- * the PAGE's ink. That assertion widened into one lane covering all five
- * swatches: each one's outline against the popover, and each dark mode's
- * craters against its own moon.
- *
- * Then that lane's own premise was superseded (issue #180, 2026-08-25): the
- * owner reported the three dark craters unreadable at 18px — "they all look
- * exactly the same" — so the glyphs stopped previewing a palette at all and
- * now paint ONE ink (currentColor), telling the five modes apart by SHAPE
- * instead. "Every swatch paints a distinct silhouette, at a legible ink, in
- * every reading mode" is the current lane: it measures the inverse of what
- * this one did — that every swatch now SHARES its ink and instead draws a
- * silhouette no other swatch draws. */
-
+/* THE NIGHT AND THE DAY KEPT BEHIND IT (owner, 2026-10-19: night on every
+ * visit, and of the control that turned it to day, "do away with this all
+ * together but keep the logic"). The footer control that offered five modes is
+ * gone, the device's own preference no longer reaches the page, and nothing on
+ * the page turns it; the day palette is still whole behind the root's data-sky
+ * (turnScene). So the swap this lane holds still is that palette — night on
+ * arrival, day, and back — which is the zero-CLS floor for whatever brings a
+ * day back. */
 test('switching the reading mode repaints without moving anything', async ({ page }) => {
   await visit(page);
   const geometry = () =>
@@ -639,6 +650,25 @@ test('switching the reading mode repaints without moving anything', async ({ pag
           )
           .map((animation) => animation.finished.catch(() => {}))
       );
+      /* TODAY'S GLOW BREATHES FOREVER — an endless stroke-width animation on
+         one calendar day — and Gecko counts a shape's stroke in its box ("SVG
+         SHAPES ARE MEASURED BY THEIR GEOMETRY", further down this file), so
+         two reads taken at different breaths differ in Firefox with nothing
+         having moved: MEASURED as 0.3px of calendar on the dark swap once the
+         lane read with the diagram in view. Each read holds every endless
+         animation on the diagram at its first moment, so both reads see the
+         glow at the same breath and the swap is the only thing left that can
+         differ between them. */
+      for (const animation of window.document.getAnimations()) {
+        if (
+          animation.effect?.target instanceof Element &&
+          diagram?.contains(animation.effect.target) &&
+          animation.effect.getComputedTiming().endTime === Infinity
+        ) {
+          animation.pause();
+          animation.currentTime = 0;
+        }
+      }
       const boxes = {};
       const shifted = ({ x, y, width, height }, offset) => ({ x, y: y + offset, width, height });
       const round = ({ x, y, width, height }) =>
@@ -651,7 +681,8 @@ test('switching the reading mode repaints without moving anything', async ({ pag
       const scrollY = window.scrollY;
       /* J's seat joins the list in place of the chrome row he left (owner
          direction, 2026-10-16): he is sized in the name's own measure, so a
-         mode that resized the name would move him too. */
+         mode that resized the name would move him too. The intro joins it
+         (owner, 2026-10-19): the name and J are one centred group in it. */
       /* The trackers' one diagram and the Ongoing Work columns join the list
          in place of the heatmap blocks they replaced (owner direction,
          2026-10-16): the chart, the calendar under it and every column of the
@@ -660,10 +691,10 @@ test('switching the reading mode repaints without moving anything', async ({ pag
       for (const selector of [
         '#app',
         'main',
+        '.page-intro',
         'h1',
         '.page-j',
         '.panel-stack',
-        '.page-footer',
         '.chronicle',
         '.chronicle-chart',
         '.chronicle-calendar',
@@ -683,65 +714,61 @@ test('switching the reading mode repaints without moving anything', async ({ pag
         cells.length,
         Math.round(cells.reduce((sum, cell) => sum + cell.getBoundingClientRect().width, 0) * 100) / 100,
       ];
-      /* WHAT A MODE REPAINTS, which is no longer the document's ground (THE
-         KEEP, owner direction, 2026-10-16). The Keep paints ONE backdrop under
-         the night sky in every mode — the <html> ground is the same near-black
-         whatever is chosen, and the canvas over it is drawn in code with no
-         mode at all — and the owner took every competing ground off the sheet
-         the same day ("I don't like having 3 different conflicting colors
-         fighting for a background"): the three dark modes share one glass
-         sheet, and nothing inside it paints a ground of its own. So a
-         comparison of the document's paint now reads "Slate paints the same
-         surface as Dark" for a swap that genuinely happened. What each mode
-         DOES repaint is the sheet itself — its ground (parchment or glass),
-         the ink set on it, and the calendar's quiet-day fill from the mode's
-         own ramp — so that triple is the non-vacuity probe: four modes that
-         painted one sheet would satisfy a per-step comparison while three of
-         them did not exist. */
+      /* WHAT A MODE REPAINTS, which is not the document's ground (THE KEEP,
+         owner direction, 2026-10-16): the sky is a canvas drawn in code, and
+         the owner took every competing ground off the sheet the same day ("I
+         don't like having 3 different conflicting colors fighting for a
+         background"), so nothing inside the sheet paints a ground of its own
+         and a comparison of the document's paint could read "unchanged" for a
+         swap that genuinely happened. What each scene DOES repaint is the
+         sheet itself — its ground (pale wall or night), the ink set on it, and
+         the ring the calendar draws round its busiest day in the scene's own
+         ramp peak — so that reading is the non-vacuity probe: a day that
+         painted the night sheet would pass every no-movement check below
+         while not existing. (The ring replaced the quiet day's fill here on
+         2026-10-19, when the calendar's days became moss on stone: the stones
+         are one set of pictures in both scenes, so their fill no longer says
+         which scene painted them.) */
       const sheet = getComputedStyle(window.document.querySelector('main'));
-      const day = window.document.querySelector('.chronicle-cell[data-grid-level="0"][data-measured="true"]');
+      const busiest = window.document.querySelector('.chronicle-cell[data-peak="true"]');
       return {
         boxes,
         scrollY,
         scrollHeight: window.document.documentElement.scrollHeight,
         surface: `${sheet.backgroundColor} | ${sheet.backgroundImage === 'none' ? 'plain' : 'textured'} | ${sheet.color} | ${
-          day === null ? 'no day' : getComputedStyle(day).fill
+          busiest === null ? 'no busiest day' : getComputedStyle(busiest).stroke
         }`,
       };
     });
 
-  await bringReadingModeIntoView(page);
+  /* Measured into the page: the diagram near the top of the viewport
+     (readFrom), so the scroll position the swap is held to is a real offset
+     rather than the document's top, where a nudge upward could not show. */
+  await readFrom(page, '.chronicle');
   const before = await geometry();
-  expect(before.surface, 'the calendar draws no quiet day; this lane reads half a sheet').not.toContain('no day');
+  expect(before.scrollY, 'the page did not scroll to the diagram, so the no-scroll check reads the top').toBeGreaterThan(0);
+  expect(before.surface, 'the calendar rings no busiest day; this lane reads half a sheet').not.toContain('no busiest day');
   expect(before.boxes['.chronicle-chart'], 'the diagram drew no chart for a mode to move').toBeDefined();
   expect(before.boxes['chronicle-cells'][0], 'the diagram drew no calendar days for a mode to resize').toBeGreaterThan(0);
 
-  /* EVERY stamped mode, not one of them. The floor is that no reading mode
-     moves the page, and a lane that only ever clicked Dark said nothing about
-     the others — which is precisely where a mode added later would land.
-     Each is compared against the ORIGINAL geometry rather than against its
-     predecessor, so a drift that accumulates a fraction at a time cannot hide
-     inside a chain of individually equal steps. */
-  const painted = new Map();
-  for (const [label, id] of [
-    ['Dark', 'dark'],
-    ['Slate', 'slate'],
-    ['Sepia', 'sepia'],
-    ['Light', 'light'],
-  ]) {
-    await openReadingModes(page);
-    await clickVisibleControl(page, page.getByRole('button', { name: label, exact: true }), label);
-    await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+  /* BOTH scenes, there and back. Each step is compared against the ORIGINAL
+     geometry rather than against its predecessor, so a drift that accumulates
+     a fraction at a time cannot hide inside a chain of individually equal
+     steps. */
+  for (const scene of ['day', 'night']) {
+    await turnScene(page, scene);
     const after = await geometry();
-    /* Assert the switch actually happened before asserting nothing moved —
-       otherwise a toggle that did nothing at all would pass this test
-       perfectly. Distinctness across all four is the stronger form of that
-       check: four modes that painted one surface would satisfy a per-step
-       "something changed" comparison while three of them did not exist. */
-    for (const [other, surface] of painted) {
-      expect(after.surface, `${label} paints the same sheet as ${other}`).not.toBe(surface);
+    /* Assert the turn actually happened before asserting nothing moved —
+       otherwise a turn that did nothing at all would pass this test
+       perfectly: day paints a different sheet from the night the reader
+       arrived on, and the way back to night returns to exactly that one. */
+    if (scene === 'day') {
+      expect(after.surface, 'day paints the same sheet as night').not.toBe(before.surface);
+    } else {
+      expect(after.surface, 'the way back to night does not paint what the page painted on arrival').toBe(
+        before.surface
+      );
     }
-    painted.set(label, after.surface);
     /* NO SCROLL, stated on its own: a swap that nudges the document is a
        jolt the reader feels even when not one box re-laid out, and it is a
        different defect from a relayout — measured on WebKit as a 2px scroll
@@ -749,34 +776,137 @@ test('switching the reading mode repaints without moving anything', async ({ pag
        `scroll-padding-top`. It is asserted exactly, not roughly. */
     expect(
       after.scrollY,
-      `the ${label} swap scrolled the document from ${before.scrollY} to ${after.scrollY}`
+      `the turn to ${scene} scrolled the document from ${before.scrollY} to ${after.scrollY}`
     ).toBe(before.scrollY);
-    expect(after.boxes, `the ${label} swap moved the page under the reader`).toEqual(before.boxes);
-    expect(after.scrollHeight, `the ${label} swap changed the page height`).toBe(before.scrollHeight);
+    expect(after.boxes, `the turn to ${scene} moved the page under the reader`).toEqual(before.boxes);
+    expect(after.scrollHeight, `the turn to ${scene} changed the page height`).toBe(before.scrollHeight);
   }
+});
 
-  /* Auto is the way back, and it is the ABSENCE of a stamp rather than a
-     fifth palette — so what it has to prove is that un-stamping is as free of
-     layout effect as stamping, and that the document returns to exactly the
-     rendering the visitor arrived on. */
-  await openReadingModes(page);
-  await clickVisibleControl(
-    page,
-    page.getByRole('button', { name: 'Auto', exact: true }),
-    'Auto'
+/* THE SCENE: NIGHT ON EVERY VISIT, THE DAY KEPT AS LOGIC (owner, 2026-10-19:
+ * "always set it to night by default", then, of the toggle that turned the
+ * page to day, "do away with this all together but keep the logic"). This lane
+ * was the toggle's — night by default, day on request, nothing remembered —
+ * and with the control gone it holds what is left of that, end to end in
+ * every engine:
+ *
+ *   (a) the page OPENS AT NIGHT whatever the device prefers: under an emulated
+ *       light AND an emulated dark preference the root names the night, the
+ *       page declares a dark colour scheme, the toolbars are told the night's
+ *       sheet, and the sheet's surface is one and the same colour — so a
+ *       stylesheet that let prefers-color-scheme back in fails on whichever
+ *       preference it answered;
+ *   (b) NOTHING ON THE PAGE TURNS IT: no sky control anywhere, and the name's
+ *       block holds no control and no keyboard stop at all. This replaces the
+ *       toggle's own checks — a named 44px target in the name's block, and
+ *       "the keyboard reaches it with Tab, and Enter turns it" — which went
+ *       with their subject; a control that came back unasked fails here;
+ *   (c) the day is still whole behind data-sky: written there, it paints the
+ *       day's sheet, declares a light colour scheme, and moves nothing. The
+ *       toolbars keep the night's colour, because only the app tells them,
+ *       once, at hydration — stated as measured, so a page that starts
+ *       following the attribute is a conscious edit here;
+ *   (d) the page keeps nothing: no cookie and nothing in either storage, on
+ *       load or after the day is uncovered;
+ *   (e) a reload opens at night. */
+test('the page opens at night whatever the device prefers, keeps the day behind data-sky, and remembers nothing (owner 2026-10-19)', async ({
+  page,
+  context,
+}) => {
+  const scene = () =>
+    page.evaluate(() => {
+      const root = window.document.documentElement;
+      return {
+        sky: root.dataset.sky,
+        colorScheme: getComputedStyle(root).colorScheme,
+        surface: getComputedStyle(window.document.querySelector('main')).getPropertyValue('--color-surface').trim(),
+        themeColor: window.document.head.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? null,
+        prefersDark: window.matchMedia('(prefers-color-scheme: dark)').matches,
+      };
+    });
+  const storage = () =>
+    page.evaluate(() => ({
+      cookie: window.document.cookie,
+      local: Object.keys(window.localStorage).map((key) => `${key}=${window.localStorage.getItem(key)}`),
+      session: Object.keys(window.sessionStorage).map((key) => `${key}=${window.sessionStorage.getItem(key)}`),
+    }));
+  const nothingKept = { cookie: '', local: [], session: [] };
+
+  /* (a) Night under either preference. The emulation is proved to have
+     reached the page (the media query answers it), so "the same surface" is a
+     statement about a page that was really asked twice. */
+  const arrivals = {};
+  for (const preference of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: preference });
+    await visit(page);
+    const arrived = await scene();
+    expect(arrived.prefersDark, `the emulated ${preference} preference never reached the page`).toBe(preference === 'dark');
+    expect(arrived.sky, `under a ${preference} preference the page opened on "${arrived.sky}", not the night`).toBe('night');
+    expect(arrived.colorScheme, `under a ${preference} preference the night declares "${arrived.colorScheme}"`).toBe('dark');
+    expect(arrived.surface, 'the sheet has no surface colour to compare').not.toBe('');
+    expect(arrived.themeColor, `under a ${preference} preference the toolbars were not told the night's sheet`).toBe(
+      arrived.surface
+    );
+    /* (d), on load: a first visit writes nothing anywhere. */
+    expect(await storage(), `under a ${preference} preference the page kept something on load`).toEqual(nothingKept);
+    expect(await context.cookies(), `under a ${preference} preference the page set a cookie on load`).toEqual([]);
+    arrivals[preference] = arrived.surface;
+  }
+  expect(arrivals.dark, 'the night paints a different sheet under the device’s light and dark preferences').toBe(
+    arrivals.light
   );
-  await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
-  const unstamped = await geometry();
+
+  /* (b) Nothing on the page turns it. */
+  const controls = await page.evaluate(() => ({
+    toggles: window.document.querySelectorAll('.sky-toggle').length,
+    intro: [...window.document.querySelector('main .page-intro').querySelectorAll('a[href], button, input, select, textarea, [tabindex]')].map(
+      (node) => node.outerHTML.slice(0, 80)
+    ),
+  }));
+  expect(controls.toggles, 'a sky control is on the page again').toBe(0);
+  expect(controls.intro, 'the name’s block holds a control or a keyboard stop').toEqual([]);
+  await expect(
+    page.getByRole('button', { name: /switch to (?:day|night)/i }),
+    'a control offers to turn the scene'
+  ).toHaveCount(0);
+
+  /* (c) The day behind data-sky, read at arrival, where a reader first is. */
+  const layout = () =>
+    page.evaluate(() => {
+      const at = (selector) => {
+        const box = window.document.querySelector(selector).getBoundingClientRect();
+        return [box.left, box.top + window.scrollY, box.width, box.height].map((value) => Math.round(value * 100) / 100);
+      };
+      return {
+        scrollY: window.scrollY,
+        name: at('h1'),
+        j: at('.j-flight'),
+        firstSection: at('.page-section'),
+        height: window.document.documentElement.scrollHeight,
+      };
+    });
+  const night = await scene();
+  const still = await layout();
+  await turnScene(page, 'day');
+  const day = await scene();
+  expect(day.colorScheme, `the day declares "${day.colorScheme}"`).toBe('light');
+  expect(day.surface, 'the day paints the night’s sheet').not.toBe(night.surface);
   expect(
-    unstamped.scrollY,
-    `returning to auto scrolled the document from ${before.scrollY} to ${unstamped.scrollY}`
-  ).toBe(before.scrollY);
-  expect(unstamped.boxes, 'returning to auto moved the page under the reader').toEqual(before.boxes);
-  expect(unstamped.scrollHeight).toBe(before.scrollHeight);
-  expect(
-    unstamped.surface,
-    'auto no longer paints what the unstamped document painted on arrival'
-  ).toBe(before.surface);
+    day.themeColor,
+    'the toolbars followed the attribute; only the app tells them, at hydration, and this lane says so'
+  ).toBe(night.surface);
+  expect(await layout(), 'uncovering the day moved the page').toEqual(still);
+
+  /* (d), after the day: still nothing kept. */
+  expect(await storage(), 'uncovering the day left a cookie or a stored value behind').toEqual(nothingKept);
+  expect(await context.cookies(), 'uncovering the day set a cookie').toEqual([]);
+
+  /* (e) A reload is a new visit, and a new visit is the night. */
+  await page.reload();
+  await settled(page);
+  const reloaded = await scene();
+  expect(reloaded.sky, 'a reload kept the day').toBe('night');
+  expect(reloaded.surface, 'a reload opened on a sheet other than the night’s').toBe(night.surface);
 });
 
 /* ===========================================================================
@@ -902,9 +1032,11 @@ test('the page is one centred column on a wide viewport, and everything stacks d
  * fixed chrome row rather than starting under it", and its chrome-row half is
  * retired with the row (owner direction, 2026-10-16: "do away with it for
  * now"). What stays is the half with a subject: the page still keeps its sky
- * above the sheet, the sheet still opens on the name — nothing above it in the
- * column any more — and on a phone J's overhang into that sky stays on screen
- * at the top of the page, which the J lane below measures picture by picture.
+ * above the sheet, and the sheet still opens on the name — nothing above it in
+ * the column any more. (A phone's J used to overhang into that sky, and this
+ * note pointed at the lane that kept the overhang on screen; since 2026-10-19
+ * he flies in the room the name keeps at its end, and the J lane below holds
+ * his picture inside the intro and the column instead.)
  *
  * Measured at a phone width as well as the desktop projects, because that is
  * where a safe-area inset would join the calculation on a real device. */
@@ -945,8 +1077,17 @@ test('the sheet opens on the name, under the sky the page keeps above it', async
  * the flying J again and give him a bit of a back-forth rotation, subtle").
  * He bookended the chrome row from two seats (issue 314, and issue 325's
  * mirrored one facing inwards); the row is gone and he has ONE seat, beside
- * the name — off the upper right of it on a monitor, perched on the sheet's
- * top-end corner on a phone.
+ * the name. Since 2026-10-19 the name and J are ONE CENTRED GROUP: the name
+ * keeps a room at its end the size of J's flight (a margin of the gap plus his
+ * square), the heading with that room is centred in the intro — so the name
+ * sits left of the middle — and J flies in the room, placed from the name's
+ * own end edge and centred on its two lines ("work my name also towards the
+ * left side stacked and put J on the white space flying", then, of the name
+ * at the column's very start, "way too much to the left"). He no longer
+ * perches on the frame's corner on a phone or hangs half into the sheet's
+ * margin on a monitor; what replaces those measurements is that his picture
+ * stays inside the intro and inside the column's content box, and that the
+ * group is centred.
  *
  * The source pins in tests/experience.test.mjs hold the declarations; this
  * holds what an engine did with them, which for a sprite beside a line of
@@ -1010,39 +1151,63 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
       if (jStillPath.test(pathname)) requested.still.push(request.url());
     });
     await visit(page);
-    /* 1440 and 1000 are the monitor seat at two name sizes; 721 is the
-       narrowest width that seat serves; 720 is the first phone width, where he
-       moves to the sheet's corner; 390 and 320 are phones. */
+    /* 1440 is a monitor where his 120px ceiling binds; 1000 a smaller one
+       at a smaller name; 721 and 720 straddle the page's 45rem phone
+       breakpoint; 390 and 320 are phones, where his 48px floor binds. */
     for (const width of [1440, 1000, 721, 720, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
       await settled(page);
       await page.evaluate(() => window.scrollTo(0, 0));
       await expect(page.locator('.j-flight'), `the page does not draw exactly one of him at ${width}px`).toHaveCount(1);
-      /* HIS BOX IS RESERVED AND SQUARE, and it is a share of the NAME's own
-         size, so he scales with the masthead and is smaller on a phone. */
+      /* HIS BOX IS RESERVED AND SQUARE, and its size is the one the source
+         states: half a name-size, but never past 120px — his flight is drawn
+         in 80px frames, and the owner saw him pixelated at 253px — and never
+         under 48px, so a phone still sees him (styles.css, the name:
+         clamp(3rem, 0.5em, 7.5rem) on the heading). Computed here from the
+         name's own font size as the engine resolved it, so the ratio half
+         ("a share of the name") and both bounds are one exact claim, held to
+         half a pixel. This replaced "0.78 to 0.82 of the name" (the in-flow
+         seat of the same day) and, before it, "more than 0.45 of the name". */
       const seat = await page.evaluate(() => {
         const node = window.document.querySelector('.j-flight');
         const box = node.getBoundingClientRect();
+        const heading = window.document.querySelector('h1');
         return {
           width: box.width,
           height: box.height,
-          name: parseFloat(getComputedStyle(window.document.querySelector('h1')).fontSize),
+          name: parseFloat(getComputedStyle(heading).fontSize),
+          rem: parseFloat(getComputedStyle(window.document.documentElement).fontSize),
         };
       });
       expect(Math.abs(seat.width - seat.height), `J's box is ${seat.width}x${seat.height} at ${width}px, not square`).toBeLessThan(0.5);
-      expect(seat.width / seat.name, `J is ${seat.width}px beside a ${seat.name}px name at ${width}px`).toBeGreaterThan(0.5);
-      expect(seat.width / seat.name, `J is ${seat.width}px beside a ${seat.name}px name at ${width}px`).toBeLessThan(1.2);
+      const stated = Math.min(7.5 * seat.rem, Math.max(3 * seat.rem, 0.5 * seat.name));
+      expect(
+        Math.abs(seat.width - stated),
+        `J is ${seat.width}px beside a ${seat.name}px name at ${width}px; the source states ${stated}px`
+      ).toBeLessThanOrEqual(0.5);
+      expect(seat.width, `J is drawn at ${seat.width}px at ${width}px, past the 120px his 80px frames allow`).toBeLessThanOrEqual(120 + subPixel);
 
       /* HE COVERS NO LETTER OF THE NAME, the page does not scroll sideways
-         because of him, and the part of him that rises above the sheet is
-         still on screen at the top of the page — each measured at the far ends
-         of the rock, not wherever it happened to be: the rotation widens the
-         picture's box. Where the rock runs it is held at BOTH extremes in turn
-         (the swing's start and its end); with the rock gone the still is level
-         and measured once. The name's boxes are its LINE boxes, from a Range
-         over its text, which is the box the engine paints each line's glyphs
-         in — the heading's own box is the whole column and says nothing about
-         where the letters are. */
+         because of him, his picture stays inside the intro and inside the
+         column's content box, and the name with him is one centred group —
+         each measured at the far ends of the rock, not wherever it happened to
+         be: the rotation widens the picture's box. Where the rock runs it is
+         held at BOTH extremes in turn (the swing's start and its end); with
+         the rock gone the still is level and measured once. The name's boxes
+         are its LINE boxes, from a Range over the heading's own TEXT — he is
+         inside the heading now, and a Range over the whole element would
+         count his box as a line of the name.
+
+         Inside the intro and the column REPLACES the overhang this lane used
+         to hold on screen (he perched on the frame's corner on a phone and
+         hung half into the sheet's margin on a monitor until 2026-10-19).
+
+         THE GROUP IS CENTRED (owner, 2026-10-19): from the name's start edge
+         to J's end edge, the pair's middle is the intro's middle within 2px,
+         and J is centred on the name's two lines within a pixel. This
+         REPLACES "the name starts at the column's start", the stacked setting
+         of earlier the same day that the owner found "way too much to the
+         left". */
       const extremes = motion === 'reduce' ? [null] : [0, 1];
       for (const extreme of extremes) {
         /* Hold the rock (where it runs) and read the angle the engine drew. */
@@ -1062,13 +1227,31 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
         const picture = await page.locator('.j-flight').evaluate(jPictureBox, degrees);
         /* Measure the page there, then let the rock run again. */
         const measured = await page.evaluate((box) => {
-          const range = window.document.createRange();
-          range.selectNodeContents(window.document.querySelector('h1'));
-          const lines = [...range.getClientRects()].filter((rect) => rect.width > 0);
+          const heading = window.document.querySelector('h1');
+          const lines = [];
+          for (const node of heading.childNodes) {
+            if (node.nodeType !== Node.TEXT_NODE) continue;
+            const range = window.document.createRange();
+            range.selectNodeContents(node);
+            lines.push(...[...range.getClientRects()].filter((rect) => rect.width > 0));
+          }
           const covered = lines.filter(
             (line) => box.left < line.right && line.left < box.right && box.top < line.bottom && line.top < box.bottom
           ).length;
           const overflow = window.document.documentElement.scrollWidth - window.document.documentElement.clientWidth;
+          const contentBox = (node) => {
+            const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
+            return {
+              left: rect.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft),
+              right: rect.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight),
+              top: rect.top + parseFloat(style.borderTopWidth) + parseFloat(style.paddingTop),
+            };
+          };
+          const introNode = window.document.querySelector('.page-intro');
+          const intro = introNode.getBoundingClientRect();
+          const name = heading.getBoundingClientRect();
+          const seat = window.document.querySelector('.j-flight').getBoundingClientRect();
           for (const animation of window.document.querySelector('.j-flight').getAnimations({ subtree: true })) {
             animation.play();
           }
@@ -1079,6 +1262,12 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
             covered,
             overflow,
             viewport: window.document.documentElement.clientWidth,
+            intro: { left: intro.left, right: intro.right, top: intro.top, bottom: intro.bottom },
+            introContent: contentBox(introNode),
+            column: contentBox(window.document.querySelector('main')),
+            group: { left: name.left, right: seat.right },
+            nameMiddle: (name.top + name.bottom) / 2,
+            jMiddle: (seat.top + seat.bottom) / 2,
           };
         }, picture);
         measured.degrees = degrees;
@@ -1086,10 +1275,36 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
         expect(measured.lines, `the name is not two lines ${where}`).toBe(2);
         expect(measured.covered, `J's picture covers ${measured.covered} line(s) of the name ${where}`).toBe(0);
         expect(measured.overflow, `the page scrolls ${measured.overflow}px sideways ${where}`).toBeLessThanOrEqual(0);
-        expect(measured.picture.top, `J's picture starts above the top of the page ${where}`).toBeGreaterThanOrEqual(-subPixel);
         expect(measured.picture.right, `J's picture runs past the viewport's end ${where}`).toBeLessThanOrEqual(
           measured.viewport + subPixel
         );
+        /* One centred group. */
+        const groupMiddle = (measured.group.left + measured.group.right) / 2;
+        const introMiddle = (measured.introContent.left + measured.introContent.right) / 2;
+        expect(
+          Math.abs(groupMiddle - introMiddle),
+          `the name and J span ${measured.group.left.toFixed(1)}-${measured.group.right.toFixed(1)}px, centred ${(groupMiddle - introMiddle).toFixed(1)}px off the intro's middle ${where}`
+        ).toBeLessThanOrEqual(2);
+        expect(
+          Math.abs(measured.jMiddle - measured.nameMiddle),
+          `J is centred ${(measured.jMiddle - measured.nameMiddle).toFixed(1)}px off the name's two lines ${where}`
+        ).toBeLessThanOrEqual(1);
+        /* In his seat: inside the intro, inside the column. */
+        for (const [edge, inside] of [
+          ['left', measured.picture.left >= measured.intro.left - subPixel],
+          ['right', measured.picture.right <= measured.intro.right + subPixel],
+          ['top', measured.picture.top >= measured.intro.top - subPixel],
+          ['bottom', measured.picture.bottom <= measured.intro.bottom + subPixel],
+        ]) {
+          expect(inside, `J's picture leaves the intro on its ${edge} ${where}: ${JSON.stringify(measured.picture)} in ${JSON.stringify(measured.intro)}`).toBe(true);
+        }
+        for (const [edge, inside] of [
+          ['start', measured.picture.left >= measured.column.left - subPixel],
+          ['end', measured.picture.right <= measured.column.right + subPixel],
+          ['top', measured.picture.top >= measured.column.top - subPixel],
+        ]) {
+          expect(inside, `J's picture runs into the sheet's margin at its ${edge} ${where}: ${JSON.stringify(measured.picture)} in ${JSON.stringify(measured.column)}`).toBe(true);
+        }
       }
       /* THE PICTURE TAKES NO POINTER: a press at his very centre lands on
          whatever is under him, never on him. */
@@ -1137,9 +1352,9 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
         hidden: node.getAttribute('aria-hidden'),
       };
     });
-    /* AS RENDERED: the flight faces screen-left, which from the name's upper
-       right is toward it, so his box carries no flip — the mirrored seat left
-       with the row it faced into. */
+    /* AS RENDERED: the flight faces screen-left, which from the room beside
+       the name is toward it, so his box carries no flip — the mirrored seat
+       left with the row it faced into. */
     expect(declared.transform, `J's box computed transform "${declared.transform}"; he is flipped`).toBe('none');
     /* THE SPRITE REALLY MOVES AND HE REALLY ROCKS, sampled rather than
        reasoned: every animation frame for 1200ms, counting the DISTINCT
@@ -1304,16 +1519,20 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
 
     /* SILENT AND UNREACHABLE: a decorative dragon beside the name adds no
        stop to the keyboard order and no name to the accessibility tree. Asked
-       of the name's own block rather than by pressing Tab, because engines in
-       this matrix disagree about whether a plain link is tabbable and that
-       disagreement would decide the result instead of the change under test;
-       the heading is the block's only named thing, and it is the page's name. */
+       of the markup rather than by pressing Tab, because engines in this
+       matrix disagree about whether a plain link is tabbable and that
+       disagreement would decide the result instead of the change under test.
+       The name's block holds no stop at all — as it did before the sky's
+       control briefly sat in it on 2026-10-19 — and he is inside the heading
+       now, so the heading's accessible name is asked for exactly the name:
+       a picture that leaked a name of its own into it fails there. */
     expect(declared.hidden, 'J is no longer hidden from assistive technology').toBe('true');
-    const block = await page.evaluate(() => {
-      const intro = window.document.querySelector('.page-intro');
-      return intro.querySelectorAll('a[href], button, input, select, textarea, [tabindex]').length;
-    });
-    expect(block, 'the name’s own block holds a keyboard stop; J is decoration').toBe(0);
+    const stops = await page.evaluate(() =>
+      [...window.document.querySelector('.page-intro').querySelectorAll('a[href], button, input, select, textarea, [tabindex]')].map(
+        (node) => node.outerHTML.slice(0, 80)
+      )
+    );
+    expect(stops, 'the name’s own block holds a keyboard stop; J is decoration').toEqual([]);
     await expect(page.getByRole('heading', { level: 1, name: 'Samuel Naranjo', exact: true })).toHaveCount(1);
     await context.close();
   }
@@ -1369,11 +1588,9 @@ test('a phone still renders the single full-width column it always did', async (
        264, 2026-08-31: on a phone the page showed a dead strip roughly 60px
        wide down its inline end). Issue 241 had subtracted a third term here —
        the 44px lane the page reserved for the fixed reading-mode control — and
-       that lane is retired: the control is glued to the document below the
-       handle breakpoint now, so it scrolls away with the page instead of
-       holding a corner over it, and nothing has to be held back from it. The
-       measured replacement for the lane's guarantee is the scroll check
-       below.
+       that lane is retired: issue 264 glued the control to the document, and
+       the control itself went with the footer (owner, 2026-10-19), so nothing
+       has to be held back for it.
 
        THE COLUMN carries that claim now, and what is inside it carries the
        rest (THE KEEP, owner direction, 2026-10-16): the sheet's frame and
@@ -1400,53 +1617,10 @@ test('a phone still renders the single full-width column it always did', async (
         0
       );
     }
-    /* And the guarantee that replaces the lane, MEASURED rather than reasoned.
-       The reading mode rode the ledger's masthead row from issue 287; the row
-       is gone (owner direction, 2026-10-16: "do away with it for now") and the
-       control rides the page's own FOOTER. What the corner check was FOR is
-       unchanged and is what is measured here: the control costs the column no
-       inline lane — it sits inside the column, between the sheet's own edges —
-       and it holds no pixels over scrolled content at any offset, because it
-       moves with the document: scrolled by any distance, it moves by exactly
-       that distance. A control that had become viewport-glued reports the
-       identical box at both offsets and fails the last of these by the whole
-       scroll. */
-    const control = await page.evaluate(async () => {
-      const button = window.document.querySelector('.page-footer [aria-label="Reading mode"]');
-      if (button === null) return null;
-      const main = window.document.querySelector('main').getBoundingClientRect();
-      window.scrollTo(0, 0);
-      await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
-      const rest = button.getBoundingClientRect();
-      const restScroll = window.scrollY;
-      window.scrollTo(0, window.document.documentElement.scrollHeight);
-      await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
-      const scrolled = button.getBoundingClientRect();
-      const offset = window.scrollY - restScroll;
-      // Later lanes in this file start from the top of the document.
-      window.scrollTo(0, 0);
-      return {
-        mainLeft: main.left,
-        mainRight: main.right,
-        left: rest.left,
-        right: rest.right,
-        restTop: rest.top,
-        scrolledTop: scrolled.top,
-        offset,
-      };
-    });
-    expect(control, `the reading-mode control is not in the page footer at ${width}px`).not.toBeNull();
-    expect(control.offset, `the page could not be scrolled at ${width}px, so this check proves nothing`).toBeGreaterThan(0);
-    expect(control.left, `the reading-mode control starts outside the column at ${width}px`).toBeGreaterThanOrEqual(
-      control.mainLeft - subPixel
-    );
-    expect(control.right, `the reading-mode control ends outside the column at ${width}px`).toBeLessThanOrEqual(
-      control.mainRight + subPixel
-    );
-    expect(
-      control.restTop - control.scrolledTop,
-      `scrolled ${control.offset}px, the reading-mode control moved ${control.restTop - control.scrolledTop}px at ${width}px; it is held to the viewport rather than the page`
-    ).toBeCloseTo(control.offset, 0);
+    /* The footer control's own check stood here — inside the column, and
+       carried by the document rather than the viewport — and it went with the
+       footer (owner, 2026-10-19): there is no control left for a corner or a
+       scroll to cover. */
   }
 });
 
@@ -2097,9 +2271,28 @@ test('every model row an account draws is a real member with a real rule', async
       }
     }
     /* THE LONGEST ROW RUNS THE ACCOUNT'S FULL WIDTH and the rest are read against
-       it, which is what makes the rules comparable without a scale. */
-    expect(largest.fill).toBeCloseTo(largest.track, 0);
-    expect(lesser.fill / lesser.track).toBeCloseTo(0.25, 1);
+       it, which is what makes the rules comparable without a scale.
+
+       A ROW IS A SWORD since 2026-10-19 ("we should have swords"): the hilt
+       (13px) and the point (6px) are always whole, and only the blade between
+       them carries the share, so a bar is 19px plus the share of the rest of
+       its track — held here to that formula within a pixel, which replaced
+       "a quarter of the track to within 0.05" (a ratio a 19px sword part
+       shifts by several hundredths on a phone). The share is the member's
+       total against the largest member's (token-usage.ts: "against the
+       LARGEST member, not against the sum"), so the staged 4:1 is a full
+       sword and a quarter blade — NOT the printed percent, which on a
+       lifetime card is each member's share of the source's whole lifetime. */
+    const sword = (track, share) => 19 + (track - 19) * share;
+    for (const [row, share] of [
+      [largest, 1],
+      [lesser, 0.25],
+    ]) {
+      expect(
+        Math.abs(row.fill - sword(row.track, share)),
+        `"${row.label}" draws a ${row.fill}px sword in a ${row.track}px track; a share of ${share} is ${sword(row.track, share).toFixed(2)}px`
+      ).toBeLessThanOrEqual(1);
+    }
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   }
 });
@@ -3087,6 +3280,10 @@ test('every layer button clears the touch floor at 320, 390 and 1440 (owner 2026
 test('the night sky is fixed behind the sheet, takes no room or pointer, and holds still for a reader who asked for less motion (owner 2026-10-16)', async ({
   page,
 }) => {
+  /* THE NIGHT, which is every visit's arrival (owner, 2026-10-19: "always set
+     it to night by default"), and the only sky with stars to move — so the
+     motion half below is about a sky that would otherwise move. The scene
+     lane further down proves the arrival itself. */
   const sample = () =>
     page.evaluate(() => {
       const canvas = window.document.querySelector('canvas.night-sky');
@@ -3105,6 +3302,7 @@ test('the night sky is fixed behind the sheet, takes no room or pointer, and hol
     await page.emulateMedia({ reducedMotion: motion });
     await visit(page);
     await expect(page.locator('canvas.night-sky'), 'the page draws no night sky, or more than one').toHaveCount(1);
+    await expect(page.locator('html'), 'the page did not open on the night').toHaveAttribute('data-sky', 'night');
 
     if (motion === 'reduce') {
       const placed = await page.evaluate(() => {
@@ -3156,7 +3354,7 @@ test('the night sky is fixed behind the sheet, takes no room or pointer, and hol
       const layout = () =>
         page.evaluate(() => {
           const root = window.document.documentElement;
-          const boxes = [...window.document.querySelectorAll('main, .page-section, footer')].map((node) => {
+          const boxes = [...window.document.querySelectorAll('main, .page-section')].map((node) => {
             const box = node.getBoundingClientRect();
             return [box.left, box.top + window.scrollY, box.width, box.height].map((value) => Math.round(value * 100) / 100);
           });
@@ -3192,6 +3390,204 @@ test('the night sky is fixed behind the sheet, takes no room or pointer, and hol
   await page.emulateMedia({ reducedMotion: null });
 });
 
+/* THE SKY IS THE NIGHT, WHATEVER THE HOUR (owner, 2026-10-19). This lane was
+ * "the sky follows the reader's hour: a still blue day, and a dawn that keeps
+ * a few stars moving"; later the same day the owner asked for the night by
+ * default and a toggle for the day, and then for the toggle to go too ("do
+ * away with this all together but keep the logic"). What it measures now is
+ * the half with a subject on the page: the page ignores the clock — at midday
+ * it still opens on the night, drawn as the night (no blue day sky), so a sky
+ * that went back to reading the hour fails here.
+ *
+ * The other half, "the day is a still blue sky", went with the toggle: the
+ * sky canvas takes its phase from the app's constant, so nothing on the page
+ * can draw the day sky now, and the attribute the stylesheet's day palette
+ * keys on does not reach it. That is stated as measured below, so a page that
+ * starts drawing the day from the attribute is a conscious edit here; the day
+ * preset itself is still pinned at the source by tests/sky.test.mjs. */
+test('the sky ignores the reader’s hour and opens on the night (owner 2026-10-19)', async ({
+  page,
+}) => {
+  const sample = () =>
+    page.evaluate(() => {
+      const canvas = window.document.querySelector('canvas.night-sky');
+      const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      let red = 0;
+      let blue = 0;
+      for (let index = 0; index < data.length; index += 4) {
+        red += data[index];
+        blue += data[index + 2];
+      }
+      return { red, blue, sky: window.document.documentElement.dataset.sky };
+    });
+
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.clock.setFixedTime(atHour(13));
+  await visit(page);
+  const midday = await sample();
+  expect(midday.sky, 'at 13:00 the page opened on the day; the sky is reading the clock again').toBe('night');
+  expect(midday.blue, 'at 13:00 the sky is drawn blue; the canvas is reading the clock again').toBeLessThanOrEqual(midday.red * 1.4);
+
+  /* The day palette's attribute does not draw the day sky (stated, above). */
+  await turnScene(page, 'day');
+  await page.waitForTimeout(500);
+  const attributeOnly = await sample();
+  expect(
+    attributeOnly.blue,
+    'the sky turned blue from the attribute alone; the canvas now follows data-sky, so this lane needs its day half back'
+  ).toBeLessThanOrEqual(attributeOnly.red * 1.4);
+  await page.emulateMedia({ reducedMotion: null });
+});
+
+/* THE TORCHES BURN AT NIGHT (owner, 2026-10-19). They are scenery on the
+ * frame: a pair at each seat, one on each side band, inside the sheet's outer
+ * edge so the page never widens; at night — every visit — every torch on
+ * screen draws a flame, and the flame moves with motion welcome and holds
+ * still for a reader who asked for less. A flame is read from its canvas, so a
+ * torch that drew nothing would be caught rather than counted. (This lane also
+ * held them out by day while a toggle could bring the day; see the note at its
+ * end.) */
+test('the torches burn on both sides of the frame at night and hold still for less motion (owner 2026-10-19)', async ({
+  page,
+}) => {
+  /* No page error while they burn: the torches' effects once wrote state they
+     also read, and Svelte stopped the loop with effect_update_depth_exceeded
+     while the page went on looking right. */
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const read = () =>
+    page.evaluate(() => {
+      const main = window.document.querySelector('main');
+      const sheet = main.getBoundingClientRect();
+      const frame = getComputedStyle(main);
+      const torches = [...window.document.querySelectorAll('.torch')].map((torch) => {
+        const box = torch.getBoundingClientRect();
+        const canvas = torch.querySelector('canvas.torch-flame');
+        const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        let lit = 0;
+        let hash = 0;
+        for (let index = 0; index < data.length; index += 4) {
+          if (data[index + 3] > 0) lit += 1;
+          hash = (Math.imul(hash, 31) + data[index] + data[index + 1] * 7 + data[index + 2] * 13 + data[index + 3]) | 0;
+        }
+        const halo = torch.querySelector('.torch-halo').getBoundingClientRect();
+        return {
+          side: torch.dataset.side,
+          left: box.left,
+          right: box.right,
+          top: box.top + window.scrollY,
+          lit,
+          hash,
+          glow: Number(getComputedStyle(torch.querySelector('.torch-light')).opacity),
+          light: torch.style.getPropertyValue('--torch-light'),
+          halo: { left: halo.left, right: halo.right },
+          pointer: getComputedStyle(torch.closest('.keep-torches')).pointerEvents,
+          hidden: torch.closest('.keep-torches').getAttribute('aria-hidden'),
+          layer: getComputedStyle(torch.closest('.keep-torches')).zIndex,
+        };
+      });
+      return {
+        torches,
+        sheet: { left: sheet.left, right: sheet.right },
+        words: {
+          left: sheet.left + parseFloat(frame.borderLeftWidth) + parseFloat(frame.paddingLeft),
+          right: sheet.right - parseFloat(frame.borderRightWidth) - parseFloat(frame.paddingRight),
+        },
+        width: window.document.documentElement.scrollWidth,
+        viewport: window.innerWidth,
+      };
+    });
+
+  /* SEATED: a torch pair stands at every seat the sheet has room for. The
+     seats follow the sheet's height through a resize observer, which an
+     engine delivers with a rendering update — WebKit without a GPU, a second
+     after the page settled — so the lane waits for the count the height
+     calls for rather than reading whatever stood at that moment. */
+  const seated = () =>
+    expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const layer = window.document.querySelector('.keep-torches');
+            const style = getComputedStyle(layer);
+            const first = parseFloat(style.getPropertyValue('--torch-first-px'));
+            const spacing = parseFloat(style.getPropertyValue('--torch-spacing-px'));
+            const foot = parseFloat(style.getPropertyValue('--torch-foot-px'));
+            const height = window.document.querySelector('main').clientHeight;
+            let seats = 0;
+            for (let top = first; top + foot <= height; top += spacing) seats += 1;
+            return seats > 0 && window.document.querySelectorAll('.torch').length === seats * 2;
+          }),
+        { message: 'the torches never stood at every seat the sheet has room for' }
+      )
+      .toBe(true);
+
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 320, height: 700 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    /* The night is the arrival (owner, 2026-10-19), so no clock is set: a
+       page that stopped opening on the night fails right here. */
+    await visit(page);
+    await expect(page.locator('html'), 'the page did not open on the night').toHaveAttribute('data-sky', 'night');
+    await seated();
+    const night = await read();
+    expect(night.torches.length, `no torches at ${viewport.width}px`).toBeGreaterThanOrEqual(2);
+    expect(night.torches.filter((torch) => torch.side === 'start').length).toBe(
+      night.torches.filter((torch) => torch.side === 'end').length
+    );
+    expect(night.width, `the torches widened the page at ${viewport.width}px`).toBe(night.viewport);
+    for (const torch of night.torches) {
+      expect(torch.hidden, 'a torch is exposed to assistive technology').toBe('true');
+      expect(torch.pointer, 'a torch can take the pointer').toBe('none');
+      expect(torch.left, 'a torch pokes past the sheet’s outer edge').toBeGreaterThanOrEqual(night.sheet.left - 0.5);
+      expect(torch.right, 'a torch pokes past the sheet’s outer edge').toBeLessThanOrEqual(night.sheet.right + 0.5);
+      /* Under the words, and the hot light beside the flame stops short of
+         them (owner, 2026-10-19: "readable, very readable"). */
+      expect(torch.layer, 'the torches paint over the sheet’s words').toBe('-1');
+      if (torch.side === 'start') {
+        expect(torch.halo.right, `a torch’s hot light reaches over the words (${viewport.width}px)`).toBeLessThanOrEqual(night.words.left + 0.5);
+      } else {
+        expect(torch.halo.left, `a torch’s hot light reaches over the words (${viewport.width}px)`).toBeGreaterThanOrEqual(night.words.right - 0.5);
+      }
+    }
+    const first = night.torches[0];
+    expect(first.lit, `the first torch drew no flame at night (${viewport.width}px)`).toBeGreaterThan(0);
+    expect(first.glow, 'a burning torch throws no light').toBeGreaterThan(0);
+    await expect
+      .poll(async () => (await read()).torches[0].hash, {
+        message: 'the flame never moved with motion welcome',
+        timeout: 4_000,
+      })
+      .not.toBe(first.hash);
+    /* The light on the stone moves with the fire: it brightens and dims. */
+    await expect
+      .poll(async () => (await read()).torches[0].light, {
+        message: 'the torchlight never moved with the flame',
+        timeout: 4_000,
+      })
+      .not.toBe(first.light);
+
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await visit(page);
+    const still = (await read()).torches[0];
+    expect(still.lit, 'a reader who asked for less motion sees no flame at all').toBeGreaterThan(0);
+    expect(still.glow, 'a reader who asked for less motion sees a torch throw no light').toBeGreaterThan(0);
+    await page.waitForTimeout(1_000);
+    const later = (await read()).torches[0];
+    expect(later.hash, 'the flame moved for a reader who asked for less motion').toBe(still.hash);
+    expect(later.light, 'the torchlight moved for a reader who asked for less motion').toBe(still.light);
+    /* "Out by day" is retired with the toggle that brought the day (owner,
+       2026-10-19: "do away with this all together but keep the logic"): the
+       torches take their lit state from the app's constant phase, which is
+       always the night, so the page has no day for them to be out in. */
+  }
+  await page.emulateMedia({ reducedMotion: null });
+  expect(errors, 'the page threw while the torches stood').toEqual([]);
+});
+
 /* NO RED ANYWHERE (owner directive, 2026-09-11).
  *
  * The sheet's one chromatic mark used to be a red that belonged to no palette
@@ -3210,30 +3606,35 @@ test('the night sky is fixed behind the sheet, takes no room or pointer, and hol
  * background"). Two halves moved:
  *
  * - THE PAGE IT IS PRINTED ON is MEASURED now, not named: the ticker lost its
- *   own glass and reads off the sheet, and the sheet is a translucent glass
- *   over the night in the dark modes and parchment in light. So the ground
+ *   own glass and reads off the sheet, and the sheet is a stone wall, dark
+ *   at night and pale by day. So the ground
  *   is every background colour from the figure up to the document,
  *   composited by the engine itself onto one pixel — what the reader's eye
  *   actually gets behind the figure, rather than a token that is no longer
- *   the surface. (The parchment's grain is an image over its own base
- *   colour; the base colour is what is measured, as for every other lane.)
+ *   the surface. (The wall is an image over its own base colour, held to a
+ *   narrow band of brightness around it; the base colour is what is
+ *   measured, as for every other lane.)
  * - THE BUSIEST DAY'S PEAK moved with the calendar: the old calendar marked
  *   its busiest day with `data-grid-peak`; the chronicle's calendar marks it
  *   `data-peak` (restored the same day, owner issues 287/292 asked for the
- *   peak), and its fill is measured as the engine resolved it. The token half
- *   stays: the mark must still not BE the peak green.
+ *   peak), and its peak green is measured as the engine resolved it — on its
+ *   fill until 2026-10-19, on the ring it wears since the days became moss on
+ *   stone. The token half stays: the mark must still not BE the peak green.
  */
 test('the page spends its one mark on its own green, legible as text, in every reading mode (owner 2026-09-11)', async ({
   page,
 }) => {
   await visit(page);
-  for (const mode of ['light', 'dark', 'slate', 'sepia']) {
-    /* The calendar's cells repaint to a new mode as a wave (a fill
-       transition, with motion allowed), so what a cell is painted is read
-       once the repaint has landed: every running transition is waited out —
-       transitions only, because today's cell glows on an endless animation. */
-    await page.evaluate(async (theme) => {
-      window.document.documentElement.setAttribute('data-theme', theme);
+  /* Both palettes the page has: the night it opens on, and the day kept
+     behind data-sky (owner, 2026-10-19; the control that offered slate and
+     sepia besides went with the footer the same day). */
+  for (const mode of ['night', 'day']) {
+    await turnScene(page, mode);
+    /* The page's colours ease to a new mode (transitions, with motion
+       allowed), so what is painted is read once the repaint has landed: every
+       running transition is waited out — transitions only, because today's
+       cell glows on an endless animation. */
+    await page.evaluate(async () => {
       await new Promise((frame) => requestAnimationFrame(frame));
       await Promise.all(
         window.document
@@ -3241,7 +3642,7 @@ test('the page spends its one mark on its own green, legible as text, in every r
           .filter((animation) => animation instanceof window.CSSTransition)
           .map((animation) => animation.finished.catch(() => undefined))
       );
-    }, mode);
+    });
     const observed = await page.evaluate(() => {
       const root = window.document.documentElement;
       const resolve = (token) => {
@@ -3294,13 +3695,101 @@ test('the page spends its one mark on its own green, legible as text, in every r
         mark: resolve('--ledger-highlight'),
         page: ground,
         ticker: figure === null ? null : getComputedStyle(figure).color,
-        busiest: busiest.map((cell) => getComputedStyle(cell).fill),
+        busiest: busiest.map((cell) => ({
+          fill: getComputedStyle(cell).fill,
+          stroke: getComputedStyle(cell).stroke,
+          /* Today's and the picked day's own rings are drawn over the peak's,
+             in the ledger's ink, so only a busiest day that is neither is
+             ringed in the peak. */
+          ringed: cell.dataset.today !== 'true' && cell.dataset.picked !== 'true',
+        })),
       };
     });
     expect(observed.peak, `${mode}: the peak token resolves to nothing`).toMatch(/rgb/);
     expect(observed.busiest.length, `${mode}: the calendar marks no busiest day`).toBeGreaterThan(0);
-    for (const fill of observed.busiest) {
-      expect(fill, `${mode}: the busiest day is painted ${fill}, not the calendar's peak green`).toBe(observed.peak);
+    /* THE BUSIEST DAY IS THE MOSSIEST STONE, RINGED IN THE PEAK GREEN (owner,
+       2026-10-19: the calendar's days became moss on stone). The stones are
+       the same pictures in both scenes, so the peak green this lane used to
+       read off the fill is read off the ring the busiest day wears instead.
+       The stones themselves are painted on one canvas under the cells (the
+       same day: WebKit without a GPU stalled rasterising them inside the
+       SVG), so the stone under the busiest day is read off that canvas once
+       it has arrived: the mean colour of its square must lie nearest the
+       mossiest of the five stone drawings, each read from the key's own
+       step, so a bare or half-mossed stone there fails. */
+    await page.locator('.chronicle-calendar').first().scrollIntoViewIfNeeded();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(async () => {
+            const canvas = window.document.querySelector('.chronicle-stones');
+            const cell = window.document.querySelector('.chronicle-cell[data-peak="true"]');
+            if (canvas === null || cell === null || canvas.width === 0) {
+              return 'no stones canvas or no busiest day';
+            }
+            const mean = (data) => {
+              const sum = [0, 0, 0];
+              let count = 0;
+              for (let at = 0; at < data.length; at += 4) {
+                if (data[at + 3] > 200) {
+                  sum[0] += data[at];
+                  sum[1] += data[at + 1];
+                  sum[2] += data[at + 2];
+                  count += 1;
+                }
+              }
+              return count === 0 ? null : sum.map((channel) => channel / count);
+            };
+            const box = canvas.getBoundingClientRect();
+            const ratio = canvas.width / box.width;
+            const square = cell.getBoundingClientRect();
+            const laid = mean(
+              canvas
+                .getContext('2d')
+                .getImageData(
+                  Math.round((square.left - box.left) * ratio),
+                  Math.round((square.top - box.top) * ratio),
+                  Math.max(1, Math.round(square.width * ratio)),
+                  Math.max(1, Math.round(square.height * ratio))
+                ).data
+            );
+            if (laid === null) {
+              return 'no stone under the busiest day yet';
+            }
+            const drawings = await Promise.all(
+              [0, 1, 2, 3, 4].map(async (level) => {
+                const step = window.document.querySelector(`.chronicle-step[data-grid-level="${level}"]`);
+                const url = /url\("?([^")]+)"?\)/.exec(step === null ? '' : getComputedStyle(step).backgroundImage)?.[1];
+                if (url === undefined) {
+                  return null;
+                }
+                const image = new Image();
+                image.src = url;
+                await image.decode();
+                const art = window.document.createElement('canvas');
+                art.width = image.naturalWidth;
+                art.height = image.naturalHeight;
+                const context = art.getContext('2d');
+                context.drawImage(image, 0, 0);
+                return mean(context.getImageData(0, 0, art.width, art.height).data);
+              })
+            );
+            if (drawings.some((drawing) => drawing === null)) {
+              return 'the key does not draw all five stones';
+            }
+            const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+            const nearest = drawings.reduce((best, drawing, level) => (distance(laid, drawing) < distance(laid, drawings[best]) ? level : best), 0);
+            return `level ${nearest}`;
+          }),
+        { message: `${mode}: the stone under the busiest day is not the mossiest stone`, timeout: 8000 }
+      )
+      .toBe('level 4');
+    const ringed = observed.busiest.filter((day) => day.ringed);
+    expect(ringed.length, `${mode}: every busiest day is also today or picked, so no peak ring can be read`).toBeGreaterThan(0);
+    for (const day of ringed) {
+      expect(day.stroke, `${mode}: the busiest day is ringed ${day.stroke}, not in the calendar's peak green`).toBe(
+        observed.peak
+      );
     }
     expect(observed.mark, `${mode}: the mark resolves to nothing`).toMatch(/rgb/);
     expect(observed.page, `${mode}: the ticker printed no peak figure to measure`).not.toBeNull();
@@ -3324,7 +3813,6 @@ test('the page spends its one mark on its own green, legible as text, in every r
       `${mode}: the mark ${observed.mark} on the page ${observed.page} is ${ratio.toFixed(2)}:1`
     ).toBeGreaterThanOrEqual(4.5);
   }
-  await page.evaluate(() => window.document.documentElement.removeAttribute('data-theme'));
 });
 
 /* AN ACCOUNT IS NOT A CONTROL, AND CLICKING ONE CHANGES NOTHING (owner
@@ -3391,7 +3879,8 @@ test('an account never repaints when it is clicked, and every account wears one 
  * page no longer draws, retired with it. What an engine can still be asked is
  * the removal itself: no band on the page, and no band picture ever requested,
  * on arrival or after a reading-mode switch (the switch used to be what
- * fetched the next picture). */
+ * fetched the next picture; since 2026-10-19 it is the day palette uncovered
+ * behind data-sky, the only switch the page keeps). */
 test('the page draws no picture band and fetches no band picture, before or after a reading-mode switch (owner 2026-10-16)', async ({
   page,
 }) => {
@@ -3403,9 +3892,7 @@ test('the page draws no picture band and fetches no band picture, before or afte
   });
   await visit(page);
   await expect(page.locator('.band, .band-layer'), 'a picture band is on the page again').toHaveCount(0);
-  await openReadingModes(page);
-  await page.getByRole('button', { name: 'Dark', exact: true }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await turnScene(page, 'day');
   await settled(page);
   await expect(page.locator('.band, .band-layer'), 'a reading-mode switch brought a picture band back').toHaveCount(0);
   expect(fetched, 'the page asked for a band picture').toEqual([]);
@@ -3766,7 +4253,7 @@ test('the boss ticker pans inside its own box, and still pans with the motion of
        larger lazy margin is what made the same lane pass in one engine and
        time out in two. */
     strip.scrollIntoView({ block: 'center' });
-    strip.scrollLeft = strip.querySelector('.ticker-lead').getBoundingClientRect().width;
+    strip.scrollLeft = strip.querySelector('.ticker-item').getBoundingClientRect().width;
   });
   await expect
     .poll(async () => (await readTicker()).inView, {
@@ -3813,6 +4300,177 @@ test('the boss ticker pans inside its own box, and still pans with the motion of
   await page.emulateMedia({ reducedMotion: null });
 });
 
+/* THE BOSS STRIP (owner, 2026-10-19). Three rulings, measured together:
+ *   - ITS ORDER IS THE HISCORES' OWN ("by the order in which they appear in
+ *     the runelite plugin viewer"): the strip follows the payload and sorts
+ *     nothing. Staged with the payload reversed, so a strip that sorted by
+ *     kill count — or kept any order of its own — draws a different sequence
+ *     from the one it was handed; the staging is checked to be unsorted first.
+ *   - IT READS 15% LARGER ("increase the size of this by 15%"): a 25px icon,
+ *     0.65rem by 1rem around each boss, and the figure at 1.15 times the
+ *     ledger's figure size, each read from the engine.
+ *   - NOTHING PARTS THE BOSSES BUT SPACE ("the skulls here do not look good"):
+ *     no border and no picture on any boss and no frame round the strip.
+ *   - NOTHING LEADS THEM (the same day, of the lead's figure and its blade:
+ *     "remove this"): the strip's first item in either lane is a boss. */
+test('the boss strip keeps the payload’s order, reads 15% larger, and parts its bosses by space alone (owner 2026-10-19)', async ({
+  page,
+}) => {
+  let staged = [];
+  await page.route('**/api/panels/boss-log', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.bosses.reverse();
+    staged = envelope.data.bosses.map((boss) => ({ name: boss.name, kc: boss.kc ?? -1 }));
+    await route.fulfill({ response, json: envelope });
+  });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await visit(page);
+  expect(staged.length, 'the origin served too few bosses to order').toBeGreaterThan(2);
+  const byCount = [...staged].sort((a, b) => b.kc - a.kc).map((boss) => boss.name);
+  expect(byCount, 'the staged order is already the kill-count order, so this lane cannot tell order from sorting').not.toEqual(
+    staged.map((boss) => boss.name)
+  );
+  const observed = await page.evaluate(() => {
+    const rem = Number.parseFloat(getComputedStyle(window.document.documentElement).fontSize);
+    const probe = window.document.createElement('span');
+    probe.style.fontSize = 'var(--ledger-figure-size)';
+    window.document.body.appendChild(probe);
+    const figureToken = Number.parseFloat(getComputedStyle(probe).fontSize);
+    probe.remove();
+    const strip = window.document.querySelector('#trackers .ticker-strip');
+    const lane = strip.querySelector('.ticker-lane:not([aria-hidden="true"])');
+    const parts = (node) => {
+      const style = getComputedStyle(node);
+      return {
+        borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth].map(Number.parseFloat),
+        picture: style.backgroundImage,
+        ground: style.backgroundColor,
+      };
+    };
+    const items = [...lane.querySelectorAll('.ticker-item')];
+    const first = items[0];
+    const icon = first.querySelector('.ticker-icon').getBoundingClientRect();
+    const itemStyle = getComputedStyle(first);
+    return {
+      rem,
+      figureToken,
+      labels: items.map((item) => item.getAttribute('aria-label') ?? ''),
+      icon: [icon.width, icon.height],
+      padding: [itemStyle.paddingTop, itemStyle.paddingRight, itemStyle.paddingBottom, itemStyle.paddingLeft].map(Number.parseFloat),
+      figure: Number.parseFloat(getComputedStyle(first.querySelector('.ticker-figure')).fontSize),
+      items: items.map(parts),
+      leads: [...strip.querySelectorAll('.ticker-lane')].map((each) => ({
+        first: each.firstElementChild?.className ?? '',
+        pictures: each.querySelectorAll('img:not(.ticker-icon), svg').length,
+      })),
+      strip: parts(strip),
+    };
+  });
+  /* The order. */
+  expect(observed.labels.length, 'the strip drew a different number of bosses from the payload').toBe(staged.length);
+  for (const [index, boss] of staged.entries()) {
+    expect(observed.labels[index], `boss ${index} is not the payload's ${boss.name}`).toMatch(new RegExp(`^${boss.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: `));
+  }
+  /* The size. */
+  expect(observed.icon[0], `a boss icon is ${observed.icon[0]}px wide`).toBeCloseTo(25, 1);
+  expect(observed.icon[1], `a boss icon is ${observed.icon[1]}px tall`).toBeCloseTo(25, 1);
+  expect(observed.padding, 'a boss is not padded 0.65rem by 1rem').toEqual([
+    expect.closeTo(0.65 * observed.rem, 1),
+    expect.closeTo(observed.rem, 1),
+    expect.closeTo(0.65 * observed.rem, 1),
+    expect.closeTo(observed.rem, 1),
+  ]);
+  expect(observed.figureToken, 'the ledger figure size resolves to nothing').toBeGreaterThan(0);
+  expect(
+    observed.figure,
+    `a boss's figure is ${observed.figure}px against the ledger's ${observed.figureToken}px figure`
+  ).toBeCloseTo(1.15 * observed.figureToken, 1);
+  /* Space alone. */
+  for (const [index, item] of observed.items.entries()) {
+    expect(item.borders, `boss ${index} draws a border`).toEqual([0, 0, 0, 0]);
+    expect(item.picture, `boss ${index} paints a picture (a separator)`).toBe('none');
+  }
+  expect(observed.strip.borders, 'the strip draws a frame').toEqual([0, 0, 0, 0]);
+  /* No lead. */
+  expect(observed.leads.length, 'the strip lost its loop, or grew a third lane').toBe(2);
+  for (const [index, lane] of observed.leads.entries()) {
+    expect(lane.first, `lane ${index} opens on "${lane.first}" rather than a boss`).toMatch(/^ticker-item\b/);
+    expect(lane.pictures, `lane ${index} draws a picture that is not a boss's icon`).toBe(0);
+  }
+});
+
+/* THE TRACKERS' FIGURES SIT ABOVE A FULL-WIDTH GRAPH AND CALENDAR (owner,
+ * 2026-10-19: "large awkward gap in between here, either expand the heatmap or
+ * find a way to present the information in a better way"). At every width the
+ * figures are one row, wholly above the graph, and the graph and the calendar
+ * under it take the diagram's whole column: their boxes start at its start
+ * and are its width, and the calendar's DRAWING does too — its first and last
+ * days sit within their own half-gap of the column's two edges, at the scale
+ * the engine drew them, so no empty band opens beside the stones however the
+ * figures are set. Measured at the owner's 1100px, at a monitor, at the page's
+ * breakpoint and at two phones. */
+test('the trackers set their figures in one row above a graph and calendar that take the whole column, at every width (owner 2026-10-19)', async ({
+  page,
+}) => {
+  await visit(page);
+  for (const width of [1440, 1100, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    const observed = await page.evaluate(() => {
+      const box = (node) => {
+        const rect = node.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width };
+      };
+      const column = window.document.querySelector('.chronicle');
+      const calendar = window.document.querySelector('.chronicle-calendar');
+      const drawing = calendar.querySelector('svg');
+      const view = drawing.viewBox.baseVal;
+      const scale = drawing.getBoundingClientRect().width / view.width;
+      const cells = [...drawing.querySelectorAll('.chronicle-cell')].map((cell) => ({
+        x: Number(cell.getAttribute('x')),
+        width: Number(cell.getAttribute('width')),
+      }));
+      const drawn = drawing.getBoundingClientRect();
+      return {
+        column: box(column),
+        headlines: [...window.document.querySelectorAll('.chronicle-headline')].map(box),
+        chart: box(window.document.querySelector('.chronicle-chart')),
+        calendar: box(calendar),
+        firstDay: drawn.left + Math.min(...cells.map((cell) => cell.x)) * scale,
+        lastDay: drawn.left + Math.max(...cells.map((cell) => cell.x + cell.width)) * scale,
+        /* The first column's own inset in the drawing: half the gap between
+           two days, at the scale drawn. */
+        halfGap: Math.min(...cells.map((cell) => cell.x)) * scale,
+        cells: cells.length,
+      };
+    });
+    const at = `at ${width}px`;
+    expect(observed.headlines.length, `the diagram sets fewer than two figures ${at}`).toBeGreaterThan(1);
+    expect(observed.cells, `the calendar draws no days ${at}`).toBeGreaterThan(0);
+    for (const headline of observed.headlines) {
+      expect(Math.abs(headline.top - observed.headlines[0].top), `the figures are not one row ${at}`).toBeLessThanOrEqual(1);
+      expect(headline.bottom, `a figure reaches below the graph's top ${at}`).toBeLessThanOrEqual(observed.chart.top + subPixel);
+    }
+    for (const [name, part] of [
+      ['graph', observed.chart],
+      ['calendar', observed.calendar],
+    ]) {
+      expect(Math.abs(part.left - observed.column.left), `the ${name} starts ${(part.left - observed.column.left).toFixed(1)}px into the column ${at}`).toBeLessThanOrEqual(1);
+      expect(Math.abs(part.width - observed.column.width), `the ${name} is ${part.width.toFixed(1)}px of a ${observed.column.width.toFixed(1)}px column ${at}`).toBeLessThanOrEqual(1);
+    }
+    expect(observed.calendar.top, `the calendar is not under the graph ${at}`).toBeGreaterThanOrEqual(observed.chart.bottom - subPixel);
+    expect(
+      observed.firstDay - observed.column.left,
+      `the calendar's first day starts ${(observed.firstDay - observed.column.left).toFixed(1)}px into the column ${at}: an empty band`
+    ).toBeLessThanOrEqual(observed.halfGap + 1);
+    expect(
+      observed.column.right - observed.lastDay,
+      `the calendar's last day ends ${(observed.column.right - observed.lastDay).toFixed(1)}px short of the column's end ${at}: an empty band`
+    ).toBeLessThanOrEqual(observed.halfGap + 1);
+  }
+});
+
 /* The detail this table used to draw itself is now the page's one hover-detail
    primitive, anchored to the VIEWPORT rather than to a grid cell, and it has
    its own battery at the end of this file — including the containment floor
@@ -3823,14 +4481,14 @@ test('the boss ticker pans inside its own box, and still pans with the motion of
 test('the page names its owner, carries no badges, and wears no button chrome', async ({ page }) => {
   await visit(page);
   const observed = await page.evaluate(() => {
-    // Scoped to the page's own chrome: .icon-button is a shared control shape
-    // (issue 176 reuses it for the gallery's prev/next/close), and this test's
-    // own claim is about the one control the page itself carries. That chrome
-    // was the header row; the row is gone (owner direction, 2026-10-16) and
-    // the control is in the footer.
-    const icons = [...window.document.querySelectorAll('.page-footer .icon-button')];
-    const footer = window.document.querySelector('.page-footer').getBoundingClientRect();
-    const sections = [...window.document.querySelectorAll('.page-section')];
+    /* EVERY .icon-button in the document, open or not: the shape is shared
+       (issue 176 reuses it for the gallery's close control), and since the
+       footer and its reading-mode trigger went, and the sky's control after
+       them (owner, 2026-10-19), the gallery's lightbox close is the only
+       control that wears it. Read as computed style, which an engine answers
+       for a closed dialog's contents too, so the shape is measured without
+       opening anything. */
+    const icons = [...window.document.querySelectorAll('.icon-button')];
     return {
       heading: window.document.querySelector('h1')?.textContent?.trim(),
       titles: [...window.document.querySelectorAll('.panel-title')].map((n) => n.textContent.trim()),
@@ -3838,26 +4496,11 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
       provenance: [...window.document.querySelectorAll('.panel-shell')].every((n) =>
         n.hasAttribute('data-panel-status')
       ),
-      viewport: window.document.documentElement.clientWidth,
-      footer: { left: footer.left, right: footer.right, top: footer.top + window.scrollY },
-      /* The column's own edges: the footer is a block of the sheet, so the
-         control's place is a relationship between the two boxes rather than a
-         distance from the viewport. */
-      column: (() => {
-        const box = window.document.querySelector('main').getBoundingClientRect();
-        return { left: box.left, right: box.right };
-      })(),
-      lastSectionBottom: sections.at(-1).getBoundingClientRect().bottom + window.scrollY,
       icons: icons.map((node) => {
-        const box = node.getBoundingClientRect();
         const style = getComputedStyle(node);
         return {
           label: node.getAttribute('aria-label'),
-          top: box.top + window.scrollY,
-          left: box.left,
-          right: box.right,
-          width: box.width,
-          height: box.height,
+          inLightbox: node.closest('dialog.gallery-lightbox') !== null,
           border: Number.parseFloat(style.borderTopWidth),
           radius: Number.parseFloat(style.borderTopLeftRadius),
           background: style.backgroundColor,
@@ -3885,42 +4528,28 @@ test('the page names its owner, carries no badges, and wears no button chrome', 
      status the badge used to read from. */
   expect(observed.badges, 'a freshness badge is rendering again').toBe(0);
   expect(observed.provenance, 'a card lost the status the badge used to display').toBe(true);
-  /* The one remaining control. A second — the manual refresh — used to sit
-     beside it and is retired (issue 179); before that, the reading mode alone
-     sat above the title while the refresh headed the panel stack below it
-     (issue 127). Neither stacked arrangement survives. */
-  expect(observed.icons.length, 'the page chrome is not one icon').toBe(1);
+  /* NO CHROME CONTROL IS LEFT. The page's own chrome carried one icon — the
+     reading mode, in the header row and then the footer — after the manual
+     refresh beside it retired (issue 179); the footer took it (owner,
+     2026-10-19), and the sky's control that took its place the same day went
+     too ("do away with this all together but keep the logic"). So the icon
+     shape lives only inside the gallery's lightbox, and one that turns up
+     anywhere else is chrome coming back. The position rules (the corner of
+     issue 168, the footer of 2026-10-16) and the touch target held here went
+     with their subject; the lightbox close is held to the 44px floor by its
+     own lane ("the lightbox close mark is small, off the artwork, and still a
+     44px target"), with the lightbox open. */
+  expect(observed.icons.length, 'no control wears the shared icon shape; the checks below prove nothing').toBeGreaterThan(0);
+  expect(
+    observed.icons.filter((icon) => !icon.inLightbox).map((icon) => icon.label),
+    'the page wears an icon control outside the gallery lightbox again'
+  ).toEqual([]);
   for (const icon of observed.icons) {
-    /* Icons, not buttons: no disc, no border, no fill... */
+    /* Icons, not buttons: no disc, no border, no fill. */
     expect(icon.border, `"${icon.label}" wears a border`).toBe(0);
     expect(icon.radius, `"${icon.label}" wears a disc`).toBe(0);
     expect(icon.background, `"${icon.label}" wears a fill`).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
-    /* ...and the touch target is untouched by any of that. */
-    expect(icon.width, `"${icon.label}" is ${icon.width}px wide`).toBeGreaterThanOrEqual(
-      touchFloorPx - subPixel
-    );
-    expect(icon.height, `"${icon.label}" is ${icon.height}px tall`).toBeGreaterThanOrEqual(
-      touchFloorPx - subPixel
-    );
-    /* THE CONTROL CLOSES THE SHEET (owner direction, 2026-10-16). It sat at
-       the end of the masthead row from issue 287 — the corner rule of issue
-       168, "push the icons all the way to the top right, outside of the
-       feed", answered by a row instead of a corner — and the row is gone. What
-       that rule protected is unchanged and is what is measured instead: the
-       control is not among the panels, and it wastes no gutter. So it sits
-       inside the column, below the last section rather than between any two,
-       in the footer that ends the sheet. A control that had drifted back into
-       the feed fails the last of those. */
-    expect(icon.left, `"${icon.label}" starts outside the column`).toBeGreaterThanOrEqual(observed.column.left - subPixel);
-    expect(icon.right, `"${icon.label}" ends outside the column`).toBeLessThanOrEqual(observed.column.right + subPixel);
-    expect(
-      icon.top,
-      `"${icon.label}" sits at ${icon.top}px, above the last section's bottom edge at ${observed.lastSectionBottom}px`
-    ).toBeGreaterThanOrEqual(observed.lastSectionBottom - subPixel);
   }
-  expect(observed.footer.top, 'the footer no longer follows the last section').toBeGreaterThanOrEqual(
-    observed.lastSectionBottom - subPixel
-  );
 });
 
 /* ===========================================================================
@@ -4687,13 +5316,15 @@ test('a valid SHA outranks an unverifiable trailing reference on the SAME entry 
  *
  * Each entry is a subject line and a supporting line between two paddings — a
  * PITCH the section decides before any payload lands — and the pitch is closed
- * by the page's border token, which is what turns the space into a list
- * instead of dead air. Measured here, with the property that made the rule
- * safe: entries stay flush, every one is at least a finger's height, the rule
- * is an inset shadow that grows no entry's box, the last entry draws none, and
- * the box still reserves exactly the entries the column beside it shows — five
- * repository entries tall on a wide sheet, and on a phone the collapsed five
- * plus the control that reveals the rest. */
+ * by a rule, which is what turns the space into a list instead of dead air.
+ * Measured here, with the property that made the rule safe: entries stay
+ * flush, every one is at least a finger's height, the rule is painted as a
+ * BACKGROUND that grows no entry's box (an inset shadow until 2026-10-19, a
+ * twig since: "the plain lines should be tree branches, or vines"), no entry
+ * draws a border, the last entry draws no rule, and the box still reserves
+ * exactly the entries the column beside it shows — five repository entries
+ * tall on a wide sheet, and on a phone the collapsed five plus the control
+ * that reveals the rest. */
 test('the commit log reads as ruled two-line entries at the touch pitch, not text in dead air (owner 2026-08-25; 2026-10-16)', async ({
   page,
 }) => {
@@ -4713,7 +5344,7 @@ test('the commit log reads as ruled two-line entries at the touch pitch, not tex
       entries: entries.map((entry) => {
         const rect = entry.getBoundingClientRect();
         const style = getComputedStyle(entry);
-        return { top: rect.top, height: rect.height, rule: style.boxShadow, border: style.borderBlockEndWidth };
+        return { top: rect.top, height: rect.height, rule: style.backgroundImage, border: style.borderBlockEndWidth };
       }),
     };
   });
@@ -4773,29 +5404,6 @@ test('the commit log reads as ruled two-line entries at the touch pitch, not tex
  * repository link in the log to shrink. The entry link that replaced it is
  * held to the floor on both axes by "every control clears the touch floor on
  * both axes" and by the ruled-entries lane above. */
-
-test('the popover animates only where motion is welcome', async ({ page }) => {
-  await visit(page);
-  await openReadingModes(page);
-  const animation = () =>
-    page.locator('#reading-mode-menu').evaluate((node) => getComputedStyle(node).animationName);
-  /* Both directions on ONE page, because either half alone proves nothing: a
-     stylesheet with no animation at all satisfies the reduce assertion, and a
-     preference that never reaches the page satisfies the other.
-     page.emulateMedia is deliberate — a describe-level
-     `test.use({ reducedMotion: 'reduce' })` was MEASURED not reaching the page
-     in this Playwright version (the document still reported no-preference),
-     so the preference is set here, where its effect is observable. */
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
-  expect(
-    await animation(),
-    'nothing animates even with motion allowed; the reduce assertion below would then prove nothing'
-  ).not.toBe('none');
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  expect(await animation(), 'the popover animates for a reader who asked for less motion').toBe(
-    'none'
-  );
-});
 
 /* ===========================================================================
  * The stacked page (issue 134)
@@ -5146,7 +5754,11 @@ test('every rendered link is unmarked at rest and marks itself on hover', async 
      words a reader is pointing at — rather than on the description under it. */
   const entry = page.locator('#projects .repo-link').first();
   await entry.scrollIntoViewIfNeeded();
-  await entry.hover();
+  /* The pointer goes where a reader's does, onto the name. The entry's
+     figures sit over the link's far end on purpose — they carry their own
+     detail — so the link's centre lands on them whenever the row is narrower
+     than twice their width, and hovering there never reaches the link. */
+  await entry.locator('.repo-name').hover();
   const hovered = await entry.locator('.repo-name').evaluate((node) => getComputedStyle(node).textDecorationLine);
   expect(hovered, 'hover leaves the repository name unmarked, so nothing announces it as a link').toBe('underline');
 });
@@ -6656,14 +7268,16 @@ test('the lightbox also closes on a backdrop click and its own close button', as
  * floors").
  *
  * The page-wide swap lane earlier in this file measures the chrome, the
- * column and the heatmap blocks; it does not reach the gallery, and the
- * gallery is exactly where a mode is most tempted to move something — the
- * tiles sit on `--gallery-stage-ground`, which IS one of the tokens a reading
- * mode overrides. A reading-mode block may declare only custom properties and
+ * column and the diagram; it does not reach the gallery, and the gallery is
+ * exactly where a mode is most tempted to move something — the tiles sit on
+ * `--gallery-stage-ground`, which IS one of the tokens the night block
+ * overrides. A reading-mode block may declare only custom properties and
  * `color-scheme` (AGENTS.md, "Frontend and UX floors"), which is what makes a
  * zero-CLS swap structural rather than a promise; this lane is what an engine
  * did with that rule, on the one gallery surface whose ground changes with
- * the mode. */
+ * the mode. Since 2026-10-19 the page is the night on every visit and the day
+ * is kept behind the root's data-sky (turnScene), so the swap is that palette
+ * — night on arrival, day, and back — with the gallery in view. */
 test('switching the reading mode repaints the gallery without moving any of it (owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
@@ -6686,60 +7300,41 @@ test('switching the reading mode repaints the gallery without moving any of it (
       };
     });
 
-  await bringReadingModeIntoView(page);
+  /* Measured where a reader sees it: the gallery near the top of the
+     viewport (readFrom), so the scroll position the swaps are held to is a
+     real offset into the document rather than its top. */
+  await readFrom(page, '.gallery-grid');
   const before = await shape();
+  expect(before.scrollY, 'the page did not scroll to the gallery, so the no-scroll check reads the top').toBeGreaterThan(0);
   expect(before.cells.length, 'the gallery rendered no cells; this lane measures nothing').toBe(
     (page.viewportSize()?.width ?? 1280) <= 720 ? 4 : 5
   );
 
-  /* EVERY stamped mode, each compared against the ORIGINAL rather than
-     against its predecessor, so a drift that accumulates a fraction at a time
-     cannot hide inside a chain of individually equal steps. */
-  const grounds = new Map();
-  for (const [label, id] of [
-    ['Dark', 'dark'],
-    ['Slate', 'slate'],
-    ['Sepia', 'sepia'],
-    ['Light', 'light'],
-  ]) {
-    await openReadingModes(page);
-    await clickVisibleControl(page, page.getByRole('button', { name: label, exact: true }), label);
-    await expect(page.locator('html')).toHaveAttribute('data-theme', id);
+  /* BOTH scenes, there and back, each compared against the ORIGINAL rather
+     than against its predecessor, so a drift that accumulates a fraction at a
+     time cannot hide inside a chain of individually equal steps. */
+  const grounds = new Map([['arrival', before.ground]]);
+  for (const scene of ['day', 'night']) {
+    await turnScene(page, scene);
     const after = await shape();
     expect(
       after.scrollY,
-      `the ${label} swap scrolled the document from ${before.scrollY} to ${after.scrollY}`
+      `the turn to ${scene} scrolled the document from ${before.scrollY} to ${after.scrollY}`
     ).toBe(before.scrollY);
-    expect(after.grid, `the ${label} swap moved or resized the gallery row`).toEqual(before.grid);
-    expect(after.cells, `the ${label} swap moved a tile under the reader`).toEqual(before.cells);
-    expect(after.scrollHeight, `the ${label} swap changed the page height`).toBe(before.scrollHeight);
-    grounds.set(label, after.ground);
+    expect(after.grid, `the turn to ${scene} moved or resized the gallery row`).toEqual(before.grid);
+    expect(after.cells, `the turn to ${scene} moved a tile under the reader`).toEqual(before.cells);
+    expect(after.scrollHeight, `the turn to ${scene} changed the page height`).toBe(before.scrollHeight);
+    grounds.set(scene, after.ground);
   }
-  /* NON-VACUITY: the modes really do repaint the tile's own ground, so
+  /* NON-VACUITY: the scenes really do repaint the tile's own ground, so
      "nothing moved" is a statement about a surface that changed rather than
-     about one nothing touched. Measured across the four rather than per step,
-     because four modes painting one ground would satisfy a per-step
-     comparison while three of them did not exist. */
+     about one nothing touched. */
   expect(
     new Set(grounds.values()).size,
-    `the four reading modes paint ${new Set(grounds.values()).size} distinct grounds under the tiles`
+    `night and day paint ${new Set(grounds.values()).size} distinct grounds under the tiles`
   ).toBeGreaterThan(1);
-
-  /* Auto is the way back, and it is the ABSENCE of a stamp rather than a
-     fifth palette — so what it has to prove is that un-stamping is as free of
-     layout effect as stamping. */
-  await openReadingModes(page);
-  await clickVisibleControl(
-    page,
-    page.getByRole('button', { name: 'Auto', exact: true }),
-    'Auto'
-  );
-  await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
-  const unstamped = await shape();
-  expect(unstamped.grid, 'returning to auto moved the gallery row').toEqual(before.grid);
-  expect(unstamped.cells, 'returning to auto moved a tile under the reader').toEqual(before.cells);
-  expect(unstamped.scrollHeight).toBe(before.scrollHeight);
-  expect(unstamped.ground, 'auto no longer paints what the unstamped page painted on arrival').toBe(
+  /* And the way back is the page the reader arrived on, not a third paint. */
+  expect(grounds.get('night'), 'the way back to night does not paint what the page painted on arrival').toBe(
     before.ground
   );
 });
@@ -6911,8 +7506,8 @@ test('a panel head with no title keeps the reserved row, and no head draws a fre
  *    after it and the busiest source first among them, and the diagram wears
  *    no panel label (owner direction, 2026-10-16: the contributions are the
  *    layer the diagram opens on; the token series lead the graph above it);
- *  - the browser's chrome is told the sheet's colour, and told again when the
- *    mode or the OS scheme changes;
+ *  - the browser's chrome is told the sheet's colour, once, at hydration (it
+ *    was told again whenever the scene turned, while a control could turn it);
  *  - the document root no longer refuses the native overscroll (the pull
  *    gesture that needed that refusal is gone, owner ruling, same issue). */
 test('the name is two lines, the calendar opens on the contributions layer, and the toolbars wear the sheet (issue 294; 2026-10-16)', async ({
@@ -6992,44 +7587,12 @@ test('the name is two lines, the calendar opens on the contributions layer, and 
   expect(observed.surface, 'the sheet token is unreadable').not.toBe('');
   expect(observed.themeColor, 'the toolbars were not told the sheet colour').toBe(observed.surface);
 
-  /* A chosen mode moves it: the real toggle, so the sync rides applyMode. */
-  await page.locator('.theme-menu .trigger').click();
-  await page.locator('.swatch-sepia').click();
-  const sepia = await page.evaluate(() => ({
-    surface: getComputedStyle(window.document.documentElement).getPropertyValue('--color-surface').trim(),
-    themeColor: window.document.head.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? null,
-  }));
-  expect(sepia.surface, 'sepia did not change the sheet').not.toBe(observed.surface);
-  expect(sepia.themeColor, 'the toolbars did not follow the chosen mode').toBe(sepia.surface);
-
-  /* And the OS scheme moves it under auto: back to auto, then flip the scheme.
-     The sync rides the frame after the change event (App.svelte says why), so
-     the read waits two frames — the one the sync is queued for, and the one
-     that proves it ran. */
-  const settledFrames = () =>
-    page.evaluate(
-      () =>
-        new Promise((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(resolve));
-        })
-    );
-  await page.locator('.theme-menu .trigger').click();
-  await page.locator('.swatch-auto').click();
-  await page.emulateMedia({ colorScheme: 'dark' });
-  await settledFrames();
-  const dark = await page.evaluate(() => ({
-    surface: getComputedStyle(window.document.documentElement).getPropertyValue('--color-surface').trim(),
-    themeColor: window.document.head.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? null,
-  }));
-  expect(dark.themeColor, 'the toolbars did not follow the OS scheme under auto').toBe(dark.surface);
-  await page.emulateMedia({ colorScheme: 'light' });
-  await settledFrames();
-  const light = await page.evaluate(() => ({
-    surface: getComputedStyle(window.document.documentElement).getPropertyValue('--color-surface').trim(),
-    themeColor: window.document.head.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? null,
-  }));
-  expect(light.surface, 'the scheme flip did not move the sheet').not.toBe(dark.surface);
-  expect(light.themeColor, 'the toolbars did not follow the scheme back').toBe(light.surface);
+  /* The toolbars are told once, at hydration (App.svelte), and the night is
+     every visit's scene, so that one telling is the whole contract now. The
+     half that held them following a turn of the scene went with the control
+     that turned it (owner, 2026-10-19: "do away with this all together but
+     keep the logic"); what the kept day palette does to them is the scene
+     lane's to state. */
 });
 
 /* THE REPOSITORIES, MEASURED (issue 188; owner sketch 2026-08-31; the ruled
@@ -7238,495 +7801,6 @@ test('a day the reader points at is named in words, never as a raw ISO date (iss
     sentences.filter((line) => /tokens over|peak |data through/.test(line)),
     `the retired reading sentence is on the page again: ${sentences.join(' | ')}`
   ).toHaveLength(0);
-});
-
-/* ===========================================================================
- * The chrome-icon family (owner directive, 2026-08-24)
- *
- * "These icons are not matching the small, sleek, translucid, appearance of
- * the parent icons, they should not look this overwhelming." The complaint is
- * about two things being drawn at different scales in the same corner of the
- * page, which makes it a MEASUREMENT rather than an opinion: the swatches
- * painted 44px of filled disc plus a 2px ring, the header icons above them
- * painted an 18px line glyph inside an identical 44px box that stayed empty.
- *
- * So these lanes measure the two families against each other in a real
- * engine. The source pins in tests/experience.test.mjs bind the tokens and
- * the chrome's SVG attributes together; only an engine can say what the
- * cascade, the viewBox and the scaling actually produced.
- * ======================================================================== */
-
-/* The popover reveals with a 120ms slide, so a box measured the instant it
- * opens is a box measured part-way through that slide — which reads as a
- * layout shift of a fraction of a pixel and is nothing of the kind. Every
- * measurement below waits for the engine's OWN animation set to finish
- * instead of for a duration, so a reader who asked for less motion (no
- * animation at all) waits for nothing. */
-const openedAndStill = async (page) => {
-  await openReadingModes(page);
-  await page
-    .locator('#reading-mode-menu')
-    .evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
-};
-
-/* What the browser painted for each member of the family: the box the finger
- * gets, the box the eye gets, the line weight, and whether anything was drawn
- * around it. The reader runs whole inside page.evaluate rather than being
- * serialised into it — the origin serves a strict Content-Security-Policy and
- * a helper injected as source text would need eval() to come back to life. */
-const readFamily = (page) =>
-  page.evaluate(() => {
-    const painted = (node) => {
-      const style = getComputedStyle(node);
-      const glyph = node.querySelector('svg');
-      const glyphBox = glyph === null ? null : glyph.getBoundingClientRect();
-      const stroked = node.querySelector('.chip, .ray, .chip-edge');
-      const hit = node.getBoundingClientRect();
-      return {
-        label: node.getAttribute('aria-label'),
-        pressed: node.getAttribute('aria-pressed') === 'true',
-        hit: { width: hit.width, height: hit.height },
-        glyph: glyphBox === null ? null : { width: glyphBox.width, height: glyphBox.height },
-        strokeWidth:
-          stroked === null ? null : Number.parseFloat(getComputedStyle(stroked).strokeWidth),
-        opacity: Number.parseFloat(style.opacity),
-        borderWidth: Number.parseFloat(style.borderTopWidth),
-        radius: Number.parseFloat(style.borderTopLeftRadius),
-        background: style.backgroundColor,
-        ink: style.color,
-      };
-    };
-    return {
-      /* The chrome's own line weight used to be readable off a second,
-         independently-stroked header icon (the manual refresh, retired by
-         issue 179); with one filled chrome icon left, the token it and the
-         swatches both derive from is the only source of truth. */
-      chromeStroke: Number.parseFloat(
-        getComputedStyle(window.document.documentElement).getPropertyValue('--chrome-icon-stroke')
-      ),
-      // Scoped to the page's own chrome for the same reason the button-chrome
-      // test above is: .icon-button is now also the gallery's prev/next/close
-      // shape (issue 176), and "chrome" here means the reading-mode trigger
-      // the swatches open from — in the footer since the header row left
-      // (owner direction, 2026-10-16).
-      chrome: [...window.document.querySelectorAll('.page-footer .icon-button')].map(painted),
-      swatches: [...window.document.querySelectorAll('.swatch')].map(painted),
-    };
-  });
-
-test('a reading-mode swatch is painted at the same scale as the chrome icon beside it', async ({
-  page,
-}) => {
-  await visit(page);
-  await openedAndStill(page);
-  const { chrome, swatches, chromeStroke } = await readFamily(page);
-  // One chrome icon now (issue 179 retired the manual refresh that used to
-  // sit beside the reading-mode trigger).
-  expect(chrome.length, 'the page chrome is not one icon').toBe(1);
-  expect(swatches.length, 'the popover renders no swatches').toBe(5);
-  expect(
-    swatches.filter((swatch) => swatch.pressed).length,
-    'the popover shows no chosen mode; the rest/active split below would prove nothing'
-  ).toBe(1);
-
-  const [reference] = chrome;
-  expect(reference.glyph, `"${reference.label}" paints no glyph`).not.toBeNull();
-  expect(chromeStroke, 'the shared --chrome-icon-stroke token could not be read').toBeGreaterThan(0);
-
-  for (const swatch of swatches) {
-    /* The eye gets the chrome's glyph — this is the whole complaint, and the
-       arrangement the owner rejected fails it by 44 against 18. */
-    expect(swatch.glyph, `"${swatch.label}" paints no glyph`).not.toBeNull();
-    expect(
-      swatch.glyph.width,
-      `"${swatch.label}" paints ${swatch.glyph.width}px of glyph beside a ${reference.glyph.width}px chrome icon`
-    ).toBeCloseTo(reference.glyph.width, 1);
-    expect(swatch.glyph.height).toBeCloseTo(reference.glyph.height, 1);
-    /* ...at the chrome's line weight. */
-    expect(
-      swatch.strokeWidth,
-      `"${swatch.label}" is drawn at ${swatch.strokeWidth} against the chrome's ${chromeStroke}`
-    ).toBeCloseTo(chromeStroke, 2);
-    /* ...wearing the chrome's absence of chrome: no disc, no rim, no fill. */
-    expect(swatch.borderWidth, `"${swatch.label}" wears a border`).toBe(0);
-    expect(swatch.radius, `"${swatch.label}" wears a disc`).toBe(0);
-    expect(swatch.background, `"${swatch.label}" wears a fill`).toMatch(
-      /rgba\(0, 0, 0, 0\)|transparent/
-    );
-    /* ...and translucent at rest, which is the "translucid" half of the
-       directive: an unchosen swatch sits behind the chrome rather than
-       shouting over it, and the chosen one comes forward to exactly the
-       chrome's own presence — never past it. */
-    if (swatch.pressed) {
-      expect(
-        swatch.opacity,
-        `the chosen "${swatch.label}" is painted at ${swatch.opacity} against chrome at ${reference.opacity}`
-      ).toBe(reference.opacity);
-    } else {
-      expect(
-        swatch.opacity,
-        `"${swatch.label}" rests at ${swatch.opacity} against chrome at ${reference.opacity}`
-      ).toBeLessThan(reference.opacity);
-      expect(swatch.opacity).toBeGreaterThan(0);
-    }
-    /* The finger still gets the full target: only the paint shrank. */
-    expect(swatch.hit.width, `"${swatch.label}" is ${swatch.hit.width}px wide`).toBeGreaterThanOrEqual(
-      touchFloorPx - subPixel
-    );
-    expect(swatch.hit.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-    expect(
-      swatch.hit.width / swatch.glyph.width,
-      `"${swatch.label}" paints ${swatch.glyph.width}px inside a ${swatch.hit.width}px target; the disc is back`
-    ).toBeGreaterThan(2);
-  }
-});
-
-test('pointing at a swatch changes its presence and nothing else', async ({ page, isMobile }) => {
-  test.skip(Boolean(isMobile), 'a touch device has no hover state to measure');
-  await visit(page);
-  await openedAndStill(page);
-  const geometry = () =>
-    page.evaluate(() => {
-      const box = (node) => {
-        const { x, y, width, height } = node.getBoundingClientRect();
-        return [x, y, width, height].map((value) => Math.round(value * 100) / 100);
-      };
-      return {
-        popover: box(window.document.querySelector('#reading-mode-menu')),
-        swatches: [...window.document.querySelectorAll('.swatch')].map(box),
-        glyphs: [...window.document.querySelectorAll('.swatch svg')].map(box),
-      };
-    });
-  const before = await geometry();
-
-  /* The reference: the chrome answers a pointer by moving its ink to the
-     brand token, and this reads that answer off the chrome ITSELF rather
-     than from a variable name. The reading-mode trigger is the only chrome
-     icon left (issue 179 retired the manual refresh that used to sit beside
-     it), and while its own popover is open it already carries that answer
-     permanently — aria-expanded="true" paints it in the same brand ink hover
-     does, per the shared .icon-button rule — so its color right now, with no
-     further interaction needed, IS the target color a pointed-at swatch has
-     to reach. (Hovering it to look for a CHANGE, tried first, is exactly the
-     comparison that cannot work here: there is nothing left to change.) */
-  const chromeIcon = page.locator('.theme-menu .trigger');
-  const chromeHover = await chromeIcon.evaluate((node) => getComputedStyle(node).color);
-
-  /* An UNCHOSEN swatch, deliberately: the chosen one is already at full
-     presence, so hovering it would prove nothing about the state change. */
-  const swatch = page.locator('.swatch[aria-pressed="false"]').first();
-  const rest = await swatch.evaluate((node) => getComputedStyle(node).opacity);
-  expect(Number.parseFloat(rest), 'an unchosen swatch already rests at full presence').toBeLessThan(1);
-
-  await swatch.hover();
-  /* Presence and ink are what change, and both are repaints. The polls run to
-     the SETTLED value rather than to "something different", because the
-     transition passes through every value in between and a first sample
-     lands part-way along it. Neither poll is vacuous: the swatch measurably
-     rests below full presence (asserted above) and the chrome measurably
-     moves its ink (asserted above). */
-  await expect
-    .poll(() => swatch.evaluate((node) => getComputedStyle(node).opacity), {
-      message: 'pointing at a swatch does not bring it to the chrome’s own presence',
-    })
-    .toBe('1');
-  await expect
-    .poll(() => swatch.evaluate((node) => getComputedStyle(node).color), {
-      message: 'a pointed-at swatch never reaches the ink the chrome beside it paints',
-    })
-    .toBe(chromeHover);
-
-  const moved = await geometry();
-  expect(moved, 'pointing at a swatch moved the popover under the pointer').toEqual(before);
-});
-
-/* SUPERSEDED premise (owner directive, 2026-08-28): the chosen mode used to
- * be underlined by a ::after bar, and this lane measured that exactly one bar
- * was painted, on the pressed swatch, at a size that did not change. The bar
- * is gone — the chosen swatch is now COLOURED IN with the brand ink while the
- * unchosen ones stay muted — so what the lane measures moved from a
- * pseudo-element's box to the glyphs' own ink. The two halves it exists for
- * did not move: exactly one swatch must be marked, on the pressed one, and
- * marking it must cost no layout. */
-test('choosing a reading mode marks it by ink, and moves nothing', async ({ page }) => {
-  await visit(page);
-  await openedAndStill(page);
-
-  const marks = async () => {
-    /* Away from every swatch first: hover paints the SAME brand ink the
-       choice does, so a pointer left resting on the swatch that was just
-       clicked would report two marked swatches and hide a broken one. */
-    await page.mouse.move(0, 0);
-    return page.evaluate(() => {
-      const box = (node) => {
-        const { x, y, width, height } = node.getBoundingClientRect();
-        return [x, y, width, height].map((value) => Math.round(value * 100) / 100);
-      };
-      return {
-        popover: box(window.document.querySelector('#reading-mode-menu')),
-        swatches: [...window.document.querySelectorAll('.swatch')].map(box),
-        /* The mark's target colour, read off the CHROME rather than from a
-           token name — the same reference the hover lane beside this one
-           uses. The reading-mode trigger wears exactly that ink for as long
-           as its own popover is open (aria-expanded="true", the shared
-           .icon-button rule), so the page states its own expectation and this
-           lane never parses a custom property. It is re-read per measurement
-           because the brand ink is per reading mode. */
-        chosenInk: getComputedStyle(window.document.querySelector('.theme-menu .trigger')).color,
-        /* The chosen-mode mark, measured as the ink an engine actually
-           resolved rather than read off a class: a rule that named a colour
-           nothing resolves to would satisfy every source pin and show the
-           reader nothing. */
-        marked: [...window.document.querySelectorAll('.swatch')].map((node) => ({
-          label: node.getAttribute('aria-label'),
-          pressed: node.getAttribute('aria-pressed') === 'true',
-          ink: getComputedStyle(node).color,
-        })),
-      };
-    });
-  };
-
-  /* Exactly one mode is chosen at a time, the mark is on it, and the mark is
-     a DIFFERENCE rather than a claim: every unchosen swatch shares one
-     resting ink and it is not the chosen one's. A stylesheet that painted all
-     five the brand colour would satisfy "the pressed one is brand" while
-     showing the reader nothing. */
-  const marked = (state) => {
-    const chosen = state.marked.filter((swatch) => swatch.ink === state.chosenInk);
-    expect(chosen.length, 'exactly one reading mode must carry the chosen ink').toBe(1);
-    expect(chosen[0].pressed, 'the mark is not on the pressed swatch').toBe(true);
-    const resting = new Set(
-      state.marked.filter((swatch) => !swatch.pressed).map((swatch) => swatch.ink)
-    );
-    expect([...resting], 'the unchosen swatches do not share one resting ink').toHaveLength(1);
-    expect(
-      [...resting][0],
-      `every swatch is painted ${state.chosenInk}; the choice is not marked at all`
-    ).not.toBe(state.chosenInk);
-    return chosen[0];
-  };
-
-  const before = await marks();
-  marked(before);
-
-  await page.getByRole('button', { name: 'Sepia', exact: true }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'sepia');
-  await openedAndStill(page);
-  const after = await marks();
-  expect(marked(after).label, 'the chosen ink did not follow the choice').toBe('Sepia');
-  /* And the mark costs no space — the whole reason it is ink and not a bar:
-     the row it sits in is the row it sat in. */
-  expect(after.popover, 'choosing a reading mode resized the popover').toEqual(before.popover);
-  expect(after.swatches, 'choosing a reading mode moved the swatches').toEqual(before.swatches);
-});
-
-test('every swatch paints a distinct silhouette, at a legible ink, in every reading mode', async ({
-  page,
-}) => {
-  /* SUPERSEDED premise (issue #180, 2026-08-25): the swatches used to preview
-     each mode's OWN palette token inside the glyph, and this lane measured
-     that no two swatches painted the same (fill, ink) pair. The owner's
-     complaint was that this was unreadable at 18px — three near-identical
-     moons told apart only by a crater color difference nobody could see. The
-     glyphs now paint ONE ink (currentColor) and tell the five modes apart by
-     SHAPE instead, so what this lane must measure inverted: the swatches
-     SHARE their ink (zero theme branching) and instead must paint a distinct
-     SILHOUETTE.
-
-     AMENDED (owner directive, 2026-08-28): there are now exactly TWO inks in
-     the popover, because the underline that used to mark the chosen mode was
-     replaced by colouring that swatch in. So "one ink" became "one RESTING
-     ink plus the chosen one", and both are non-text indicators that have to
-     clear 3:1 on the surface they are drawn on — the chosen ink most of all,
-     since it is the thing carrying the state. Nothing else about the lane
-     moved: five distinct silhouettes, in every reading mode. */
-  await visit(page);
-  const read = async () => {
-    await openedAndStill(page);
-    /* Away from the swatches before measuring: hover paints the same brand
-       ink the choice does, and the loop below clicks a swatch immediately
-       before each read, so a resting pointer would report a second marked
-       swatch that no reader who moved their hand would see. */
-    await page.mouse.move(0, 0);
-    return page.evaluate(() => {
-      const popover = window.document.querySelector('#reading-mode-menu');
-      return {
-        surface: getComputedStyle(popover).backgroundColor,
-        swatches: [...window.document.querySelectorAll('.swatch')].map((node) => {
-          const glyph = node.querySelector('svg.glyph');
-          const outlineShape = node.querySelector('.chip, .chip-edge');
-          const outline = getComputedStyle(outlineShape);
-          const box = glyph.getBoundingClientRect();
-          /* The silhouette: every filled or stroked primitive's own
-             geometry, concatenated in DOM order. Two swatches sharing this
-             string would be the same shape painted twice — the "three
-             identical moons" issue #180 reports, now measured as geometry
-             rather than as color, because color is no longer what tells them
-             apart. */
-          const geometry = [...node.querySelectorAll('.chip, .chip-edge, .ray line')]
-            .map(
-              (part) =>
-                part.getAttribute('d') ??
-                ['cx', 'cy', 'r', 'x1', 'y1', 'x2', 'y2']
-                  .map((attribute) => part.getAttribute(attribute))
-                  .join(',')
-            )
-            .join('|');
-          return {
-            label: node.getAttribute('aria-label'),
-            pressed: node.getAttribute('aria-pressed') === 'true',
-            ink: outline.stroke !== 'none' ? outline.stroke : outline.fill,
-            painted: box.width > 0 && box.height > 0,
-            geometry,
-          };
-        }),
-      };
-    });
-  };
-
-  /* Opened once: every iteration below leaves the popover open, because the
-     measurement is the last thing it does. Opening it again would toggle it
-     shut. */
-  await openedAndStill(page);
-  for (const [label, id] of [
-    ['Auto', null],
-    ['Light', 'light'],
-    ['Dark', 'dark'],
-    ['Slate', 'slate'],
-    ['Sepia', 'sepia'],
-  ]) {
-    await page.getByRole('button', { name: label, exact: true }).click();
-    if (id === null) {
-      await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
-    } else {
-      await expect(page.locator('html')).toHaveAttribute('data-theme', id);
-    }
-    const painted = await read();
-    const chosen = painted.swatches.filter((swatch) => swatch.pressed);
-    expect(chosen, `${label} mode marks no swatch as chosen`).toHaveLength(1);
-    const restingInk = painted.swatches.find((swatch) => !swatch.pressed).ink;
-    const seen = new Map();
-    for (const swatch of painted.swatches) {
-      expect(swatch.painted, `"${swatch.label}" paints nothing in ${label} mode`).toBe(true);
-      /* Zero theme branching: every glyph resolves to the currentColor its
-         swatch was given, and there are exactly two answers on this popover —
-         the resting ink, and the chosen swatch's brand ink. A swatch that
-         painted its own PALETTE colour again would be the per-mode branching
-         issue #180 removed, and it shows up here as a third ink. */
-      expect(
-        swatch.ink,
-        `"${swatch.label}" paints neither the popover's resting ink nor the chosen one`
-      ).toBe(swatch.pressed ? chosen[0].ink : restingInk);
-      /* No two swatches draw the same shape. */
-      expect(
-        seen.get(swatch.geometry),
-        `in ${label} mode "${swatch.label}" draws the identical shape "${seen.get(swatch.geometry)}" already draws`
-      ).toBeUndefined();
-      seen.set(swatch.geometry, swatch.label);
-    }
-    /* The chosen ink is what carries the state now that the underline is
-       gone, so it must be legible AS a difference: a brand ink that resolved
-       to the resting one would mark nothing at all. */
-    expect(
-      chosen[0].ink,
-      `in ${label} mode the chosen swatch is painted the same ${restingInk} as its neighbours`
-    ).not.toBe(restingInk);
-    /* WCAG 1.4.11: both inks are non-text indicators, so both clear 3:1
-       against the surface they are drawn on, in every reading mode. */
-    for (const [role, ink] of [
-      ['resting', restingInk],
-      ['chosen', chosen[0].ink],
-    ]) {
-      const ratio = contrastRatio(ink, painted.surface);
-      expect(
-        ratio,
-        `in ${label} mode the ${role} reading-mode ink sits at ${ratio.toFixed(2)}:1 on the popover`
-      ).toBeGreaterThanOrEqual(3);
-    }
-  }
-});
-
-/* EVERY PHONE WIDTH, not only the narrowest (owner direction, 2026-10-16: the
- * control moved to the footer). The narrowest was the only width that
- * mattered while the control hung from the end of the header row; in the
- * footer the width that bites is any one where the footer's line fits — the
- * first cut put the control beside the version mark there, right of centre,
- * and its centred menu ran 8px off a 390px screen while 320px, where the line
- * wraps, measured clean. So each width is opened in turn, from a fresh load,
- * and measured where it opened. */
-test('the reading-mode popover fits the narrowest phone this site supports', async ({ page }) => {
-  for (const phoneWidth of phoneWidths) {
-    await visit(page);
-    await page.setViewportSize({ width: phoneWidth, height: 720 });
-    await settled(page);
-    const closedHeight = await page.evaluate(() => window.document.documentElement.scrollHeight);
-    await openReadingModes(page);
-    const observed = await page.evaluate(() => {
-      const popover = window.document.querySelector('#reading-mode-menu');
-      const box = popover.getBoundingClientRect();
-      const trigger = window.document
-        .querySelector('.page-footer [aria-label="Reading mode"]')
-        .getBoundingClientRect();
-      const root = window.document.documentElement;
-      return {
-        width: Math.round(box.width * 100) / 100,
-        left: box.left,
-        right: box.right,
-        top: box.top,
-        bottom: box.bottom,
-        centre: box.left + box.width / 2,
-        triggerCentre: trigger.left + trigger.width / 2,
-        triggerTop: trigger.top,
-        viewport: root.clientWidth,
-        innerWidth: window.innerWidth,
-        scrollWidth: root.scrollWidth,
-        scrollHeight: root.scrollHeight,
-      };
-    });
-    const at = `at ${phoneWidth}px`;
-    /* Inside the viewport on both edges, and not by making the page scroll to
-       reveal it — an open popover that pushes the document sideways breaks the
-       320px floor exactly as any other overflow would. On an emulated phone
-       the layout viewport WIDENS to take in an overflow rather than scrolling,
-       so the window's own width is held to the phone's as well. */
-    expect(observed.left, `the popover starts at ${observed.left}px ${at}`).toBeGreaterThanOrEqual(0);
-    expect(
-      observed.right,
-      `the popover reaches ${observed.right}px in a ${observed.viewport}px viewport ${at}`
-    ).toBeLessThanOrEqual(observed.viewport + subPixel);
-    expect(observed.scrollWidth, `the open popover made the page scroll sideways ${at}`).toBeLessThanOrEqual(
-      observed.viewport
-    );
-    expect(observed.innerWidth, `the open popover widened the page ${at}`).toBeLessThanOrEqual(phoneWidth);
-    /* And it is genuinely narrower than the screen, with room to spare — the
-       measurement the shrink was for. */
-    expect(
-      observed.width,
-      `the popover is ${observed.width}px wide in a ${observed.viewport}px viewport`
-    ).toBeLessThan(observed.viewport - gutterPx);
-    /* And it opens from its own trigger, so a reader's eye and thumb find it
-       where they left the button. It hung from the trigger's END edge while the
-       trigger sat at the end of the masthead row (issue 287); the row is gone
-       and the trigger is on the footer's centre line (owner direction,
-       2026-10-16) — so the menu is CENTRED on its trigger and opens UPWARD,
-       over sheet the reader has already passed, rather than below the last
-       thing on the page. Both are measured: its centre on the trigger's, its
-       bottom edge above the trigger's top, and the document no taller for its
-       being open. */
-    expect(
-      Math.abs(observed.centre - observed.triggerCentre),
-      `the popover is centred at ${observed.centre}px and the control it opens from at ${observed.triggerCentre}px ${at}`
-    ).toBeLessThanOrEqual(1);
-    expect(
-      observed.bottom,
-      `the popover ends at ${observed.bottom}px, below the top of the control it opens from at ${observed.triggerTop}px ${at}`
-    ).toBeLessThanOrEqual(observed.triggerTop + subPixel);
-    expect(observed.top, `the popover starts above the viewport at ${observed.top}px ${at}`).toBeGreaterThanOrEqual(0);
-    expect(
-      observed.scrollHeight,
-      `opening the popover made the document ${observed.scrollHeight - closedHeight}px taller ${at}`
-    ).toBe(closedHeight);
-  }
 });
 
 /* ===========================================================================
@@ -8645,9 +8719,10 @@ test('a hostile row name reaches the detail as text and nothing else', async ({ 
   await visit(page);
 
   /* The staged row is found by its own name rather than by position: the band
-     is ordered by the payload's own ranking, so "the row I replaced" and "the
-     first row drawn" are different rows, and assuming otherwise would measure
-     an innocent neighbour. Exactly one readable copy must match. */
+     keeps the payload's own order (owner, 2026-10-19), so the row replaced is
+     the first one drawn today — but a lane that assumed so would measure an
+     innocent neighbour the day the order moved again. Exactly one readable
+     copy must match. */
   const staged = page.locator(
     '.ticker-lane:not([aria-hidden="true"]) .ticker-item[aria-label^="<img src=x"]'
   );
@@ -9016,21 +9091,6 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
      locator.focus(), whose wait is bounded only by the test timeout.) */
   await expect(handles(page)).toHaveCount(2);
   const before = await columnBox(page);
-  /* The reading-mode control, before anything is dragged — the reference
-     for the check below that it never disagrees with the sheet it sits in
-     (owner directive, issue 168: "I don't like how they move when I drag the
-     feed in and out"). It lives in the footer now (owner direction,
-     2026-10-16), on the column's centre line. */
-  const footerControl = () =>
-    page.evaluate(() => {
-      const box = window.document.querySelector('main .page-footer .icon-button').getBoundingClientRect();
-      return { left: box.left, right: box.right, centre: box.left + box.width / 2 };
-    });
-  const iconBefore = await footerControl();
-  expect(
-    iconBefore.centre,
-    'the reading-mode control is off the column centre line before any drag'
-  ).toBeCloseTo((before.left + before.right) / 2, 0);
 
   /* INWARD, because the page ships at its ceiling (owner directive,
      2026-09-04, issue 292) and there is nothing to drag out into: the end
@@ -9046,24 +9106,9 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
   expect(after.width - before.width, 'a centred column must shrink from both sides').toBeCloseTo(-320, 0);
   expect(after.left - before.left).toBeCloseTo(160, 0);
   expect(after.scrollWidth).toBe(after.clientWidth);
-  /* THE CONTROL RIDES THE SHEET (owner directive, 2026-09-03, issue 287).
-     Until 2026-10-16 it sat at the end of the masthead row and this lane held
-     it to the column's END edge, one for one. That row is gone (owner
-     direction, 2026-10-16: the page opens on the name) and the control moved
-     into the footer, stacked on the column's centre line — so the claim is
-     re-aimed at where it now lives, not dropped: the control is IN the
-     sheet and never disagrees with it, which for a centred footer means it
-     stays on the column's centre line however far the edge is dragged, and
-     never leaves the column. Its block position is not asserted any more:
-     the footer is the LAST thing on the sheet, so a narrower column
-     legitimately reflows everything above it. */
-  const iconAfter = await footerControl();
-  expect(
-    iconAfter.centre,
-    `the drag moved the column's centre to ${((after.left + after.right) / 2).toFixed(1)}px and left the reading-mode control at ${iconAfter.centre.toFixed(1)}px`
-  ).toBeCloseTo((after.left + after.right) / 2, 0);
-  expect(iconAfter.left, 'the reading-mode control left the column').toBeGreaterThanOrEqual(after.left - subPixel);
-  expect(iconAfter.right, 'the reading-mode control left the column').toBeLessThanOrEqual(after.right + subPixel);
+  /* The reading-mode control this lane also held to the dragged sheet (owner
+     directive, 2026-09-03, issue 287) went with the footer (owner,
+     2026-10-19): the sheet carries no chrome control for a drag to move. */
 
   /* The start handle mirrors it, and undoes it: pulled 160px outward, it
      gives the column back the 320px the end handle took. */
@@ -9311,9 +9356,12 @@ test('a stored width is on the page before it paints, and moves nothing', async 
  * with what they reserved for (owner direction, 2026-10-16), so the shell is
  * the name in the same intro block the mounted page draws it in — and J, who
  * arrives with the mounted page, is out of the flow, so he is measured here
- * too: his arrival must move nothing. */
+ * too: his arrival must move nothing. Since 2026-10-19 the name and J are one
+ * centred group, the name keeping J's room as a margin at its end so the
+ * shell, which has no J, centres the name exactly where the mounted page
+ * does; measured at a phone width as well as a monitor, because the room is a
+ * different share of the column at each and both must agree. */
 test('the static shell holds the heading where hydration will put it', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
   const read = () =>
     page.evaluate(() => {
       const box = (selector) => {
@@ -9330,38 +9378,41 @@ test('the static shell holds the heading where hydration will put it', async ({ 
       };
     });
 
-  /* The shell alone. Scripts are refused at the network, which is the honest
-     boot state issue 239 describes, not a synthetic one. */
-  await page.route('**/*.js', (route) => route.abort());
-  await page.goto('/');
-  await page.waitForLoadState('load');
-  /* Both reads wait for the webfonts. The heading's box is its longest word
-     now (issue 294), so its width is the FONT's to decide: read in a fallback
-     face it is narrower than in the vendored one, and WebKit reached `load`
-     before the swap. The claim here is that the shell reserves the hydrated
-     page's geometry, not that a font arrives before the load event. */
-  await page.evaluate(() => window.document.fonts.ready);
-  const before = await read();
-  expect(before.shell, 'the page did not render its static shell with scripts refused').toBe(true);
-  expect(before.heading, 'the shell painted no heading').not.toBeNull();
-  await page.unroute('**/*.js');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    /* The shell alone. Scripts are refused at the network, which is the honest
+       boot state issue 239 describes, not a synthetic one. */
+    await page.route('**/*.js', (route) => route.abort());
+    await page.goto('/');
+    await page.waitForLoadState('load');
+    /* Both reads wait for the webfonts. The heading's box is its longest word
+       now (issue 294), so its width is the FONT's to decide: read in a fallback
+       face it is narrower than in the vendored one, and WebKit reached `load`
+       before the swap. The claim here is that the shell reserves the hydrated
+       page's geometry, not that a font arrives before the load event. */
+    await page.evaluate(() => window.document.fonts.ready);
+    const before = await read();
+    expect(before.shell, `the page did not render its static shell with scripts refused at ${width}px`).toBe(true);
+    expect(before.heading, `the shell painted no heading at ${width}px`).not.toBeNull();
+    await page.unroute('**/*.js');
 
-  /* The hydrated page, on the same viewport. */
-  await visit(page);
-  await page.evaluate(() => window.document.fonts.ready);
-  const after = await read();
-  expect(after.shell, 'the page never hydrated').toBe(false);
+    /* The hydrated page, on the same viewport. */
+    await visit(page);
+    await page.evaluate(() => window.document.fonts.ready);
+    const after = await read();
+    expect(after.shell, 'the page never hydrated').toBe(false);
 
-  expect(
-    after.heading,
-    `hydration moved the heading from ${before.heading} to ${after.heading}; the shell reserves a different page from the one that mounts`
-  ).toEqual(before.heading);
-  expect(before.j, 'the shell draws J, who should arrive with the mounted page').toBeNull();
-  expect(after.j, 'the mounted page draws no J').not.toBeNull();
-  expect(
-    after.main[1],
-    `hydration moved the column's top edge from ${before.main[1]} to ${after.main[1]}`
-  ).toBe(before.main[1]);
+    expect(
+      after.heading,
+      `hydration moved the heading from ${before.heading} to ${after.heading} at ${width}px; the shell reserves a different page from the one that mounts`
+    ).toEqual(before.heading);
+    expect(before.j, 'the shell draws J, who should arrive with the mounted page').toBeNull();
+    expect(after.j, 'the mounted page draws no J').not.toBeNull();
+    expect(
+      after.main[1],
+      `hydration moved the column's top edge from ${before.main[1]} to ${after.main[1]} at ${width}px`
+    ).toBe(before.main[1]);
+  }
 });
 
 test('a poisoned preference lands the page on the width it ships at', async ({ page }) => {
@@ -9427,11 +9478,11 @@ test('a phone gets no handle and the page it has always had', async ({ page }) =
        column is the screen less its two gutters and nothing else, and nothing
        scrolls sideways. Issue 241 subtracted a third term here — the lane the
        page reserved for the fixed reading-mode control — and issue 264 retired
-       it: below the handle breakpoint the control is document-glued, so it
-       costs the column nothing. Every width in this list sits below that
-       breakpoint, which is exactly the range the re-aim applies to. The
-       100rem token is far above every width here (issue 292), so the min()
-       is the viewport's, exactly as it always was on a phone. */
+       it (the control was document-glued below the handle breakpoint), and the
+       control itself went with the footer (owner, 2026-10-19), so nothing
+       costs the column a lane at any width. The 100rem token is far above
+       every width here (issue 292), so the min() is the viewport's, exactly
+       as it always was on a phone. */
     expect(column.width).toBeCloseTo(Math.min(100 * column.rem, width - gutterPx), 0);
     expect(column.scrollWidth).toBe(column.clientWidth);
   }
@@ -9690,126 +9741,6 @@ test('the drag writes once a frame and never stalls on layout', async ({ page })
   expect(swept.moves, `120 pointer moves took ${swept.moves.toFixed(1)}ms`).toBeLessThan(250);
 });
 
-// SUPERSEDED TWICE, and the second reversal is the current rule (owner
-// directive, 2026-09-03, issue 287). Originally this lane REQUIRED the popover
-// to fit inside whatever the reader had dragged the column down to, because
-// the header took the column's own width and the popover hangs off the header.
-// Issue 168 removed that coupling — the header pinned to the viewport corner —
-// so the claim inverted to "narrowing the column moves the popover not at all".
-// The ledger's masthead puts the header back INSIDE the column, sharing its
-// inline-size rule with `main`, so the coupling is deliberate again and the
-// original claim is the right one: the popover travels with the column and
-// must still FIT, entirely on screen, with every swatch, and without taking
-// the document sideways. Both halves are asserted — that it moved, so the
-// coupling is real rather than assumed, and that it fits, which is the floor
-// the coupling has to respect.
-//
-// The header row is gone (owner direction, 2026-10-16) and the control rides
-// the page's FOOTER, which is inside the column too — so the coupling holds,
-// and is measured as CONTAINMENT now rather than as movement: the footer
-// centres its row, so a narrower column need not move a control that is
-// already centred, but it must never leave the control outside it. A control
-// pinned to the viewport instead fails that the moment the column narrows.
-test('the reading-mode popover travels with the column and still fits at its narrowest (issue 168; owner 2026-09-03, issue 287; 2026-10-16)', async ({
-  page
-}) => {
-  await page.setViewportSize({ width: railsBreakpointPx, height: 900 });
-
-  await visit(page);
-  await openedAndStill(page);
-  const shipped = await page.evaluate(() => {
-    const menu = window.document.querySelector('#reading-mode-menu');
-    const box = menu.getBoundingClientRect();
-    // Raw floats on purpose, and taken AT REST. Issue #194 recorded this as a
-    // ±1 px cross-load flake on three engines and attributed it to
-    // font-metric timing; that diagnosis was wrong, and the tolerance it
-    // bought was a band-aid over a four-pixel noise source. The popover
-    // reveals with a 120ms `translateY(-0.25rem)` slide, and
-    // openReadingModes returns the instant the box is VISIBLE — so both
-    // readings were samples of a box still travelling, and the "shift"
-    // between them was nothing but two different points on that slide.
-    // MEASURED in WebKit: top reads 64 at animation time 8ms, 65.65 at 25ms,
-    // 67.56 at 87ms and 68 once it finishes (2026-08-27); the CI failure that
-    // sent this back read 64.59 against 66.04, both inside that same 4px
-    // travel. openedAndStill waits on the engine's own animation set, which
-    // is what the two lanes above this one already do, so the reading below
-    // is the settled position rather than a race — and `animating` proves it
-    // was, because a measurement taken mid-slide is the defect itself.
-    return {
-      left: box.left,
-      right: box.right,
-      top: box.top,
-      animating: menu.getAnimations().length
-    };
-  });
-  expect(shipped.animating, 'the shipped popover was measured mid-reveal').toBe(0);
-
-  // A fresh visit rather than closing and reopening the first one: the
-  // column-width override below must apply before the popover ever opens,
-  // and a fresh load is also what keeps this test from depending on how the
-  // disclosure happens to dismiss.
-  await visit(page);
-  await expect(handles(page)).toHaveCount(2);
-  await page.evaluate(() => {
-    window.document.documentElement.style.setProperty(
-      '--page-column-width',
-      getComputedStyle(window.document.documentElement).getPropertyValue('--page-column-min').trim()
-    );
-  });
-  await settled(page);
-  const column = await columnBox(page);
-  expect(column.width, 'the column did not reach its minimum').toBeLessThan(300);
-
-  await openedAndStill(page);
-  const observed = await page.evaluate(() => {
-    const menu = window.document.querySelector('#reading-mode-menu');
-    const box = menu.getBoundingClientRect();
-    const trigger = window.document.querySelector('.page-footer [aria-label="Reading mode"]').getBoundingClientRect();
-    const root = window.document.documentElement;
-    return {
-      popover: { left: box.left, right: box.right, top: box.top },
-      trigger: { left: trigger.left, right: trigger.right },
-      animating: menu.getAnimations().length,
-      swatches: window.document.querySelectorAll('#reading-mode-menu button').length,
-      scrollWidth: root.scrollWidth,
-      clientWidth: root.clientWidth
-    };
-  });
-
-  expect(observed.animating, 'the narrowed popover was measured mid-reveal').toBe(0);
-  expect(observed.swatches, 'the reading modes lost a swatch at the narrowest column').toBe(5);
-  /* IT RIDES THE COLUMN, which is the coupling stated as a measurement rather
-     than assumed: the control it opens from is inside the narrowed column. A
-     control pinned to the viewport would sit outside a column this narrow,
-     and the fit assertions below would then prove nothing about the column
-     at all. */
-  expect(
-    observed.trigger.left,
-    `the reading-mode control starts at ${observed.trigger.left}px, outside a column that starts at ${column.left}px`
-  ).toBeGreaterThanOrEqual(column.left - subPixel);
-  expect(
-    observed.trigger.right,
-    `the reading-mode control ends at ${observed.trigger.right}px, outside a column that ends at ${column.right}px`
-  ).toBeLessThanOrEqual(column.right + subPixel);
-  /* AND IT FITS, which is the floor that coupling has to respect: entirely on
-     screen on both inline edges, and below the top of the viewport. The
-     arrangement this replaced failed exactly here — a popover hanging off a
-     narrowed header used to run off the end of the screen. */
-  expect(
-    observed.popover.left,
-    `the narrowed popover starts at ${observed.popover.left}px, off the start edge`
-  ).toBeGreaterThanOrEqual(-subPixel);
-  expect(
-    observed.popover.right,
-    `the narrowed popover ends at ${observed.popover.right}px in a ${observed.clientWidth}px viewport`
-  ).toBeLessThanOrEqual(observed.clientWidth + subPixel);
-  expect(
-    observed.popover.top,
-    `the narrowed popover starts at ${observed.popover.top}px, above the viewport`
-  ).toBeGreaterThanOrEqual(-subPixel);
-  expect(observed.scrollWidth).toBe(observed.clientWidth);
-});
-
 /* ===========================================================================
  * Filled width beats the reading measure (owner directive 2026-08-26,
  * issue 212)
@@ -9906,11 +9837,19 @@ const measureCardFill = (page) =>
       return runs;
     };
     const rows = [];
+    const prop = Number.parseFloat(getComputedStyle(window.document.documentElement).getPropertyValue('--keep-prop'));
     for (const card of window.document.querySelectorAll('.feed-card')) {
       const edge = contentEnd(card);
       for (const selector of selectors) {
         for (const block of card.querySelectorAll(selector)) {
           const runs = textRuns(block);
+          /* A ROLE OPENS AS A SCROLL (owner, 2026-10-19): its points are set
+             on a parchment inset from the card by three prop pixels a side,
+             so the paper's rollers can be a little wider than the paper. The
+             block is held to the PARCHMENT's content edge, and the parchment
+             to exactly that inset from the card's — so a cap on the block, or
+             a parchment narrowed past its stated inset, still fails here. */
+          const parchment = block.closest('.ledger-scroll');
           /* The line boxes that PROVE a width: every line of a wrapped run
              except its last. A last line is as long as the sentence ran out —
              a layout tells you nothing there — but a line the engine chose to
@@ -9922,7 +9861,9 @@ const measureCardFill = (page) =>
           rows.push({
             selector,
             card: Math.round(card.getBoundingClientRect().width),
-            short: edge - block.getBoundingClientRect().right,
+            short: (parchment === null ? edge : contentEnd(parchment)) - block.getBoundingClientRect().right,
+            inset: parchment === null ? null : edge - parchment.getBoundingClientRect().right,
+            prop,
             runs: runs.length,
             broken: broken.length,
             /* The WORST of them: the broken line that stops furthest from its
@@ -9962,13 +9903,21 @@ function expectCardsFilled(observed, where) {
       row.card,
       `a card holding ${row.selector} is only ${row.card}px wide at ${where}`
     ).toBeGreaterThan(ribbonPx);
-    /* THE RULE. The block's own box ends ON the card's content edge: the
-       card's padding is the only thing between its text and its border, and
-       nothing narrows it further. Before the ruling this read 262.0px short for
-       .entry-points and 270.0px for .entry-summary. */
+    /* THE RULE. The block's own box ends ON the content edge of the surface
+       it is set on: the card's, or since 2026-10-19 the role's parchment,
+       which sits exactly its three prop pixels inside the card's. The padding
+       is the only thing between the text and its edge, and nothing narrows it
+       further. Before the ruling this read 262.0px short for .entry-points and
+       270.0px for .entry-summary. */
+    if (row.inset !== null) {
+      expect(
+        row.inset,
+        `the parchment holding ${row.selector} is inset ${row.inset.toFixed(1)}px from the card's content edge at ${where}, not its three ${row.prop}px prop pixels`
+      ).toBeCloseTo(3 * row.prop, 1);
+    }
     expect(
       row.short,
-      `${row.selector} stops ${row.short.toFixed(1)}px short of the card's content edge at ${where} (${((row.short / row.card) * 100).toFixed(1)}% of the card left blank)`
+      `${row.selector} stops ${row.short.toFixed(1)}px short of its surface's content edge at ${where} (${((row.short / row.card) * 100).toFixed(1)}% of the card left blank)`
     ).toBeLessThanOrEqual(subPixel);
     /* ...and does not overhang it either, which is the opposite defect and the
        one that takes the document sideways. */
@@ -10030,6 +9979,106 @@ test('card text fills the card and stops at its padding, never two thirds of the
   await page.evaluate(() =>
     window.document.documentElement.style.removeProperty('--page-column-width')
   );
+});
+
+/* A ROLE OPENS AS A SCROLL (owner, 2026-10-19: "when you open up the work
+ * experience have it open up like a scroll instead of just re-using the plain
+ * background"). The points and the link are set on a parchment in the day's
+ * inks; its upper roller is the parchment's own first box, inside the
+ * drawer's clip, and its lower roller is the drawer's second row, after the
+ * clip, shown only while the role is open. Measured with the motion reduced,
+ * where the scroll is simply open, so every box is read at rest:
+ *   - closed, no roller shows: the clip shows nothing (so neither the paper nor
+ *     its upper roller is on the page) and the lower roller takes no box;
+ *   - open, both show, each eight prop pixels tall and drawn as a picture, the
+ *     upper one inside what the clip shows and the lower one directly under
+ *     the parchment;
+ *   - the parchment's ink is legible ON THE PARCHMENT at the 4.5:1 text floor,
+ *     measured against the paper's own colour as the engine resolved it;
+ *   - and nothing outside the drawer moves except by the drawer's own growth:
+ *     the role's row and the section's head stand still, and the next role and
+ *     the next section move down by exactly what the drawer grew. */
+test('a role opens as a scroll: no rollers while closed, both when open, legible ink on the parchment, and nothing moves but by the drawer (owner 2026-10-19)', async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await visit(page);
+  expect(await page.locator('#work .ledger-entry').count(), 'the experience section drew fewer than two roles').toBeGreaterThan(1);
+  const read = () =>
+    page.evaluate(() => {
+      const entry = window.document.querySelector('#work .ledger-entry');
+      const doc = (node) => {
+        const rect = node.getBoundingClientRect();
+        return {
+          top: Math.round((rect.top + window.scrollY) * 100) / 100,
+          bottom: Math.round((rect.bottom + window.scrollY) * 100) / 100,
+          height: Math.round(rect.height * 100) / 100,
+        };
+      };
+      const scroll = entry.querySelector('.ledger-scroll');
+      const end = entry.querySelector('.ledger-scroll-end');
+      const roller = getComputedStyle(scroll, '::before');
+      const endStyle = getComputedStyle(end);
+      const resolve = (token) => {
+        const probe = window.document.createElement('span');
+        probe.style.color = `var(${token})`;
+        scroll.appendChild(probe);
+        const value = getComputedStyle(probe).color;
+        probe.remove();
+        return value;
+      };
+      const link = scroll.querySelector('.ledger-link');
+      return {
+        prop: Number.parseFloat(getComputedStyle(window.document.documentElement).getPropertyValue('--keep-prop')),
+        row: doc(entry.querySelector('.ledger-row')),
+        drawer: doc(entry.querySelector('.ledger-drawer')),
+        clip: doc(entry.querySelector('.ledger-drawer-clip')),
+        parchment: doc(scroll),
+        upper: { content: roller.content, display: roller.display, height: Number.parseFloat(roller.height), picture: roller.backgroundImage },
+        lower: { display: endStyle.display, box: endStyle.display === 'none' ? null : doc(end), picture: endStyle.backgroundImage },
+        paper: resolve('--keep-parchment'),
+        inks: [
+          ['a point', getComputedStyle(scroll.querySelector('.ledger-point')).color],
+          ...(link === null ? [] : [['the link', getComputedStyle(link).color]]),
+        ],
+        next: doc(entry.nextElementSibling.querySelector('.ledger-row')),
+        head: doc(window.document.querySelector('#work .section-head')),
+        after: doc(window.document.querySelector('#projects')),
+      };
+    });
+
+  const closed = await read();
+  expect(closed.clip.height, 'a closed role shows part of its scroll').toBeLessThanOrEqual(subPixel);
+  expect(closed.lower.display, 'a closed role draws its lower roller').toBe('none');
+
+  await page.locator('#work .ledger-entry').first().locator('.ledger-row').click();
+  await settled(page);
+  const open = await read();
+  const roller = 8 * open.prop;
+  expect(open.prop, 'the prop pixel token resolves to nothing').toBeGreaterThan(0);
+  expect(open.upper.content, 'the open scroll draws no upper roller').not.toBe('none');
+  expect(open.upper.height, `the upper roller is ${open.upper.height}px, not eight prop pixels`).toBeCloseTo(roller, 1);
+  expect(open.upper.picture, 'the upper roller paints no picture').not.toBe('none');
+  expect(open.parchment.top, 'the parchment starts above what the open clip shows').toBeGreaterThanOrEqual(open.clip.top - subPixel);
+  expect(open.parchment.top + roller, 'the upper roller is cut off by the clip').toBeLessThanOrEqual(open.clip.bottom + subPixel);
+  expect(open.lower.display, 'the open scroll draws no lower roller').not.toBe('none');
+  expect(open.lower.box.height, `the lower roller is ${open.lower.box.height}px, not eight prop pixels`).toBeCloseTo(roller, 1);
+  expect(open.lower.picture, 'the lower roller paints no picture').not.toBe('none');
+  expect(
+    Math.abs(open.lower.box.top - open.parchment.bottom),
+    `the lower roller starts ${(open.lower.box.top - open.parchment.bottom).toFixed(2)}px from the parchment's foot`
+  ).toBeLessThanOrEqual(1);
+  for (const [what, ink] of open.inks) {
+    const ratio = contrastRatio(ink, open.paper);
+    expect(ratio, `${what} is ${ink} on the parchment ${open.paper}: ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+  }
+
+  const grew = open.drawer.height - closed.drawer.height;
+  expect(grew, 'opening the role grew its drawer by nothing').toBeGreaterThan(roller);
+  expect(open.row.top, 'the role’s own row moved when it opened').toBeCloseTo(closed.row.top, 1);
+  expect(open.head.top, 'the section’s head moved when a role opened').toBeCloseTo(closed.head.top, 1);
+  expect(open.next.top - closed.next.top, 'the next role moved by something other than the drawer’s growth').toBeCloseTo(grew, 0);
+  expect(open.after.top - closed.after.top, 'the next section moved by something other than the drawer’s growth').toBeCloseTo(grew, 0);
 });
 
 /* ===========================================================================
@@ -10590,113 +10639,6 @@ test('a horizontal swipe over the enlarged photograph still swipes, downward dri
   );
 });
 
-/* DEFECT 4. At iPhone width the fixed reading-mode control overlapped the
- * token panel's segmented control, rendering "cumulative" underneath the moon
- * icon. The header was fixed to the VIEWPORT while the column scrolled beneath
- * it, and at a phone width the column IS the viewport, so right-aligned panel
- * content passed through the corner the control owns — with nothing painted
- * behind it, the label showed straight through. (A phone's control is glued to
- * the document since issue 264; the header is viewport-glued above the handle
- * breakpoint, which is the range half one below still measures.)
- *
- * MEASURED before the fix at 390x844 in WebKit: icon x 330-374 y 16-60,
- * "cumulative" x 283.19-360.0 y 26.98-70.98 — a 30x33px overlap. At 1440px
- * there was none (icon x 1380-1424, column x 240-1200), which is why it only
- * ever appeared on a phone.
- *
- * That "cumulative" segment no longer renders in the open: the display
- * choices moved behind a per-source menu on 2026-08-28. The control that took
- * its place at the end of the same header — the menu's own trigger — is what
- * this lane scrolled under the plate, because the collision was never about
- * which control it was, only about where the column ends. The header has
- * since gone and the reading mode with it to the page's footer (owner
- * direction, 2026-10-16), which is where the lane measures it now. */
-test('the reading-mode control never renders over page text (issue 219)', async ({ page }) => {
-  await visit(page);
-
-  /* THE PLATE IS GONE, AND SO IS THE PROBLEM IT COVERED (owner directive,
-     2026-09-03, issue 287). The veil existed because the header was FIXED to
-     the viewport while the column scrolled beneath it: with nothing painted
-     behind the glyph, the text passing under it showed straight through. The
-     ledger made the header an ordinary in-flow row, and the row itself is
-     gone now (owner direction, 2026-10-16: "do away with it for now"): the
-     control lives in the page's FOOTER, the last block of the sheet.
-
-     What this lane measures is the structural fact that makes a veil
-     unnecessary, at every width the original sweep found the defect at and
-     at the desktop ones: the footer and the control are not taken out of flow
-     (a build that pinned either — `fixed` or `sticky` — fails here at once,
-     and would need its veil back); the control travels with the page, by
-     exactly the scroll; and its document rows are its OWN — it sits below the
-     last section of the sheet, so no page text shares them at any scroll
-     offset. Together those say no content of this page can be under the
-     control, which is strictly what the lane was for.
-
-     THE SCROLL PADDING IS STILL GONE with the fixed control it served (issue
-     287): nothing on this page is fixed to the viewport, so the page declares
-     no scroll padding and none is asserted; the swap lane asserts the scroll
-     position exactly instead.
-
-     HALF TWO stayed gone (issue 265): it was a hit-test behind a guard no
-     viewport in this matrix could reach, and this repository keeps no
-     decorative probes. */
-  for (const width of [...phoneWidths, 768, 1024, 1440]) {
-    await page.setViewportSize({ width, height: 800 });
-    await settled(page);
-    const lane = await page.evaluate(async () => {
-      const footer = window.document.querySelector('.page-footer');
-      const control = footer.querySelector('[aria-label="Reading mode"]');
-      const menu = footer.querySelector('.theme-menu');
-      const sections = [...window.document.querySelectorAll('.page-section')];
-      window.scrollTo(0, 0);
-      await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
-      const rest = control.getBoundingClientRect();
-      const lastSectionBottom = sections.at(-1).getBoundingClientRect().bottom;
-      window.scrollTo(0, 400);
-      await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
-      const travelled = rest.top - control.getBoundingClientRect().top;
-      const offset = window.scrollY;
-      // Later lanes in this file start from the top of the document.
-      window.scrollTo(0, 0);
-      return {
-        footerPosition: getComputedStyle(footer).position,
-        menuPosition: getComputedStyle(menu).position,
-        controlWidth: rest.width,
-        controlTop: rest.top,
-        lastSectionBottom,
-        travelled,
-        offset,
-      };
-    });
-    for (const [what, position] of [
-      ['the footer', lane.footerPosition],
-      ['the reading-mode control', lane.menuPosition],
-    ]) {
-      expect(
-        ['fixed', 'sticky'],
-        `${what} is ${position} at ${width}px: it is out of flow again, so page content can pass beneath it and it needs the backdrop this lane used to pin`
-      ).not.toContain(position);
-    }
-    expect(
-      lane.controlWidth + subPixel,
-      `the control shrank to ${lane.controlWidth}px; the 44px target is the floor, not the variable`
-    ).toBeGreaterThanOrEqual(touchFloorPx);
-    // Non-vacuity for the travel: an unscrollable page proves nothing about it.
-    expect(lane.offset, `the page could not be scrolled at ${width}px`).toBeGreaterThan(0);
-    /* A whole pixel of tolerance: a scroll offset is rounded to the device's
-       pixel grid. It cannot hide a control that stayed put, which reports zero
-       travel against a 400px scroll. */
-    expect(
-      lane.travelled,
-      `at ${width}px the control moved ${lane.travelled}px against a ${lane.offset}px scroll; it is glued to the viewport`
-    ).toBeCloseTo(lane.offset, 0);
-    expect(
-      lane.controlTop,
-      `at ${width}px the control starts at ${lane.controlTop}px, inside the last section of the sheet, which ends at ${lane.lastSectionBottom}px`
-    ).toBeGreaterThanOrEqual(lane.lastSectionBottom - subPixel);
-  }
-});
-
 /* REAL TOUCH, THROUGH THE ENGINE'S OWN INPUT PIPELINE (issue 285). Every other
  * touch lane in this file dispatches PointerEvents, which no browser
  * arbitrates — the 0.1.67 header records that those drives kept every lane
@@ -10818,13 +10760,14 @@ test('the contributions calendar trails today past a stalled payload, and says s
  * preloads inside the bound, so none of them takes the branch where the bound
  * wins. This lane takes it on purpose: every font file is HELD until the lane
  * lets it go — a fixed delay could run out before the first measurement and
- * leave the lane measuring nothing — so the page mounts with both faces still
- * on their way. Then the faces are released, the lane waits until the engine
- * reports EACH family loaded (one family landing is not both: the review of
+ * leave the lane measuring nothing — so the page mounts with every face still
+ * on its way. Then the faces are released, the lane waits until the engine
+ * reports EACH family loaded (one family landing is not all: the review of
  * 33f9817 held the mono face back and a wait for either one measured before it
- * came), and the name, a role's date (set in the mono stack), the first role
- * row and the page's height must be exactly where they were, with neither late
- * family in the stack that sets them. Swapped into painted text, the late face
+ * came), and the name (the display stack, Instrument Serif since 2026-10-19), a role's
+ * name (the sans stack), a role's date (the mono stack), the first role row and
+ * the page's height must be exactly where they were, with no late family in
+ * the stack that sets them. Swapped into painted text, the late face
  * widened the name by 78px and moved the roles by 4px at 1440px (0.013); the
  * mono face, whose figures share its fallback's advance, moved the page by 1px
  * in Chromium and nothing in WebKit, so for it the stack is the evidence. */
@@ -10864,22 +10807,26 @@ for (const viewport of [
           return [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 100) / 100);
         };
         const name = window.document.querySelector('h1');
+        const employer = window.document.querySelector('#work .ledger-name');
         const date = window.document.querySelector('#work .ledger-span');
         return {
           name: box(name),
+          employer: box(employer),
           date: box(date),
           role: box(window.document.querySelector('#work .ledger-row')),
           height: window.document.documentElement.scrollHeight,
-          stacks: [getComputedStyle(name).fontFamily, getComputedStyle(date).fontFamily],
+          stacks: [name, employer, date].map((node) => getComputedStyle(node).fontFamily),
         };
       });
     /* The branch under test, proved rather than assumed: the bound won, so
-       both stacks were marked before the application mounted. */
+       every stack was marked before the application mounted. */
     const marked = await page.evaluate(() => [
       window.document.documentElement.getAttribute('data-face-sans'),
       window.document.documentElement.getAttribute('data-face-mono'),
+      window.document.documentElement.getAttribute('data-face-display'),
     ]);
     expect(marked, 'the page mounted as though its faces had loaded; the lane is not on the late branch').toEqual([
+      'fallback',
       'fallback',
       'fallback',
     ]);
@@ -10899,18 +10846,20 @@ for (const viewport of [
                 [...window.document.fonts]
                   .filter((face) => face.status === 'loaded' && face.style === 'normal')
                   .map((face) => face.family.replace(/["']/g, ''))
-                  .filter((family) => family === 'Archivo' || family === 'JetBrains Mono')
+                  .filter((family) => family === 'Archivo' || family === 'Instrument Serif' || family === 'JetBrains Mono')
               ),
             ].sort()
           ),
         { message: 'a held face never loaded after release; the lane measured nothing arriving', timeout: 15_000 }
       )
-      .toEqual(['Archivo', 'JetBrains Mono']);
+      .toEqual(['Archivo', 'Instrument Serif', 'JetBrains Mono']);
     await settled(page);
     const after = await geometry();
-    expect(after.stacks[0], 'the name is set in its late face').not.toMatch(/Archivo/);
-    expect(after.stacks[1], 'a role date is set in its late face').not.toMatch(/JetBrains Mono/);
+    expect(after.stacks[0], 'the name is set in its late face').not.toMatch(/Instrument Serif/);
+    expect(after.stacks[1], 'a role name is set in its late face').not.toMatch(/Archivo/);
+    expect(after.stacks[2], 'a role date is set in its late face').not.toMatch(/JetBrains Mono/);
     expect(after.name, 'the name moved when its late face landed').toEqual(before.name);
+    expect(after.employer, 'a role name moved when its late face landed').toEqual(before.employer);
     expect(after.date, 'a role date moved when its late face landed').toEqual(before.date);
     expect(after.role, 'the first role row moved when its late face landed').toEqual(before.role);
     expect(after.height, 'the page changed height when its late face landed').toBe(before.height);
@@ -11023,9 +10972,10 @@ for (const viewport of markViewports) {
              all, and that is correct rather than broken — but "has no box"
              and "resolved no size" look identical from the outside, so each
              boxless mark has to NAME why. Two reasons are legitimate: the
-             enlarged stage is a closed <dialog>, and THE KEEP's section
-             plaques print the title alone, hiding the number and the mark
-             beside it (owner direction, 2026-10-16) — named by the computed
+             enlarged stage is a closed <dialog>, and a section head prints
+             the title alone, hiding the number and the mark beside it (owner
+             direction, 2026-10-16, when the heads were plaques; plain type
+             since 2026-10-19, and still title alone) — named by the computed
              display of the number block itself, so a mark hidden any other
              way is still caught. (The repositories table's phone column head
              and the chrome row's place label were the others, until the table
@@ -11038,7 +10988,7 @@ for (const viewport of markViewports) {
               ? 'the closed stage'
               : mark.closest('.section-number') !== null &&
                   getComputedStyle(mark.closest('.section-number')).display === 'none'
-                ? 'the section number the plaque does not print'
+                ? 'the section number the head does not print'
                 : 'nothing',
         })),
         /* The mark column: one square per role, all the same size, every
@@ -11091,7 +11041,7 @@ for (const viewport of markViewports) {
       expect(mark.width, `a mark (${mark.classes}) painted at ${mark.width}px`).toBeLessThan(32);
       expect(mark.height, `a mark (${mark.classes}) is not square`).toBeCloseTo(mark.width, 1);
       /* Ink is inherited, never named: a mark with no colour of its own is
-         what makes the family follow all four reading modes with no branch. */
+         what makes the family follow both reading modes with no branch. */
       expect(mark.ink, `a mark (${mark.classes}) painted no ink`).toMatch(/^rgba?\(/);
     }
 
@@ -11132,56 +11082,6 @@ for (const viewport of markViewports) {
     ).toBeLessThanOrEqual(observed.viewportWidth);
   });
 }
-
-/* THE READING MODE IS A KEYBOARD CONTROL WHEREVER IT SITS. This lane was "the
- * keyboard still walks the chrome row: the home link, the four nav links, then
- * the reading mode" (issues 318, 325), and the row and its first five stops
- * are gone (owner direction, 2026-10-16: "do away with it for now"). The stop
- * that had a subject left is the last one: the reading mode, in the footer
- * now. A native button is in every engine's tab order, so this needs no
- * capability probe, and it is measured end to end by keys alone: reachable
- * and named, Enter opens it with focus on the choice in force, the arrows walk
- * the choices, Enter chooses and hands focus back to the trigger, and Escape
- * closes it from inside and does the same. */
-test('the keyboard reaches the reading mode in the footer, walks its choices and closes it where it opened (owner 2026-10-16)', async ({
-  page,
-}) => {
-  await visit(page);
-  const trigger = page.locator('.page-footer button[aria-label="Reading mode"]');
-  await expect(trigger, 'the reading mode is not in the footer').toHaveCount(1);
-  expect(await trigger.evaluate((node) => node.tabIndex), 'the reading mode left the tab order').toBeGreaterThanOrEqual(0);
-  const active = () =>
-    page.evaluate(() => ({
-      label: window.document.activeElement?.getAttribute('aria-label') ?? '',
-      pressed: window.document.activeElement?.getAttribute('aria-pressed') ?? null,
-    }));
-  const menu = page.locator('#reading-mode-menu');
-
-  await trigger.focus();
-  await page.keyboard.press('Enter');
-  await expect(menu, 'Enter did not open the reading modes').toBeVisible();
-  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
-  /* Focus lands INSIDE, on the choice in force — auto, on arrival. */
-  expect(await active(), 'focus did not move onto the choice in force').toEqual({ label: 'Auto', pressed: 'true' });
-  await page.keyboard.press('ArrowRight');
-  expect((await active()).label, 'the arrow did not walk to the next choice').toBe('Light');
-  await page.keyboard.press('ArrowLeft');
-  await page.keyboard.press('ArrowLeft');
-  expect((await active()).label, 'the arrows do not wrap round the choices').toBe('Sepia');
-  await page.keyboard.press('Enter');
-  await expect(page.locator('html'), 'Enter did not choose the focused mode').toHaveAttribute('data-theme', 'sepia');
-  await expect(menu, 'choosing a mode left the menu open').toBeHidden();
-  expect((await active()).label, 'focus did not come back to the trigger after a choice').toBe('Reading mode');
-
-  /* Escape from inside closes it and hands focus back the same way. */
-  await page.keyboard.press('Enter');
-  await expect(menu).toBeVisible();
-  expect(await active(), 'focus did not move onto the newly chosen mode').toEqual({ label: 'Sepia', pressed: 'true' });
-  await page.keyboard.press('Escape');
-  await expect(menu, 'Escape left the menu open').toBeHidden();
-  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
-  expect((await active()).label, 'focus did not come back to the trigger after Escape').toBe('Reading mode');
-});
 
 /* A CLOSED DRAWER HOLDS NO STOP (issue 329). The drawer closes by clipping its
  * contents to zero height, and clipping alone left the employer link a Tab
@@ -11474,6 +11374,104 @@ test('the commit log holds its reserve and scrolls inside it at 1440px (owner 20
   expect(measured.controls, 'the phone’s disclosure control rendered at a desktop width').toBe(0);
 });
 
+/* THE LOG DRAWS NO SCROLLBAR, AND ITS EDGES SAY WHERE THERE IS MORE (owner,
+ * 2026-10-19: "this scroll wheel is quite the eyesore … don't have any cool
+ * transition"). The box keeps its scroll — a wheel, a finger and the keys
+ * still move it — but takes no width for a bar, and fades an edge only while
+ * there is more beyond it: at the top the end fades and the start does not,
+ * part-way both do, at the bottom the start does and the end does not. The
+ * box reports where it is on data-at-start and data-at-end, and the fades
+ * are the two registered lengths the mask is built from, read from the
+ * engine. And a wheel that reaches the end stays in the box rather than
+ * carrying on into the page (overscroll-behavior: contain), which is what a
+ * reader feels when they scroll to the last commit and keep going. */
+test('the commit log fades only an edge with more beyond it, draws no scrollbar, and keeps a wheel past its end to itself (owner 2026-10-19)', async ({
+  page,
+  isMobile,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await visit(page);
+  const box = page.locator('#projects .log-box');
+  const read = () =>
+    box.evaluate((node) => {
+      const style = getComputedStyle(node);
+      const rem = Number.parseFloat(getComputedStyle(window.document.documentElement).fontSize);
+      return {
+        atStart: node.dataset.atStart,
+        atEnd: node.dataset.atEnd,
+        fadeStart: Math.round(Number.parseFloat(style.getPropertyValue('--log-fade-start')) * 10) / 10,
+        fadeEnd: Math.round(Number.parseFloat(style.getPropertyValue('--log-fade-end')) * 10) / 10,
+        fade: Math.round(2.5 * rem * 10) / 10,
+        mask: style.maskImage || style.webkitMaskImage || 'none',
+        scrollTop: node.scrollTop,
+        room: node.scrollHeight - node.clientHeight,
+        clientWidth: node.clientWidth,
+        offsetWidth: node.offsetWidth,
+        overscroll: style.overscrollBehaviorY,
+      };
+    });
+  const first = await read();
+  expect(first.room, 'the log has nothing past its reserve, so its edges have nothing to say').toBeGreaterThan(0);
+  expect(first.mask, 'the log box draws no mask for its fades').not.toBe('none');
+  expect(first.clientWidth, `a scrollbar takes ${first.offsetWidth - first.clientWidth}px of the log box`).toBe(first.offsetWidth);
+  expect(first.overscroll, 'a scroll that reaches the log’s end carries on into the page').toBe('contain');
+
+  /* Each position is waited into: the attributes follow a scroll event and
+     the fades ease where motion is welcome, so the read is the settled one. */
+  const at = async (where, scrollTop, expected) => {
+    await box.evaluate((node, top) => {
+      node.scrollTop = top;
+    }, scrollTop);
+    await expect
+      .poll(
+        async () => {
+          const now = await read();
+          return { atStart: now.atStart, atEnd: now.atEnd, fadeStart: now.fadeStart, fadeEnd: now.fadeEnd };
+        },
+        { message: `the log's edges at its ${where}` }
+      )
+      .toEqual({
+        atStart: expected.atStart,
+        atEnd: expected.atEnd,
+        fadeStart: expected.startFaded ? first.fade : 0,
+        fadeEnd: expected.endFaded ? first.fade : 0,
+      });
+  };
+  await at('top', 0, { atStart: 'true', atEnd: 'false', startFaded: false, endFaded: true });
+  await at('middle', Math.round(first.room / 2), { atStart: 'false', atEnd: 'false', startFaded: true, endFaded: true });
+  await at('bottom', first.room, { atStart: 'false', atEnd: 'true', startFaded: true, endFaded: false });
+  const bottom = await read();
+  expect(bottom.clientWidth, 'a scrollbar appeared once the log was scrolled').toBe(bottom.offsetWidth);
+
+  /* THE WHEEL. A desktop pointer's gesture: an emulated phone has no wheel to
+     turn (a finger's overscroll is held by the same declaration, read above).
+     First the wheel is proved to reach the box at all — from the top it moves
+     the log and not the page — then, at the bottom, more wheel moves neither. */
+  if (isMobile) {
+    test.info().annotations.push({ type: 'capability', description: 'an emulated phone has no wheel; overscroll containment is read from the engine above' });
+    return;
+  }
+  await box.evaluate((node) => {
+    const top = node.getBoundingClientRect().top + window.scrollY;
+    window.scrollTo(0, Math.max(0, Math.floor(top) - 80));
+    node.scrollTop = 0;
+  });
+  await settled(page);
+  const page0 = await page.evaluate(() => window.scrollY);
+  const rect = await box.boundingBox();
+  await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  await page.mouse.wheel(0, 120);
+  await expect.poll(async () => (await read()).scrollTop, { message: 'a wheel over the log never moved it' }).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.scrollY), 'a wheel inside the log scrolled the page instead').toBe(page0);
+  await box.evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+  });
+  await expect.poll(async () => (await read()).atEnd).toBe('true');
+  await page.mouse.wheel(0, 600);
+  await page.evaluate(() => new Promise((done) => setTimeout(done, 400)));
+  expect(await page.evaluate(() => window.scrollY), 'a wheel past the log’s end carried on into the page').toBe(page0);
+});
+
 /* THE PHONE LOG IS NOT A SCROLL TRAP (owner ruling, 2026-09-12, on the live
  * page: at 390px the log is "quite busy ... an endless scroll field that I have
  * to fight out of"). Re-aimed at the Ongoing Work markup on 2026-10-16; every
@@ -11498,7 +11496,11 @@ test('at 390 the log shows five entries and a control, and the only scroll is th
       const list = window.document.querySelector('#projects .log-list');
       const control = window.document.querySelector('#projects .log-more');
       const section = window.document.getElementById('projects');
-      const head = window.document.querySelector('#commits .ongoing-head');
+      /* The column's own top edge stands where its head did: the visible
+         head went (owner, 2026-10-19: "remove this heading … remove the icons
+         there as well"), and its word stays for a screen reader, clipped. */
+      const head = window.document.querySelector('#commits');
+      const word = window.document.querySelector('#commits > .ongoing-clipped');
       const table = window.document.querySelector('#projects .ongoing-column:not(#commits)');
       const box2 = (node) => {
         if (node === null) return null;
@@ -11527,6 +11529,11 @@ test('at 390 the log shows five entries and a control, and the only scroll is th
         listWidth: round(list.getBoundingClientRect().width),
         sectionBox: box2(section),
         headBox: box2(head),
+        word:
+          word === null
+            ? null
+            : { text: word.textContent.trim(), width: word.getBoundingClientRect().width, height: word.getBoundingClientRect().height },
+        visibleHeads: window.document.querySelectorAll('#projects .ongoing-head').length,
         tableBox: box2(table),
         boxTop: box2(box).top,
         documentWidth: window.document.documentElement.scrollWidth,
@@ -11545,7 +11552,11 @@ test('at 390 the log shows five entries and a control, and the only scroll is th
   expect(served, 'the served log already fits in five entries; the disclosure has no subject').toBeGreaterThan(5);
 
   const collapsed = await shape();
-  expect(collapsed.headBox, 'the log column drew no head').not.toBeNull();
+  expect(collapsed.headBox, 'the log column is missing').not.toBeNull();
+  expect(collapsed.visibleHeads, 'a visible head is back over an Ongoing Work column').toBe(0);
+  expect(collapsed.word, 'the log column lost the word a screen reader names it by').not.toBeNull();
+  expect(collapsed.word.text.length, 'the log column’s clipped word is empty').toBeGreaterThan(0);
+  expect(collapsed.word.width * collapsed.word.height, 'the log column’s word is painted again').toBeLessThanOrEqual(1);
   expect(collapsed.tableBox, 'the repositories column is missing').not.toBeNull();
   /* NO SCROLL OF ITS OWN: the box is exactly as tall as what is in it, and its
      overflow is the initial one. Either half alone would still trap a thumb. */
@@ -11650,7 +11661,8 @@ test('at 390 the log shows five entries and a control, and the only scroll is th
   ).toBeLessThanOrEqual(expanded.viewportWidth + subPixel);
 
   /* NOTHING ABOVE THE LOG MOVED. The section's own top, the repositories
-     column above it and the log's head are all where they were; the section
+     column above it and the log column's own top (where its head stood until
+     2026-10-19) are all where they were; the section
      is TALLER by exactly the log's growth, which is the reader's own press
      expanding the thing they pressed on. */
   expect(expanded.sectionBox.top, 'the section moved when the log opened').toBeCloseTo(
@@ -11661,7 +11673,7 @@ test('at 390 the log shows five entries and a control, and the only scroll is th
     collapsed.tableBox.height,
     1
   );
-  expect(expanded.headBox.top, 'the log’s head moved when the log opened').toBeCloseTo(
+  expect(expanded.headBox.top, 'the log’s column moved when the log opened').toBeCloseTo(
     collapsed.headBox.top,
     1
   );
@@ -11754,6 +11766,80 @@ test('the sheet numbers four sections and the paired one reads as one head (owne
   expect(observed.logRowsUnderAnchor, '#commits lands somewhere with no commits in it').toBeGreaterThan(0);
 });
 
+/* A SECTION HEAD IS ITS TITLE AND A VINE (owner, 2026-10-19: the plain titles
+ * with "left + line", the owner's pick of three settings tried on the page,
+ * then "the plain lines should be tree branches, or vines"). The head is a
+ * row: the title at the column's start, then the vine — a band nine prop
+ * pixels tall (--keep-prop, 2px a pixel: 18px), painted as a picture — that
+ * takes whatever the title leaves, to the column's end. The vine is a
+ * generated box, so its own width is read from the engine and laid end to end
+ * with the title and the gap between them: the three must reach exactly the
+ * column's content end. A vine that stopped short, ran into the sheet's
+ * margin, wrapped under the title (a head turned back into a column), shrank
+ * back to a hairline or lost its picture is a measurement off here, at a
+ * desktop and both phone widths. */
+test('every section head sets its title at the column’s start and runs its vine to the column’s end (owner 2026-10-19)', async ({
+  page,
+}) => {
+  await visit(page);
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    const observed = await page.evaluate(() => {
+      const main = window.document.querySelector('main');
+      const sheet = main.getBoundingClientRect();
+      const frame = getComputedStyle(main);
+      return {
+        prop: parseFloat(getComputedStyle(window.document.documentElement).getPropertyValue('--keep-prop')),
+        column: {
+          start: sheet.left + parseFloat(frame.borderLeftWidth) + parseFloat(frame.paddingLeft),
+          end: sheet.right - parseFloat(frame.borderRightWidth) - parseFloat(frame.paddingRight),
+        },
+        heads: [...window.document.querySelectorAll('.section-head')].map((head) => {
+          const style = getComputedStyle(head);
+          const line = getComputedStyle(head, '::after');
+          const title = head.querySelector('.section-title').getBoundingClientRect();
+          return {
+            id: head.closest('.page-section')?.id ?? '',
+            direction: style.flexDirection,
+            gap: parseFloat(style.columnGap),
+            title: { left: title.left, right: title.right },
+            line: {
+              content: line.content,
+              width: parseFloat(line.width),
+              height: parseFloat(line.height),
+              picture: line.backgroundImage,
+            },
+          };
+        }),
+      };
+    });
+    expect(observed.heads.length, `the sheet draws no section heads at ${width}px`).toBeGreaterThan(0);
+    for (const head of observed.heads) {
+      const at = `${head.id} at ${width}px`;
+      expect(head.direction, `the head of ${at} is not a row`).toBe('row');
+      expect(
+        Math.abs(head.title.left - observed.column.start),
+        `the title of ${at} starts at ${head.title.left}px, not at the column's start ${observed.column.start}px`
+      ).toBeLessThanOrEqual(1);
+      expect(head.line.content, `the head of ${at} draws no vine`).not.toBe('none');
+      expect(observed.prop, 'the prop pixel token resolves to nothing').toBeGreaterThan(0);
+      expect(
+        head.line.height,
+        `the vine of ${at} is ${head.line.height}px, not nine ${observed.prop}px prop pixels`
+      ).toBeCloseTo(9 * observed.prop, 1);
+      expect(head.line.height, `the vine of ${at} is back to a hairline`).toBeGreaterThan(1);
+      expect(head.line.picture, `the vine of ${at} paints no picture`).not.toBe('none');
+      expect(head.line.width, `the vine of ${at} has no length`).toBeGreaterThan(0);
+      const end = head.title.right + head.gap + head.line.width;
+      expect(
+        Math.abs(end - observed.column.end),
+        `the vine of ${at} ends at ${end.toFixed(2)}px, not at the column's end ${observed.column.end.toFixed(2)}px`
+      ).toBeLessThanOrEqual(1);
+    }
+  }
+});
+
 test('at 1440 the two columns fill the sheet with no dead space (owner 2026-09-11, issue 318; 2026-10-16)', async ({
   page,
 }) => {
@@ -11782,7 +11868,22 @@ test('at 1440 the two columns fill the sheet with no dead space (owner 2026-09-1
       logEnds: [...spread.querySelectorAll('.log-entry')]
         .slice(0, 5)
         .map((row) => right(row.querySelector('.log-meta > :last-child'))),
-      heads: [...spread.querySelectorAll('.ongoing-head')].map((head) => right(head)),
+      /* NO VISIBLE HEADS since 2026-10-19 ("remove this heading … remove the
+         icons there as well"): each column opens on its first entry, and its
+         word is kept clipped for a screen reader. */
+      heads: spread.querySelectorAll('.ongoing-head').length,
+      words: columns.map((column) => {
+        const word = column.querySelector(':scope > .ongoing-clipped');
+        if (word === null) return null;
+        const rect = word.getBoundingClientRect();
+        return { text: word.textContent.trim(), area: rect.width * rect.height };
+      }),
+      marksBeforeFirst: columns.map((column) => {
+        const first = column.querySelector('.repo-entry, .log-box');
+        return [...column.querySelectorAll('svg')].filter(
+          (mark) => first !== null && (mark.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+        ).length;
+      }),
       documentWidth: window.document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
     };
@@ -11817,9 +11918,13 @@ test('at 1440 the two columns fill the sheet with no dead space (owner 2026-09-1
   };
   reaches(measured.repoEnds, measured.boxes[0].right, 'the repository entry');
   reaches(measured.logEnds, measured.boxes[1].right, 'the commit entry');
-  expect(measured.heads.length, 'the columns do not each wear one head').toBe(2);
-  reaches([measured.heads[0]], measured.boxes[0].right, 'the repositories head');
-  reaches([measured.heads[1]], measured.boxes[1].right, 'the commits head');
+  expect(measured.heads, 'a visible head is back over an Ongoing Work column').toBe(0);
+  for (const [index, word] of measured.words.entries()) {
+    expect(word, `column ${index} lost the word a screen reader names it by`).not.toBeNull();
+    expect(word.text.length, `column ${index}'s clipped word is empty`).toBeGreaterThan(0);
+    expect(word.area, `column ${index}'s word is painted again`).toBeLessThanOrEqual(1);
+  }
+  expect(measured.marksBeforeFirst, 'a column draws a mark above its first entry, where its head’s icon was').toEqual([0, 0]);
   expect(
     measured.documentWidth,
     `the paired section took the document sideways (${measured.documentWidth} > ${measured.viewportWidth})`

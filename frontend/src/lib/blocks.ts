@@ -687,22 +687,6 @@ export type TickerProps = {
   readonly emptyNote: string;
   /* The strip's accessible name. */
   readonly label: string;
-  /* The lead item's picture, if the collection has one: a same-origin URL the
-   * binding layer resolved, with the file's own dimensions so the lead can
-   * reserve the box. Decorative — the title beside it is the name. */
-  readonly mark?: TickerMark;
-};
-
-export type TickerMark = {
-  readonly url: string;
-  readonly width: number;
-  readonly height: number;
-  /* A family mark set beside the picture (owner design decision, 2026-09-11,
-   * issue 313). It travels with the picture, in the binding layer, because a
-   * strip that hardcoded one would be a strip with an opinion about which
-   * collection it counts — the same rule that keeps every name out of this
-   * component. Decorative, like the picture: the strip's label is the name. */
-  readonly glyph?: IconName;
 };
 
 /* --- MediaGallery: one visible frame, prev/next, a click-to-enlarge lightbox

@@ -115,13 +115,44 @@
       ? logRows.slice(0, logDisclosure.collapsed)
       : logRows
   );
+
+  /* THE LOG FADES AT AN EDGE IT HAS MORE BEYOND (owner, 2026-10-19: "this
+     scroll wheel is quite the eyesore, and the elements at the topmost and
+     bottom most of the table don't have any cool transition"). The box marks
+     whether it is at its start and at its end, on every scroll and whenever
+     it or its list changes size; the stylesheet fades the entries under an
+     edge with more past it, and never one at the end of the list. A mark is a
+     data attribute, so nothing here moves a box. */
+  const logEdges = $state({ start: 'true', end: 'false' });
+  function scrollEdges(node: HTMLElement) {
+    const mark = (): void => {
+      logEdges.start = node.scrollTop <= 1 ? 'true' : 'false';
+      logEdges.end = node.scrollTop + node.clientHeight >= node.scrollHeight - 1 ? 'true' : 'false';
+    };
+    mark();
+    node.addEventListener('scroll', mark, { passive: true });
+    const observer = new ResizeObserver(mark);
+    observer.observe(node);
+    if (node.firstElementChild !== null) {
+      observer.observe(node.firstElementChild);
+    }
+    return {
+      destroy(): void {
+        node.removeEventListener('scroll', mark);
+        observer.disconnect();
+      }
+    };
+  }
 </script>
 
 <PanelShell {status} {generatedAt}>
   <FeedCard variant="table">
     <div class="ongoing">
       <div class="ongoing-column">
-        <div class="ongoing-head"><Icon name="folder" slot="cell" />{head}</div>
+        <!-- No head over the list (owner, 2026-10-19: "remove this heading …
+          remove the icons there as well"): the word is kept for a screen
+          reader, which has no other name for the column. -->
+        <span class="ongoing-clipped">{head}</span>
         {#if rows.length === 0}
           <p class="ongoing-note">{emptyNote}</p>
         {:else}
@@ -177,7 +208,7 @@
         rule: never break a URL). The nav links the section, never this — the
         anchor exists for an address a reader already shared. -->
       <div class="ongoing-column" id={logAnchor}>
-        <div class="ongoing-head"><Icon name="commit" slot="cell" />{logHead}</div>
+        <span class="ongoing-clipped">{logHead}</span>
         <!-- The log's box is RESERVED, not grown into: exactly as tall as the
           entries the column beside it shows, so a payload landing a moment
           after first paint lands without moving the page under a reader. The
@@ -185,7 +216,7 @@
           phone the reserve holds the collapsed log — its entries AND its
           control — so the arriving payload lands in a box that was already its
           size. -->
-        <div class="log-box">
+        <div class="log-box" data-at-start={logEdges.start} data-at-end={logEdges.end} use:scrollEdges>
           <div class="log-list" id={logListId}>
             {#if logRows.length === 0}
               <p class="ongoing-note">{logNote}</p>
@@ -253,7 +284,6 @@
     --ongoing-sub: 1.125rem;
     --ongoing-pad: 0.5rem;
     --ongoing-gap: 0.25rem;
-    --ongoing-head: 2.125rem;
     --ongoing-columns-gap: 2.5rem;
     --ongoing-pitch: calc(var(--ongoing-line) + var(--ongoing-sub) + 2 * var(--ongoing-pad));
     --ongoing-pitch-tall: calc(2 * var(--ongoing-line) + var(--ongoing-sub) + 2 * var(--ongoing-pad));
@@ -294,25 +324,6 @@
     min-inline-size: 0;
   }
 
-  /* ONE WORD OVER EACH LIST, in the sheet's display face. The rule under it
-     is an inset shadow, so it costs the head no height of its own. A MINIMUM,
-     because at the narrowest phone the log's words take a second line, and a
-     head that clipped them would be a head that says less than it is. */
-  .ongoing-head {
-    display: flex;
-    align-items: center;
-    gap: var(--icon-gap);
-    min-block-size: var(--ongoing-head);
-    padding-block: var(--ongoing-gap);
-    box-shadow: inset 0 -1px 0 var(--ledger-rule);
-    font-family: var(--font-display);
-    font-size: var(--ledger-label-size);
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--ledger-muted);
-  }
-
   .ongoing-note {
     margin: 0;
     padding-block: var(--ongoing-pad);
@@ -350,11 +361,17 @@
     row-gap: var(--ongoing-gap);
     block-size: var(--repo-pitch);
     padding-block-end: var(--ongoing-pad);
-    box-shadow: inset 0 -1px 0 var(--color-border);
+    /* A twig under each row (owner, 2026-10-19), each its own: three
+       drawings take turns down the list, the same three as the commits'. */
+    background: var(--keep-twig-1) left bottom / var(--keep-twig-tile) repeat-x;
   }
-
-  .repo-entry:hover {
-    background-color: var(--ledger-raised);
+  .repo-entry:nth-child(3n-1) {
+    background-image: var(--keep-twig-2);
+    background-position-x: calc(-160 * var(--keep-prop));
+  }
+  .repo-entry:nth-child(3n) {
+    background-image: var(--keep-twig-3);
+    background-position-x: calc(-320 * var(--keep-prop));
   }
 
   /* A grid item's automatic minimum is its MIN-CONTENT, so an entry holding a
@@ -484,28 +501,82 @@
      (owner directive, 2026-09-11, issue 315): the log lists every
      contribution, and a box that grew to fit them would move every section
      under it the moment a payload landed. There is no hint text under the box
-     (the no-reading-hints ruling): the scrollbar and the clipped entry are the
-     affordance. */
+     (the no-reading-hints ruling), and no scrollbar either (owner,
+     2026-10-19: "this scroll wheel is quite the eyesore"): the affordance is
+     the fade at an edge with more beyond it, which eases in and out as the
+     reader scrolls (scrollEdges, above). A wheel, a finger and the keys still
+     scroll it, and reaching its end does not carry on into the page. */
   .log-box {
+    --log-fade-start: 0px;
+    --log-fade-end: 2.5rem;
     block-size: calc(5 * var(--repo-pitch));
     overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    mask-image: linear-gradient(to bottom, transparent, currentColor var(--log-fade-start), currentColor calc(100% - var(--log-fade-end)), transparent);
+  }
+
+  /* The fades ease in and out only where motion is welcome; under reduced
+     motion an edge's fade is simply there or not. */
+  @media (prefers-reduced-motion: no-preference) {
+    .log-box {
+      transition:
+        --log-fade-start var(--ledger-hover),
+        --log-fade-end var(--ledger-hover);
+    }
+  }
+
+  .log-box::-webkit-scrollbar {
+    display: none;
+  }
+
+  .log-box[data-at-start='false'] {
+    --log-fade-start: 2.5rem;
+  }
+
+  .log-box[data-at-end='true'] {
+    --log-fade-end: 0px;
+  }
+
+  /* Registered so the two fades can ease rather than snap. */
+  @property --log-fade-start {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
+  }
+
+  @property --log-fade-end {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
   }
 
   /* An entry is at least the pitch, and a subject that needs its second line
      takes it: inside a box whose height is fixed either way, so the page below
-     does not move. The rule under an entry is an INSET SHADOW, never a border
-     (owner directive, 2026-08-25): a border adds its pixel to every entry's
-     box, and five of them push the last entry out of a reserve that is exactly
-     five entries tall. */
+     does not move. The twig under an entry is a BACKGROUND, never a border
+     (owner directive, 2026-08-25; a twig since 2026-10-19): a border adds its
+     pixel to every entry's box, and five of them push the last entry out of a
+     reserve that is exactly five entries tall. */
   .log-entry {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     min-block-size: var(--ongoing-pitch);
-    box-shadow: inset 0 -1px 0 var(--color-border);
+    /* A twig under each row (owner, 2026-10-19), each its own, as the
+       repositories' are; the list starts on a different drawing than theirs,
+       so the two columns' first rows are not one twig either. */
+    background: var(--keep-twig-2) left bottom / var(--keep-twig-tile) repeat-x;
+  }
+  .log-entry:nth-child(3n-1) {
+    background-image: var(--keep-twig-3);
+    background-position-x: calc(-240 * var(--keep-prop));
+  }
+  .log-entry:nth-child(3n) {
+    background-image: var(--keep-twig-1);
+    background-position-x: calc(-400 * var(--keep-prop));
   }
 
   .log-entry:last-child {
-    box-shadow: none;
+    background: none;
   }
 
   .log-link,
@@ -522,10 +593,6 @@
     min-block-size: var(--control-target);
     text-decoration: none;
     text-underline-offset: 0.2em;
-  }
-
-  .log-link:hover {
-    background-color: var(--ledger-raised);
   }
 
   .log-link:hover .log-message,
@@ -615,7 +682,6 @@
   }
 
   .log-more:hover {
-    background-color: var(--ledger-raised);
     color: var(--ledger-ink);
   }
 

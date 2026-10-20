@@ -14,7 +14,6 @@ import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { isChord, ringTarget } from '../src/lib/keys.ts';
-import { swatchKeyTarget } from '../src/lib/disclosure.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
@@ -65,26 +64,6 @@ test('the ring wraps both ways, ends at its ends, and leaves every other key alo
   for (const key of ['ArrowRight', 'ArrowLeft', 'Home', 'End']) {
     assert.equal(ringTarget(key, 0, 0), null, `${key} named an index on an empty ring`);
   }
-});
-
-test('the theme swatches move on the SAME ring, differing only by Escape', () => {
-  /* Executed rather than pinned in source: the popover's own key map used to
-     be a second copy of this arithmetic, and two copies of one decision are
-     free to disagree the day either moves. Escape is the one genuine
-     difference — a popover can be dismissed and an always-visible control
-     cannot — so it is asserted as the difference rather than assumed. */
-  const count = 5;
-  for (const key of ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Tab']) {
-    for (let index = 0; index < count; index += 1) {
-      assert.equal(
-        swatchKeyTarget(key, index, count),
-        ringTarget(key, index, count),
-        `the swatches and the shared ring disagree about ${key} at ${index}`
-      );
-    }
-  }
-  assert.equal(swatchKeyTarget('Escape', 1, count), 'dismiss');
-  assert.equal(ringTarget('Escape', 1, count), null, 'the shared ring claimed Escape');
 });
 
 /* ===========================================================================

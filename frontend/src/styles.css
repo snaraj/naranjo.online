@@ -89,6 +89,30 @@
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* Instrument Serif sets the name and the headings (owner choice, 2026-10-19):
+ * a narrow, high-contrast display serif, the --font-display
+ * stack. It is drawn in ONE weight, so every display rule renders this cut
+ * whatever weight it asks for — font-synthesis is off (below), so nothing is
+ * thickened into a bold the family does not have, and the asked weight only
+ * reaches the fallbacks. Split into the same two ranges as the faces above and
+ * vendored beside its OFL licence. */
+@font-face {
+  font-family: 'Instrument Serif';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/InstrumentSerif-Regular-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Instrument Serif';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/InstrumentSerif-Regular-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 /* A FACE THAT MISSED THE MOUNT IS NOT USED ON THIS VISIT. The application
  * mounts once its faces are loaded or after a short bound (main.ts); a face
  * still on its way then would swap into a painted page — measured by the
@@ -104,39 +128,30 @@
   --font-mono: var(--font-mono-fallback);
 }
 
-/* Reading-mode token layer (issue #22, the OSRS-wiki mechanism adapted):
- * every color lives in a custom property, and each reading mode is one
- * override block scoped by the data-theme attribute the origin stamps on
- * <html>. Adding a theme = one palette group + one block here + one registry
- * entry in src/lib/themes.ts + one id in readingThemes
- * (internal/server/types.go).
+:root[data-face-display='fallback'] {
+  --font-display: var(--font-display-fallback);
+}
+
+/* The colour token layer (issue #22, the OSRS-wiki mechanism adapted): every
+ * color lives in a custom property. The page has two reading modes, the
+ * night and the day of its one scene: the day palette is the :root default,
+ * and the night is mapped over it unless the root says data-sky="day" (the
+ * block after this one) — so the night is what every visit is (owner,
+ * 2026-10-19). The control that offered slate and sepia, and the cookie the
+ * origin stamped a choice from, went with the footer.
  *
- * Two layers on purpose. The --palette-* definitions below hold every
- * theme's values with each hex written exactly once — the dark palette is
- * needed by both the media query and its [data-theme] block, and the toggle's
- * swatches preview every palette at once, so values are defined here and only
- * referenced everywhere else. The active --color-* tokens are what components
- * consume; theme blocks remap them onto a palette without restating a single
- * value.
+ * Two layers on purpose. The --palette-* definitions below hold each mode's
+ * values with each hex written exactly once, defined here and only
+ * referenced everywhere else. The active --color-* tokens are what
+ * components consume; the dark block remaps them onto its palette without
+ * restating a single value, so a scheme change alters only custom-property
+ * values on the one loaded stylesheet — no layout shift, no asset refetch.
  *
- * Light is the default :root palette. With no explicit choice (no data-theme
- * stamped), prefers-color-scheme maps the dark tokens in; an explicit choice
- * always wins because the media query excludes stamped documents. Swapping
- * data-theme changes only custom-property values on the one loaded
- * stylesheet — no layout shift, no asset refetch.
- *
- * The seven slots run surface -> text. Four reading modes fill them — one
- * light and three dark — and the three darks differ by TEMPERATURE rather
- * than by depth: dark is neutral, slate is cool, sepia is warm. Dark is the
- * true one, and "true" is a measurable property here rather than a mood: its
- * every neutral is white at one fixed opacity composited over a single
- * near-black base, so red, green and blue are EQUAL in every slot and no
- * surface, border or ink in the mode can drift toward a hue. Slate holds the
- * exact values this site used to ship as its only dark — a desaturated navy,
- * which is a fine reading mode and simply not a dark one — and sepia is
- * seeded from the wiki's browntown values. The two anchor hexes each appear
- * twice below because light's text is slate's surface and vice versa — one
- * occurrence per palette slot, never per consumer. */
+ * The seven slots run surface -> text. Dark is the true one, and "true" is a
+ * measurable property here rather than a mood: its every neutral is white at
+ * one fixed opacity composited over a single near-black base, so red, green
+ * and blue are EQUAL in every slot and no surface, border or ink in the mode
+ * can drift toward a hue. */
 :root {
   --palette-light-surface: #efe2c2;
   --palette-light-surface-raised: #e6d5ac;
@@ -144,15 +159,11 @@
   --palette-light-border: #c4ab7a;
   /* Repainted at issue 138. border-strong is a non-text UI boundary, so WCAG
      2.2 SC 1.4.11 sets its floor at 3:1 against the surface it sits on, and
-     three of the four palettes were below it — measured against each mode's
-     own card AND its page: light 2.46/2.65, slate 2.77/2.96, sepia 2.79/3.19,
-     with only the neutral dark (3.17/3.57) clearing. Each failing value was
-     re-derived along its OWN channel ratios rather than replaced, so the hue
-     and the temperature of every palette are untouched and only the lightness
-     moved: light steps darker toward its card, the two dark palettes step
-     lighter away from theirs. The four now land in one tight band — 3.14,
-     3.17, 3.22, 3.14 on their cards — which is the point: a card seam that is
-     equally perceivable in every reading mode rather than in one of them. */
+     light measured 2.46 on its card and 2.65 on its page while dark cleared
+     (3.17/3.57). Light's value was re-derived along its OWN channel ratios
+     rather than replaced, so its hue is untouched and only the lightness
+     moved, darker toward its card: 3.14, in the same band as dark's 3.17 —
+     a card seam equally perceivable in both modes. */
   --palette-light-border-strong: #8a6a3c;
   --palette-light-accent: #6b4e2a;
   --palette-light-text: #2b1b0c;
@@ -176,32 +187,10 @@
   --palette-dark-accent: #a0a0a0;
   --palette-dark-text: #e0e0e0;
 
-  /* Slate: the cool, desaturated navy this site shipped as its only dark. It
-     keeps its own id precisely so that replacing the dark mode costs a
-     visitor who preferred it nothing. Exactly ONE value here is no longer the
-     one it shipped with: border-strong, lifted at issue 138 to clear 1.4.11's
-     3:1 (see the note above). Everything else is untouched. */
-  --palette-slate-surface: #10131a;
-  --palette-slate-surface-raised: #161a23;
-  --palette-slate-surface-overlay: #1d222d;
-  --palette-slate-border: #2a3040;
-  --palette-slate-border-strong: #5f6a84;
-  --palette-slate-accent: #b9c2d4;
-  --palette-slate-text: #faf9f5;
-
-  /* Sepia: placeholder palette seeded from the wiki's browntown values. */
-  --palette-sepia-surface: #1b1612;
-  --palette-sepia-surface-raised: #28221d;
-  --palette-sepia-surface-overlay: #312a25;
-  --palette-sepia-border: #3e362f;
-  --palette-sepia-border-strong: #7b6d60;
-  --palette-sepia-accent: #b79d7e;
-  --palette-sepia-text: #f4eaea;
-
   /* Brand and data colors. RuneLite's published orange is the panels' accent
-     and stays the brand mark in every reading mode — but it only clears
-     WCAG 1.4.3 on a DARK surface (6.37:1 on the dark card, 5.74:1 on sepia,
-     a failing 2.37:1 on the light card), so the light palette carries the same
+     and stays the brand mark in both reading modes — but it only clears
+     WCAG 1.4.3 on a DARK surface (6.37:1 on the dark card, a failing 2.37:1
+     on the light card), so the light palette carries the same
      hue darkened until it passes at 5.33:1. Same brand, legible everywhere,
      rather than a brand that quietly becomes unreadable in one mode. */
   --palette-brand-orange: #dc8a00;
@@ -231,9 +220,10 @@
      the meter always prints its own percentage beside the bar — so color is
      the redundant channel; it still has to clear 1.4.11's 3:1 as a non-text
      indicator, which is why each ink carries a darkened `-on-light` twin.
-     The three dark palettes share one value per state because their card
-     surfaces sit within a whisker of each other in luminance, and the worst
-     of the three is what was measured.
+     Dark has one value per state, chosen while the page had three dark
+     palettes whose cards sat within a whisker of each other in luminance:
+     the worst of the three is what was measured (the "across the darks"
+     figures below), and dark was one of them.
 
      Every one of these six was measured against BOTH surfaces a status ink
      can land on — the panel card (--panel-surface) and the usage tile
@@ -267,9 +257,9 @@
   --palette-status-critical: #e05a5a;
   --palette-status-critical-on-light: #c62828;
 
-  /* The projection ground the film stage letterboxes onto in the three dark
-     reading modes — one shared value like the status family above, and for
-     the same reason: their surfaces sit within a whisker of each other.
+  /* The projection ground the film stage letterboxes onto in the dark
+     reading mode — one value like the status family above, chosen the same
+     way while there were three dark modes.
      Near-black rather than black so the stage still reads as a surface
      against a true-dark page instead of dissolving into it. Light mode never
      reads this token; see --gallery-stage-ground directly below. */
@@ -281,11 +271,11 @@
      swatch of its compiled CSS, stated in the rgb form the pin in
      tests/sections.test.mjs measures). Declared HERE, with the palettes and
      not beside the other gallery tokens, because position is load-bearing:
-     bare :root and [data-theme] blocks tie at (0,1,0) specificity, so
-     whichever is written LATER wins, and the reading-mode remaps of this
-     token live in the mode blocks below. Declared after them it would win
-     the tie and paint every explicitly-chosen dark mode's letterbox ivory —
-     the exact fault the PR-278 review caught running. The same pin now
+     the bare :root here and the device's dark :root (the media block
+     below) tie at (0,1,0) specificity, so whichever is written LATER wins,
+     and the dark remap of this token lives in that block. Declared after it
+     this would win the tie and paint the dark mode's letterbox ivory — the
+     exact fault the PR-278 review caught running. The same pin now
      measures this ordering, so moving the declaration down fails the build
      rather than the reader. The full issue-239 history of why a stage
      paints a ground at all stays with the gallery tokens. */
@@ -301,10 +291,10 @@
      "multiple shades of green and the most bright is bright green"). Level 0
      stays each palette's own empty tile — a day with nothing in it is not a
      pale green day — and levels 1..4 walk one green hue away from the card:
-     darker on the light sheet, brighter on the three dark ones, so the
-     busiest days are the ones furthest from the paper in every mode. The
-     PEAK is the palette's most saturated green — on the three dark sheets
-     also its lightest; on the light sheet it sits between levels 1 and 2 in
+     darker on the light sheet, brighter on the dark one, so the busiest
+     days are the ones furthest from the paper in both modes. The PEAK is
+     the palette's most saturated green — on the dark sheet also its
+     lightest; on the light sheet it sits between levels 1 and 2 in
      luminance and separates by chroma — and its own token below, rather than
      the page's highlight: the busiest day of the window is the one cell the
      owner asked to glow, and a red tile in a green calendar would be a
@@ -321,30 +311,19 @@
   --palette-light-grid-peak: #00d95a;
   /* Light's mark: the one mode whose fourth step (4.23:1 on the page) is
      short of the 4.5:1 a text ink is held to, so it carries a deeper green of
-     the same hue — 5.54:1 on the surface, 5.07:1 raised, 4.59:1 overlay. The
-     three dark modes' fourth steps clear 10:1 and are the mark as they are. */
+     the same hue — 5.54:1 on the surface, 5.07:1 raised, 4.59:1 overlay.
+     Dark's fourth step clears 8:1 and is the mark as it is. */
   --palette-light-mark: #0b6223;
 
+  /* The night's greens are moss and lichen (owner, 2026-10-19: colour "more
+     in line with the medieval, cave, castle" look), the greens the calendar's
+     stones grow, rather than a screen's green. */
   --palette-dark-grid-0: #2a2a2a;
-  --palette-dark-grid-1: #17492a;
-  --palette-dark-grid-2: #1f7d3d;
-  --palette-dark-grid-3: #2eb457;
-  --palette-dark-grid-4: #5ee97b;
-  --palette-dark-grid-peak: #8dff97;
-
-  --palette-slate-grid-0: #262b36;
-  --palette-slate-grid-1: #1e4b35;
-  --palette-slate-grid-2: #237f48;
-  --palette-slate-grid-3: #34b762;
-  --palette-slate-grid-4: #6ceb8a;
-  --palette-slate-grid-peak: #9dffb2;
-
-  --palette-sepia-grid-0: #3a322b;
-  --palette-sepia-grid-1: #3d5330;
-  --palette-sepia-grid-2: #55823f;
-  --palette-sepia-grid-3: #79b455;
-  --palette-sepia-grid-4: #a9e37e;
-  --palette-sepia-grid-peak: #ccff8a;
+  --palette-dark-grid-1: #2c4a22;
+  --palette-dark-grid-2: #3f6a2b;
+  --palette-dark-grid-3: #5e8f3a;
+  --palette-dark-grid-4: #8fbf55;
+  --palette-dark-grid-peak: #b8e07a;
 
   /* The token-usage ENTITY set: identity colors for the per-day breakdowns.
      The five accounting classes take slots 1..5 (input, output, cache read,
@@ -364,7 +343,8 @@
      hues slots 6 and 7 added were chosen by that measurement rather than by
      eye, and the larger group's members were assigned slots in the order
      that keeps its ADJACENT pairs apart: worst adjacent separation across
-     the three chromatic modes is 19.8 to normal vision and 13.8 under
+     the three chromatic modes the page then had (light, slate and sepia;
+     light is the one left) was 19.8 to normal vision and 13.8 under
      deuteranopia and protanopia, against floors of 15 and 8.
 
      Slots 8 and 9 (issue 369) are an orchid and a cyan, the two hue gaps
@@ -431,41 +411,11 @@
   --palette-dark-cat-9: #cccccc;
   --palette-dark-cat-10: #737373;
 
-  --palette-slate-cat-0: #5a657e;
-  --palette-slate-cat-1: #3f81d9;
-  --palette-slate-cat-2: #b87e1f;
-  --palette-slate-cat-3: #1f9e7d;
-  --palette-slate-cat-4: #8a68d8;
-  --palette-slate-cat-5: #cf5585;
-  --palette-slate-cat-6: #b46852;
-  --palette-slate-cat-7: #678546;
-  --palette-slate-cat-8: #8e5793;
-  --palette-slate-cat-9: #01a2c5;
-  --palette-slate-cat-10: #8d6803;
-
-  --palette-sepia-cat-0: #77685a;
-  --palette-sepia-cat-1: #5c88d8;
-  --palette-sepia-cat-2: #bb7d24;
-  --palette-sepia-cat-3: #2f9e7d;
-  --palette-sepia-cat-4: #8f6ad4;
-  --palette-sepia-cat-5: #d15a88;
-  --palette-sepia-cat-6: #b56754;
-  --palette-sepia-cat-7: #6d8a4b;
-  --palette-sepia-cat-8: #985a96;
-  --palette-sepia-cat-9: #0fa3bf;
-  --palette-sepia-cat-10: #926e10;
-
-  /* Stacking order, as tokens rather than magic numbers. Two things sit over
-     the document and they must be told apart. The reading-mode popover hangs
-     over the panel stack, which is later in the document and would otherwise
-     paint over it. The column's resize rails are drawn against the column's
-     own edges, above whatever the page scrolls past — and they sit BELOW the
-     popover, because a menu the visitor deliberately opened must never be
-     covered by a rail nobody asked for. Three named layers say that, and a
-     component reading a raw number instead is still the defect this scale
-     exists to prevent. */
+  /* Stacking order, as a token rather than a magic number: the column's
+     resize rails are drawn against the column's own edges, above whatever
+     the page scrolls past. (The reading-mode popover that once sat above
+     them went with the footer, owner 2026-10-19.) */
   --layer-rail: 10;
-  --layer-menu: 30;
 
   /* The page column: one width for the header, the name, every section and
      every panel in the stack, so the chrome sits over the cards rather than
@@ -547,11 +497,7 @@
      about to escape"). It was derived from the chrome row it cleared — the
      row's top inset plus the 44px hit lane the row was. The row is gone
      (owner direction, 2026-10-16: "do away with it for now") and the space
-     keeps exactly that measure for a new tenant: on a phone J perches on the
-     sheet's top-end corner with half of him above it (App.svelte), and this
-     is the sky he rises into. tests/experience.test.mjs holds his overhang
-     inside it, and a rendering lane measures him on screen at the top of the
-     page. */
+     keeps exactly that measure, so the name still has the sky above it. */
   --page-top-space: calc(var(--page-gutter) + var(--page-rail-size));
 
   /* --page-rail-size is a HIT LANE, not a visible object: 44px of grab area
@@ -789,7 +735,7 @@
   --ledger-mark: var(--control-target);
 
   /* The mono LABEL, which is the ledger's connective tissue: section numbers,
-     column heads, sub-lines, the footer. One size, one tracking, everywhere. */
+     column heads, sub-lines. One size, one tracking, everywhere. */
   --ledger-label-size: 0.6875rem;
   --ledger-label-tracking: 0.2em;
   --ledger-figure-size: 0.75rem;
@@ -977,8 +923,8 @@
      carry no raw length at all — which is what lets a test insist on it. */
   --tip-x: 0px;
   --tip-y: 0px;
-  /* Above the page, below the reading-mode menu, which is the one thing on
-     the page that must still be reachable while a detail is showing. */
+  /* Above the page and its rails, so nothing a detail describes can cover
+     it. */
   --tip-layer: 20;
 
   color-scheme: light;
@@ -1034,57 +980,16 @@
   --font-sans-fallback: 'Helvetica Neue', Arial, sans-serif;
   --font-sans: 'Archivo', var(--font-sans-fallback);
 
-  /* The chrome-icon grammar (owner directive, 2026-08-24). The page's two
-     header controls are LINE ICONS — a small glyph inside a 44px hit area,
-     no disc, no border, no fill — and the reading-mode swatches are meant to
-     be read as their siblings. They were not: each swatch was a 2.75rem
-     filled disc wearing a 1px rim and, when chosen, a further 2px ring, so
-     the quietest control on the page rendered its five choices as the
-     loudest objects on it. The grammar the two share is stated here, once,
-     rather than restated in each component, and the swatch derives its own
-     dimensions from it below.
-
-     Two of these describe values the header icons carry as SVG attributes
-     (`width="18"`, `stroke-width="2.2"`), which is the one place a token
-     cannot reach — an attribute is markup, not a declaration. So the pins in
-     tests/experience.test.mjs read those attributes back out of the chrome
-     components and compare them to these tokens, and the browser lanes
-     measure the two families against each other in a real engine: the
-     duplication is legal because drift in either direction is a red build.
-
-     The 44px hit box is deliberately NOT a token. It is pinned as a literal
-     in both control rules by the touch-floor walk, which can only measure a
-     length it can read — routing it through var() would blind the guard that
-     protects it, which is a weakening dressed as tidiness. */
-  --chrome-icon-glyph-size: 18px;
-  --chrome-icon-stroke: 2.2;
-  --swatch-glyph-size: var(--chrome-icon-glyph-size);
-  --swatch-stroke: var(--chrome-icon-stroke);
-  /* Translucent at rest, full presence when pointed at, chosen, or focused —
-     the swatch's own dimension rather than the chrome's, and the reason it
-     has one: a swatch carries a filled palette preview, which is heavier ink
-     than a line glyph, so it sits back until it is addressed. */
-  --swatch-rest-opacity: 0.7;
-  --swatch-active-opacity: 1;
-  --swatch-popover-padding: 0.25rem;
-  /* The popover's own shape (owner directive, issue 169, 2026-08-24): a flat
-     radius shared with the rest of the page's chrome (--card-radius,
-     --tip-radius) rather than the bespoke 1.875rem pill curve the owner
-     rejected as "looks very AI". */
-  --theme-menu-radius: 3px;
-
   /* The Hairline family's three sizes (owner design decision, 2026-09-11,
      issue 313). A mark is sized by the SLOT it sits in — the chrome row, a
      list or control line, a table figure — never by the surface that draws
      it, so every mark on a line is the same height as every other mark on
      that kind of line and a resize is one edit here. The family carries no
-     colour token at all: it paints currentColor, so it follows all four
-     reading modes without a single theme branch.
+     colour token at all: it paints currentColor, so it follows the light
+     and the dark sheet without a single theme branch.
 
-     These are rem, unlike the chrome-icon grammar above, because a mark sits
-     beside text and should scale with the reader's type size; the 18px
-     chrome glyph is a fixed control ornament and 1.125rem is the same size
-     at the default root. */
+     These are rem because a mark sits beside text and should scale with the
+     reader's type size. */
   --icon-chrome: 1.125rem;
   --icon-row: 1rem;
   --icon-cell: 0.75rem;
@@ -1095,42 +1000,151 @@
      still be ONE number. */
   --icon-gap: 0.375rem;
 
-  /* THE KEEP (owner direction, 2026-10-16): the page is a sheet of parchment
-     (or, in the dark modes, dark glass) inside a drawn stone frame, under a
-     night sky. Hueless and without gold (owner, 2026-10-17: "not happy with
-     the blue background color … the font used, and the gold color"): the
-     dark modes are true black, the frame is grey stone, and the name and the
-     plaques are set in Archivo in the page's own ink. The parchment is
-     generated locally, vendored under src/assets/images/keep/; the frame is a
-     drawn SVG (src/assets/images/frame/), the sky is drawn in code
-     (lib/sky.ts). The display face is a token of its own so a heading face is
-     one line to change. The fixed values live here; the ones that change with
-     the reading mode are declared below and in every mode block. */
-  --font-display: var(--font-sans);
+  /* THE KEEP (owner direction, 2026-10-16): the page is a castle wall (owner,
+     2026-10-19) — dark stone at night, pale stone by day — inside a drawn
+     stone frame, lit by torches at night, under the sky of the hour the
+     reader chose: the night, or the day. Without gold (owner, 2026-10-17): the frame is
+     grey stone, and the name and the section titles are set in Instrument
+     Serif (owner choice, 2026-10-19) in the page's own ink. The wall is vendored under
+     src/assets/images/keep/; the frame is a drawn SVG
+     (src/assets/images/frame/), the sky and the fire are drawn in code
+     (lib/sky.ts, lib/fire.ts). The
+     display face is a token of its own so a heading face is one line to
+     change, with its fallbacks a token of their own like the other stacks'.
+     The fixed values live here; the ones that change with the reading mode
+     are declared below and in every mode block. */
+  --font-display-fallback: Georgia, 'Times New Roman', serif;
+  --font-display: 'Instrument Serif', var(--font-display-fallback);
   --palette-keep-backdrop: #050505;
-  /* The dark modes' sheet: night-violet glass the sky shows through. */
-  --palette-keep-glass: rgb(10 10 10 / 0.74);
-  --keep-texture-parchment: url('./assets/images/keep/parchment.jpg');
-  /* The frame is a pixel pattern (owner direction, 2026-10-16: borders like
-     the old handheld RPGs' text-box frames): an 8-pixel band in a 24-pixel
-     nine-slice, drawn at whole multiples so every pixel stays square, its
-     pattern repeated round the edge rather than stretched. */
-  --keep-frame-image: url('./assets/images/frame/rampart.svg');
+  /* The torches on the frame (owner, 2026-10-19; Torches.svelte): iron cups
+     and brackets in the frame's own greys, oak handles, a charred rim where
+     the fire sits, and the light a burning one throws on the stone — a hot
+     yellow at the flame, falling off through orange to a faint red reach the
+     way light thins with distance — and the shadow its handle casts. */
+  --palette-keep-torch-iron: #5d5d5d;
+  --palette-keep-torch-iron-dark: #343434;
+  --palette-keep-torch-wood: #7a4a24;
+  --palette-keep-torch-wood-dark: #4f2f16;
+  --palette-keep-torch-char: #1c1410;
+  --palette-keep-torch-light-hot: rgb(255 200 116 / 0.85);
+  --palette-keep-torch-light: rgb(255 146 56 / 0.46);
+  --palette-keep-torch-light-far: rgb(240 104 36 / 0.14);
+  --palette-keep-torch-shadow: rgb(0 0 0 / 0.6);
+  /* THE BACKSPLASH IS A CASTLE WALL (owner, 2026-10-19: "stone, castle wall …
+     that rugged medieval look … readable, very readable"; then, of ten mocks,
+     "lets go with 8 … less pixelated and more sharp"). A dry-stone wall from
+     Unsplash (ATTRIBUTION.md), made seamless and kept sharp — the stones'
+     edges drawn out, nothing pixelated — at 1.5x its display size for a
+     retina screen, and toned twice: dark stone for the dark modes, pale
+     limestone for light, each held to a narrow band of brightness so every
+     text colour keeps its contrast on any stone of it. Drawn at 1440x960 a
+     tile, so the repeat is as wide as a wide sheet. */
+  --keep-texture-wall-night: url('./assets/images/keep/wall-night.webp');
+  --keep-texture-wall-day: url('./assets/images/keep/wall-day.webp');
+  --keep-wall-tile: 1440px 960px;
+  /* The colour under the night wall, its own mean, for the moment before the
+     picture arrives. */
+  --palette-keep-wall-night: #1e1e1d;
+  /* The frame is castle stone in pixels (owner, 2026-10-19: "more
+     castle-like, more realistic", after the old-school RPG sites' stone
+     borders): dressed blocks of several lengths with lit and shadowed edges,
+     mortar between them, a keystone at each corner and the frame's shadow on
+     the wall. An 8-pixel band in a 64-pixel nine-slice, so each side repeats a
+     run of different stones; drawn at whole multiples — four CSS pixels a
+     pixel here, the wall's own grain, two on a phone — so every pixel stays
+     square, the run repeated round the edge rather than stretched. */
+  --keep-frame-image: url('./assets/images/frame/castle.svg');
+  /* The frame's greenery (owner, 2026-10-19: "a bit of grassy vines to the
+     border"): ivy over the two top corners, grass and a creeping vine at the
+     two feet, pixel art in the frame's own units, the end side the start
+     side's mirror image. */
+  --keep-ivy-start: url('./assets/images/frame/ivy-start.svg');
+  --keep-ivy-end: url('./assets/images/frame/ivy-end.svg');
+  --keep-grass-start: url('./assets/images/frame/grass-start.svg');
+  --keep-grass-end: url('./assets/images/frame/grass-end.svg');
+  /* THE KEEP'S PROPS (owner, 2026-10-19: "the plain lines should be tree
+     branches, or vines, we should have swords and skulls or castle wall
+     fixtures"). Pixel art in the frame's palette, one SVG unit an art pixel
+     (src/assets/images/props/), drawn at --keep-prop CSS pixels a pixel so
+     every pixel stays square. A section head's line is a vine and the rule
+     between rows a branch; a model's share is the blade of a sword and the
+     picked layer is underlined by one; a role's opener hangs in an iron ring,
+     the knocker of a castle door, and the role unrolls as a parchment scroll;
+     and a day on the calendar is a wall stone that grows moss as the day gets
+     busier. */
+  --keep-prop: 2px;
+  --keep-vine: url('./assets/images/props/vine.svg');
+  /* Four branches, each its own drawing, so no two rules running down the
+     page are the same bough (owner, 2026-10-19: "make the branches more
+     unique. they all seem to be the same sprite"). */
+  --keep-branch-1: url('./assets/images/props/branch-1.svg');
+  --keep-branch-2: url('./assets/images/props/branch-2.svg');
+  --keep-branch-3: url('./assets/images/props/branch-3.svg');
+  --keep-branch-4: url('./assets/images/props/branch-4.svg');
+  --keep-branch-tile: calc(640 * var(--keep-prop)) calc(12 * var(--keep-prop));
+  /* The lighter rule inside a list: a twig rather than a branch, so a list's
+     rows read as one list; three of them, for the same reason. */
+  --keep-twig-1: url('./assets/images/props/twig-1.svg');
+  --keep-twig-2: url('./assets/images/props/twig-2.svg');
+  --keep-twig-3: url('./assets/images/props/twig-3.svg');
+  --keep-twig-tile: calc(640 * var(--keep-prop)) calc(4 * var(--keep-prop));
+  --keep-sword: url('./assets/images/props/sword.svg');
+  /* A picked layer's or set's underline: the whole sword, one pixel a pixel,
+     lying under the name. */
+  --keep-sword-underline: var(--keep-sword) center bottom 0.25rem / 40px 7px no-repeat;
+  --keep-sword-hilt: url('./assets/images/props/sword-hilt.svg');
+  --keep-sword-blade: url('./assets/images/props/sword-blade.svg');
+  --keep-sword-tip: url('./assets/images/props/sword-tip.svg');
+  --keep-ring: url('./assets/images/props/ring.svg');
+  --keep-scroll-roll: url('./assets/images/props/scroll-roll.svg');
+  --keep-scroll-knob-start: url('./assets/images/props/scroll-knob-start.svg');
+  --keep-scroll-knob-end: url('./assets/images/props/scroll-knob-end.svg');
+  /* The scroll's parchment and inks are the day's, which the contrast floors
+     already hold to this paper, so a role's words are as legible on the
+     scroll at night as the day's are on its sheet. */
+  --keep-parchment: var(--palette-light-surface);
+  --keep-parchment-edge: var(--palette-light-surface-overlay);
+  --keep-parchment-ink: var(--palette-light-text);
+  --keep-parchment-muted: var(--palette-light-accent);
+  --keep-parchment-mark: var(--palette-brand-orange-on-light);
+  --keep-stone-0: url('./assets/images/props/stone-0.svg');
+  --keep-stone-1: url('./assets/images/props/stone-1.svg');
+  --keep-stone-2: url('./assets/images/props/stone-2.svg');
+  --keep-stone-3: url('./assets/images/props/stone-3.svg');
+  --keep-stone-4: url('./assets/images/props/stone-4.svg');
+  /* The stone's roughness, a mask the torches' light falls through: the light
+     breaks up on the wall as it does on rough stone, rather than lying on it
+     like a wash. */
+  --keep-grain: url('./assets/images/props/grain.svg');
+  --keep-grain-tile: calc(24 * var(--keep-prop)) calc(24 * var(--keep-prop));
   --keep-frame-slice: 8;
   --keep-frame-repeat: round;
-  --keep-frame-page: 1.5rem;
-  --keep-sheet-pad: clamp(1rem, 3vw, 2.75rem);
-  --keep-plaque-size: clamp(1.375rem, 2.6vw, 2.125rem);
+  --keep-frame-page: 2rem;
+  /* The sheet's margin inside the frame is the torches' gutter too: wide
+     enough that a torch's light has faded before the sheet's words begin
+     (measured beside a fully lit torch: 3vw left a margin's date at 2.7:1).
+     It follows the column as well as the window, so a column dragged to its
+     18rem floor keeps the room its rows were measured at — 4.5vw of a
+     1080px window left a role row 126px and took the page sideways. The
+     column's share is 5.5%, not 4.5%, so at the column the page opens at
+     (the widest the window allows, which the script writes in place of the
+     token's 100rem) the window's share still decides: the static shell,
+     which never sees the script, and the mounted page then draw the same
+     margin, and the name does not move when the page mounts (measured: at
+     4.5% the two differed by 4.6px at 1440px). */
+  --keep-sheet-pad: clamp(1rem, min(4.5vw, var(--page-column-width) * 0.055), 4rem);
+  --keep-title-size: clamp(1.25rem, 2.6vw, 2.125rem);
   /* The floor fits "NARANJO" inside a 320px phone's framed sheet. The intro
-     holds the name to its own column on top of this (the Keep layer). */
-  --keep-name-ceiling: clamp(2.5rem, 11.5vw, 12.5rem);
+     holds the name to its own column on top of this (the Keep layer), which
+     is what binds on a wide screen: 291px at 1440px since the owner asked
+     for the name to "take more of the top" (2026-10-19), 237px before that
+     and 165px before that. */
+  --keep-name-ceiling: clamp(2.5rem, 24vw, 22rem);
   --keep-name-size: var(--keep-name-ceiling);
-  /* The mode-dependent values, light's here. The blur is for glass only:
-     the parchment is opaque, so a blur behind it shows nothing and costs
-     every frame the sky or J paints (measured in WebKit without a GPU). */
-  --keep-sheet: var(--keep-texture-parchment);
+  /* The mode-dependent values, light's here: the pale wall. Every mode's
+     wall is opaque, so nothing behind the sheet is blurred or shown through. */
+  --keep-sheet: var(--keep-texture-wall-day);
   --keep-sheet-ground: var(--color-surface);
-  --keep-sheet-blur: none;
 
   color: var(--color-text);
   background: var(--color-surface);
@@ -1139,51 +1153,15 @@
   text-rendering: optimizeLegibility;
 }
 
-/* No explicit choice: the visitor's OS preference selects the dark tokens.
- * :not([data-theme]) keeps an explicit light choice authoritative even when
- * the OS prefers dark. The remap is repeated in the block below because CSS
- * cannot share one declaration block between a media query and an attribute
- * selector — but only these var() references repeat, never the values. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
-    color-scheme: dark;
-    --color-surface: var(--palette-dark-surface);
-    --color-surface-raised: var(--palette-dark-surface-raised);
-    --color-surface-overlay: var(--palette-dark-surface-overlay);
-    --color-border: var(--palette-dark-border);
-    --color-border-strong: var(--palette-dark-border-strong);
-    --color-accent: var(--palette-dark-accent);
-    --color-text: var(--palette-dark-text);
-    --color-brand: var(--palette-brand-orange);
-    --color-highlight: var(--palette-dark-grid-4);
-    --color-status-ok: var(--palette-status-ok);
-    --color-status-stale: var(--palette-status-stale);
-    --color-status-critical: var(--palette-status-critical);
-    --color-grid-0: var(--palette-dark-grid-0);
-    --color-grid-1: var(--palette-dark-grid-1);
-    --color-grid-2: var(--palette-dark-grid-2);
-    --color-grid-3: var(--palette-dark-grid-3);
-    --color-grid-4: var(--palette-dark-grid-4);
-    --color-grid-peak: var(--palette-dark-grid-peak);
-    --color-cat-0: var(--palette-dark-cat-0);
-    --color-cat-1: var(--palette-dark-cat-1);
-    --color-cat-2: var(--palette-dark-cat-2);
-    --color-cat-3: var(--palette-dark-cat-3);
-    --color-cat-4: var(--palette-dark-cat-4);
-    --color-cat-5: var(--palette-dark-cat-5);
-    --color-cat-6: var(--palette-dark-cat-6);
-    --color-cat-7: var(--palette-dark-cat-7);
-    --color-cat-8: var(--palette-dark-cat-8);
-    --color-cat-9: var(--palette-dark-cat-9);
-    --color-cat-10: var(--palette-dark-cat-10);
-    --gallery-stage-ground: var(--palette-projection-ground);
-    --keep-sheet: none;
-    --keep-sheet-ground: var(--palette-keep-glass);
-    --keep-sheet-blur: blur(6px) saturate(115%);
-  }
-}
-
-[data-theme="dark"] {
+/* THE NIGHT (owner, 2026-10-19: "always set it to night by default"). Every
+ * visit is the night — the dark stone, the night sky, the torches lit —
+ * whatever the reader's device prefers. The day is kept whole beneath it (the
+ * owner removed the control that turned the page to day and kept its logic):
+ * data-sky="day" on the root uncovers the day palette the :root block above
+ * declares, and App.svelte's phase is the one place that would write it. The
+ * :not() weighs (0,2,0) against :root's (0,1,0), so this holds wherever it
+ * sits in the file. */
+:root:not([data-sky='day']) {
   color-scheme: dark;
   --color-surface: var(--palette-dark-surface);
   --color-surface-raised: var(--palette-dark-surface-raised);
@@ -1215,89 +1193,8 @@
   --color-cat-9: var(--palette-dark-cat-9);
   --color-cat-10: var(--palette-dark-cat-10);
   --gallery-stage-ground: var(--palette-projection-ground);
-  --keep-sheet: none;
-  --keep-sheet-ground: var(--palette-keep-glass);
-  --keep-sheet-blur: blur(6px) saturate(115%);
-}
-
-/* Slate remaps the identical slot list onto its own palette — same roles,
-   same order, one value each. That sameness is the contract every consuming
-   component depends on: a card, a panel or a feed item reads a role by name
-   and never asks which mode is active, so a mode that declared a shorter
-   list would leave those components silently painting the light palette's
-   value for whatever it dropped. A parity test compares the four lists. */
-[data-theme="slate"] {
-  color-scheme: dark;
-  --color-surface: var(--palette-slate-surface);
-  --color-surface-raised: var(--palette-slate-surface-raised);
-  --color-surface-overlay: var(--palette-slate-surface-overlay);
-  --color-border: var(--palette-slate-border);
-  --color-border-strong: var(--palette-slate-border-strong);
-  --color-accent: var(--palette-slate-accent);
-  --color-text: var(--palette-slate-text);
-  --color-brand: var(--palette-brand-orange);
-  --color-highlight: var(--palette-slate-grid-4);
-  --color-status-ok: var(--palette-status-ok);
-  --color-status-stale: var(--palette-status-stale);
-  --color-status-critical: var(--palette-status-critical);
-  --color-grid-0: var(--palette-slate-grid-0);
-  --color-grid-1: var(--palette-slate-grid-1);
-  --color-grid-2: var(--palette-slate-grid-2);
-  --color-grid-3: var(--palette-slate-grid-3);
-  --color-grid-4: var(--palette-slate-grid-4);
-  --color-grid-peak: var(--palette-slate-grid-peak);
-  --color-cat-0: var(--palette-slate-cat-0);
-  --color-cat-1: var(--palette-slate-cat-1);
-  --color-cat-2: var(--palette-slate-cat-2);
-  --color-cat-3: var(--palette-slate-cat-3);
-  --color-cat-4: var(--palette-slate-cat-4);
-  --color-cat-5: var(--palette-slate-cat-5);
-  --color-cat-6: var(--palette-slate-cat-6);
-  --color-cat-7: var(--palette-slate-cat-7);
-  --color-cat-8: var(--palette-slate-cat-8);
-  --color-cat-9: var(--palette-slate-cat-9);
-  --color-cat-10: var(--palette-slate-cat-10);
-  --gallery-stage-ground: var(--palette-projection-ground);
-  --keep-sheet: none;
-  --keep-sheet-ground: var(--palette-keep-glass);
-  --keep-sheet-blur: blur(6px) saturate(115%);
-}
-
-[data-theme="sepia"] {
-  color-scheme: dark;
-  --color-surface: var(--palette-sepia-surface);
-  --color-surface-raised: var(--palette-sepia-surface-raised);
-  --color-surface-overlay: var(--palette-sepia-surface-overlay);
-  --color-border: var(--palette-sepia-border);
-  --color-border-strong: var(--palette-sepia-border-strong);
-  --color-accent: var(--palette-sepia-accent);
-  --color-text: var(--palette-sepia-text);
-  --color-brand: var(--palette-brand-orange);
-  --color-highlight: var(--palette-sepia-grid-4);
-  --color-status-ok: var(--palette-status-ok);
-  --color-status-stale: var(--palette-status-stale);
-  --color-status-critical: var(--palette-status-critical);
-  --color-grid-0: var(--palette-sepia-grid-0);
-  --color-grid-1: var(--palette-sepia-grid-1);
-  --color-grid-2: var(--palette-sepia-grid-2);
-  --color-grid-3: var(--palette-sepia-grid-3);
-  --color-grid-4: var(--palette-sepia-grid-4);
-  --color-grid-peak: var(--palette-sepia-grid-peak);
-  --color-cat-0: var(--palette-sepia-cat-0);
-  --color-cat-1: var(--palette-sepia-cat-1);
-  --color-cat-2: var(--palette-sepia-cat-2);
-  --color-cat-3: var(--palette-sepia-cat-3);
-  --color-cat-4: var(--palette-sepia-cat-4);
-  --color-cat-5: var(--palette-sepia-cat-5);
-  --color-cat-6: var(--palette-sepia-cat-6);
-  --color-cat-7: var(--palette-sepia-cat-7);
-  --color-cat-8: var(--palette-sepia-cat-8);
-  --color-cat-9: var(--palette-sepia-cat-9);
-  --color-cat-10: var(--palette-sepia-cat-10);
-  --gallery-stage-ground: var(--palette-projection-ground);
-  --keep-sheet: none;
-  --keep-sheet-ground: var(--palette-keep-glass);
-  --keep-sheet-blur: blur(6px) saturate(115%);
+  --keep-sheet: var(--keep-texture-wall-night);
+  --keep-sheet-ground: var(--palette-keep-wall-night);
 }
 
 * {
@@ -1357,7 +1254,7 @@ body,
    every engine measures `innerWidth` equal to the root's `clientWidth`, the
    gutter still took 15px at rest — moving the centred column off centre,
    cutting the 320px phone column from 244px to 229px, and pushing the fixed
-   reading-mode control 15px inboard of the viewport edge it is anchored to. A
+   reading-mode control of the time 15px inboard of its viewport edge. A
    strip only an open dialog needs must not be charged to every page view. */
 html[data-modal-open] {
   overflow: hidden;
@@ -1531,8 +1428,7 @@ html[data-column-resizing] {
 
 /* THE CHROME ROW IS GONE (owner direction, 2026-10-16: "do away with it for
    now"): the home link, the section nav, the place and J's two seats with
-   it. The page opens on the name; the reading mode is in the footer and J
-   flies beside the name (App.svelte). */
+   it. The page opens on the name, and J flies at its side (App.svelte). */
 
 /* THE SCROLL PADDING IS GONE WITH THE FIXED CONTROL (owner directive,
    2026-09-03, issue 287). It reserved the top of the viewport so a fragment
@@ -1548,8 +1444,8 @@ html[data-column-resizing] {
 
 /* The column, and — since the resize handles are drawn against its edges —
    their containing block. position: relative adds no stacking context of its
-   own (no z-index sits on this rule), so the reading-mode popover still hangs
-   over everything from the one layer scale above.
+   own (no z-index sits on this rule), so the rails still sit over everything
+   from the one layer scale above.
 
    The gap is the ledger's own section rhythm (owner directive, 2026-09-03,
    issue 287): the sheet's parts sit forty pixels apart, which is what makes a
@@ -1765,14 +1661,13 @@ h1 {
   color: var(--ledger-rule);
 }
 
-/* The shared shape of every page-level icon control — the reading-mode
-   trigger (ThemeMenu.svelte) and the gallery's lightbox close control
-   (MediaGallery.svelte; the gallery's prev/next pair moved onto the stage as
-   .gallery-nav, 2026-08-29). Defined once, here, because controls that are meant
-   to read as siblings cannot be allowed to drift apart across component
+/* The shape of a page-level icon control — today the gallery's lightbox
+   close control (MediaGallery.svelte; the gallery's prev/next pair moved onto
+   the stage as .gallery-nav, 2026-08-29). Defined once, here, so a control
+   meant to read as its sibling cannot drift apart across component
    stylesheets. It outlived the pair it was written for: the refresh button
-   that sat beside the reading-mode trigger left at issue 179, and the rule
-   was already the site's icon-control shape rather than that pair's.
+   left at issue 179, and the reading-mode trigger with the footer (owner,
+   2026-10-19).
 
    They are ICONS, not buttons (owner directive, issue 127): no disc, no
    border, no fill. Each used to wear a bordered circle on a raised surface,
@@ -1782,9 +1677,9 @@ h1 {
    comfortable touch target and a bare glyph is no easier to hit than a
    framed one. The visible glyph inside it is 18px; the other 26 are hit area.
 
-   With no surface to shade, the hover and open states move to the ink — the
-   brand token, which is a defined color in every reading mode rather than a
-   translucency that depends on what is behind it. */
+   With no surface to shade, hover moves to the ink — the brand token, which
+   is a defined color in both reading modes rather than a translucency that
+   depends on what is behind it. */
 .icon-button {
   inline-size: 2.75rem;
   block-size: 2.75rem;
@@ -1797,8 +1692,7 @@ h1 {
   color: var(--color-text);
 }
 
-.icon-button:hover,
-.icon-button[aria-expanded='true'] {
+.icon-button:hover {
   color: var(--color-brand);
 }
 
@@ -1823,7 +1717,7 @@ h1 {
    close control deliberately do not branch by reading mode -- a backdrop
    behind an enlarged photograph is legitimately the same near-black surface
    in every mode, the way a photograph itself is not re-tinted per mode
-   either -- so the token layer states one value, not five.
+   either -- so the token layer states one value, not one per mode.
 
    Nine more join them for the gallery-experience work (issue 202): the close
    mark's size, lane and resting opacity, the caption's and the lightbox
@@ -1892,7 +1786,7 @@ h1 {
  * Every rule below draws one part of the ruled sheet, and not one of them
  * states a colour, a family or a motion of its own: each reads a --ledger-*,
  * --control-* or --square-* role declared once in the token layer at
- * the top of this file. That is what lets the four reading modes carry this
+ * the top of this file. That is what lets both reading modes carry this
  * design with no mode-specific rule anywhere, and what lets the owner retune
  * the whole sheet from one block.
  *
@@ -1914,25 +1808,6 @@ h1 {
    scrolls inside its own box (the calendar strip and the ticker both do). */
 .feed-card-body > * {
   min-inline-size: 0;
-}
-
-/* --- The footer ---------------------------------------------------------- */
-
-.page-footer {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 0.5rem 1rem;
-  padding-block-start: 0.625rem;
-  border-block-start: var(--ledger-heavy) solid var(--ledger-rule);
-  font-family: var(--font-mono);
-  font-size: var(--ledger-label-size);
-  letter-spacing: var(--ledger-label-tracking);
-  text-transform: uppercase;
-}
-
-.footer-mark {
-  color: var(--ledger-ink);
 }
 
 /* --- The panel shell, under the ledger ----------------------------------- */
@@ -1988,8 +1863,17 @@ h1 {
   border: var(--ledger-hairline) solid var(--ledger-rule);
 }
 
-.ledger-row:hover {
-  background: var(--ledger-raised);
+/* Pointing at a row brightens its ink rather than painting a ground under it
+   (owner, 2026-10-19: "hovering looks quite ugly" — the raised tint was a
+   second background on the wall): the quiet cells come up to the row's own
+   ink and the chevron's ring with them. */
+.ledger-row:hover .ledger-span,
+.ledger-row:hover .ledger-place {
+  color: var(--ledger-ink);
+}
+
+.ledger-row:hover .ledger-chevron {
+  border-color: var(--ledger-ink);
 }
 
 .ledger-row:focus-visible {
@@ -2084,7 +1968,6 @@ h1 {
   background: var(--ledger-ink);
 }
 
-
 /* THE DRAWER'S LINK (issue 243, kept by the owner's ruling of 2026-09-12,
    issue 326). What changed is its TEXT, not its existence: it prints the host
    it goes to rather than the organisation's name a second time. Mono and muted
@@ -2157,7 +2040,6 @@ h1 {
   display: flex;
 }
 
-.ticker-lead,
 .ticker-item {
   display: inline-flex;
   align-items: center;
@@ -2165,27 +2047,6 @@ h1 {
   padding: var(--ticker-item-pad);
   border-inline-end: var(--ledger-hairline) solid var(--ledger-rule);
   white-space: nowrap;
-}
-
-.ticker-lead {
-  background: var(--ledger-ink);
-  color: var(--ledger-bg);
-}
-
-/* THE LEAD'S MARK STANDS THE FULL HEIGHT OF THE STRIP (owner directive,
-   2026-09-04, issue 292: the gnome). It is a tall figure, and at the item
-   icon's 22px it was a green sliver; drawn at the lead's whole box instead —
-   the icon plus both block paddings, with a negative margin that gives those
-   paddings back — it is recognisable and the strip's height is untouched,
-   because the mark's outer height is exactly the icon's. The inline size
-   follows the file's own ratio, which the img's width and height attributes
-   state, so the lead reserves its width before the picture arrives. */
-.ticker-mark {
-  flex: none;
-  block-size: calc(var(--ticker-icon) + 2 * var(--ticker-item-pad-block));
-  inline-size: auto;
-  margin-block: calc(-1 * var(--ticker-item-pad-block));
-  object-fit: contain;
 }
 
 .ticker-icon {
@@ -2228,8 +2089,8 @@ h1 {
   color: var(--ledger-highlight);
 }
 
-.ticker-item:hover {
-  background: var(--ledger-raised);
+.ticker-item:hover .ticker-figure {
+  color: var(--ledger-ink);
 }
 
 /* --- The phone (owner's first requirement) ------------------------------- */
@@ -2309,7 +2170,7 @@ h1 {
  * THE KEEP — the medieval frame (owner direction, 2026-10-16).
  *
  * The owner's reference is the Old School RuneScape site: a dark backdrop, a
- * framed column, parchment and centred plaques — hueless and without gold
+ * framed column, castle stone and a centred name — hueless and without gold
  * since 2026-10-17. The page keeps the ledger's ORDER and its content exactly;
  * this layer changes what the sheet is made of. It is one section on purpose, so the whole look can be
  * reviewed as one change — and, if the owner keeps it, folded into the rules
@@ -2329,19 +2190,22 @@ h1 {
   background-color: var(--palette-keep-backdrop);
 }
 
-/* --- The sheet: parchment (or dark glass) inside the stone frame --------- */
+/* --- The sheet: a castle wall inside the stone frame ----------------------- */
 
-/* The sheet's ground, glass, frame and vignette are painted on a layer BEHIND
-   main rather than on main. A backdrop-filter on main itself would make main
-   the containing block of every fixed descendant — and the hover details are
-   fixed, placed in viewport coordinates — so each one rendered shifted by
+/* The sheet's ground, wall, frame and vignette are painted on a layer BEHIND
+   main rather than on main. A filter of any kind on main itself would make
+   main the containing block of every fixed descendant — and the hover details
+   are fixed, placed in viewport coordinates — so each one rendered shifted by
    main's box and the page's scroll, off the screen (measured by the browser
    lanes, 2026-10-16). main keeps a transparent border of the frame's width so
    the content sits where the frame leaves room for it.
 
    main is NOT a stacking context, and casts no shadow. The layer lands above
-   the night sky and below main's content without one: both sit at z-index -1
-   in the root's context, and the sky comes first in the document. Isolating
+   the night sky and below main's content without one, by z-index in the
+   root's context: the sky at -3; this layer and the frame's greenery at -2,
+   the greenery after it in the document; and the torches at -1, so their
+   light falls on the wall, the frame and the greenery alike (owner,
+   2026-10-19: "against all the surfaces that it is hitting"). Isolating
    main, or giving it a z-index, cost WebKit without a GPU a repaint of main's
    whole layer whenever the ticker moved — on the CI runner's iPhone profile at
    1440px, 1156ms a frame with the trackers on screen, against 25ms with the
@@ -2357,7 +2221,7 @@ main::before {
   content: '';
   position: absolute;
   inset: calc(var(--keep-frame-page) * -1);
-  z-index: -1;
+  z-index: -2;
   border: var(--keep-frame-page) solid transparent;
   border-image: var(--keep-frame-image) var(--keep-frame-slice) var(--keep-frame-repeat);
   background-color: var(--keep-sheet-ground);
@@ -2374,8 +2238,34 @@ main::before {
     var(--keep-sheet);
   background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, repeat;
   background-clip: padding-box, padding-box, padding-box, padding-box, border-box;
-  -webkit-backdrop-filter: var(--keep-sheet-blur);
-  backdrop-filter: var(--keep-sheet-blur);
+  /* The wall at its tile size, smoothly scaled (owner, 2026-10-19: "less
+     pixelated and more sharp"). */
+  background-size: auto, auto, auto, auto, var(--keep-wall-tile);
+  pointer-events: none;
+}
+
+/* The frame's greenery: ivy over the top corners, grass at the feet. Drawn in
+   the frame's own units — the band is eight of them — so its pixels are the
+   frame's pixels; over the stone and under the torches' light, so the leaves
+   catch it, and under every word (z-index -2 in the root's context, after the
+   sheet in the document), and taking no pointer. Each
+   picture is as wide as its own pixels, so a phone's finer frame draws it
+   finer too. */
+main::after {
+  --keep-frame-unit: calc(var(--keep-frame-page) / 8);
+  content: '';
+  position: absolute;
+  inset: calc(var(--keep-frame-page) * -1);
+  z-index: -2;
+  background-image: var(--keep-ivy-start), var(--keep-ivy-end), var(--keep-grass-start), var(--keep-grass-end);
+  background-repeat: no-repeat;
+  background-position: left top, right top, left bottom, right bottom;
+  background-size:
+    calc(var(--keep-frame-unit) * 60) auto,
+    calc(var(--keep-frame-unit) * 60) auto,
+    calc(var(--keep-frame-unit) * 48) auto,
+    calc(var(--keep-frame-unit) * 48) auto;
+  image-rendering: pixelated;
   pointer-events: none;
 }
 
@@ -2402,7 +2292,25 @@ main::before {
    a wide screen, and took the page sideways (measured by the browser lanes,
    2026-10-16). The intro is the name's container, so the name — and J, who
    reads the same size — is held to the column it is actually in as well. An
-   engine without the unit keeps the viewport size. */
+   engine without the unit keeps the viewport size.
+
+   STACKED, AND CENTRED WITH J AS ONE GROUP (owner, 2026-10-19: "work my
+   name also towards the left side stacked and put J on the white space
+   flying", then, of the name at the column's very start, "way too much to the
+   left and it just looks awkward"). The name keeps a room at its end the size
+   of J's flight (App.svelte flies him in it, just past the name's own edge),
+   and the name with that room is centred on the sheet — so the pair is
+   balanced, the name sits left of the middle, and J is beside it. The room is
+   a margin rather than J's own box, so the static shell (index.html), which
+   has no J, places the name exactly where the mounted page does. In
+   Instrument Serif the longer line is 2.28 name-sizes wide, so at 28cqi the
+   pair spans 79% of the column at 1440px. The intro keeps a margin under the
+   name, and the section titles start at the column's start (below).
+
+   A LITTLE SMALLER, WITH LESS ROOM ROUND IT (the same evening: "make my name
+   a bit more smaller and the padding around it also smaller"): 23cqi, so the
+   pair spans about two thirds of the column at 1440px, over a thinner margin
+   above and under it. */
 .page-intro {
   --keep-name-size: var(--keep-name-ceiling);
   container-type: inline-size;
@@ -2410,23 +2318,28 @@ main::before {
 
 @supports (width: 1cqi) {
   .page-intro {
-    --keep-name-size: min(var(--keep-name-ceiling), 17cqi);
+    --keep-name-size: min(var(--keep-name-ceiling), 23cqi);
   }
 }
 
 .page-intro {
   justify-items: center;
   gap: 0.25rem;
-  padding-block: clamp(0.75rem, 2.5vw, 2rem) 0;
-  text-align: center;
+  padding-block: clamp(0.25rem, 1vw, 0.75rem) clamp(0.75rem, 2vw, 1.5rem);
 }
 
-/* The masthead's own face, weight and tracking (the rule above), centred on
-   the sheet and held to the intro's size. */
+/* The masthead's own face, weight and tracking (the rule above), held to the
+   intro's size, with J's room at its end. Measured in the name's own size
+   (an em here is one name-size): J is half a name-size, but never past 7.5rem
+   — his flight is drawn in 80px frames, so past that he is a blur rather than
+   a dragon — and never under 3rem, so a phone still sees him. */
 h1 {
+  --j-size: clamp(3rem, 0.5em, 7.5rem);
+  --j-gap: 0.15em;
+  position: relative;
+  margin-inline-end: calc(var(--j-gap) + var(--j-size));
   font-family: var(--font-display);
   font-size: var(--keep-name-size);
-  text-align: center;
   color: var(--ledger-ink);
 }
 
@@ -2434,14 +2347,134 @@ h1 {
   display: none;
 }
 
-/* --- Section plaques ------------------------------------------------------ */
+/* --- Section titles ------------------------------------------------------- */
 
+/* Plain type, no box (owner, 2026-10-19: "I don't like these button like
+   borders for the sections. Not sleek at all"), set at the column's start
+   edge, with a line running from the title to the column's end — the owner's
+   pick of the three settings tried on the page ("left + line"), and a vine
+   rather than a rule (the same day: "the plain lines should be tree branches,
+   or vines"). The vine is the head's own last box, so it takes whatever the
+   title leaves and a longer title simply shortens it. */
 .section-head {
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 0.375rem;
+  gap: 1.25rem;
   padding-block: 0 0.75rem;
   border: 0;
+}
+
+.section-head::after {
+  content: '';
+  flex: 1 1 auto;
+  block-size: calc(9 * var(--keep-prop));
+  background: var(--keep-vine) left center / calc(64 * var(--keep-prop)) 100% repeat-x;
+}
+
+/* The rule under each role is a branch, and a role opens from an iron ring:
+   the chevron's disc was the one round button on the sheet (owner,
+   2026-10-19: "castle wall fixtures"). The ring hangs from its staple at the
+   top of the chevron's square, so the chevron sits in the ring's hole; the
+   open state is the chevron's own swap, down to up (LedgerLog.svelte), so the
+   ring stays as it hangs rather than inverting. */
+.ledger-entry {
+  border-block-end: 0;
+  background: var(--keep-branch-1) left bottom / var(--keep-branch-tile) repeat-x;
+}
+/* The row clears its branch: the drawings are twelve pixels deep, deeper
+   than the ledger's own padding, and their leaves grow up off the bough, so
+   the row's bottom padding is the drawing's depth and no leaf reaches a line
+   of the row (measured at 390 wide before this: the lowest line sat 10px
+   inside the drawing). An open role's lower roller covers the branch. */
+.ledger-row {
+  padding-block-end: calc(12 * var(--keep-prop));
+}
+/* EACH ROLE ITS OWN BOUGH (owner, 2026-10-19: "make the branches more
+   unique. they all seem to be the same sprite"). Four drawings take turns
+   down the roles, and the stretch of each that shows takes turns over three,
+   so a run of twelve roles passes before two branches look alike. The
+   structural selectors are written with minus, never plus: a plus reads as a
+   combinator to anything that splits a selector into its compounds. */
+.ledger-entry:nth-child(4n-2) {
+  background-image: var(--keep-branch-2);
+}
+.ledger-entry:nth-child(4n-1) {
+  background-image: var(--keep-branch-3);
+}
+.ledger-entry:nth-child(4n) {
+  background-image: var(--keep-branch-4);
+}
+.ledger-entry:nth-child(3n-1) {
+  background-position-x: calc(-213 * var(--keep-prop));
+}
+.ledger-entry:nth-child(3n) {
+  background-position-x: calc(-427 * var(--keep-prop));
+}
+
+/* A ROLE OPENS AS A SCROLL (owner, 2026-10-19: "when you open up the work
+   experience have it open up like a scroll instead of just re-using the
+   plain background"). The parchment and its upper roller are inside the
+   drawer's clip, so they are revealed from the top as the drawer opens; the
+   lower roller is the drawer's second row, outside the clip, so it rides the
+   clip's growing edge down and the scroll unrolls rather than sliding in.
+   Each roller is a rolled edge tiled between two wooden knobs, a little wider
+   than the paper. The words on it are set in the day's inks (the parchment
+   tokens), and under reduced motion the scroll is simply open. */
+/* The paper darkens over a band four props wide at each edge, and its words
+   begin two props inside the band, so no word ever sits on the darker paper
+   at any width: on a phone the list and the link start at the scroll's own
+   edge. The top roller reaches back out over the padding, three props past
+   the paper on each side. */
+.ledger-scroll {
+  --ledger-ink: var(--keep-parchment-ink);
+  --ledger-muted: var(--keep-parchment-muted);
+  --ledger-highlight: var(--keep-parchment-mark);
+  margin-inline: calc(3 * var(--keep-prop));
+  padding-inline: calc(6 * var(--keep-prop));
+  background: linear-gradient(
+    to right,
+    var(--keep-parchment-edge),
+    var(--keep-parchment) calc(4 * var(--keep-prop)),
+    var(--keep-parchment) calc(100% - 4 * var(--keep-prop)),
+    var(--keep-parchment-edge)
+  );
+  color: var(--keep-parchment-ink);
+}
+
+.ledger-scroll::before {
+  content: '';
+  display: block;
+  margin-inline: calc(-9 * var(--keep-prop));
+  margin-block-end: 0.5rem;
+}
+
+.ledger-scroll::before,
+.ledger-scroll-end {
+  block-size: calc(8 * var(--keep-prop));
+  box-sizing: border-box;
+  padding-inline: calc(5 * var(--keep-prop));
+  background:
+    var(--keep-scroll-knob-start) left center / calc(5 * var(--keep-prop)) 100% no-repeat border-box,
+    var(--keep-scroll-knob-end) right center / calc(5 * var(--keep-prop)) 100% no-repeat border-box,
+    var(--keep-scroll-roll) left center / var(--keep-prop) 100% repeat-x content-box;
+}
+
+.ledger-scroll-end {
+  display: none;
+}
+
+.ledger-drawer[data-open='true'] > .ledger-scroll-end {
+  display: block;
+}
+
+.ledger-chevron,
+.ledger-row[data-open='true'] .ledger-chevron {
+  box-sizing: border-box;
+  padding-block-start: 0.45rem;
+  border: 0;
+  border-radius: 0;
+  background: var(--keep-ring) center top / auto 100% no-repeat;
+  color: var(--ledger-ink);
 }
 
 .section-number {
@@ -2450,11 +2483,12 @@ h1 {
 
 .section-title {
   font-family: var(--font-display);
-  font-size: var(--keep-plaque-size);
+  font-size: var(--keep-title-size);
   font-weight: 800;
   letter-spacing: -0.01em;
   text-transform: none;
-  text-align: center;
+  text-align: start;
+  text-wrap: balance;
   color: var(--ledger-ink);
 }
 
@@ -2489,29 +2523,32 @@ h1 {
   display: none;
 }
 
+/* The boss log reads 15% larger than the strip it was drawn as (owner,
+   2026-10-19: "increase the size of this by 15%"), and its bosses are parted
+   by space alone: the skulls that parted them did not suit it (the same day:
+   "the skulls here do not look good"), and a rule is the plain line the sheet
+   has none of. The item's padding is restated whole because the shorthand
+   token is computed where it is declared. */
 #trackers .ticker-strip {
+  --ticker-icon: 25px;
+  --ticker-item-pad-block: 0.65rem;
+  --ticker-item-pad-inline: 1rem;
+  --ticker-item-pad: var(--ticker-item-pad-block) var(--ticker-item-pad-inline);
   border: 0;
 }
 
-/* The strip's lead (the gnome) stands on the sheet like everything else,
-   rather than on an inverted tile. */
-#trackers .ticker-lead {
-  background: none;
-  color: var(--ledger-ink);
+#trackers .ticker-item {
+  border-inline-end: 0;
 }
 
-/* A panel's own heading is a small plaque, centred like the section's. */
+#trackers .ticker-figure {
+  font-size: calc(var(--ledger-figure-size) * 1.15);
+}
+
+/* A panel's own heading starts where the section's does. */
 .panel-title {
-  text-align: center;
+  text-align: start;
 }
-
-/* --- The footer ----------------------------------------------------------- */
-
-.page-footer {
-  justify-content: center;
-  border-block-start: 0;
-}
-
 /* ===========================================================================
  * MOTION — every animated declaration on this page, in one guard.
  *
@@ -2528,15 +2565,14 @@ h1 {
  * ======================================================================== */
 
 @media (prefers-reduced-motion: no-preference) {
-  /* The reading-mode crossfade: the sheet's paper, ink and rules move between
-     palettes rather than snapping. Only paint properties, so the zero-CLS
-     floor is untouched by construction. */
+  /* The scene's crossfade: when the root turns from night to day or back,
+     the sheet's paper, ink and rules move between palettes rather than
+     snapping. Only paint properties, so the zero-CLS floor is untouched by
+     construction. */
   .section-head,
-  .page-footer,
   .ledger-entry,
   .ledger-chevron,
   .ticker-strip,
-  .ticker-lead,
   .ticker-item {
     transition:
       background-color var(--ledger-repaint) var(--ledger-ease),
@@ -2553,14 +2589,6 @@ h1 {
 
   .ledger-drawer {
     transition: grid-template-rows var(--drawer-duration) var(--ledger-ease);
-  }
-
-  .ledger-chevron {
-    transition: transform var(--drawer-duration) var(--ledger-ease);
-  }
-
-  .ledger-row[data-open='true'] .ledger-chevron {
-    transform: rotate(180deg);
   }
 
   /* The masthead's rule is DRAWN on load: the dash pattern is as long as the

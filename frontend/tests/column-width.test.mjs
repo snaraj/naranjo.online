@@ -36,7 +36,8 @@ import {
  * that there is no way to break the website in an ugly way").
  *
  * These tests EXECUTE the drag rather than pinning source text around it, the
- * same split disclosure.ts established: every number, clamp and keystroke
+ * same split the reading-mode menu's state machine established before it left
+ * with the footer: every number, clamp and keystroke
  * lives in a framework-free module, and the browser lanes in
  * e2e/rendering-lanes.spec.mjs measure what an engine then did with it. The
  * halves answer different questions and neither replaces the other — a clamp

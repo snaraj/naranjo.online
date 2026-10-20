@@ -162,9 +162,11 @@ producer's worst-case transient read did not grow when its shape changed.
 
 A progressive value (a dynamic viewport unit, `env()`, `color-mix()`) must
 have a fallback under it, because an unsupported value is DROPPED — so an
-unguarded one degrades to nothing rather than to less. A reading-mode block
-may declare only custom properties and `color-scheme`, which is what makes the
-zero-CLS theme switch structural instead of a promise.
+unguarded one degrades to nothing rather than to less. The night block (the
+`:root:not([data-sky='day'])` mapping every visit is, over the day palette kept
+behind `data-sky="day"`) may declare only custom properties and
+`color-scheme`, which is what keeps a turn of the scene zero-CLS by structure
+instead of by promise.
 
 Both are swept across `styles.css` and every component `<style>` alike,
 because a stylesheet-only sweep is blind to most of its own subject.

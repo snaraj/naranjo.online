@@ -50,8 +50,9 @@ teach an existing component a domain.
 ## Change how it looks
 
 `frontend/src/styles.css` is the hand-tuning surface — the file says so at
-the top. Palettes, reading modes, layout, type, card/feed/panel dimensions
-are all custom properties there; components consume tokens and state no
+the top. Palettes (the night every visit opens on, and the day), layout, type,
+card/feed/panel dimensions are all custom properties there; components
+consume tokens and state no
 values of their own. Change the token, and every consumer moves at once. A
 per-instance tweak is a local token override at the call site, never a
 second rule.
