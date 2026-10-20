@@ -192,6 +192,28 @@ test('a pace forgets the frames before a restart', () => {
   assert.ok(paced.interval >= 316 * skyCostShare, `a drawing that cost 316ms left a wait of ${paced.interval}ms`);
 });
 
+test('a page that never answers in time still sees the sky move once each slowest wait', () => {
+  /* Every frame takes 100ms, twice the budget, for two minutes: the bill of
+     the first drawing is never paid in time. The loop still draws, once each
+     skySlowestInterval and no more often (WebKit's iPhone lane, 2026-10-20,
+     where a bill that waited for a quick frame stopped the fire for good). */
+  const paced = pace(skyFrameInterval, nextSkyInterval);
+  assert.equal(paced.frame(0), true);
+  paced.drew(0);
+  const drawn = [];
+  for (let now = 100; now <= 120_000; now += 100) {
+    if (paced.frame(now)) {
+      paced.drew(now);
+      drawn.push(now);
+    }
+  }
+  assert.deepEqual(
+    drawn,
+    [1, 2, 3, 4].map((wait) => wait * skySlowestInterval),
+    'a page that is never quick saw the sky stop, or move more often than its slowest wait'
+  );
+});
+
 test('the same sky on every load: the generator, the noise and the stars are seeded', () => {
   const a = seeded(42);
   const b = seeded(42);

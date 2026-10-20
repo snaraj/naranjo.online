@@ -208,7 +208,13 @@ export function nextSkyInterval(interval: number, answeredIn: number): number {
  * and the fire each took twice their share. So the cost of a drawing runs from
  * the drawing to the end of the first frame after it that took no more than
  * skyFrameBudget, and the loop draws nothing while it is still being paid
- * for. Where frames are cheap that is the next frame, as before. */
+ * for. Where frames are cheap that is the next frame, as before.
+ *
+ * Never for longer than skySlowestInterval, though: a page whose every frame
+ * is slow (WebKit's iPhone lane on a runner with no GPU, 2026-10-20) never
+ * answers in time, and a bill that waited for that answer stopped the fire
+ * for good. So once the slowest wait has passed the bill is settled at what
+ * it has cost, and the loop draws once more. */
 export type Pace = {
   /* Called once a frame: whether the loop draws in this one. */
   frame(now: number): boolean;
@@ -231,7 +237,7 @@ export function pace(ceiling: number, next: (interval: number, answeredIn: numbe
       const took = previous >= 0 ? now - previous : 0;
       previous = now;
       if (drawnAt >= 0) {
-        if (took > skyFrameBudget) {
+        if (took > skyFrameBudget && now - last < skySlowestInterval) {
           return false;
         }
         interval = next(interval, now - drawnAt);
