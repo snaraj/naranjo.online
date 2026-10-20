@@ -92,6 +92,13 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   session opens with as usage. A stored day is lowered only where its
   records are intact, so an inflated day whose records are gone keeps its
   figure until it is corrected by hand.
+- Dependencies (#377, #378, #379):
+  - @playwright/test 1.64.1, for the browser lanes;
+  - github/codeql-action 4.39.0, for CodeQL's init and analyze;
+  - actions/create-github-app-token 3.3.0 in the release publisher, with
+    the publisher's pinned reference in the release contract moved with it.
+    3.3.0 adds permission inputs and drops one this workflow never asks
+    for; the administration-read token it mints is unchanged.
 
 ### Added
 
