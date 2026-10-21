@@ -1016,8 +1016,11 @@ test('the frame wears its greenery as scenery, and each title is plain type at t
  * decided:
  *   · every name resolves: a token or an import names a file that is there,
  *     the folder holds no drawing nothing names, and every token is read;
- *   · the props that tile are drawn at their own size times one whole-pixel
- *     grain, read from each drawing's own viewBox, so every pixel is square;
+ *   · the props that tile each have one tile token, their own size times one
+ *     whole-pixel grain, read from each drawing's own viewBox, so every pixel
+ *     is square. That every painted box sizes them by it is measured in the
+ *     browser lanes ("every branch, twig and grain is painted at its own
+ *     drawing’s size in prop pixels"), since no text here sees a box;
  *   · the trackers' roll stands the role scroll's own rollers upright, and
  *     its calendar and key are one set of inks, level for level;
  *   · a model's share is a sword whose hilt and point are always whole, and

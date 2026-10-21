@@ -12203,6 +12203,79 @@ test('every section head sets its title at the column’s start and runs its vin
   }
 });
 
+/* EVERY PROP IS PAINTED AT ITS OWN GRAIN. The branches under the roles and
+ * the tome, the twigs under the lists and the stone grain the torchlight
+ * falls through are pixel drawings, each tiled at its own viewBox times
+ * --keep-prop, so every pixel is square. sections.test.mjs pins the tile
+ * tokens; nothing there sees what a painted box does with them, and a role
+ * row sized `1px 1px` in place of its token passed every frontend test (the
+ * review of 97c7a60, finding 2). So this reads what the engine resolved: every
+ * box on the page, and its ::before and ::after, whose background or mask
+ * carries one of these drawings must size that layer at exactly the drawing's
+ * viewBox in prop pixels, however the size was spelled and in whichever rule.
+ * Each drawing must be found painted at both widths, so a lane that measured
+ * nothing cannot pass. */
+const grained = Object.fromEntries(
+  ['branch-1', 'branch-2', 'branch-3', 'branch-4', 'twig-1', 'twig-2', 'twig-3', 'grain'].map((name) => {
+    const drawing = readFileSync(new URL(`../src/assets/images/props/${name}.svg`, import.meta.url), 'utf8');
+    const [, w, h] = /viewBox="0 0 (\d+) (\d+)"/.exec(drawing) ?? [];
+    return [name, { w: Number(w), h: Number(h) }];
+  })
+);
+test('every branch, twig and grain is painted at its own drawing’s size in prop pixels', async ({ page }) => {
+  for (const [name, { w, h }] of Object.entries(grained)) {
+    expect(w > 0 && h > 0, `${name}.svg no longer states a viewBox this lane can read`).toBe(true);
+  }
+  await visit(page);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    const observed = await page.evaluate((names) => {
+      const drawing = new RegExp(`/(${names.join('|')})-[\\w-]+\\.svg`);
+      const layers = (value) => (!value || value === 'none' ? [] : value.split(/,(?![^(]*\))/).map((part) => part.trim()));
+      const painted = [];
+      for (const element of window.document.querySelectorAll('*')) {
+        for (const pseudo of [null, '::before', '::after']) {
+          const style = getComputedStyle(element, pseudo);
+          for (const [kind, images, sizes] of [
+            ['background', style.backgroundImage, style.backgroundSize],
+            ['mask', style.maskImage || style.webkitMaskImage, style.maskSize || style.webkitMaskSize],
+          ]) {
+            const sized = layers(sizes);
+            layers(images).forEach((image, index) => {
+              const found = drawing.exec(image);
+              if (found) {
+                painted.push({
+                  where: `${element.tagName.toLowerCase()}${[...element.classList].map((name) => `.${name}`).join('')}${pseudo ?? ''}`,
+                  kind,
+                  name: found[1],
+                  size: sized[index % Math.max(1, sized.length)] ?? '',
+                });
+              }
+            });
+          }
+        }
+      }
+      return {
+        prop: parseFloat(getComputedStyle(window.document.documentElement).getPropertyValue('--keep-prop')),
+        painted,
+      };
+    }, Object.keys(grained));
+    expect(observed.prop, 'the prop pixel token resolves to nothing').toBeGreaterThan(0);
+    const seen = [...new Set(observed.painted.map(({ name }) => name))].sort();
+    expect(seen, `at ${width}px the page no longer paints every branch, twig and grain`).toEqual(Object.keys(grained).sort());
+    for (const { where, kind, name, size } of observed.painted) {
+      const { w, h } = grained[name];
+      const [across, down] = size.split(/\s+/).map((part) => (part.endsWith('px') ? parseFloat(part) : Number.NaN));
+      expect(
+        Math.abs(across - w * observed.prop) <= 0.01 && Math.abs(down - h * observed.prop) <= 0.01,
+        `${where} at ${width}px paints ${name} as a ${kind} at ${size}, not its ${w}x${h} drawing at ` +
+          `${observed.prop}px a pixel (${w * observed.prop}px ${h * observed.prop}px)`
+      ).toBe(true);
+    }
+  }
+});
+
 test('at 1440 the two columns fill the sheet with no dead space (owner 2026-09-11, issue 318; 2026-10-16)', async ({
   page,
 }) => {
