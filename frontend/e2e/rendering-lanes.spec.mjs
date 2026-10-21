@@ -3985,7 +3985,20 @@ test('an account never repaints when it is clicked, and every account wears one 
 test('the tome turns its leaf on a press and on its corner, says the new opening, and moves nothing (owner 2026-10-20)', async ({
   browser,
 }) => {
+  /* EACH LEAF IN THE AIR BRINGS ITS OWN TIME. A turn is 1.5s in the air by
+     design (Tome.svelte, TURN_MS) and this lane allows each leaf `landing` to
+     come down. With motion welcome it lifts one per opening it walks through,
+     six with two accounts (two openings at a desk, four at a phone): about
+     twelve seconds of animation in every engine, which the suite's 30s was
+     never sized for. So each leaf lifted adds its own `landing` to the lane's
+     budget as it is lifted. A tome with more accounts brings its own time,
+     and nothing is granted where no leaf flies. Every wait and every
+     assertion is as it was. */
+  const landing = 5_000;
   for (const motion of ['no-preference', 'reduce']) {
+    const lift = () => {
+      if (motion === 'no-preference') test.setTimeout(test.info().timeout + landing);
+    };
     const context = await browser.newContext({ reducedMotion: motion });
     const page = await context.newPage();
     await visit(page);
@@ -4018,6 +4031,7 @@ test('the tome turns its leaf on a press and on its corner, says the new opening
       expect(before.scrollWidth, `the tome takes the document sideways ${at}`).toBeLessThanOrEqual(before.clientWidth + 1);
 
       // A press on the leaf itself.
+      lift();
       await page.locator('.tome-page[data-open="true"]').first().click({ position: { x: 24, y: 24 } });
       if (motion === 'no-preference') {
         await expect(page.locator('.tome-leaves .tome-leaf'), `a press lifted no leaf ${at}`).toHaveCount(1);
@@ -4025,7 +4039,7 @@ test('the tome turns its leaf on a press and on its corner, says the new opening
       } else {
         expect(await page.locator('.tome-leaves .tome-leaf').count(), `a leaf is in the air for a reader who asked for less motion ${at}`).toBe(0);
       }
-      await expect(page.locator('.tome-leaves .tome-leaf'), `the leaf never landed ${at}`).toHaveCount(0, { timeout: 5000 });
+      await expect(page.locator('.tome-leaves .tome-leaf'), `the leaf never landed ${at}`).toHaveCount(0, { timeout: landing });
       const second = await open();
       expect(second, `a press did not turn the leaf ${at}`).not.toEqual(first);
       await expect(page.locator('.tome-said'), `the turn said nothing ${at}`).toHaveText(/the (?:totals|models)/);
@@ -4034,10 +4048,11 @@ test('the tome turns its leaf on a press and on its corner, says the new opening
       // Enter on the corner, until the tome is back where it opened.
       const corner = page.locator('.tome-corner');
       for (let turns = 0; turns < 8 && JSON.stringify(await open()) !== JSON.stringify(first); turns += 1) {
-        await expect(corner, `the corner did not come back after a turn ${at}`).toHaveAttribute('data-away', 'false', { timeout: 5000 });
+        await expect(corner, `the corner did not come back after a turn ${at}`).toHaveAttribute('data-away', 'false', { timeout: landing });
         await corner.focus();
+        lift();
         await page.keyboard.press('Enter');
-        await expect(page.locator('.tome-leaves .tome-leaf'), `the leaf never landed ${at}`).toHaveCount(0, { timeout: 5000 });
+        await expect(page.locator('.tome-leaves .tome-leaf'), `the leaf never landed ${at}`).toHaveCount(0, { timeout: landing });
       }
       expect(await open(), `Enter on the corner never brought the tome back to its first opening ${at}`).toEqual(first);
       expect(await frame(), `turning back moved the tome or the page ${at}`).toEqual(before);
