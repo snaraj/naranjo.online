@@ -11,7 +11,7 @@
  * palette: argument), so this file holds no colour of its own. */
 
 import { fireRandom } from './fire.ts';
-import { catenary, chainLinks, cloth, type Corbel } from './tome.ts';
+import { catenary, chainLinks, cloth, type ChainLink, type Corbel } from './tome.ts';
 
 export type TomePalette = Record<string, string>;
 
@@ -383,6 +383,31 @@ function drawCloth(ctx: Ctx, base: Corbel, palette: TomePalette): void {
   }
 }
 
+/* The chain's links, hung from the hasp's ring to the staple's crown, and the
+ * thickness of their iron, in the tome's pixels. */
+function chainShape(hasp: readonly [number, number], staple: readonly [number, number], s: number): { links: ChainLink[]; pitch: number; d: number } {
+  const d = Math.max(2.6, 5.4 * s);
+  const { links, pitch } = chainLinks(catenary([hasp[0], hasp[1] + 12 * s], [staple[0], staple[1] + 12 * s], 1.12), d);
+  return { links, pitch, d };
+}
+
+/* The box the iron is drawn in, in the tome's pixels and whole ones: every
+ * link's centre and both fixings, widened by the most anything reaches past
+ * them — the staple's lead and the hasp's plate (22 of the base's units), or
+ * a link's half length, its rim and the blur of its shadow — and the shadow
+ * thrown down a further 7 units. The canvas covers this and no more, so a
+ * renderer without a GPU moves a few hundred pixels when the chain swings,
+ * not the whole tome's. */
+export function chainReach(hasp: readonly [number, number], staple: readonly [number, number], s: number): { x: number; y: number; width: number; height: number } {
+  const { links, pitch, d } = chainShape(hasp, staple, s);
+  const xs = [hasp[0], staple[0], ...links.map((link) => link.x)];
+  const ys = [hasp[1], staple[1], ...links.map((link) => link.y)];
+  const pad = Math.max(22 * s, (pitch + 2 * d) / 2 + d + 4.5 * s) + 2;
+  const x = Math.floor(Math.min(...xs) - pad);
+  const y = Math.floor(Math.min(...ys) - pad);
+  return { x, y, width: Math.ceil(Math.max(...xs) + pad) - x, height: Math.ceil(Math.max(...ys) + pad + 7 * s) - y };
+}
+
 /* THE IRON: a hasp riveted to the tome's board with an eye at its end, a
  * forged staple run into a joint of the masonry, and the chain between them
  * hanging as a catenary, its links alternately face-on and edge-on, rimmed in
@@ -433,10 +458,7 @@ export function drawChain(ctx: Ctx, hasp: readonly [number, number], staple: rea
   ring(ctx, hasp[0], hasp[1] + 8 * s, 5 * s, 3 * s, palette);
 
   /* The chain, from the hasp's ring to the staple's crown. */
-  const from: [number, number] = [hasp[0], hasp[1] + 12 * s];
-  const to: [number, number] = [staple[0], staple[1] + 12 * s];
-  const d = Math.max(2.6, 5.4 * s);
-  const { links, pitch } = chainLinks(catenary(from, to, 1.12), d);
+  const { links, pitch, d } = chainShape(hasp, staple, s);
   const lc = pitch + d;
   const r = (2.35 * d) / 2;
   const lo = pitch + 2 * d;

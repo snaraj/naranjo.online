@@ -23,7 +23,7 @@
 <script lang="ts">
   import type { ChronicleAccount } from '../blocks.ts';
   import { baseBook, corbel, openingLeaves, tomeLeaves, tomeOpenings, type TomeLeaf } from '../tome.ts';
-  import { drawBase, drawChain, tomePaletteTokens, type TomePalette } from '../tomeDraw.ts';
+  import { chainReach, drawBase, drawChain, tomePaletteTokens, type TomePalette } from '../tomeDraw.ts';
 
   let {
     accounts,
@@ -362,7 +362,16 @@
   /* ===== The drawing =========================================================
      The palette by name off the canvas; the base at its box's size; the iron
      where the tome's corner and the masonry are. Redrawn when the tome's box
-     changes size, and never otherwise. */
+     changes size, and never otherwise.
+
+     Both canvases ask for a context that WILL READ FREQUENTLY, which they do
+     not: the hint is taken for its one effect, a canvas drawn by the CPU
+     rather than through the engine's GPU path. A drawing made once per size
+     loses nothing by it, and an engine without a GPU (the browser lanes'
+     WebKit) emulates that path in software — measured there, one draw of the
+     base stalled the page 1.9s on a desktop and 5.8s on a phone, and the same
+     calls on a CPU canvas take a few milliseconds. */
+  const cpu: CanvasRenderingContext2DSettings = { willReadFrequently: true };
   function paletteOf(el: Element): TomePalette {
     const style = getComputedStyle(el);
     return Object.fromEntries(tomePaletteTokens.map((name) => [name, style.getPropertyValue(`--palette-keep-${name}`).trim()]));
@@ -381,7 +390,7 @@
     const s = box.width / base.width;
     canvas.width = Math.round(box.width * ratio);
     canvas.height = Math.round(box.height * ratio);
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', cpu);
     if (ctx !== null) {
       ctx.setTransform(s * ratio, 0, 0, s * ratio, 0, -baseTop * s * ratio);
       ctx.clearRect(-10, baseTop - 10, base.width + 20, baseSpan + 20);
@@ -390,14 +399,10 @@
 
     /* The iron, in the tome's own box: the hasp at the book's lower right
        corner, the staple in the wall right of the corbel where the wall shows,
-       or else in the corbel's own fourth course. */
+       or else in the corbel's own fourth course. Its canvas covers the iron's
+       reach inside the tome and no more. */
     const frame = host.getBoundingClientRect();
     const pagesBox = tome.getBoundingClientRect();
-    irons.width = Math.round(frame.width * ratio);
-    irons.height = Math.round(frame.height * ratio);
-    const ictx = irons.getContext('2d');
-    if (ictx === null) return;
-    ictx.setTransform(ratio, 0, 0, ratio, 0, 0);
     const baseLeft = box.left - frame.left;
     const baseTopPx = box.top - frame.top - baseTop * s;
     const hasp: [number, number] = [pagesBox.right - frame.left - 10 * s, pagesBox.bottom - frame.top + 6 * s];
@@ -407,9 +412,24 @@
       wallX <= frame.width - 24 * s
         ? [wallX, baseTopPx + base.staple[1] * s]
         : [baseLeft + (base.centre + course.half - 18) * s, baseTopPx + (course.top + 20) * s];
+    const reach = chainReach(hasp, staple, s);
+    const left = Math.max(0, reach.x);
+    const top = Math.max(0, reach.y);
+    const across = Math.min(Math.floor(frame.width), reach.x + reach.width) - left;
+    const down = Math.min(Math.floor(frame.height), reach.y + reach.height) - top;
+    if (across <= 0 || down <= 0) return;
+    irons.style.setProperty('inset-inline-start', `${left}px`);
+    irons.style.setProperty('inset-block-start', `${top}px`);
+    irons.style.setProperty('inline-size', `${across}px`);
+    irons.style.setProperty('block-size', `${down}px`);
+    irons.width = Math.round(across * ratio);
+    irons.height = Math.round(down * ratio);
+    const ictx = irons.getContext('2d', cpu);
+    if (ictx === null) return;
+    ictx.setTransform(ratio, 0, 0, ratio, -left * ratio, -top * ratio);
     drawChain(ictx, hasp, staple, s, palette);
     chainAngle = (Math.atan2(staple[1] - hasp[1], staple[0] - hasp[0]) * 180) / Math.PI;
-    irons.style.transformOrigin = `${hasp[0]}px ${hasp[1]}px`;
+    irons.style.transformOrigin = `${hasp[0] - left}px ${hasp[1] - top}px`;
   }
 
   $effect(() => {
@@ -1086,12 +1106,14 @@
     pointer-events: none;
   }
 
+  /* Placed and sized by the drawing, over the iron's reach alone. */
   .tome-chain {
     position: absolute;
-    inset: 0;
+    inset-block-start: 0;
+    inset-inline-start: 0;
     z-index: 3;
-    inline-size: 100%;
-    block-size: 100%;
+    inline-size: 0;
+    block-size: 0;
     pointer-events: none;
   }
 
