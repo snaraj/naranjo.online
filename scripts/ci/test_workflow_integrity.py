@@ -2968,6 +2968,72 @@ class WorkflowIntegrityTests(unittest.TestCase):
                 capture_output=True,
             ).returncode
 
+    def test_the_lane_worker_count_is_a_single_digit_the_runner_receives(self):
+        """The browser lanes take each runner's worker count from the matrix, guarded.
+
+        browser-lanes.yml hands each runner a worker count through LANE_WORKERS
+        and refuses anything but a single digit before the runner sees it
+        (fc87a89, the iPhone's own runner). Text cannot show a guard runs:
+        deleting the whole `case` block left actionlint and every contract test
+        green (the review of fc87a89, finding 3). So the `run:` block that
+        reads LANE_WORKERS is executed as the runner executes a step with no
+        `shell:`, `bash -e {0}`, against a stand-in `npm` that records what it
+        was asked, with each `${{ }}` expression replaced by a project name. It
+        must pass every count the matrix declares, and 1, 2 and 9, handing each
+        to the runner as `--workers N`; it must fail, before the runner runs,
+        for an empty value, 0, 10, -1 and two values carrying shell syntax; and
+        the step must take LANE_WORKERS from the matrix rather than state it.
+        """
+        path = WORKFLOWS / "browser-lanes.yml"
+        where = path.relative_to(ROOT)
+        text = path.read_text()
+        blocks = [(lineno, block) for lineno, _, block in run_blocks(text) if "LANE_WORKERS" in block]
+        self.assertEqual(len(blocks), 1, f"{where} reads LANE_WORKERS in {len(blocks)} `run: |` blocks, not one")
+        lineno, block = blocks[0]
+        shell = self._declared_shell(read_workflow(path), lineno)
+        if shell is not None:
+            self.fail(f"{where}:{lineno}: the step runs under `shell: {shell}`; this test executes only the "
+                      f"runner default, `bash -e {{0}}`")
+        self.assertRegex(
+            text, r"\n\s+LANE_WORKERS: \$\{\{ matrix\.engine\.workers \}\}\n",
+            f"{where}: the lane step does not take LANE_WORKERS from the matrix",
+        )
+        entries = re.findall(r"^\s*- \{ lane: [^}]*\}", text, re.MULTILINE)
+        self.assertTrue(entries, f"{where}: the lanes' matrix has no `- {{ lane: ... }}` entry")
+        declared = []
+        for entry in entries:
+            found = re.search(r"\bworkers: ([^\s,}]+)", entry)
+            if found is None:
+                self.fail(f"{where}: the lane entry `{entry.strip()}` declares no worker count")
+            declared.append(found.group(1))
+        for value in sorted(set(declared) | {"1", "2", "9"}):
+            code, argv = self._run_lane_step(block, value)
+            self.assertEqual(code, 0, f"{where}:{lineno}: the lane step refuses a worker count of {value}")
+            self.assertEqual(
+                (argv or [])[-2:], ["--workers", value],
+                f"{where}:{lineno}: the runner was not handed --workers {value}: {argv}",
+            )
+        for value in ["", "0", "10", "-1", "1; touch admitted", "$(id)"]:
+            code, argv = self._run_lane_step(block, value)
+            self.assertNotEqual(code, 0, f"{where}:{lineno}: the lane step admits a worker count of {value!r}")
+            self.assertIsNone(argv, f"{where}:{lineno}: the runner ran with a worker count of {value!r}")
+
+    def _run_lane_step(self, block: str, workers: str) -> tuple[int, list[str] | None]:
+        """Run the lane step's block with a stand-in npm: its exit code, and npm's argv if npm ran."""
+        with tempfile.TemporaryDirectory() as scratch:
+            record = Path(scratch) / "argv"
+            stub = Path(scratch) / "npm"
+            stub.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$NPM_ARGV"\n')
+            stub.chmod(0o755)
+            script = Path(scratch) / "run.sh"
+            script.write_text(re.sub(r"\$\{\{[^}]*\}\}", "webkit", block))
+            code = subprocess.run(
+                [shutil.which("bash") or "/bin/bash", "-e", str(script)],
+                env={"PATH": f"{scratch}:/usr/bin:/bin", "HOME": scratch, "LANE_WORKERS": workers, "NPM_ARGV": str(record)},
+                capture_output=True, cwd=scratch,
+            ).returncode
+            return code, record.read_text().splitlines() if record.exists() else None
+
     # -- allowlist hygiene ---------------------------------------------------
 
     def test_a_malformed_allowlist_entry_is_refused(self):
