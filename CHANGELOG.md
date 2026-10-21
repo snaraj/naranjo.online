@@ -7,6 +7,15 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.97] - 2026-10-21
+
+### Security
+
+- The server is built with Go 1.26.10, which fixes a high-severity
+  vulnerability in Go 1.26.9's `crypto/x509` (CVE-2026-111943). The release
+  publisher's final-image scan refused to publish 0.1.96 on it, so 0.1.96 was
+  tagged but never published, and this release carries its changes (#380).
+
 ## [0.1.96] - 2026-10-20
 
 ### Changed
