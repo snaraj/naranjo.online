@@ -2930,13 +2930,19 @@ class WorkflowIntegrityTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _declared_shell(workflow: Workflow, lineno: int) -> str | None:
-        """The shell the step holding line `lineno` runs under, when anything sets one."""
+    def _holding_step(workflow: Workflow, lineno: int) -> tuple[Job, Step] | None:
+        """The job and step that hold line `lineno`: the last step to start at or before it."""
         holder = None
         for job in workflow.jobs.values():
             for step in job.steps:
                 if step.line <= lineno and (holder is None or step.line > holder[1].line):
                     holder = (job, step)
+        return holder
+
+    @classmethod
+    def _declared_shell(cls, workflow: Workflow, lineno: int) -> str | None:
+        """The shell the step holding line `lineno` runs under, when anything sets one."""
+        holder = cls._holding_step(workflow, lineno)
         if holder is None:
             return None
         job, step = holder
@@ -2982,7 +2988,11 @@ class WorkflowIntegrityTests(unittest.TestCase):
         must pass every count the matrix declares, and 1, 2 and 9, handing each
         to the runner as `--workers N`; it must fail, before the runner runs,
         for an empty value, 0, 10, -1 and two values carrying shell syntax; and
-        the step must take LANE_WORKERS from the matrix rather than state it.
+        the very step that runs the block must declare LANE_WORKERS from the
+        matrix, since the value injected here stands in for that declaration
+        alone. A text match anywhere in the file let the declaration move to
+        the step before, leaving this one with no value (the review of
+        97c7a60, finding 1).
         """
         path = WORKFLOWS / "browser-lanes.yml"
         where = path.relative_to(ROOT)
@@ -2990,13 +3000,21 @@ class WorkflowIntegrityTests(unittest.TestCase):
         blocks = [(lineno, block) for lineno, _, block in run_blocks(text) if "LANE_WORKERS" in block]
         self.assertEqual(len(blocks), 1, f"{where} reads LANE_WORKERS in {len(blocks)} `run: |` blocks, not one")
         lineno, block = blocks[0]
-        shell = self._declared_shell(read_workflow(path), lineno)
+        workflow = read_workflow(path)
+        shell = self._declared_shell(workflow, lineno)
         if shell is not None:
             self.fail(f"{where}:{lineno}: the step runs under `shell: {shell}`; this test executes only the "
                       f"runner default, `bash -e {{0}}`")
-        self.assertRegex(
-            text, r"\n\s+LANE_WORKERS: \$\{\{ matrix\.engine\.workers \}\}\n",
-            f"{where}: the lane step does not take LANE_WORKERS from the matrix",
+        holder = self._holding_step(workflow, lineno)
+        if holder is None:
+            self.fail(f"{where}:{lineno}: no step holds the block that reads LANE_WORKERS")
+        _, step = holder
+        declared = step.env.get("LANE_WORKERS")
+        if declared is None:
+            self.fail(f"{where}:{lineno}: the step `{step.name}` reads LANE_WORKERS but declares none of its own")
+        self.assertEqual(
+            text.splitlines()[declared - 1].strip(), "LANE_WORKERS: ${{ matrix.engine.workers }}",
+            f"{where}:{declared}: the step `{step.name}` does not take LANE_WORKERS from the matrix",
         )
         entries = re.findall(r"^\s*- \{ lane: [^}]*\}", text, re.MULTILINE)
         self.assertTrue(entries, f"{where}: the lanes' matrix has no `- {{ lane: ... }}` entry")
