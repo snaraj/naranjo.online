@@ -65,13 +65,17 @@
       <!-- THE SHEET OPENS ON THE NAME, in both shells (owner direction,
         2026-10-16: the chrome row and the picture band above the name are
         gone). The heading sits in the same intro block the mounted page
-        draws it in, so hydration finds it exactly where this document put it
-        and moves nothing; J, who arrives with the mounted page, flies out of
-        the flow in a room the stylesheet keeps at the name's end here too, so
-        this shell holds nothing open by hand. -->
+        draws it in, and is the SAME MARKUP, J aside: its two words as two
+        lines, the j drawn dotless and the empty seat J will fly from. The
+        same runs of text are then set the same way on every platform — one
+        "Naranjo" against three runs moved the heading a pixel when Linux
+        Chromium rounded each run's width on its own (CI, 2026-10-20) — so
+        hydration finds it exactly where this document put it and moves
+        nothing. J arrives with the mounted page, out of the flow, so this
+        shell holds nothing open for him. -->
       <main aria-labelledby="static-page-title" data-static-fallback>
         <div class="page-intro">
-          <h1 id="static-page-title">Samuel Naranjo</h1>
+          <h1 id="static-page-title"><span class="page-name-line">Samuel</span> <span class="page-name-line">Naran<span class="page-name-j">j</span>o<span class="page-j-seat"></span></span></h1>
         </div>
         <!-- THE HONEST BOOT STATE (issue 239). This block is what a visitor
           reads when the entry module never arrives — degraded HTTP/3, or the

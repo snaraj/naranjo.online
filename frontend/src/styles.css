@@ -2450,9 +2450,9 @@ main::after {
 /* The masthead's own face, weight and tracking (the rule above), held to the
    intro's size, its two lines centred one name-size apart, which leaves J the
    room over the second line's x-height to hover in without meeting the first
-   line's letters. The static shell's heading (index.html) is one text that
-   breaks at its space, and takes this same rule, so it is laid out exactly
-   as the mounted one.
+   line's letters. The static shell's heading (index.html) is the same
+   markup, J aside, and takes this same rule and the name's parts below, so
+   it is laid out exactly as the mounted one on every platform.
 
    Measured in the name's own size (an em here is one name-size). J is 0.46
    of a name-size, the dot's place scaled to a dragon, but never past 7.5rem
@@ -2478,6 +2478,46 @@ h1 {
   line-height: 1;
   text-align: center;
   color: var(--ledger-ink);
+}
+
+/* The name's own parts, here rather than in the page shell's scoped style so
+   the static shell (index.html), whose heading is the same markup J aside, is
+   set from the same rules. Each word is a line of its own, kept whole. */
+.page-name-line {
+  display: block;
+  white-space: nowrap;
+}
+
+/* THE J, DRAWN DOTLESS. Its letter is kept in the text at no size, and the
+   dotless letter is drawn in its place — the same advance in this face, so
+   not a letter after it moves. The drawn letter is spoken as nothing, so the
+   heading's name stays the name in every engine that reads generated text;
+   an engine without the alternative-text form keeps the first declaration.
+   The tracking each letter carries is put back on the drawn one, since a
+   letter of no size still carries it. */
+.page-name-j {
+  font-size: 0;
+  letter-spacing: 0;
+}
+
+.page-name-j::before {
+  content: '\0237';
+  content: '\0237' / '';
+  font-size: var(--keep-name-size);
+  letter-spacing: var(--masthead-tracking);
+}
+
+/* J'S SEAT is a box of no size at the end of the second word: a box with no
+   font is a box of no height ON THE BASELINE, so J (App.svelte) is placed from
+   the letters themselves rather than from a line box whose height each engine
+   derives from the face differently. It is at the word's END because any
+   placed box inside a word splits it for a screen reader — measured in
+   Chromium, Gecko and WebKit alike, a seat at the j's own start named the
+   heading "Samuel Naran jo", and one inside the j "Samuel Naranj o" — while at
+   the end the word is whole. */
+.page-j-seat {
+  position: relative;
+  font-size: 0;
 }
 
 .masthead-rule {

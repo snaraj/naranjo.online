@@ -114,46 +114,6 @@
 </main>
 
 <style>
-  /* Each word is a line of its own, kept whole: the name is two centred
-     lines (styles.css, the name), and the static shell's one text breaks at
-     its space onto the same two. */
-  .page-name-line {
-    display: block;
-    white-space: nowrap;
-  }
-
-  /* THE J, DRAWN DOTLESS. Its letter is kept in the text at no size, and
-     the dotless letter is drawn in its place — the same advance in this face,
-     so not a letter after it moves. The drawn letter is spoken as nothing, so
-     the heading's name stays the name in every engine that reads generated
-     text; an engine without the alternative-text form keeps the first
-     declaration. The tracking each letter carries is put back on the drawn
-     one, since a letter of no size still carries it. */
-  .page-name-j {
-    font-size: 0;
-    letter-spacing: 0;
-  }
-
-  .page-name-j::before {
-    content: '\0237';
-    content: '\0237' / '';
-    font-size: var(--keep-name-size);
-    letter-spacing: var(--masthead-tracking);
-  }
-
-  /* J'S SEAT is a box of no size at the end of the second word: a box with
-     no font is a box of no height ON THE BASELINE, so J is placed from the
-     letters themselves rather than from a line box whose height each engine
-     derives from the face differently. It is at the word's END because any
-     placed box inside a word splits it for a screen reader — measured in
-     Chromium, Gecko and WebKit alike, a seat at the j's own start named the
-     heading "Samuel Naran jo", and one inside the j "Samuel Naranj o" — while
-     at the end the word is whole. */
-  .page-j-seat {
-    position: relative;
-    font-size: 0;
-  }
-
   /* From there he is carried back over the j's stem and lifted so his feet
      hover a breath over the x-height (styles.css, the name, states the face's
      facts as --j-stem and --j-hover; his feet are 0.1125 of his square above

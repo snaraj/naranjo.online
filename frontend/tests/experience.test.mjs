@@ -1623,27 +1623,28 @@ test('J flies off the name from one seat, reserved, silent, still at rest, and f
      second word, after its dotless j — and no other component draws him, so there is no
      second request and no second dragon. The mirrored seat left with the row
      it faced into: no prop, no flip rule, anywhere. The static shell's
-     heading has no J at all: it is the name alone, inside the same intro, and
-     the mounted heading's words are exactly its words, so the stylesheet that
-     places the name places it there too and the page mounts without moving
-     a letter. */
+     heading has no J at all: it is the mounted heading's very markup with
+     his flight taken out, inside the same intro, so the same runs of text are
+     set by the same rules and the page mounts without moving a letter on any
+     platform. (Its words alone were not enough: "Naranjo" as one run against
+     three moved the heading a pixel in Linux Chromium, which rounds each
+     run's width on its own — CI, 2026-10-20.) */
   const seats = Object.entries(componentSources).flatMap(([file, source]) =>
     (stripComments(source).match(/<JMark\b[^>]*\/>/g) ?? []).map((tag) => [file, tag])
   );
   assert.deepEqual(seats, [['App.svelte', '<JMark />']], 'J is drawn somewhere other than exactly once, as rendered, by the page shell');
-  /* Each text run of the heading is captured where the markup pins it — the
-     first word, the second word up to its j, the j, and the rest — so its
-     words are read without stripping any markup. */
-  const heading = /<div class="page-intro">\s*<h1 id="page-title"><span class="page-name-line">([^<]+)<\/span> <span class="page-name-line">([^<]+)<span class="page-name-j">(j)<\/span>([^<]*)<span class="page-j-seat"><span class="page-j"><JMark \/><\/span><\/span><\/span><\/h1>/.exec(
+  /* The heading is cut where J's flight sits, so the shell is compared with
+     the rest of it as markup, nothing stripped. */
+  const heading = /<div class="page-intro">\s*<h1 id="page-title">(<span class="page-name-line">[^<]+<\/span> <span class="page-name-line">[^<]+<span class="page-name-j">j<\/span>[^<]*<span class="page-j-seat">)<span class="page-j"><JMark \/><\/span>(<\/span><\/span>)<\/h1>/.exec(
     stripComments(component)
   );
   assert.ok(heading, 'J is not seated inside the name’s own heading, at the end of its second word, after its j, each word a line of its own');
-  const shell = /<div class="page-intro">\s*<h1 id="static-page-title">([^<]+)<\/h1>/.exec(fallback);
-  assert.ok(shell, 'the static shell’s name is not the name alone in the same intro the page draws');
+  const shell = /<div class="page-intro">\s*<h1 id="static-page-title">([\s\S]*?)<\/h1>/.exec(fallback);
+  assert.ok(shell, 'the static shell’s heading is not in the same intro the page draws');
   assert.equal(
-    `${heading[1]} ${heading[2]}${heading[3]}${heading[4]}`,
     shell[1],
-    'the mounted heading’s words are not exactly the static shell’s, so the name moves, or reads differently, when the page mounts'
+    `${heading[1]}${heading[2]}`,
+    'the static shell’s heading is not the mounted heading’s markup with J’s flight taken out, so its text is set in other runs and the name moves when the page mounts'
   );
   assert.doesNotMatch(
     stripComments(mark).replace(/\/\*[\s\S]*?\*\//g, ''),
@@ -1729,14 +1730,17 @@ test('J flies off the name from one seat, reserved, silent, still at rest, and f
          hover up, reaches the line above;
        · and the j is still a j: the dotless letter is only DRAWN over it,
          in the face's own glyph, spoken as nothing. */
-  const seatRules = sweptRules.filter((rule) => rule.file === 'App.svelte' && selectorParts(rule.selector).includes('.page-j-seat'));
+  /* The name's parts are global rules, so the static shell's heading — the
+     same markup, which the page shell's scoped style never reaches — is set
+     by them too. */
+  const seatRules = sweptRules.filter((rule) => rule.file === 'styles' && selectorParts(rule.selector).includes('.page-j-seat'));
   assert.equal(seatRules.length, 1, 'J’s seat is shaped by more than one rule, or none');
   const seat = declared(seatRules[0]);
-  assert.ok(!seatRules[0].enclosing.some((at) => at.startsWith('@')), 'J’s seat sits inside a condition, so some reader gets no seat');
+  assert.ok(!seatRules[0].enclosing.some((at) => /^@(?:media|supports|container)/.test(at)), 'J’s seat sits inside a condition, so some reader gets no seat');
   assert.ok(!('display' in seat), 'J’s seat is not an ordinary inline box, so it splits the name for a screen reader or leaves the baseline');
   assert.equal(seat['font-size'], '0', 'J’s seat has a font, so it is not a box of no height on the baseline');
   assert.equal(seat.position, 'relative', 'J is not placed from his seat');
-  const lines = sweptRules.filter((rule) => rule.file === 'App.svelte' && selectorParts(rule.selector).includes('.page-name-line'));
+  const lines = sweptRules.filter((rule) => rule.file === 'styles' && selectorParts(rule.selector).includes('.page-name-line'));
   assert.equal(lines.length, 1, 'the name’s lines are shaped by more than one rule, or none');
   assert.deepEqual(
     [declared(lines[0]).display, declared(lines[0])['white-space']],
@@ -1848,10 +1852,10 @@ test('J flies off the name from one seat, reserved, silent, still at rest, and f
      tracking of its own, and the dotless j is drawn in its place from the
      face itself (a vendored face whose range covers it), at the name's size
      and with the name's tracking, spoken as nothing. */
-  const letter = sweptRules.find((rule) => rule.file === 'App.svelte' && rule.selector === '.page-name-j');
+  const letter = sweptRules.find((rule) => rule.file === 'styles' && rule.selector === '.page-name-j');
   assert.ok(letter, 'the j has no rule of its own');
   assert.deepEqual([declared(letter)['font-size'], declared(letter)['letter-spacing']], ['0', '0'], 'the j’s own letter still takes room or tracking');
-  const drawn = sweptRules.find((rule) => rule.file === 'App.svelte' && rule.selector === '.page-name-j::before');
+  const drawn = sweptRules.find((rule) => rule.file === 'styles' && rule.selector === '.page-name-j::before');
   assert.ok(drawn, 'no dotless j is drawn over the j');
   const drawnContents = declarationsOf(drawn.body).filter(({ property }) => property === 'content').map(({ value }) => value);
   assert.deepEqual(drawnContents, ["'\\0237'", "'\\0237' / ''"], 'the drawn letter is not the dotless j, spoken as nothing where an engine reads generated text');
