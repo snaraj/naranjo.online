@@ -235,71 +235,86 @@ const subPixel = 0.01;
  * reads per poll and no extra round trip. */
 async function settled(page) {
   let previous = -1;
-  await expect
-    .poll(
-      async () => {
-        /* EACH READ WAITS FOR TWO RENDERED FRAMES. A media query's change, a
-           resize observer's report and every update they cause are delivered
-           only by a rendering update, and a forced layout between updates
-           reads the page at its new size with the components still in their
-           old state. Two equal reads with no frame between them were exactly
-           that on WebKit without a GPU, where the first updates after a mount
-           or a resize come late: the popover lane read Ongoing Work's 320px
-           height with its log still in the desktop form, 1756px taller than
-           the page it then measured. A page that renders no frame for two
-           seconds reads as not settled, never as settled. */
-        const measured = await page.evaluate(
-          () =>
-            new Promise((resolve) => {
-              const read = (rendered) => {
-                const stacks = [...window.document.querySelectorAll('.panel-stack')];
-                return {
-                  rendered,
-                  height: window.document.documentElement.scrollHeight,
-                  hydrated: window.document.querySelector('[data-static-fallback]') === null,
-                  /* Read as a STRING and compared to '0'. Number('') is 0, so a
-                     missing attribute would read as "every panel has answered" —
-                     which is the one reading that must never be possible here. */
-                  pending: window.document.documentElement.getAttribute('data-panels-pending'),
-                  /* A stack that declares no count is a stack this lane cannot
-                     reason about, and it must not read as "whole": NaN compares
-                     false against everything, which would silently restore the old
-                     behaviour. It is reported as a distinct falsehood instead. */
-                  described: stacks.every((stack) => /^\d+$/.test(stack.dataset.blockCount ?? '')),
-                  whole: stacks.every(
-                    (stack) => stack.children.length === Number(stack.dataset.blockCount)
-                  ),
+  /* The last read, named in the failure: which of the conditions below never
+     held, at what width, is the first thing anyone debugging a red lane needs,
+     and the poll's own message cannot carry it. */
+  let last = null;
+  let reads = 0;
+  let frameless = 0;
+  try {
+    await expect
+      .poll(
+        async () => {
+          /* EACH READ WAITS FOR TWO RENDERED FRAMES. A media query's change, a
+             resize observer's report and every update they cause are delivered
+             only by a rendering update, and a forced layout between updates
+             reads the page at its new size with the components still in their
+             old state. Two equal reads with no frame between them were exactly
+             that on WebKit without a GPU, where the first updates after a mount
+             or a resize come late: the popover lane read Ongoing Work's 320px
+             height with its log still in the desktop form, 1756px taller than
+             the page it then measured. A page that renders no frame for two
+             seconds reads as not settled, never as settled. */
+          const measured = await page.evaluate(
+            () =>
+              new Promise((resolve) => {
+                const read = (rendered) => {
+                  const stacks = [...window.document.querySelectorAll('.panel-stack')];
+                  return {
+                    width: window.innerWidth,
+                    rendered,
+                    height: window.document.documentElement.scrollHeight,
+                    hydrated: window.document.querySelector('[data-static-fallback]') === null,
+                    /* Read as a STRING and compared to '0'. Number('') is 0, so a
+                       missing attribute would read as "every panel has answered" —
+                       which is the one reading that must never be possible here. */
+                    pending: window.document.documentElement.getAttribute('data-panels-pending'),
+                    /* A stack that declares no count is a stack this lane cannot
+                       reason about, and it must not read as "whole": NaN compares
+                       false against everything, which would silently restore the old
+                       behaviour. It is reported as a distinct falsehood instead. */
+                    described: stacks.every((stack) => /^\d+$/.test(stack.dataset.blockCount ?? '')),
+                    whole: stacks.every(
+                      (stack) => stack.children.length === Number(stack.dataset.blockCount)
+                    ),
+                  };
                 };
-              };
-              let answered = false;
-              const answer = (rendered) => {
-                if (!answered) {
-                  answered = true;
-                  resolve(read(rendered));
-                }
-              };
-              requestAnimationFrame(() => requestAnimationFrame(() => answer(true)));
-              setTimeout(() => answer(false), 2_000);
-            })
-        );
-        const stable =
-          measured.rendered &&
-          measured.height > 0 &&
-          measured.height === previous &&
-          measured.hydrated &&
-          measured.pending === '0' &&
-          measured.described &&
-          measured.whole;
-        previous = measured.height;
-        return stable;
-      },
-      {
-        message:
-          'the page never stopped growing, rendered no frame, never hydrated, still has a panel waiting for its first envelope, or has a stack short of the blocks it declares',
-        timeout: 15_000,
-      }
-    )
-    .toBe(true);
+                let answered = false;
+                const answer = (rendered) => {
+                  if (!answered) {
+                    answered = true;
+                    resolve(read(rendered));
+                  }
+                };
+                requestAnimationFrame(() => requestAnimationFrame(() => answer(true)));
+                setTimeout(() => answer(false), 2_000);
+              })
+          );
+          const stable =
+            measured.rendered &&
+            measured.height > 0 &&
+            measured.height === previous &&
+            measured.hydrated &&
+            measured.pending === '0' &&
+            measured.described &&
+            measured.whole;
+          reads += 1;
+          if (!measured.rendered) frameless += 1;
+          last = { ...measured, previous, reads, frameless };
+          previous = measured.height;
+          return stable;
+        },
+        {
+          message:
+            'the page never stopped growing, rendered no frame, never hydrated, still has a panel waiting for its first envelope, or has a stack short of the blocks it declares',
+          timeout: 15_000,
+        }
+      )
+      .toBe(true);
+  } catch (error) {
+    error.message += `\nlast read: ${JSON.stringify(last)}`;
+    throw error;
+  }
 }
 
 /* Today at a given hour of the clock the browser reads (the runner's own
