@@ -400,7 +400,10 @@
     /* The iron, in the tome's own box: the hasp at the book's lower right
        corner, the staple in the wall right of the corbel where the wall shows,
        or else in the corbel's own fourth course. Its canvas covers the iron's
-       reach inside the tome and no more. */
+       reach inside the tome and no more, placed in shares of the tome's box:
+       between a resize and the redraw it answers, the canvas then scales
+       with the tome, as a canvas the tome's full size did, and never reaches
+       past it to scroll the page sideways. */
     const frame = host.getBoundingClientRect();
     const pagesBox = tome.getBoundingClientRect();
     const baseLeft = box.left - frame.left;
@@ -418,10 +421,11 @@
     const across = Math.min(Math.floor(frame.width), reach.x + reach.width) - left;
     const down = Math.min(Math.floor(frame.height), reach.y + reach.height) - top;
     if (across <= 0 || down <= 0) return;
-    irons.style.setProperty('inset-inline-start', `${left}px`);
-    irons.style.setProperty('inset-block-start', `${top}px`);
-    irons.style.setProperty('inline-size', `${across}px`);
-    irons.style.setProperty('block-size', `${down}px`);
+    const share = (part: number, whole: number): string => `${((part / whole) * 100).toFixed(4)}%`;
+    irons.style.setProperty('inset-inline-start', share(left, frame.width));
+    irons.style.setProperty('inset-block-start', share(top, frame.height));
+    irons.style.setProperty('inline-size', share(across, frame.width));
+    irons.style.setProperty('block-size', share(down, frame.height));
     irons.width = Math.round(across * ratio);
     irons.height = Math.round(down * ratio);
     const ictx = irons.getContext('2d', cpu);
@@ -429,7 +433,7 @@
     ictx.setTransform(ratio, 0, 0, ratio, -left * ratio, -top * ratio);
     drawChain(ictx, hasp, staple, s, palette);
     chainAngle = (Math.atan2(staple[1] - hasp[1], staple[0] - hasp[0]) * 180) / Math.PI;
-    irons.style.transformOrigin = `${hasp[0] - left}px ${hasp[1] - top}px`;
+    irons.style.transformOrigin = `${share(hasp[0] - left, across)} ${share(hasp[1] - top, down)}`;
   }
 
   $effect(() => {
