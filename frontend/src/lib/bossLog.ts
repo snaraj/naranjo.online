@@ -7,7 +7,7 @@
  * internal/panels/types.go: the hiscores legitimately return no figure, and
  * null is data that must survive the round trip. */
 
-import type { TickerItem, TickerMark, TickerProps } from './blocks.ts';
+import type { TickerItem, TickerProps } from './blocks.ts';
 import { bossInitials, bossSlug } from './bossIcons.ts';
 import { formatWhole } from './grid.ts';
 import type { BossLogData, BossLogEntry, BossLogSkill, PanelEnvelope } from './panels';
@@ -102,7 +102,7 @@ export const bossLogUnavailableNote = 'Boss data is unavailable right now.';
  * The ticker (owner directive, 2026-09-03, issue 287)
  *
  * The three-column tally grid became one scrolling strip: every boss the
- * hiscores list, most-killed first, each an icon and its count. The grid's
+ * hiscores list, in their order, each an icon and its count. The grid's
  * whole contract survives the move, item for item — the icon is the same
  * vendored thumbnail keyed by the same slug, an unmapped row still falls back
  * to its initials, every figure still goes through `tally` so an unreported
@@ -125,12 +125,14 @@ export const bossLogUnavailableNote = 'Boss data is unavailable right now.';
 export const bossLogEmptyBossesNote = 'No boss kills reported.';
 
 /* The strip's accessible name. */
-export const bossLogStripLabel = 'Boss kill counts, most killed first';
+export const bossLogStripLabel = 'Boss kill counts, in the hiscores\' order';
 
-/* The strip's order: most killed first, then by name, so a redraw of the same
- * payload is byte-identical and two bosses on the same count do not swap
- * places between renders. An unreported count sorts as the absence it is —
- * last, with the zeroes. */
+/* The strip's order is the hiscores' own (owner, 2026-10-19: "by the order in
+ * which they appear in the runelite plugin viewer" — RuneLite's Hiscore
+ * panel, which lists the bosses as the hiscores do). The origin keeps the
+ * upstream order (internal/panels/mapping.go), so the strip keeps the
+ * payload's: a redraw of the same payload is byte-identical, and no count can
+ * move a boss. An unreported count reads as the absence it is. */
 function killCount(boss: BossLogEntry): number {
   return boss.kc === null || boss.kc === undefined ? -1 : boss.kc;
 }
@@ -139,9 +141,7 @@ export function bossTickerItems(
   bosses: readonly BossLogEntry[],
   icons: ReadonlyMap<string, string>
 ): TickerItem[] {
-  const ordered = bosses
-    .slice()
-    .sort((left, right) => killCount(right) - killCount(left) || left.name.localeCompare(right.name));
+  const ordered = bosses.slice();
   const peak = ordered.reduce((largest, boss) => Math.max(largest, killCount(boss)), 0);
   return ordered.map((boss) => {
     const count = killCount(boss);
@@ -163,15 +163,10 @@ export function bossTickerItems(
 
 /* bossTickerProps renders the strip as data, in the same three faces the grid
  * had: no envelope yet, an envelope with no payload, and a payload. */
-export function bossTickerProps(
-  envelope: PanelEnvelope | null,
-  icons: BossIconSet,
-  mark?: TickerMark
-): TickerProps {
+export function bossTickerProps(envelope: PanelEnvelope | null, icons: BossIconSet): TickerProps {
   const base = {
     items: [] as TickerItem[],
-    label: bossLogStripLabel,
-    mark
+    label: bossLogStripLabel
   };
   if (envelope === null) {
     return {

@@ -30,16 +30,58 @@ local-origin-only, so no visitor request may leave the origin to fetch a
 letterform. Two axes in two files is what lets the masthead be set at 900 and
 the prose at 400 with no second download.
 
-## Band textures
+## Instrument Serif webfont
 
-The four photographs under `frontend/src/assets/textures/` — one per reading
-mode (owner directive, 2026-09-04, issue #292: the cycle box and the second
-picture of each pair are gone) — are the owner's own wallpaper library,
-originally from Unsplash and used under the Unsplash Licence. Their
-provenance, licence, encoding recipe and exact vendored weight are recorded
-beside the files in `frontend/src/assets/textures/SOURCES.md`, which is the
-document a reviewer should read: it states what was verified and claims
-nothing beyond it.
+The name and the headings (owner's pick, 2026-10-19) are set in
+[Instrument Serif](https://fonts.google.com/specimen/Instrument+Serif),
+copyright 2022 The Instrument Serif Project Authors
+(https://github.com/Instrument/instrument-serif), used under the SIL Open Font
+License 1.1 — the same licence and convention as the faces above. The licence
+text ships beside the files as
+`frontend/src/assets/fonts/OFL-InstrumentSerif.txt`. The two `.woff2` files are
+the family's one upright cut (Regular, weight 400), split into the latin and
+latin-ext character ranges by the Google Fonts pipeline from the same OFL
+sources (fonts.gstatic.com), and vendored here for the same reason: no visitor
+request leaves the origin to fetch a letterform.
+
+## Cormorant Garamond webfont
+
+The leaves of the chained tome (owner's pick, 2026-10-20) are set in
+[Cormorant Garamond](https://fonts.google.com/specimen/Cormorant+Garamond),
+copyright 2015 the Cormorant Project Authors
+(https://github.com/CatharsisFonts/Cormorant), used under the SIL Open Font
+License 1.1 — the same licence and convention as the faces above. The licence
+text ships beside the files as
+`frontend/src/assets/fonts/OFL-CormorantGaramond.txt`. The two `.woff2` files
+are the family's upright variable cut (weights 300 to 700), split into the
+latin and latin-ext character ranges by the Google Fonts pipeline from the same
+OFL sources (fonts.gstatic.com), and vendored here for the same reason.
+
+## UnifrakturMaguntia webfont
+
+The tome's illuminated initials are set in
+[UnifrakturMaguntia](https://fonts.google.com/specimen/UnifrakturMaguntia),
+copyright 2009 and 2010 its authors as named in its licence file, with Reserved
+Font Name UnifrakturMaguntia, used under the SIL Open Font License 1.1. The
+licence text, with its copyright lines in full, ships beside the file as
+`frontend/src/assets/fonts/OFL-UnifrakturMaguntia.txt`. The one `.woff2` file
+is the family's one cut (Regular, weight 400) in the latin character range,
+which holds every capital an initial can be, as the Google Fonts pipeline
+serves it from the same OFL sources (fonts.gstatic.com), vendored here for the
+same reason.
+
+## Castle wall photograph
+
+The sheet's castle wall (owner's pick, 2026-10-19) is derived from
+[a photograph of a rustic stone wall by Y](https://images.unsplash.com/photo-1779636826516-955b8b293989)
+on Unsplash (published 2026-05-24), used under the
+[Unsplash License](https://unsplash.com/license), which permits free use,
+including modification, without permission. The photograph itself is not
+vendored: `frontend/src/assets/images/keep/wall-night.webp` and
+`wall-day.webp` are 2160x1440 derivatives of the wall above the grass, made
+seamless, sharpened by local contrast and toned to two narrow bands of
+brightness so the page's text keeps its contrast on them. Thanks to the
+photographer.
 
 ## Old School RuneScape boss icons
 
@@ -58,16 +100,9 @@ The page no longer prints that sentence under the boss strip (owner directive,
 2026-09-04, issue #292); this document is where the attribution is kept, and a
 frontend test holds it here word for word.
 
-### The strip's lead figure (2026-09-04, issue #292)
-
-`frontend/src/assets/icons/gnome.png` leads the boss strip: the owner's pick,
-the wiki's own 64px thumbnail of `Gnome_(2).png` (the lead image of the Gnome
-page), **64×131, 8,864 bytes, unmodified**, requested through the same
-MediaWiki thumbnail path as the boss icons below. Same artwork owner, same
-licence story, same notice above. It stands the full height of the strip's
-lead item, and its dimensions are stated beside the file in
-`frontend/src/lib/blocks/bossTicker.ts` so the lead reserves its box before
-the picture arrives.
+The strip's lead figure, the wiki's 64px thumbnail of `Gnome_(2).png`
+vendored on 2026-09-04 (issue #292), left the repository on 2026-10-19 with
+the strip's lead, at the owner's word; it remains in the history.
 
 ### The reviewed batch (2026-08-20, issue #78)
 

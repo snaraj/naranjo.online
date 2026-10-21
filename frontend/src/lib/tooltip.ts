@@ -541,8 +541,9 @@ function bindDetail(
      the omission with a case that was itself a defect — "the calendar opens
      scrolled to its newest column, so Home names a cell a phone has never
      shown". A cursor outside its own scrollport is not a state to preserve;
-     it is the bug ContributionGrid's revealCursor now fixes, which is what
-     makes this test safe to ask. MEASURED at 390x844 in both engines before
+     it was the bug the calendar grid's revealCursor fixed (the grid retired
+     with the redesign of 2026-10-16), which is what makes this test safe to
+     ask. MEASURED at 390x844 in both engines before
      the pair landed: cursor on cell 370 via `End`, pan the strip to
      scrollLeft 0, and the card, the ring and aria-activedescendant all kept
      naming a cell sitting 364px past the strip's right edge. */

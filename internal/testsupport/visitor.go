@@ -91,9 +91,10 @@ type Visitor struct {
 	// the validator a browser would replay on its next navigation.
 	cache map[string]string
 	// cookies holds the client-set cookie pairs every navigation carries. The
-	// origin never issues Set-Cookie — the site's JavaScript writes cookies
-	// (the reading-mode choice) — so scenarios populate this jar directly,
-	// exactly the way document.cookie would.
+	// origin never issues Set-Cookie and the site writes none today, but a
+	// browser keeps what an earlier version wrote (the retired reading-mode
+	// choice), so scenarios populate this jar directly, exactly the way
+	// document.cookie did.
 	cookies map[string]string
 }
 
@@ -150,9 +151,9 @@ func (v *Visitor) On(t *testing.T) *Visitor {
 }
 
 // SetCookie records a cookie in the session jar the way the site's own
-// JavaScript writes one — the origin never sets cookies — so every later
-// navigation in this session carries it, exactly like a browser after the
-// reading-mode toggle. Setting a name again replaces its value.
+// JavaScript once wrote one — the origin never sets cookies — so every later
+// navigation in this session carries it, exactly like a browser still holding
+// the retired reading-mode choice. Setting a name again replaces its value.
 func (v *Visitor) SetCookie(name, value string) {
 	v.t.Helper()
 	v.cookies[name] = value

@@ -19,6 +19,7 @@ import {
   unrankedLabel,
 } from '../src/lib/bossLog.ts';
 import { contributionCalendarProps } from '../src/lib/commits.ts';
+import { gridLevel, gridLevels } from '../src/lib/grid.ts';
 import { unavailablePanel } from '../src/lib/panels.ts';
 import { projects } from '../src/lib/projects.ts';
 
@@ -41,7 +42,7 @@ const stripComments = (text) => {
 
 // The container image builds the frontend from a stage that holds ONLY the
 // frontend tree plus the few repo files the build DECLARES as inputs
-// (Dockerfile: COPY frontend/ ./, plus VERSION and the two vocabulary files), so
+// (Dockerfile: COPY frontend/ ./, plus the two vocabulary files), so
 // the rest of the repository does not exist there. The cross-tree pins below
 // are therefore capability-gated exactly like the provider-neutrality pin: in
 // a full checkout — the PR gate's application job, every local run — they are
@@ -64,18 +65,14 @@ const reducedContextNote = fullCheckout
 const [
   app,
   shell,
-  pageHeaderSource,
   fallbackShell,
   ticker,
   panelsSource,
   iconsSource,
   viteConfig,
-  grid,
   gridSource,
-  commitLog,
-  ledgerBoard,
+  chronicle,
   styles,
-  themeMenu,
   detailTip,
   manifest,
   pageSection,
@@ -84,18 +81,14 @@ const [
 ] = await Promise.all([
   read('../src/App.svelte'),
   read('../src/lib/components/PanelShell.svelte'),
-  read('../src/lib/components/PageHeader.svelte'),
   read('../index.html'),
   read('../src/lib/components/Ticker.svelte'),
   read('../src/lib/panels.ts'),
   read('../src/lib/bossIcons.ts'),
   read('../vite.config.ts'),
-  read('../src/lib/components/ContributionGrid.svelte'),
   read('../src/lib/grid.ts'),
-  read('../src/lib/components/ContributionCalendar.svelte'),
-  read('../src/lib/components/LedgerBoard.svelte'),
+  read('../src/lib/components/Chronicle.svelte'),
   read('../src/styles.css'),
-  read('../src/lib/ThemeMenu.svelte'),
   read('../src/lib/components/DetailTip.svelte'),
   read('../src/page.ts'),
   read('../src/lib/components/PageSection.svelte'),
@@ -107,12 +100,11 @@ const [
  * the component that draws the repositories table beside the commit log. */
 const ledgerSpread = await read('../src/lib/components/LedgerSpread.svelte');
 
-/* The two sibling binding modules, read beside the one above so the
- * stays-current pin can sweep all three panel bindings. */
+/* The multi-panel binding modules, read beside the one above so the
+ * stays-current pin can sweep every panel binding. */
 const bindingSourceCache = {
-  commits: await read('../src/lib/blocks/contributionCalendar.ts'),
-  board: await read('../src/lib/blocks/tokenBoard.ts'),
   projects: await read('../src/lib/blocks/projectsCommits.ts'),
+  chronicle: await read('../src/lib/blocks/trackerChronicle.ts'),
 };
 
 /* The adapter module beside the boss-log data, for the account-privacy pin. */
@@ -135,18 +127,22 @@ test('the manifest mounts exactly the three tracker blocks, in the stacked order
      has come back between the board and the ticker, because a year of daily
      counts a reader cycles between three sources is exactly what the two
      around it are — a tracker. The owner named the order: the token cards,
-     then the calendar, then the game ticker. */
+     then the calendar, then the game ticker.
+
+     And TWO blocks now (owner direction, 2026-10-16): the token cards and
+     the calendar are drawn as ONE diagram on one timeline — the chronicle —
+     and the game ticker stays a scrolling strip under it. */
   assert.match(
     manifest,
-    /section\('trackers', 'Trackers', \[tokenBoard, contributionCalendar, bossTicker\], \{\s*mark: '[a-z-]+',\s*layout: 'stack'\s*\}\)/,
+    /section\('trackers', 'Trackers', \[trackerChronicle, bossTicker\], \{\s*mark: '[a-z-]+',\s*layout: 'stack'\s*\}\)/,
     'the trackers section must list exactly one entry per panel, in the order the page stacks them'
   );
-  // ...and the calendar is mounted exactly once, here and nowhere else.
+  // ...and the chronicle is mounted exactly once, here and nowhere else.
   const mounts = manifest.slice(manifest.indexOf('export const page'));
   assert.equal(
-    (mounts.match(/contributionCalendar/g) ?? []).length,
+    (mounts.match(/trackerChronicle/g) ?? []).length,
     1,
-    'the calendar block is mounted more than once, or not at all'
+    'the chronicle block is mounted more than once, or not at all'
   );
   assert.doesNotMatch(
     manifest,
@@ -179,7 +175,7 @@ test('the panels are one centered column, not a rail', () => {
   );
   // Nothing anywhere still reaches for the rail's geometry or its published
   // open-state attribute; a leftover reference is a gutter nobody reserves.
-  for (const [name, source] of Object.entries({ app, styles, themeMenu, commitLog, ticker, pageSection })) {
+  for (const [name, source] of Object.entries({ app, styles, chronicle, ticker, pageSection })) {
     assert.doesNotMatch(source, /data-rail-open|--page-rail-gutter|--panel-rail-|SideRail/, `${name} still references the retired rail`);
   }
   // The stack owns the column width and the gap; panels own neither, so a
@@ -192,18 +188,12 @@ test('the panels are one centered column, not a rail', () => {
   assert.match(pageSection, /\{#if section\.layout === 'stack'\}(?:\s*<!--[\s\S]*?-->)?\s*<div class="panel-stack" data-block-count=\{section\.blocks\.length\}>/);
   assert.match(styles, /\.panel-stack\s*\{[^}]*display:\s*grid/);
   assert.match(styles, /\.panel-stack\s*\{[^}]*gap:\s*var\(--page-stack-gap\)/);
-  /* THE HEADER SHARES THIS RULE AGAIN, and the reversal is deliberate (owner
-     directive, 2026-09-03, issue 287). Issue 168 decoupled the two because the
-     header was a corner-pinned CONTROL that must not move when the reader
-     drags the feed. The ledger's header is a ROW of the sheet — its top rule —
-     so it has to begin and end exactly where every section head below it does,
-     and sharing the declaration is what makes that true by construction rather
-     than by two sets of numbers kept in step. The old coupling's actual defect
-     is fixed at its cause instead: the row is in the flow, so nothing about it
-     floats over the column. */
+  /* The header shared this rule from issue 287 (owner directive, 2026-09-03)
+     until the chrome row was removed (owner direction, 2026-10-16: "do away
+     with it for now"); the column is the one box it sizes again. */
   assert.match(
     styles,
-    /#app > main,\s*\.page-header \{[^}]*inline-size:\s*min\(var\(--page-column-width\), 100%\)/
+    /#app > main \{[^}]*inline-size:\s*min\(var\(--page-column-width\), 100%\)/
   );
 });
 
@@ -323,11 +313,12 @@ test('no card announces its own age, and none keeps a control', () => {
   assert.match(ticker, /\{#if items\.length === 0\}\s*<p class="ticker-note">\{emptyNote\}<\/p>/);
   /* The log's own honest empty line moved with the log (owner design decision,
      2026-09-11, issue 318): the rows are the sheet's right-hand column now, so
-     the note that stands in for them is rendered there, under the same class,
-     from the same adapter word. */
-  assert.match(ledgerSpread, /<p class="commit-note">\{logNote\}<\/p>/);
-  assert.match(ledgerSpread, /<p class="table-note">\{emptyNote\}<\/p>/);
-  assert.match(ledgerBoard, /<p class="board-note">\{emptyNote\}<\/p>/);
+     the note that stands in for them is rendered there, from the same adapter
+     word — one note class for both columns since the section became two-line
+     entries (owner direction, 2026-10-16). */
+  assert.match(ledgerSpread, /<p class="ongoing-note">\{logNote\}<\/p>/);
+  assert.match(ledgerSpread, /<p class="ongoing-note">\{emptyNote\}<\/p>/);
+  assert.match(chronicle, /<p class="chronicle-note">\{emptyNote\}<\/p>/);
   // No per-card control, and no panel hands one up any more.
   assert.doesNotMatch(shell, /panel-refresh|<button/, 'a card grew its own refresh control back');
   // Two spellings, because a bespoke refresher does not have to be CALLED
@@ -356,8 +347,7 @@ test('no card announces its own age, and none keeps a control', () => {
   // there appears on every card at once.
   for (const [name, source] of Object.entries({
     ticker,
-    commitLog,
-    ledgerBoard,
+    chronicle,
     panelShell: shell,
     blockHost,
   })) {
@@ -379,8 +369,10 @@ test('no card announces its own age, and none keeps a control', () => {
 // directive, issue 179): "the site is expected to be responsive on its own;
 // a data-retrieval failure logs an error … it is not an expected state a
 // visitor manages with a manual refresh control." It used to sit beside the
-// reading mode in the header's corner (issue 127); the reading mode is now
-// the header's only control, and nothing it left behind survives as
+// reading mode in the header's corner (issue 127); the reading mode has since
+// left with the footer (owner, 2026-10-19), the sky's toggle that followed it
+// went the same day ("do away with this all together"), so the page's chrome
+// carries no control at all, and nothing the refresh left behind survives as
 // reachable code.
 test('the refresh control is gone, and nothing it owned survives as dead code', async () => {
   assert.equal(
@@ -388,18 +380,15 @@ test('the refresh control is gone, and nothing it owned survives as dead code', 
     false,
     'the refresh component must not come back'
   );
-  assert.doesNotMatch(pageHeaderSource, /RefreshAll/, 'the header still names the retired control');
-  /* The chrome row gained the section nav and the wordmark with the ledger
-     (owner directive, 2026-09-03, issue 287), so "one control" is no longer
-     the shape to pin — what is, and what issue 179 actually decided, is that
-     the reading mode is the only ACTION in the row: everything else there is
-     navigation or a label. */
-  assert.match(pageHeaderSource, /<header class="page-header">/);
-  assert.match(pageHeaderSource, /<ThemeMenu \/>/);
+  /* What issue 179 decided is that the page's own chrome carries no refresh
+     ACTION. That chrome was the header row until the owner removed it (owner
+     direction, 2026-10-16: "do away with it for now"), then the footer, which
+     the owner removed too (2026-10-19), and with it every control the
+     chrome had — so the page shell declares no button of its own at all. */
   assert.equal(
-    (pageHeaderSource.match(/<button/g) ?? []).length,
+    (app.match(/<button/g) ?? []).length,
     0,
-    'the header declares a button of its own again; its one action is the reading mode, which ThemeMenu owns'
+    'the page shell declares a button of its own again; its chrome carries no control'
   );
   assert.doesNotMatch(app, /RefreshAll/, 'the refresh must not head the panel stack again either');
   // THE FAN-OUT EXISTS ONLY WITH A CALLER — that condition is the pin, in
@@ -471,11 +460,9 @@ test('no page chrome floats over the document', () => {
   // components alone would let the exact drift this test is named for return
   // with the suite green.
   for (const [name, source] of Object.entries({
-    pageHeaderSource,
-    themeMenu,
-    commitLog,
+    app,
+    chronicle,
     ticker,
-    ledgerBoard,
     pageSection,
     blockHost,
     shell,
@@ -494,10 +481,11 @@ test('no page chrome floats over the document', () => {
   /* ONE narrow, named exception, stated here where the owner will read it.
 
      The page header used to be the other one (issue 168) and is not any more:
-     the ledger's chrome is a row in the document's own flow (owner directive,
-     2026-09-03, issue 287), so it is swept by the loop above like everything
-     else and needs no carve-out. That is the stricter direction — the
-     exception list shrank rather than grew.
+     the ledger made it a row in the document's own flow (owner directive,
+     2026-09-03, issue 287), and the row itself is gone now (owner direction,
+     2026-10-16) — the page shell that replaced it is swept by the loop above
+     like everything else and needs no carve-out. That is the stricter
+     direction — the exception list shrank rather than grew.
 
      What survives from the pair: the detail card (DetailTip) is fixed on
      purpose and always has been — it is a readout, not chrome, it takes no
@@ -558,23 +546,61 @@ test('the ticker renders the tallies through the tested renderers, formatting no
     'a figure is being formatted in the component instead of by the tested renderers'
   );
   const { items } = bossTickerFixture();
-  assert.equal(items[0].figure, tally(1192), 'tallies must go through the tested renderer');
-  assert.equal(items[0].label, cellLabel({ name: 'Zulrah', kc: 1192, rank: 111737 }));
-  assert.deepEqual(items[0].detail, bossDetail({ name: 'Zulrah', kc: 1192, rank: 111737 }));
-  // MOST KILLED FIRST, then by name — a stable order, so a redraw of the same
-  // payload is byte-identical and two rows on one count never swap places.
-  assert.deepEqual(items.map((item) => item.key), ['Zulrah', 'Hespori', 'Artio']);
+  const item = (key) => items.find((entry) => entry.key === key);
+  assert.equal(item('Zulrah').figure, tally(1192), 'tallies must go through the tested renderer');
+  assert.equal(item('Zulrah').label, cellLabel({ name: 'Zulrah', kc: 1192, rank: 111737 }));
+  assert.deepEqual(item('Zulrah').detail, bossDetail({ name: 'Zulrah', kc: 1192, rank: 111737 }));
+  /* IN THE HISCORES' ORDER (owner, 2026-10-19: "do not arrange the bosses by
+     alphabetical order but instead by the order in which they appear in the
+     runelite plugin viewer" — RuneLite's Hiscore panel, which lists them as
+     the hiscores do). The origin keeps the upstream order, so the strip keeps
+     the payload's: no count and no name moves a boss. The fixture's order is
+     neither alphabetical nor by count, so either sort coming back fails here,
+     and the reversed payload proves the order is the payload's own rather
+     than this one fixture's. A redraw of the same payload is byte-identical. */
+  const payloadOrder = ['Zulrah', 'Artio', 'Hespori'];
+  assert.deepEqual(items.map((entry) => entry.key), payloadOrder, 'the strip reorders the hiscores’ bosses');
+  assert.notDeepEqual(payloadOrder, [...payloadOrder].sort(), 'the fixture is already alphabetical, so it cannot tell the orders apart');
+  const reversed = bossTickerProps(
+    {
+      schema: 'panel/v1',
+      id: bossLogPanelId,
+      kind: 'boss-log/v1',
+      title: 'x',
+      status: 'ok',
+      data: {
+        account: 'f',
+        bosses: [
+          { name: 'Hespori', kc: 0, rank: null },
+          { name: 'Artio', kc: null, rank: null },
+          { name: 'Zulrah', kc: 1192, rank: 111737 },
+        ],
+      },
+    },
+    new Map()
+  );
+  assert.deepEqual(reversed.items.map((entry) => entry.key), [...payloadOrder].reverse(), 'the strip’s order is not the payload’s own');
+  assert.doesNotMatch(
+    bossLogStripLabel,
+    /most|alphabet|by (?:count|name)|ranked/i,
+    'the strip’s accessible name claims a sort the strip no longer does'
+  );
   // A row the hiscores list with nothing against it is DIMMED, never dropped,
   // and the two absences stay different claims: a reported zero renders "0"
   // and an unreported figure renders the no-figure marker.
-  assert.equal(items[1].figure, tally(0));
-  assert.equal(items[1].quiet, true, 'a zero row is dimmed, never hidden');
-  assert.equal(items[2].figure, tally(null), 'a null tally arrives as the no-figure marker');
-  assert.equal(items[2].quiet, true);
+  assert.equal(item('Hespori').figure, tally(0));
+  assert.equal(item('Hespori').quiet, true, 'a zero row is dimmed, never hidden');
+  assert.equal(item('Artio').figure, tally(null), 'a null tally arrives as the no-figure marker');
+  assert.equal(item('Artio').quiet, true);
   // The peak is the page's one highlight, and it is a peak only when
-  // something was actually killed.
-  assert.equal(items[0].peak, true);
-  assert.equal(items[1].peak, false);
+  // something was actually killed — wherever in the order it stands.
+  assert.equal(item('Zulrah').peak, true);
+  assert.equal(item('Hespori').peak, false);
+  assert.deepEqual(
+    reversed.items.map((entry) => entry.peak),
+    [false, false, true],
+    'the peak follows the strip’s first place rather than the largest count'
+  );
   assert.equal(bossTickerProps({
     schema: 'panel/v1',
     id: bossLogPanelId,
@@ -644,14 +670,47 @@ test('the boss icons are locked exactly as they render', () => {
     'the painted icon box is square and never distorts the art inside it'
   );
   assert.match(styles, /--ticker-icon: 22px;/);
+  /* FIFTEEN PERCENT LARGER ON THE TRACKERS (owner, 2026-10-19: "increase the
+     size of this by 15%"): the boss log's strip restates the icon, the item's
+     padding on both axes and the figure, each the base measure times 1.15 to
+     the nearest step its unit allows, and the painted icon stays square. The
+     shorthand padding token is restated whole because a custom property that
+     reads others is computed where it is declared: inherited, it would still
+     carry the base's padding. */
+  const sheetCode = styles.replace(/\/\*[\s\S]*?\*\//g, '');
+  const strip = /#trackers \.ticker-strip \{([^}]*)\}/.exec(sheetCode)?.[1] ?? '';
+  assert.ok(strip, 'the trackers’ strip states no measures of its own');
+  const measure = (source, token) => {
+    const found = new RegExp(`${token}: ([\\d.]+)(px|rem);`).exec(source);
+    assert.ok(found, `${token} is not a plain length this pin can read`);
+    return { value: Number(found[1]), unit: found[2] };
+  };
+  for (const token of ['--ticker-icon', '--ticker-item-pad-block', '--ticker-item-pad-inline']) {
+    const base = measure(sheetCode, token);
+    const scaled = measure(strip, token);
+    assert.equal(scaled.unit, base.unit, `${token} changes unit on the trackers`);
+    const ratio = scaled.value / base.value;
+    assert.ok(Math.abs(ratio - 1.15) <= 0.02, `${token} is ${ratio.toFixed(3)} of its base on the trackers, not 15% larger`);
+  }
+  assert.match(
+    strip,
+    /--ticker-item-pad: var\(--ticker-item-pad-block\) var\(--ticker-item-pad-inline\);/,
+    'the strip’s padding shorthand is inherited, so the items keep the base padding'
+  );
+  assert.match(
+    /#trackers \.ticker-figure \{([^}]*)\}/.exec(sheetCode)?.[1] ?? '',
+    /font-size: calc\(var\(--ledger-figure-size\) \* 1\.15\);/,
+    'the strip’s figures are not 15% larger'
+  );
   // The designed hole for a row that ships upstream before its art does.
   assert.match(ticker, /<span class="ticker-icon ticker-glyph" aria-hidden="true">\{item\.glyph\}<\/span>/);
   // WHICH art a row shows is the adapter's slug lookup, executed: a mapped
   // slug arrives as the icon URL, an unmapped row arrives as its initials.
   const { items } = bossTickerFixture();
-  assert.equal(items[0].icon, '/assets/zulrah.png', 'a vendored icon is selected by slug');
-  assert.equal(items[2].icon, undefined, 'a row without art carries none');
-  assert.equal(items[2].glyph, bossInitials('Artio'));
+  const item = (key) => items.find((entry) => entry.key === key);
+  assert.equal(item('Zulrah').icon, '/assets/zulrah.png', 'a vendored icon is selected by slug');
+  assert.equal(item('Artio').icon, undefined, 'a row without art carries none');
+  assert.equal(item('Artio').glyph, bossInitials('Artio'));
 });
 
 // The initials fallback stays in the component regardless: a boss shipped
@@ -890,7 +949,12 @@ test('the panel heading is data the origin serves, not a string in either tree',
      totals line were cut as noise). The component is swept for the word and
      the config is what carries it. */
   assert.equal(fetchConfig.titles?.['boss-log'], 'Old School RuneScape');
-  assert.match(ticker, /<PanelShell \{title\}/);
+  /* …and the strip no longer prints it (owner direction, 2026-10-16: "The
+     oldschool runescape boss log IS a tracker and should be part of that
+     section"). The title is still served and still the adapter's; the strip
+     is named by its own label instead of a heading over it. */
+  assert.match(ticker, /<PanelShell \{status\} \{generatedAt\}>/);
+  assert.doesNotMatch(ticker, /<PanelShell \{title\}/, 'the strip grew its heading back');
   assert.doesNotMatch(ticker, /ticker-name|ticker-lead-line/, 'the lead grew its text back');
   // And the Go source keeps the neutral name as its fallback, so a config
   // that fails to load degrades to a truthful heading rather than a blank.
@@ -946,7 +1010,7 @@ test('every mounted panel stays current instead of painting once', () => {
     /\bloadPanel\b/,
     'the block host reads an envelope directly; the one-shot read is the bug'
   );
-  for (const [name, source] of Object.entries({ ticker, commitLog, ledgerBoard, ledgerSpread })) {
+  for (const [name, source] of Object.entries({ ticker, chronicle, ledgerSpread })) {
     assert.doesNotMatch(
       source,
       /\bloadPanel\b|\bwatchPanel\b|\bfetch\(/,
@@ -956,142 +1020,109 @@ test('every mounted panel stays current instead of painting once', () => {
   // And every tracker block is a panel binding, so all of them ride that host.
   for (const [name, source] of Object.entries({
     bossBinding,
-    boardBinding: bindingSourceCache.board,
   })) {
     assert.match(source, /panelBlock\(/, `${name} no longer binds through the panel host`);
   }
-  /* TWO blocks read SEVERAL panels each and ride the same host to do it
+  /* Two blocks read SEVERAL panels each and ride the same host to do it
      (owner directive, 2026-09-03, issue 287; the sheet's paired section, owner
      design decision 2026-09-11, issue 318): panelsBlock is one subscription
      per id through the identical watchPanel, never a second retrieval path. */
   for (const [name, source] of Object.entries({
-    calendarBinding: bindingSourceCache.commits,
     projectsBinding: bindingSourceCache.projects,
+    chronicleBinding: bindingSourceCache.chronicle,
   })) {
     assert.match(source, /panelsBlock\(/, `${name} no longer binds through the panel host`);
   }
   assert.match(blockHost, /watchPanel\(id, \(loaded\) => \{/, 'the multi-panel branch no longer watches through the shared host');
 });
 
-test('the contribution grid is one component every calendar renders', () => {
-  /* ONE component and now ONE INSTANCE (owner directive, 2026-09-03, issue
-     287): the calendars moved into the commits section, where a segmented
-     control swaps which series the same grid draws. That is stricter than two
-     panels sharing an implementation — there is one mounted grid on the page,
-     so a scroll position, a keyboard cursor and a detail card cannot be three
-     of each. The board renders none. */
-  assert.match(commitLog, /import ContributionGrid from '\.\/ContributionGrid\.svelte'/);
-  assert.equal((commitLog.match(/<ContributionGrid/g) ?? []).length, 1);
-  assert.doesNotMatch(ledgerBoard, /ContributionGrid/, 'the board grew a calendar of its own');
-  // A wide window scrolls inside the strip, so it never takes the page's own
-  // scrollbar sideways. The strip's BOX — the term-by-term calc() that keeps
-  // an arriving series from moving the page — is pinned in
-  // tests/activity.test.mjs, which parses the declaration and checks each
-  // term. A `block-size: 7rem` pin lived here until this commit and had been
-  // vacuous since issue 130 replaced that literal with the calc(): every
-  // `7rem` left in the component is inside a comment, and the one this
-  // matched is the comment recording that `block-size: 7rem` was REMOVED.
-  assert.match(grid, /overflow-x:\s*auto/);
-  // The ramp's five themable levels AND their validated dark defaults are
-  // pinned together in tests/activity.test.mjs, which matches
-  // `var(--grid-cell-N, #hex)` — strictly stronger than the bare
-  // `--grid-cell-N` sweep that stood here, and mutation-tested there.
-  // Never color alone, and a day outside the window is a hole, not a zero.
-  assert.match(grid, /aria-label=\{cellLabel\(cell, noun, formatValue\)\}/);
-  // THE BROWSER TOOLTIP IS GONE, AND ITS ABSENCE IS THE PIN (issue 219).
-  // `title=` used to carry every calendar cell's reading and 96% of the token
-  // strip's. It has NO touch trigger in any engine, so on a phone those cells
-  // said nothing at all — a heatmap encodes magnitude as colour alone, which
-  // is precisely what AGENTS.md's dataviz floor forbids. This assertion is
-  // strictly stronger than the `title={text}` it replaces: that one admitted
-  // any accompanying detail, this one makes the browser tooltip
-  // unrepresentable on a grid cell. (The month axis keeps its own `title=` —
-  // it is a label, not a datapoint — so the sweep is scoped to the cell.)
-  const cellMarkup = grid.slice(grid.indexOf('<div class="grid-cells"'));
-  assert.doesNotMatch(
-    cellMarkup.slice(0, cellMarkup.indexOf('</div>')),
-    /\stitle=/,
-    'a grid cell carries the browser tooltip again; it has no touch trigger and no reading on a phone'
+test('the calendar is drawn once, inside the chronicle, and an unmeasured day is never a quiet one', () => {
+  /* ONE calendar on the page (owner directive, 2026-09-03, issue 287 — one
+     grid instance the reader cycled), carried to the Chronicle, which draws
+     the year's cells under its lines (owner direction, 2026-10-16) and
+     repaints them by layer rather than mounting one per set. The retired
+     grid's own internals (its scroller, its listbox, its per-cell detail)
+     retired with it. */
+  assert.equal(
+    (chronicle.match(/class="chronicle-calendar"/g) ?? []).length,
+    1,
+    'the chronicle draws more than one calendar, or none'
   );
-  assert.match(grid, /data-grid-absent=\{cell\.absent \? 'true' : 'false'\}/);
+  // Its scrub hands the vertical axis back to the page on the calendar's OWN
+  // rule; the chart's declaration in the same file cannot stand in for it.
+  assert.match(/\.chronicle-calendar \{([^}]*)\}/.exec(chronicle)?.[1] ?? '', /touch-action: pan-y/);
+  // Never colour alone at the edge that matters most: a day nobody measured
+  // is marked as such in the DOM, so it can never be read as a quiet day.
+  assert.match(chronicle, /data-measured=\{cell\.measured \? 'true' : 'false'\}/);
+  assert.match(gridSource, /export function measuredCell\(/);
+  // The busiest day is simply the deepest green (owner, 2026-10-20: "we
+  // don't need to highlight the highest day like that"): its value is the
+  // peak, whose level is the top one at any peak, so it is inked darkest
+  // without a rule of its own, and it wears no ring. It is still marked in
+  // the DOM, so the browser lanes can find it and prove it is the deepest.
+  assert.match(chronicle, /data-peak=\{cell\.busiest \? 'true' : 'false'\}/);
+  assert.match(chronicle, /busiest: peak > 0 && value === peak,/, 'the busiest day is not the day whose value is the peak');
+  for (const peakValue of [1, 7, 12.5, 4096]) {
+    assert.equal(gridLevel(peakValue, peakValue), gridLevels - 1, `a busiest day of ${peakValue} is not the top level, the deepest green`);
+  }
+  assert.doesNotMatch(chronicle, /\.chronicle-cell\[data-peak='true'\]/, 'the busiest day wears a mark of its own again');
+  // And no cell carries the browser tooltip (issue 219): it has no touch
+  // trigger in any engine, so on a phone it said nothing at all.
+  assert.doesNotMatch(chronicle, /\stitle=/, 'a calendar cell carries the browser tooltip again');
+  /* The line IS the calendar read as a line (owner, 2026-10-16): it plots the
+     picked layer — "it makes no sense that the graph doesn't change to show
+     contributions when I pick contributions" — and its x is the calendar's own
+     week scale over the weeks the calendar shows — "make the graph represent
+     the entire heatmap not just a subsection" — so a day stands over its own
+     week's column. The browser lanes measure the two boxes agreeing. */
+  assert.match(chronicle, /paths\(layer\.series\)/, 'the line plots something other than the picked layer');
+  /* No size container inside the diagram: one on each account sent Blink's
+     layout into a loop that never returned — the page answered nothing for
+     as long as it was open (measured 2026-10-16) — while every other engine
+     drew it fine, so only a pin keeps it from coming back unseen. */
+  assert.doesNotMatch(chronicle, /container-type\s*:/, 'a size container is back inside the diagram');
+  assert.match(
+    /function chartX\(index: number\): number \{([^}]*)\}/.exec(chronicle)?.[1] ?? '',
+    /\(index - firstDay \+ 0\.5\) \/ Math\.max\(1, shownWeeks \* 7\)\) \* chartW/,
+    'the line is scaled to something other than the calendar’s shown weeks'
+  );
 });
 
-/* Full width (issue #178, extended to both grids by the owner on 2026-08-25)
- * and the OSRS-style card (issue #178). The daily heatmap used to render as a
- * tiny left-aligned block, and its value popover was a bare title= tooltip
- * reading "1,025,755,735 tokens on 2026-08-22" — a log line, not a designed
- * readout. Both callers opted in, and since the ledger redesign (owner
- * directive, 2026-09-03, issue 287) there is one caller carrying both opt-ins
- * for every series it draws: the commits block. The card's TITLE is now the
- * active set's own label, so a reader who cycles to a token series reads a
- * card headed with that series rather than with the calendar's noun. */
-test('the one calendar takes the full width and names its card from the active set', () => {
+/* THE FIGURES OPEN THE ROLL (owner, 2026-10-20, picking "The Rotulus"):
+ * its incipit, first in the roll's top, beside the writing on a desk and over
+ * it on a phone. Beside the graph the figures once left the calendar a third
+ * of the room (owner, 2026-10-19: "large awkward gap in between here"), so
+ * the incipit's column is held narrow — at most 13rem, the writing taking
+ * every other track — and nothing sizes itself as a flex item. */
+test('the chronicle opens its roll with the figures, beside the writing on a desk and over it on a phone (owner 2026-10-20)', () => {
+  const markup = stripComments(chronicle);
+  const side = markup.indexOf('<dl class="chronicle-headlines">');
+  const plotting = markup.indexOf('<div class="chronicle-plotting">');
+  const top = markup.indexOf('<div class="chronicle-top">');
+  assert.ok(top >= 0 && side > top && plotting > side, 'the figures no longer come before the graph inside the roll’s top');
+  const style = (/<style[^>]*>([\s\S]*?)<\/style>/.exec(chronicle)?.[1] ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = (selector) =>
+    [...style.matchAll(/(?:^|\n)\s*([^{}\n][^{}]*?)\s*\{([^{}]*)\}/g)]
+      .filter(([, selectors]) => selectors.split(',').some((part) => part.trim() === selector))
+      .map(([, , body]) => body.replace(/\s+/g, ' '));
+  const topRules = rules('.chronicle-top');
+  assert.equal(topRules.length, 2, 'the roll’s top is laid out other than once for a desk and once for a phone');
+  assert.match(topRules[0], /display: grid;/, 'the roll’s top is no longer a grid');
+  assert.match(topRules[0], /grid-template-columns: minmax\(9\.5rem, 13rem\) minmax\(0, 1fr\);/, 'on a desk the incipit is not a narrow column beside the writing');
+  assert.match(topRules[1], /^ ?grid-template-columns: minmax\(0, 1fr\);/, 'on a phone the incipit is not over the writing');
   assert.match(
-    commitLog,
-    /<ContributionGrid[\s\S]*?fullWidth[\s\S]*?\/>/,
-    'the calendar stopped filling its card'
+    /@media \(max-width: 47\.99rem\) \{\s*\.chronicle-top \{/.exec(style)?.[0] ?? '',
+    /47\.99rem/,
+    'the incipit goes over the writing at some width other than the page’s phone width'
   );
-  assert.match(
-    commitLog,
-    /<ContributionGrid[\s\S]*?cardTitle=\{active\.label\}[\s\S]*?\/>/,
-    'the hover card no longer names the series a reader is actually looking at'
-  );
-  /* THE FORMATTER IS THE SET'S (owner directive, 2026-09-03, issue 287). It
-     used to be a per-panel choice — exact digits for commits, compacted for
-     nine-digit token days — and the two now live in one section, so the
-     choice travels with the series rather than with the component. The shared
-     grid still defaults to exact digits, which is what a caller that says
-     nothing gets. */
-  assert.match(
-    commitLog,
-    /<ContributionGrid[\s\S]*?formatValue=\{active\.format\}[\s\S]*?\/>/,
-    'the card and the accessible text can drift apart from the series they describe'
-  );
-  assert.match(grid, /formatValue = formatWhole/, 'the shared grid defaults to anything but exact digits');
-
-  // The calendar names its card from data and does not need a literal: the
-  // shared component's fallback reads its own noun, so silence still works.
-  assert.match(grid, /name: cardTitle \?\? nounTitle\(noun\)/);
-
-  // The shared component: both remain props rather than becoming its only
-  // behaviour, so how many columns there are (the caller's data) and whether
-  // the block stretches (the caller's layout) stay separate questions.
-  assert.match(grid, /fullWidth\?: boolean/);
-  assert.match(grid, /cardTitle\?: string/);
-  assert.match(grid, /data-grid-fullwidth=\{fullWidth\}/);
-  // THE GATE IS GONE — the one line this test used to pin as correct.
-  // `{#if cardTitle && !cell.absent}` was two independent holes, and both
-  // consumers of the shared grid fell through at least one. Pinning its
-  // ABSENCE is what stops the opt-in coming back as a convenience.
-  assert.doesNotMatch(
-    grid,
-    /\{#if cardTitle/,
-    'the detail is gated on a prop again; every cell of every grid carries it'
-  );
-  assert.match(grid, /import DetailTip from '\.\/DetailTip\.svelte'/);
-  // One card per STRIP, not per cell, and the strip resolves which cell a
-  // point names. 371 cells at 10x10px cannot each own a tip — that is ~4400
-  // extra elements per grid for a readout one cell shows at a time, and a
-  // 10px target is far under the 44px touch floor either way.
-  assert.match(grid, /host=\{strip\}/);
-  assert.match(grid, /resolve=\{resolveCell\}/);
-  assert.match(grid, /select=\{noteSelection\}/);
-  assert.match(grid, /anchor=\{anchorElement\}/);
-  // Every cell is a selectable option with an honest accessible name, absent
-  // ones included: "no data for this day" is information a reader can reach.
-  assert.match(grid, /role="option"/);
-  assert.match(grid, /aria-selected=\{selected === index\}/);
-  assert.match(
-    grid,
-    /aria-activedescendant=\{selected >= 0 \? `\$\{gridId\}-cell-\$\{selected\}` : undefined\}/
-  );
-  // The card shows the value AND the day phrase, both rows label-less, from
-  // the ONE function that phrase comes from.
-  assert.match(
-    grid,
-    /value: selectedCell\.absent \? 'no data' : formatValue\(selectedCell\.value\)/
-  );
-  assert.match(grid, /\{ label: '', value: cellPeriod\(selectedCell\) \}/);
+  for (const body of topRules) {
+    assert.doesNotMatch(body, /display: flex|flex-direction|grid-auto-flow: column/, 'some width lays the roll’s top out as flex items');
+  }
+  for (const half of ['.chronicle-headlines', '.chronicle-plotting']) {
+    for (const body of rules(half)) {
+      assert.doesNotMatch(body, /(?:^|; |\s)flex(?:-basis|-grow|-shrink)?:|grid-column: (?!1 \/ -1)/, `${half} sizes itself beside its sibling again`);
+    }
+  }
 });
 
 /* ONE WINDOW FOR EVERY SERIES, AND NO WAY TO RE-ASK IT (owner directive,
@@ -1107,9 +1138,10 @@ test('the one calendar takes the full width and names its card from the active s
  * window ends every other one, and the reader is offered a choice of SERIES
  * rather than a choice of how to re-read one.
  *
- * The segmented control is buttons with a pressed state, deliberately not a
+ * The segmented control was buttons with a pressed state, deliberately not a
  * radiogroup — the same grammar the gallery's set switch uses, so the page has
- * one way of saying "pick which of these to show".
+ * one way of saying "pick which of these to show". The Chronicle's layer
+ * switch (owner direction, 2026-10-16) keeps that grammar.
  *
  * The lens ENGINE is untouched and still proven, executed rather than
  * pattern-matched, in tests/grid.test.mjs and tests/periods.test.mjs. */
@@ -1129,8 +1161,14 @@ test('every calendar shares one window, and no display control survives', () => 
     calendarCalls.length,
     'a set builds its columns without the shared anchor'
   );
-  // The control is pressed buttons, not a radio group.
-  assert.match(commitLog, /<button\s+class="commit-segment"[\s\S]*?aria-pressed=\{set\.key === active\.key\}/);
+  /* The control is pressed buttons, not a radio group — carried from the
+     retired segmented control to the Chronicle's layer switch (owner
+     direction, 2026-10-16), which picks what the line plots and the calendar
+     paints, in the same grammar the gallery's set switch speaks. */
+  assert.match(
+    chronicle,
+    /<div class="chronicle-layers" role="group" aria-label="Diagram layer">[\s\S]*?<button\s+type="button"\s+data-tone=\{option\.tone\}\s+data-initial=\{option\.label\.charAt\(0\)\}\s+aria-pressed=\{option\.key === layer\?\.key\}/
+  );
 
   /* THE ABSENCES, one per retired mechanism, swept over every component that
      could grow one back. Any one of them returning alone is a display control
@@ -1150,8 +1188,13 @@ test('every calendar shares one window, and no display control survives', () => 
     [/seriesViews|seriesRanges|defaultSeriesRange/, 'a display vocabulary is offered to the reader again'],
     [/viewColumns/, 'the view aggregation is applied to a graph nobody can re-read'],
     [/role="radiogroup"/, 'a radio group is back inside a panel'],
+    // The owner, 2026-10-16: "make the graph represent the entire heatmap not
+    // just a subsection" — the line covers the calendar's weeks, so a span
+    // row and the outline that marked the span have nothing left to choose.
+    [/chronicle-ranges|rangeKey|chronicleRangeSpecs/, 'the span row is back over a graph that is the whole calendar'],
+    [/chronicle-window/, 'the span outline is back on the calendar'],
   ]) {
-    for (const [name, source] of Object.entries({ commitLog, ledgerBoard, ticker })) {
+    for (const [name, source] of Object.entries({ chronicle, ticker })) {
       assert.doesNotMatch(source, pattern, `${name}: ${complaint}`);
     }
   }
@@ -1161,56 +1204,6 @@ test('every calendar shares one window, and no display control survives', () => 
     !existsSync(new URL('../src/lib/components/UsageFilterMenu.svelte', import.meta.url)),
     'the display menu component is back'
   );
-});
-
-// The calendar opens on TODAY at its end edge (owner directive, issue 127).
-// Cells run oldest first, so a strip that opens where its content begins
-// opens on January and hides every recent day off the right edge — which is
-// the defect, not a preference.
-test('the grid opens on its newest column and lets history scroll back', () => {
-  assert.match(
-    grid,
-    /node\.scrollLeft = node\.scrollWidth/,
-    'the strip must be scrolled to its end edge, where the newest column is'
-  );
-  // Keyed on the column COUNT, not on every payload: a sixty-second refresh
-  // that returns the same window must not yank a reader who scrolled back.
-  assert.match(
-    grid,
-    /count === anchoredColumns/,
-    'a refresh returning the same window must not re-anchor a reader who scrolled back'
-  );
-  // And re-anchored when the BOX changes width, because the scroll position
-  // that means "the end" is a function of that box: a card in this stack
-  // genuinely resizes (a rotation, a viewport change), and a strip anchored
-  // before the resize is left showing the middle of its history afterwards.
-  assert.match(grid, /node\.clientWidth === anchoredWidth/);
-  assert.match(grid, /new ResizeObserver\(/);
-  // Instantly. A smooth scroll here would be motion nobody asked for, on a
-  // page whose animations are all inside a no-preference query.
-  assert.doesNotMatch(grid, /scroll-behavior|scrollTo\(/, 'the opening position is not a journey');
-  /* And the SAME rule for the second scroll this component performs (issue
-     219 review round 2): the keyboard cursor is brought into its scrollport
-     on every move, which is a scroll on a reader's own key press and is
-     therefore exactly the place an unasked-for animation would appear. The
-     option is REQUIRED rather than left to the default, because the default
-     resolves to whatever scrolling mode the stylesheet gives the element —
-     so an omitted option is a reduced-motion promise held by a file that
-     cannot see the one that would break it. Every call is checked, not the
-     first, so a second one added later inherits the rule. */
-  const reveals = [...grid.matchAll(/scrollIntoView\(([^)]*)\)/g)];
-  assert.ok(reveals.length > 0, 'nothing scrolls the keyboard cursor into view any more');
-  for (const [call, options] of reveals) {
-    assert.match(
-      options,
-      /behavior:\s*'instant'/,
-      `${call} leaves its scrolling mode to the stylesheet; a cursor step is never animated`
-    );
-    // `nearest` on both axes, or a cursor step drags the page and the strip
-    // to centre a cell that was already perfectly visible.
-    assert.match(options, /block:\s*'nearest'/, `${call} does not leave a visible cell alone`);
-    assert.match(options, /inline:\s*'nearest'/, `${call} does not leave a visible cell alone`);
-  }
 });
 
 // INVERTED by the owner's ruling of 2026-08-24. This pin used to REQUIRE the
@@ -1234,21 +1227,16 @@ test('the grid opens on its newest column and lets history scroll back', () => {
  * payload IN FLIGHT and holds exactly the box the data will fill, while a
  * source that has already answered and said it keeps no daily record gets no
  * held-open box at all — nothing is on its way there, so the box would be a
- * permanent hole. What changed is only where each side lives: the calendar's
- * own reserve is the one grid the commits block always renders, waiting for
- * the contributions payload, and a token source with no series contributes no
- * SET, so there is no segment to press and no grid drawn on its behalf.
+ * permanent hole. What changed is only where each side lives: a token source
+ * with no series contributes no SET, so there is no layer to press and no
+ * calendar drawn on its behalf (the Chronicle since 2026-10-16).
  *
  * An earlier draft of this pin accepted a set with no columns and an honest
  * caption. That is the same arrangement wearing better words: a pressable
  * segment over 371 placeholder cells and a note underneath. The stronger
  * claim is the one the ruling actually made.
  */
-test('a source with no series is offered no segment, while the calendar keeps its reserve', () => {
-  // The grid renders whenever there are sets to choose between, because the
-  // contributions calendar is one of them and its payload is genuinely in
-  // flight — that reserve is measured in the rendering lanes.
-  assert.match(commitLog, /\{#if sets\.length > 0 && active\}/);
+test('a source with no series is offered no calendar set', () => {
   const { sets } = contributionCalendarProps([
     null,
     {
@@ -1285,23 +1273,8 @@ test('a source with no series is offered no segment, while the calendar keeps it
   const plotted = drawn.find((set) => set.key === 'anthropic');
   assert.ok(plotted, 'a source with days to plot lost its segment');
   assert.ok(plotted.columns.length > 0, 'a real series draws no window');
-  // The board never asks the shared component for its empty treatment,
-  // because the board draws no graph at all.
-  assert.doesNotMatch(ledgerBoard, /emptyNote=/, 'the board asks for an empty grid again');
-  assert.doesNotMatch(ledgerBoard, /pendingColumns/, 'the board reaches for placeholder columns');
-  // The component KEEPS that treatment for the caller whose data is coming.
-  assert.match(grid, /pendingColumns/, 'the reserve for a payload in flight lost its chrome');
-  assert.match(
-    grid,
-    /<span class="grid-cell" data-grid-pending data-grid-absent="true"><\/span>/,
-    'every placeholder cell is absent — no value, no date, no level'
-  );
-  assert.match(grid, /<div class="grid-cells" aria-hidden="true">/);
-  assert.match(grid, /\.grid-empty\s*\{[^}]*position:\s*absolute/);
-  // Exactly one caller may ask for it, and it is the one whose data is coming.
-  assert.match(commitLog, /emptyNote=/, 'the calendar stopped labelling its waiting state');
   // The retired sentence must not come back anywhere.
-  for (const [name, source] of Object.entries({ grid, ledgerBoard, commitLog })) {
+  for (const [name, source] of Object.entries({ chronicle })) {
     assert.doesNotMatch(
       source,
       /live refresh is off/,
@@ -1316,10 +1289,8 @@ test('panel sources stay local-origin', () => {
     ticker,
     panelsSource,
     iconsSource,
-    grid,
     gridSource,
-    commitLog,
-    ledgerBoard,
+    chronicle,
     blockHost,
     pageSection,
     manifest,

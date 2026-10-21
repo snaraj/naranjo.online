@@ -1,8 +1,9 @@
 <!-- Ticker is the scrolling strip (owner directive, 2026-09-03, issue 287): a
-  ruled band whose items travel from right to left, led by an inverted item
-  carrying the collection's figure and nothing else — the name and totals it
-  used to print were cut as noise (owner directive, 2026-09-04, issue 292);
-  the panel head above already names the collection.
+  band whose items travel from right to left. It has no lead: the inverted
+  item that once carried the collection's figure lost its name and totals as
+  noise (owner directive, 2026-09-04, issue 292), and then the figure and its
+  mark too (owner, 2026-10-19: "remove this"); the panel head above already
+  names the collection.
 
   THE ITEMS ARE WRITTEN TWICE AND THAT IS THE MECHANISM. A strip that
   translates from 0 to -50% of a row containing its content twice is seamless
@@ -29,11 +30,13 @@
   import type { TipDetail } from '../tooltip.ts';
   import DetailTip from './DetailTip.svelte';
   import FeedCard from './FeedCard.svelte';
-  import Icon from './Icon.svelte';
   import PanelShell from './PanelShell.svelte';
 
-  let { title, status, generatedAt, items, emptyNote, label, mark }: TickerProps =
-    $props();
+  /* The strip prints no heading (owner direction, 2026-10-16): it is one of
+     the trackers, inside their frame, not a panel of its own. The envelope's
+     title still names the collection for the adapter; the strip's own label
+     is its accessible name. */
+  let { status, generatedAt, items, emptyNote, label }: TickerProps = $props();
 
   /* ONE DETAIL FOR THE WHOLE STRIP, and the reason is not economy — it is
      that a detail rendered INSIDE this band cannot be positioned at all.
@@ -87,7 +90,7 @@
   );
 </script>
 
-<PanelShell {title} {status} {generatedAt}>
+<PanelShell {status} {generatedAt}>
   <FeedCard variant="strip">
     {#if items.length === 0}
       <p class="ticker-note">{emptyNote}</p>
@@ -102,32 +105,6 @@
         <div class="ticker-run">
           {#each [false, true] as duplicate (duplicate)}
             <div class="ticker-lane" aria-hidden={duplicate}>
-              <span class="ticker-lead">
-                <!-- The mark is the collection's own figure, handed in as data
-                  by the binding layer with its file's dimensions, so the lead
-                  reserves the box before the picture arrives (owner directive,
-                  2026-09-04, issue 292). Decorative: the name beside it is the
-                  accessible one. -->
-                {#if mark}
-                  <img
-                    class="ticker-mark"
-                    src={mark.url}
-                    alt=""
-                    width={mark.width}
-                    height={mark.height}
-                    decoding="async" />
-                  <!-- A second mark, from the icon family, when the binding
-                    hands one over (owner design decision, 2026-09-11, issue
-                    313). It travels with the picture rather than being named
-                    here, because a strip that drew a fixed glyph would be a
-                    strip with an opinion about what it counts — the same rule
-                    that keeps every other domain word out of this file. Both
-                    marks are decorative; the strip's label is its name. -->
-                  {#if mark.glyph}
-                    <Icon name={mark.glyph} slot="row" />
-                  {/if}
-                {/if}
-              </span>
               {#each items as item, index (item.key)}
                 <span
                   class="ticker-item"

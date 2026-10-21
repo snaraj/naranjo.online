@@ -1,65 +1,86 @@
 <script lang="ts">
   import ColumnHandles from './lib/components/ColumnHandles.svelte';
-  import PageHeader from './lib/components/PageHeader.svelte';
+  import JMark from './lib/components/JMark.svelte';
+  import NightSky from './lib/components/NightSky.svelte';
   import PageSection from './lib/components/PageSection.svelte';
-  import TextureBand from './lib/components/TextureBand.svelte';
-  import { bandTextures } from './lib/textureAssets.ts';
-  import { bandMode, documentPrefersDark, prefersDarkQuery, textureFor } from './lib/textures.ts';
-  import { syncThemeColor } from './lib/themes.ts';
+  import Torches from './lib/components/Torches.svelte';
+  import { syncThemeColor } from './lib/themeColor.ts';
   import { sectionOrdinal } from './lib/blocks.ts';
+  import type { SkyPhase } from './lib/sky.ts';
   import { page } from './page.ts';
 
-  /* THE BAND'S STATE LIVES HERE, and that is deliberate: the page opens and
-     closes on the SAME picture, so the two bands are two views of one value.
-     Held by the page's own chrome rather than in a module store, because it is
-     chrome — the reading mode's own picture, persisted nowhere, which is why
-     it needs no cookie, no storage and no consent question. The cycle box is
-     gone (owner directive, 2026-09-04, issue 292): a mode has one picture, and
-     the only thing that changes it is the mode. */
-  let mode = $state(bandMode());
-  let prefersDark = $state(documentPrefersDark());
+  /* A REFRESH LOADS AT THE TOP (owner report, issue 171). A browser remembers a
+     scroll offset per history entry, independent of the URL, and restores it on
+     a reload — so a reader who refreshed mid-page was put back mid-page rather
+     than on the name. Turning that memory off once is what makes a refresh load
+     the page as a first visit would. It lived in the section nav, beside the
+     fragment handling it was found with; the nav is gone (owner direction,
+     2026-10-16: "do away with it for now") and the behaviour is the page's, so
+     it lives with the page. */
+  if (typeof history !== 'undefined' && 'scrollRestoration' in history) {
+    history.scrollRestoration = 'manual';
+  }
 
-  const texture = $derived(textureFor(mode, prefersDark));
+  /* THE NIGHT (owner, 2026-10-19: "always set it to night by default", then,
+     of the control that turned it to day, "do away with this all together but
+     keep the logic"). The page is the night on every visit. The day stays
+     whole behind this one constant — the stylesheet's day palette keyed on
+     data-sky, the day sky, the torches put out — so a control that brings it
+     back writes a phase here and touches nothing else. The phase is written on
+     the root as data-sky, which is what the stylesheet's night block keys on.
 
-  /* The reading mode is an ATTRIBUTE on the document, written by the toggle
-     (lib/themes.ts) and by the origin's own stamp — never by this component —
-     so the band watches the attribute rather than being told. That keeps the
-     one mechanism the whole page already agrees on: the mode is what the
-     document says it is. */
+     THE BROWSER'S TOOLBARS WEAR THE SHEET (owner directive, 2026-09-04, issue
+     294), so they are told the sheet's colour once the phase is written. The
+     read follows the write in the same task, and reading a computed style
+     applies the new rules first. */
+  const phase: SkyPhase = 'night';
   $effect(() => {
-    const root = document.documentElement;
-    const observer = new MutationObserver(() => {
-      mode = bandMode();
-    });
-    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
-    return () => observer.disconnect();
-  });
-
-  /* And the other half of `auto`: an unstamped document follows the device, so
-     a device that changes its mind mid-visit changes the band with it. */
-  $effect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      return;
-    }
-    const query = window.matchMedia(prefersDarkQuery);
-    const onChange = (): void => {
-      prefersDark = query.matches;
-      /* The sheet's colour changed under auto, so the browser's toolbars
-         follow it (lib/themes.ts); a chosen mode is synced by the toggle.
-         ONE FRAME LATER, measured: the change event fires before the
-         stylesheet's own media query has been re-evaluated, so a read inside
-         the handler still returns the colour the sheet is leaving. */
-      requestAnimationFrame(syncThemeColor);
-    };
-    query.addEventListener('change', onChange);
-    return () => query.removeEventListener('change', onChange);
-  });
-
-  /* The first sync: the origin stamped the mode before any script ran, so
-     the toolbars are told the sheet's colour once at hydration and then only
-     when it changes (owner directive, 2026-09-04, issue 294). */
-  $effect(() => {
+    document.documentElement.dataset.sky = phase;
     syncThemeColor();
+  });
+
+  /* J OVER THE j THE ENGINE DREW (the review of fc87a89). The stylesheet seats
+     J by Instrument Serif's own advances (--j-stem). When that face missed the
+     mount (main.ts marks the display stack), the name is set in the device's
+     serif, whose j and o are wider, and J hung 0.17em right of the stem
+     (measured: 20.7px at 1440px). So then, and only then, the stem is found
+     where it was drawn: the dotless j drawn once in the face the engine chose
+     for it, its ink read half way up the x-height, and J's offset from his
+     seat written in pixels. An effect runs before the browser paints, so he
+     is never seen elsewhere, and he follows the name when it changes size. */
+  $effect(() => {
+    const name = document.getElementById('page-title');
+    const letter = name?.querySelector('.page-name-j');
+    const seat = name?.querySelector('.page-j-seat');
+    if (!name || !letter || !seat || document.documentElement.getAttribute('data-face-display') !== 'fallback') return;
+    const place = (): void => {
+      const art = getComputedStyle(letter, '::before');
+      const size = parseFloat(art.fontSize);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = Math.ceil(size * 2);
+      const ink = canvas.getContext('2d', { willReadFrequently: true });
+      if (ink === null || !(size > 0)) return;
+      ink.font = `${art.fontWeight} ${size}px ${art.fontFamily}`;
+      const pad = size / 2;
+      const base = size * 1.5;
+      ink.fillText(String.fromCodePoint(0x237), pad, base);
+      const row = ink.getImageData(0, Math.round(base - ink.measureText('x').actualBoundingBoxAscent / 2), canvas.width, 1).data;
+      let first = -1;
+      let last = -1;
+      for (let x = 0; x < canvas.width; x += 1) {
+        if (row[x * 4 + 3] > 128) {
+          if (first < 0) first = x;
+          last = x;
+        }
+      }
+      if (first < 0) return;
+      const stem = letter.getBoundingClientRect().left + (first + last) / 2 - pad;
+      name.style.setProperty('--j-stem', `${(stem - seat.getBoundingClientRect().left).toFixed(2)}px`);
+    };
+    place();
+    const watcher = new ResizeObserver(place);
+    watcher.observe(name);
+    return () => watcher.disconnect();
   });
 </script>
 
@@ -76,23 +97,36 @@
   owner asked for, and the panels refresh themselves (issue 179), so the
   gesture, its indicator and its keyboard control are gone rather than
   re-tuned. -->
-<PageHeader />
+<!-- The sky behind the page (owner direction, 2026-10-16; the night or the day
+  since 2026-10-19). It is fixed and decorative, so it takes no room and cannot
+  move anything above it. -->
+<NightSky {phase} />
 
-<!-- THE LEDGER (owner directive, 2026-09-03, issue 287). The page is one
-  ruled sheet: a picture band under the chrome row, the name set large across
-  the column with a rule drawn under it, five numbered sections, a second band
-  closing the sheet, and a footer.
+<!-- THE SHEET OPENS ON THE NAME (owner direction, 2026-10-16: "remove the stock
+  image from this only leave it with my name, also find a better way to work
+  the navigation bar away from the top of the screen and just do away with it
+  for now, put J elsewhere"). There is no chrome row above the sheet and no
+  picture band at either end of it: the name and the sections. No footer
+  either (owner, 2026-10-19): the version mark and the reading-mode control
+  went, and the page is the night on every visit.
 
   What the sections ARE lives in src/page.ts, the manifest (owner directive,
   issue 165): this file renders that array and is otherwise inert. Adding a
   block or reordering the page happens there; this file changes when the page's
-  CHROME changes, nothing else — and the two bands, the masthead and the footer
-  are exactly that. -->
+  CHROME changes, nothing else — and the masthead and J are exactly that. Every section keeps its id, so a shared .../#trackers still lands on
+  its section with no nav on the page to have linked it. -->
 <main aria-labelledby="page-title">
-  <TextureBand layers={bandTextures} active={texture.file} />
-
   <div class="page-intro">
-    <h1 id="page-title">Samuel Naranjo</h1>
+    <!-- J IS THE DOT OF THE J (owner, 2026-10-20, picking "the dot of the j,
+      stacked" of six ways to set the name with J in a place of his own). The
+      name is its two words on two centred lines, and its j is drawn dotless
+      so J can hover where the dot would be. The text is still exactly the
+      name — the j is a j, and the dotless letter is only drawn over it
+      (styles.css, the name) — and J is a picture inside a seat with no
+      size, so the heading reads and lays out just as the static shell's does.
+      He is aria-hidden inside his own component, so the heading's accessible
+      name is still exactly the name. -->
+    <h1 id="page-title"><span class="page-name-line">Samuel</span> <span class="page-name-line">Naran<span class="page-name-j">j</span>o<span class="page-j-seat"><span class="page-j"><JMark /></span></span></span></h1>
     <!-- The rule under the name is drawn rather than declared: a border would
       simply be there, and the owner asked for it to arrive. Under reduced
       motion it is already drawn on the first frame — the same rule, without
@@ -107,12 +141,6 @@
     <PageSection {section} ordinal={sectionOrdinal(position)} />
   {/each}
 
-  <TextureBand layers={bandTextures} active={texture.file} />
-
-  <footer class="page-footer">
-    <span class="footer-mark">naranjo.online v{__SITE_VERSION__}</span>
-  </footer>
-
   <!-- The reader's grip on the column (owner directive, 2026-08-24). It sits
     INSIDE main because main is the column: the two handles are drawn against
     its edges, so the element that resizes is also the box they measure
@@ -121,4 +149,29 @@
     rendered only where there is room for them — which is why a phone never
     receives them at all. -->
   <ColumnHandles />
+
+  <!-- The torches on the frame's sides (owner, 2026-10-19), burning only at
+    night. Inside main for the same reason as the handles: main's border is the
+    frame they stand on, so they are placed against the box they decorate.
+    Scenery, out of flow, clipped to the sheet. -->
+  <Torches lit={phase === 'night'} />
 </main>
+
+<style>
+  /* From there he is carried back over the j's stem and lifted so his feet
+     hover a breath over the x-height (styles.css, the name, states the face's
+     facts as --j-stem and --j-hover; his feet are 0.1125 of his square above
+     its foot). He takes the name's size back, since his seat has none, so his
+     size and his place are shares of the name's own. He is out of the flow,
+     so his arrival moves nothing the static shell (index.html) painted before
+     he existed; his square is the --j-size his component reads as the box it
+     reserves. */
+  .page-j {
+    position: absolute;
+    inset-inline-start: calc(var(--j-stem) - var(--j-size) / 2);
+    inset-block-end: calc(var(--j-hover) - 0.1125 * var(--j-size));
+    font-size: var(--keep-name-size);
+    line-height: 0;
+    pointer-events: none;
+  }
+</style>

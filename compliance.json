@@ -11,12 +11,6 @@
   ],
   "storage": [
     {
-      "name": "theme",
-      "kind": "cookie",
-      "writtenWhen": "visitor-action",
-      "purpose": "The reading mode a visitor picked, so the next page renders in it"
-    },
-    {
       "name": "page-column-width",
       "kind": "localStorage",
       "writtenWhen": "visitor-action",

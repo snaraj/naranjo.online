@@ -266,3 +266,58 @@ func TestSnapshotDataSurvivesCanonicalization(t *testing.T) {
 		t.Errorf("present values did not survive canonicalization: %+v", payload.Bosses[1])
 	}
 }
+
+// TestEveryShippedUsageSourceShowsTheSameAccounting is the owner's parity
+// directive (2026-10-16: capture the second tool's usage "in parity with" the
+// first's) made a pin. The origin can never ADD a tile or a per-model section
+// by push — overlayCapturedStats and overlayDerivedStats refresh only tiles
+// the snapshot ships, and admitModelStats discards a split for a source whose
+// snapshot ships none — so a source shipped without them could never show
+// them, whatever its producer measured. That is exactly how the second source
+// sat with five tiles beside the first's twelve and no model split. So every
+// source the token-usage snapshot ships carries every captured lifetime-class
+// tile and every series-derived tile, each in the unit its closed vocabulary
+// defines, and a per-model lifetime split. Derived from the two vocabularies
+// rather than transcribed, so a key added to either moves this pin with it.
+func TestEveryShippedUsageSourceShowsTheSameAccounting(t *testing.T) {
+	t.Parallel()
+	loaded, err := SnapshotSource{Name: "snapshots/token-usage.json"}.load(snapshotFiles, KindTokenUsageV2)
+	if err != nil {
+		t.Fatalf("load token snapshot: %v", err)
+	}
+	var payload TokenUsageData
+	if err := decodeStrict(loaded.data, &payload); err != nil {
+		t.Fatalf("decode token snapshot: %v", err)
+	}
+	// Non-vacuity: parity is a relation between sources, so a snapshot that
+	// shipped one would satisfy everything below without comparing anything.
+	if len(payload.Sources) < 2 {
+		t.Fatalf("the shipped snapshot carries %d source(s); parity needs at least two", len(payload.Sources))
+	}
+	required := make(map[string]string, len(usageSeriesStatKeys)+len(usageSeriesDerivedKeys))
+	for key, unit := range usageSeriesStatKeys {
+		required[key] = unit
+	}
+	for key, unit := range usageSeriesDerivedKeys {
+		required[key] = unit
+	}
+	for _, source := range payload.Sources {
+		shipped := make(map[string]string, len(source.Stats))
+		for _, stat := range source.Stats {
+			shipped[stat.Key] = stat.Unit
+		}
+		for key, unit := range required {
+			got, ok := shipped[key]
+			if !ok {
+				t.Errorf("snapshot source %q ships no %q tile; a push can never add one, so the page could never show it", source.Label, key)
+				continue
+			}
+			if got != unit {
+				t.Errorf("snapshot source %q ships its %q tile in %q; the closed vocabulary defines %q", source.Label, key, got, unit)
+			}
+		}
+		if len(source.ModelStats) == 0 {
+			t.Errorf("snapshot source %q ships no per-model lifetime split; a push can never add one", source.Label)
+		}
+	}
+}

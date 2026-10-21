@@ -105,7 +105,38 @@ the admission window, its slack and its skew can touch) at their widest
 figures — measures **14,667 bytes** served, 116,405 under the ceiling.
 Nothing a live round can produce is larger, because every term is at the bound
 its own admission enforces. `TestActivityPayloadFitsTheOwnerBudget` builds it
-and fails if it grows past 15,000 without somebody re-measuring.
+and fails if it grows past its recorded ceiling without somebody re-measuring.
+
+Re-measured 2026-10-16, when the payload gained `commitWeeks` and
+`totalCommits` (the commits pushed each day, read in the calendar's own
+request): the commit weeks take the calendar weeks' own shape and a day's
+commits never exceed that day's contributions, so the widest commit cell is
+the widest calendar cell. The maximal document now measures **17,259 bytes**,
+113,813 under the ceiling, and the pinned ceiling is 17,500.
+
+The calendar ANSWER that carries those commit buckets is bounded separately,
+against the calendar spec's own cap. A single collection over the year could
+not carry the buckets — the upstream pages a repository's days at 100, and the
+first live capture found two repositories with 163 and 148 — so the commit half
+is asked for in four aliased sub-collections, thirteen weeks each, chained from
+the calendar's own `$from` to its `$to` through three seams computed from that
+same `$from` (no sub-window reports more than 93 days, so no page can fill).
+Both sub-windows meeting at a seam report the seam's day, either whole or split
+at the seam instant; the mapper counts equal reports once and adds unequal
+halves, and accepts the result only when the placed days equal the calendar
+collection's own commit total for the whole window, which a day counted twice
+or a half dropped cannot. The worst case is four times the old one: in every
+sub-window every repository's whole page at its bound (25 repositories, 100
+buckets each, five-digit counts), beside the widest calendar this package
+admits, each page carrying its `pageInfo { hasNextPage }` (how a cut page
+is told: a repository's `totalCount` is its commit count, not its bucket
+count, and its buckets must add up to it). With the query renaming each
+bucket's two fields to `at` and `count`, that measures **469,424 bytes**, so
+the calendar cap rose from 262,144 to 524,288 — the shared bound, no wider —
+leaving 54,864 bytes of headroom.
+`TestTheWorstCaseCalendarAnswerFitsItsByteCap` fails if it ever stops fitting,
+because an answer over the cap would refuse the calendar itself rather than
+only its commit figure.
 
 `coding-projects/v2` replaces `coding-projects/v1`: it carries `closedPulls`,
 `release` and `pinned`, and no longer carries `openIssues`/`openPulls` or the
@@ -131,9 +162,11 @@ producer's worst-case transient read did not grow when its shape changed.
 
 A progressive value (a dynamic viewport unit, `env()`, `color-mix()`) must
 have a fallback under it, because an unsupported value is DROPPED — so an
-unguarded one degrades to nothing rather than to less. A reading-mode block
-may declare only custom properties and `color-scheme`, which is what makes the
-zero-CLS theme switch structural instead of a promise.
+unguarded one degrades to nothing rather than to less. The night block (the
+`:root:not([data-sky='day'])` mapping every visit is, over the day palette kept
+behind `data-sky="day"`) may declare only custom properties and
+`color-scheme`, which is what keeps a turn of the scene zero-CLS by structure
+instead of by promise.
 
 Both are swept across `styles.css` and every component `<style>` alike,
 because a stylesheet-only sweep is blind to most of its own subject.

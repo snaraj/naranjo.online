@@ -57,8 +57,6 @@ import {
   activityEntriesNote,
   activityPanelId,
   activityStripEmptyNote,
-  commitRepoLinkLabel,
-  commitRepoUrl,
   commitShaUrl,
   commitTitleLink,
   isValidCommitSha,
@@ -106,14 +104,16 @@ export const commitLogListId = 'commits-log';
 
 /* HOW MANY ROWS THE LOG SHOWS ON A PHONE BEFORE THE READER ASKS FOR MORE
  * (owner ruling, 2026-09-12: at that width the log is "quite busy ... an
- * endless scroll field that I have to fight out of"). A phone row is two lines
- * tall, so five of them is already most of a screen; the rest arrive on a
- * press, in the page's own scroll, rather than inside a box a finger has to
- * escape.
+ * endless scroll field that I have to fight out of"). Five entries is already
+ * most of a screen; the rest arrive on a press, in the page's own scroll,
+ * rather than inside a box a finger has to escape. It is also the column's
+ * own count since the owner's direction of 2026-10-16 (`shownProjectRows`), so
+ * a phone shows exactly what a desktop's reserve shows before either scrolls.
  *
- * ONE constant, TWO seats: this number and the stylesheet's collapsed reserve
- * are the same fact, and tests/activity.test.mjs recomputes the reserve's calc
- * from this constant so the box and the slice cannot drift apart. */
+ * ONE constant, TWO seats: this number and the component's collapsed reserve
+ * (LedgerSpread.svelte) are the same fact, and tests/activity.test.mjs
+ * recomputes the reserve's calc from this constant so the box and the slice
+ * cannot drift apart. */
 export const phoneLogRows = 5;
 
 /* The control's two words. "show all N" carries the figure because a reader
@@ -126,9 +126,10 @@ export function logExpandWord(rows: number): string {
   return `show all ${rows}`;
 }
 
-/* The commit column's own ruled head. The table beside it names five columns;
- * this one names the whole stream, because the owner's ruling is that it is
- * every repository's record rather than a selection (issue #315). */
+/* The commit column's own ruled head. It names the whole stream, because the
+ * owner's ruling is that it is every repository's record rather than a
+ * selection (issue #315) — and since the owner's direction of 2026-10-16 the
+ * column beside it wears one word too, rather than a head per figure. */
 export const commitColumnHead = 'Commits · every repository';
 
 /* How many characters of a commit identity the log prints. Seven is the
@@ -282,10 +283,10 @@ function privateRow(day: VCSPrivateDay, now: Date): CommitLogRow {
   return {
     key: `private-${day.date}`,
     age: panelAge(privateInstant(day), now),
-    /* No href on either half: a private row has no destination this page may
-       offer, and an anchor pointing nowhere is a promise the page cannot
-       keep. The component renders plain text for a null href. */
-    source: { text: privateRowLabel, href: null, label: privateRowLabel },
+    /* No href: a private row has no destination this page may offer, and an
+       anchor pointing nowhere is a promise the page cannot keep. The
+       component renders the entry as plain text for a null href. */
+    source: privateRowLabel,
     title: { text, href: null, label: text },
     /* And no identity. A private commit's sha is exactly the kind of fact
        that must never reach the wire, so there is nothing to shorten. */
@@ -293,15 +294,20 @@ function privateRow(day: VCSPrivateDay, now: Date): CommitLogRow {
   };
 }
 
+/* A public entry. The repository is TEXT on the supporting line (owner
+ * direction, 2026-10-16): the entry is one link, the title's, and the whole
+ * two-line entry is its target — a second link on the same entry could not
+ * be a finger's width tall without the entry growing a line, which is the
+ * height the direction asked the section not to spend. The repository stays
+ * one press away: the commit's own page names and links it, and the pinned
+ * ones are entries in the column beside this one. The text is the payload's
+ * name verbatim; it reaches the page as text, never as an address, so a
+ * hostile name has nothing to become. */
 function publicRow(commit: VCSCommit, index: number, now: Date): CommitLogRow {
   return {
     key: `${commit.repo}-${commit.sha}-${index}`,
     age: panelAge(commit.at, now),
-    source: {
-      text: commit.repo,
-      href: commitRepoUrl(commit.repo),
-      label: commitRepoLinkLabel(commit.repo)
-    },
+    source: commit.repo,
     title: commitTitleLink(commit),
     mark: commitShaUrl(commit) === null ? noMark : commitMark(commit.sha)
   };
@@ -382,9 +388,11 @@ export function contributionCalendarProps(
   };
 }
 
-/* THE SHEET'S PAIRED SECTION (owner design decision, 2026-09-11, issue 318):
- * the repositories table from lib/projects.ts on the left, this module's
- * commit rows on the right, in one props bag because they are one section.
+/* THE SHEET'S PAIRED SECTION (owner design decision, 2026-09-11, issue 318;
+ * named "Ongoing Work" and re-cut as two-line entries by the owner's direction
+ * of 2026-10-16): the repositories from lib/projects.ts on the left, this
+ * module's commit entries on the right, in one props bag because they are one
+ * section.
  *
  * The two halves are handed through rather than rebuilt: the table half IS
  * `projectTableProps`, with every rule it already proved — the payload's

@@ -904,9 +904,10 @@ implements them independently — patterns may rhyme, but code, values,
 and tests re-derive per repository (requirement 5):
 
 - **Design tokens only.** `styles.css` is a CSS custom-property token
-  layer: the light palette on `:root`, every further reading mode one
-  `[data-theme]` override block, `prefers-color-scheme` mapping the
-  dark tokens absent an explicit choice. Components consume tokens —
+  layer: the day palette on `:root`, and the night one mapped over it by a
+  `:root:not([data-sky='day'])` block — every visit is the night whatever
+  the device prefers, and the day is kept whole behind `data-sky="day"` with
+  no control on the page (owner, 2026-10-19). Components consume tokens —
   never raw palette literals.
 - **Dataviz floors.** A value is never encoded by color alone: pair
   color with position, text, or shape, and use palettes validated for
@@ -926,9 +927,9 @@ and tests re-derive per repository (requirement 5):
   a progressive value (a dynamic viewport unit, `env()`, `color-mix()`)
   must have a fallback under it, either an earlier plain declaration of
   the same property or an `@supports` block whose base sits outside the
-  guard; and a reading-mode block may declare only custom properties and
-  `color-scheme`, which is what makes the zero-CLS theme switch structural
-  instead of a promise (`docs/panels-invariants.md`).
+  guard; and the night block may declare only custom properties and
+  `color-scheme`, which is what keeps a turn of the scene zero-CLS by
+  structure instead of by promise (`docs/panels-invariants.md`).
 - **Rendering lanes, stage 2** (issue #26): `browser-lanes.yml` drives the
   built binary through Chromium (Chrome and Edge), Firefox and WebKit
   (Safari and every iOS browser), each at a desktop viewport plus an
@@ -1038,8 +1039,9 @@ Structural promises of the panels subsystem, pinned by
   capability or deployment state that does not exist yet.
 - **Attribution for third-party assets.** Every third-party asset lands
   with its reviewed license; any webfont lands together with its license
-  in `frontend/src/assets/fonts/` (JetBrains Mono and Archivo ship there
-  beside their OFL texts). Where Jagex game art or intellectual property is
+  in `frontend/src/assets/fonts/` (JetBrains Mono, Archivo, Instrument
+  Serif, Cormorant Garamond and UnifrakturMaguntia ship there beside their
+  OFL texts). Where Jagex game art or intellectual property is
   used — the OSRS boss-log panel — the exact Fan Content Policy notice is
   recorded in `ATTRIBUTION.md`, word for word, pinned by a frontend test. The
   page itself does not print it (owner directive, 2026-09-04, issue #292).

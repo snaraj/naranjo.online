@@ -4230,11 +4230,17 @@ class CaptureTest(unittest.TestCase):
             {"peak-day": 135, "current-streak": 1, "longest-streak": 1, "active-days": 2, "tracked-days": 3},
         )
         # No activity cache means no lifetime accounting to carry, so the
-        # captured-stats section holds exactly the one figure a WALK can
-        # measure on its own (issue #267): the longest session span. Every
-        # other lifetime-class figure is the tool's accounting and stays
-        # absent rather than zero-filled.
-        self.assertEqual(set(section["stats"]), {"longest-session"})
+        # captured-stats section holds what the WALK measures on its own: the
+        # four class tiles summed over every day it splits (both days here,
+        # 10+3 in, 5+4 out) and the longest session span. No lifetime — a
+        # walk cannot know what came before its record — and no session
+        # tally, because this record shape declares no session and a count of
+        # files would overstate one. The per-model split is absent too: every
+        # token here folds to the residual, which says nothing the class
+        # tiles do not.
+        stats = dict(section["stats"])
+        self.assertGreater(stats.pop("longest-session"), 0)
+        self.assertEqual(stats, {"input": 13, "output": 9, "cache-read": 100, "cache-write": 20})
         self.assertNotIn("modelStats", section)
         self.assertEqual(counters["files"], 1)
         self.assertEqual(counters["duplicates"], 1)
@@ -6126,6 +6132,525 @@ class LedgerIdentityGuardTest(unittest.TestCase):
         for block, needle in cases:
             with self.subTest(needle=needle):
                 self.refuses(block, needle)
+
+
+# The running-totals fields, spelled once for the fixtures below.
+_RT = capture_usage_series
+
+
+def counted_line(stamp, cumulative, turn=None):
+    """One running-totals reading: its cumulative fields and, when given, the
+    figures it reports for its own latest turn.
+
+    `cumulative` and `turn` name the record's own field names, unset ones are
+    zero. The turn figures are what `opening_balance` reads and nothing sums.
+    """
+    usage = {field: 0 for field in _RT.RUNNING_FIELDS}
+    usage.update(cumulative)
+    info = {_RT.RUNNING_USAGE_KEY: usage}
+    if turn is not None:
+        reported = {field: 0 for field in _RT.RUNNING_FIELDS}
+        reported.update(turn)
+        info[_RT.RUNNING_TURN_KEY] = reported
+    return json.dumps(
+        {"timestamp": stamp, "type": "event_msg", "payload": {"type": "token_count", "info": info}}
+    )
+
+
+def five_way(total_input, cached, written, total_output, reasoning):
+    """Cumulative fields that partition five ways: the subsets inside their parents."""
+    return {
+        _RT.RUNNING_INPUT_FIELD: total_input,
+        _RT.RUNNING_CACHE_READ_FIELD: cached,
+        _RT.RUNNING_CACHE_WRITE_FIELD: written,
+        _RT.RUNNING_OUTPUT_FIELD: total_output,
+        _RT.RUNNING_REASONING_FIELD: reasoning,
+        _RT.RUNNING_TOTAL_FIELD: total_input + total_output,
+    }
+
+
+def declaration_line(parent=None, stamp="2026-08-20T09:00:00.000Z"):
+    """A session declaration, naming the thread that spawned it when `parent` is given."""
+    payload = {
+        "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "cwd": "/home/someone/work/a-private-project",
+        "originator": "a-private-tool",
+    }
+    if parent is not None:
+        payload[_RT.RUNNING_PARENT_FIELD] = parent
+    return json.dumps({"timestamp": stamp, "type": _RT.RUNNING_SESSION_TYPE, "payload": payload})
+
+
+def exact_identifier(member):
+    """An identifier the vocabulary folds to `member` by its EXACT rule."""
+    for identifier, key in _RT.MODEL_IDS.items():
+        if key == member:
+            return identifier
+    raise AssertionError("no exact identifier folds to %s" % member)
+
+
+def walk_running(files, carried=None):
+    """Walk {relative path: [lines]} with the running-totals reader."""
+    counters = _RT.new_counters()
+    sessions = []
+    with tempfile.TemporaryDirectory() as root:
+        for name, lines in files.items():
+            path = pathlib.Path(root) / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        rows = list(
+            _RT.read_running_totals(root, counters, sessions, scope=RUNNING_SCOPE, carried=carried)
+        )
+    return rows, counters, sessions
+
+
+class OpeningBalanceTest(unittest.TestCase):
+    """A file can open with an accounting it did not spend, and bills none of it.
+
+    Measured on the owner's tree (docs/usage-export.md): 98 review threads
+    were created from a compacted history and their FIRST reading carried
+    that history's running total — 4,121,447,105 tokens — written before any
+    turn of their own. Billing it as the file's first advance put tokens no
+    turn of the file spent on the day the thread was created. Each case below
+    pins one condition of the rule; dropping any one of them turns a case red.
+    """
+
+    MEMBER = EXACT_MEMBERS[0]
+    CARRIED = five_way(900, 800, 0, 100, 0)  # 1000, no turn of this file's
+    TURN = five_way(70, 60, 0, 10, 0)  # the 80 the reading reports as its turn
+    LATER = five_way(1000, 860, 0, 120, 0)  # one real turn of 120 later
+
+    def lines(self, first, declared_first=False):
+        model = turn_model_line(exact_identifier(self.MEMBER), stamp="2026-08-20T09:00:02.000Z")
+        body = [first, model, counted_line("2026-08-20T10:00:00.000Z", self.LATER)]
+        if declared_first:
+            body = [model, first, counted_line("2026-08-20T10:00:00.000Z", self.LATER)]
+        return [declaration_line(parent="p"), json.dumps({"type": "compacted"})] + body
+
+    def test_an_opening_balance_bills_nothing_and_the_file_bills_from_it(self):
+        carried = {}
+        rows, counters, _sessions = walk_running(
+            {
+                "day/review.jsonl": self.lines(
+                    counted_line("2026-08-20T09:00:01.000Z", self.CARRIED, self.TURN)
+                )
+            },
+            carried,
+        )
+        self.assertEqual([(day, total) for day, total, _p, _m, _i in rows], [("2026-08-20", 120)])
+        self.assertEqual(rows[0][3], self.MEMBER)
+        self.assertEqual(counters["opened"], 1)
+        # What the walk no longer bills, by day: the store's merge reads it.
+        self.assertEqual(carried, {"2026-08-20": 1000})
+
+    def test_a_reading_after_a_model_declaration_is_a_turn_and_bills(self):
+        # Once a model is declared a turn has run, so the same reading is that
+        # turn's usage, billed whole exactly as before.
+        rows, counters, _sessions = walk_running(
+            {
+                "day/review.jsonl": self.lines(
+                    counted_line("2026-08-20T09:00:03.000Z", self.CARRIED, self.TURN),
+                    declared_first=True,
+                )
+            }
+        )
+        self.assertEqual([total for _d, total, _p, _m, _i in rows], [1000, 120])
+        self.assertEqual(counters["opened"], 0)
+
+    def test_a_first_reading_whose_turn_is_the_whole_bills_whole(self):
+        # An ordinary first turn: the running total IS the turn it reports.
+        rows, counters, _sessions = walk_running(
+            {"day/fresh.jsonl": self.lines(counted_line("2026-08-20T09:00:01.000Z", self.CARRIED, self.CARRIED))}
+        )
+        self.assertEqual([total for _d, total, _p, _m, _i in rows], [1000, 120])
+        self.assertEqual(counters["opened"], 0)
+
+    def test_a_first_reading_that_reports_no_usable_turn_bills_whole(self):
+        # A journal that never states a turn figure — or states one that is not
+        # a count — has no witness for a balance, so nothing is set aside.
+        for turn in (None, {_RT.RUNNING_TOTAL_FIELD: True}, {_RT.RUNNING_TOTAL_FIELD: "80"},
+                     {_RT.RUNNING_TOTAL_FIELD: -1}, "80"):
+            with self.subTest(turn=turn):
+                line = json.loads(counted_line("2026-08-20T09:00:01.000Z", self.CARRIED, self.TURN))
+                if turn is None:
+                    del line["payload"]["info"][_RT.RUNNING_TURN_KEY]
+                else:
+                    line["payload"]["info"][_RT.RUNNING_TURN_KEY] = turn
+                rows, counters, _sessions = walk_running(
+                    {"day/journal.jsonl": self.lines(json.dumps(line))}
+                )
+                self.assertEqual([total for _d, total, _p, _m, _i in rows], [1000, 120])
+                self.assertEqual(counters["opened"], 0)
+
+    def test_only_a_files_first_reading_can_be_a_balance(self):
+        # A later reading whose running total exceeds its own turn is every
+        # ordinary advance there is; it bills its advance as it always did.
+        rows, counters, _sessions = walk_running(
+            {
+                "day/session.jsonl": [
+                    counted_line("2026-08-20T09:00:01.000Z", self.TURN, self.TURN),
+                    counted_line("2026-08-20T09:30:00.000Z", self.CARRIED, five_way(830, 740, 0, 90, 0)),
+                ]
+            }
+        )
+        self.assertEqual([total for _d, total, _p, _m, _i in rows], [80, 920])
+        self.assertEqual(counters["opened"], 0)
+
+    def test_each_file_opens_its_own_balance(self):
+        rows, counters, _sessions = walk_running(
+            {
+                "day/a.jsonl": self.lines(counted_line("2026-08-20T09:00:01.000Z", self.CARRIED, self.TURN)),
+                "day/b.jsonl": self.lines(counted_line("2026-08-20T09:00:01.000Z", self.CARRIED, self.TURN)),
+            }
+        )
+        self.assertEqual([total for _d, total, _p, _m, _i in rows], [120, 120])
+        self.assertEqual(counters["opened"], 2)
+
+    def test_the_balance_never_reaches_a_session_span(self):
+        # The balance is no turn, so the file's session starts at its first
+        # billed advance rather than at the balance's instant.
+        _rows, _counters, sessions = walk_running(
+            {"day/review.jsonl": self.lines(counted_line("2026-08-20T09:00:01.000Z", self.CARRIED, self.TURN))}
+        )
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0][_RT.LEDGER_STARTED_KEY], "2026-08-20T10:00:00Z")
+        self.assertEqual(sessions[0][_RT.HISTORY_TOTAL_KEY], 120)
+
+
+class SessionTallyTest(unittest.TestCase):
+    """Top-level sessions: the files whose first declaration names no parent."""
+
+    MEMBER = EXACT_MEMBERS[0]
+
+    def billed(self, *head, stamp="2026-08-20T10:00:00.000Z"):
+        return list(head) + [
+            turn_model_line(exact_identifier(self.MEMBER), stamp="2026-08-20T09:30:00.000Z"),
+            counted_line(stamp, five_way(100, 60, 0, 20, 0)),
+        ]
+
+    def test_a_declaration_names_a_top_level_session_or_a_spawned_one(self):
+        meta = json.loads(declaration_line())
+        self.assertIs(_RT.declared_session_of(meta), True)
+        meta["payload"][_RT.RUNNING_PARENT_FIELD] = ""
+        self.assertIs(_RT.declared_session_of(meta), True)
+        meta["payload"][_RT.RUNNING_PARENT_FIELD] = "a-parent"
+        self.assertIs(_RT.declared_session_of(meta), False)
+        for record in (
+            json.loads(turn_model_line("x")),
+            json.loads(counted_line("2026-08-20T10:00:00.000Z", {})),
+            {"type": _RT.RUNNING_SESSION_TYPE, "payload": "not an object"},
+        ):
+            with self.subTest(record=str(record)[:40]):
+                self.assertIsNone(_RT.declared_session_of(record))
+
+    def test_the_tally_counts_billed_top_level_files_and_nothing_else(self):
+        files = {
+            # A person's session.
+            "a.jsonl": self.billed(declaration_line()),
+            # A spawned thread: its file repeats the parent's declaration
+            # AFTER its own, and only the first one counts.
+            "b.jsonl": self.billed(declaration_line(parent="p"), declaration_line()),
+            # A person's session that billed nothing is no session here.
+            "c.jsonl": [declaration_line()],
+            # An empty parent field names no parent.
+            "d.jsonl": self.billed(declaration_line(parent="")),
+            # A file that declares nothing cannot be told apart; not counted.
+            "e.jsonl": self.billed(),
+        }
+        _rows, _counters, sessions = walk_running(files)
+        markers = sorted(str(entry[_RT.SESSION_TOP_LEVEL_KEY]) for entry in sessions)
+        self.assertEqual(markers, ["False", "None", "True", "True"])
+        series = {"startDate": "2026-08-20", "totals": [120 * 4], "recorded": True}
+        stats = _RT.walked_stats(series, {"input": [480]}, ["2026-08-20"], sessions)
+        self.assertEqual(stats[_RT.STAT_SESSIONS], 2)
+
+    def test_a_record_that_declares_no_session_states_no_tally(self):
+        _rows, _counters, sessions = walk_running({"e.jsonl": self.billed()})
+        series = {"startDate": "2026-08-20", "totals": [120], "recorded": True}
+        stats = _RT.walked_stats(series, {"input": [120]}, ["2026-08-20"], sessions)
+        self.assertNotIn(_RT.STAT_SESSIONS, stats)
+
+    def test_the_marker_never_reaches_the_ledger_session(self):
+        _rows, _counters, sessions = walk_running({"a.jsonl": self.billed(declaration_line())})
+        emitted = _RT.ledger_session(sessions[0])
+        self.assertNotIn(_RT.SESSION_TOP_LEVEL_KEY, emitted)
+        _RT.assert_ledger_session(emitted)
+
+
+class WalkedAccountingTest(unittest.TestCase):
+    """A source with no roll-up carries the first source's accounting surface.
+
+    The class tiles sum every day the record SPLITS — walked or remembered —
+    and nothing else; the per-model split sums the joint over the days the
+    walk owns; the session tally counts top-level sessions; no lifetime is
+    stated. Each figure below is worked by hand from the fixture.
+    """
+
+    MEMBER = EXACT_MEMBERS[0]
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.tree = self.scratch / "tree"
+        self.tree.mkdir()
+        self.store = self.scratch / "store.json"
+
+    def write_tree(self, lines, name="one.jsonl"):
+        (self.tree / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def write_store(self, days):
+        self.store.write_text(
+            json.dumps({_RT.HISTORY_SCHEMA_KEY: _RT.HISTORY_SCHEMA, _RT.HISTORY_DAYS_KEY: days}),
+            encoding="utf-8",
+        )
+
+    def run_capture(self, store=True):
+        return _RT.capture(
+            self.tree,
+            _RT.FORMAT_RUNNING_TOTALS,
+            today=datetime.date(2026, 8, 21),
+            history_store=self.store if store else None,
+            source=RUNNING_SOURCE,
+        )
+
+    def session_lines(self, model=True):
+        lines = [declaration_line()]
+        if model:
+            lines.append(turn_model_line(exact_identifier(self.MEMBER), stamp="2026-08-20T09:30:00.000Z"))
+        return lines + [
+            # 120: input 30, cache-read 60, cache-write 10, output 15, reasoning 5.
+            counted_line("2026-08-20T10:00:00.000Z", five_way(100, 60, 10, 20, 5)),
+            # +230: input 50, cache-read 140, cache-write 10, output 25, reasoning 5.
+            counted_line("2026-08-21T10:00:00.000Z", five_way(300, 200, 20, 50, 10)),
+        ]
+
+    def test_the_classes_cover_the_split_days_and_the_split_covers_the_owned_ones(self):
+        member_id = exact_identifier(self.MEMBER)
+        self.write_store(
+            {
+                # A day remembered with a total and no split (a figure read off
+                # a vendor surface, say): it is in the series, and in no class.
+                "2026-08-18": {"total": 500},
+                # A remembered day WITH a split: in the classes; not in the
+                # per-model split, because no joint was kept for it.
+                "2026-08-19": {
+                    "total": 40,
+                    "categories": {"input": 10, "output": 20, "cache-read": 10},
+                    "modelIds": {member_id: 40},
+                },
+            }
+        )
+        self.write_tree(self.session_lines())
+        section, counters = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [500, 40, 120, 230])
+        self.assertEqual(
+            section["stats"],
+            {
+                "input": 10 + 30 + 50,
+                "output": 20 + 15 + 25,
+                "cache-read": 10 + 60 + 140,
+                "cache-write": 0 + 10 + 10,
+                "sessions": 1,
+                "longest-session": 86_400,
+            },
+        )
+        # Reasoning is a category and not a stat tile: it is the whole split
+        # minus the four tiles, never a figure added to them.
+        tiles = sum(section["stats"][key] for key in _RT.STAT_CLASS_KEYS)
+        self.assertEqual(tiles + 5 + 5, 40 + 120 + 230)
+        self.assertEqual(
+            section["modelStats"],
+            [
+                {
+                    "key": self.MEMBER,
+                    "totals": {"input": 80, "output": 40, "cache-read": 200, "cache-write": 20, "reasoning": 10},
+                }
+            ],
+        )
+        for key in _RT.STAT_CLASS_KEYS:
+            self.assertLessEqual(section["modelStats"][0]["totals"][key], section["stats"][key])
+        self.assertNotIn(_RT.STAT_LIFETIME, section["stats"])
+        self.assertEqual(
+            section[_RT.LEDGER_KEY][_RT.LEDGER_MODEL_ID_STATS_KEY],
+            [{"id": member_id, "totals": section["modelStats"][0]["totals"]}],
+        )
+        self.assertEqual(counters["opened"], 0)
+
+    def test_a_split_that_names_no_model_stays_off_the_wire_and_in_the_ledger(self):
+        self.write_tree(self.session_lines(model=False))
+        section, _counters = self.run_capture(store=False)
+        self.assertNotIn("modelStats", section)
+        self.assertEqual(
+            [row["id"] for row in section[_RT.LEDGER_KEY][_RT.LEDGER_MODEL_ID_STATS_KEY]],
+            [_RT.UNIDENTIFIED_MODEL],
+        )
+        self.assertEqual(section["stats"]["input"], 80)
+
+    def test_a_day_with_only_part_of_a_split_contributes_nothing(self):
+        # A second file's reading on 2026-08-20 cannot be divided (its fields
+        # disagree with its own total), so that day's category rows hold only
+        # the first file's part. Summing them would claim a split of a day
+        # nobody could split; the day stays out of every class tile and out
+        # of the per-model split, and only 2026-08-21 counts.
+        unsplittable = {
+            _RT.RUNNING_INPUT_FIELD: 5,
+            _RT.RUNNING_CACHE_READ_FIELD: 50,
+            _RT.RUNNING_TOTAL_FIELD: 999,
+        }
+        self.write_tree(self.session_lines())
+        self.write_tree(
+            [
+                declaration_line(),
+                turn_model_line(exact_identifier(self.MEMBER), stamp="2026-08-20T10:30:00.000Z"),
+                counted_line("2026-08-20T11:00:00.000Z", unsplittable),
+            ],
+            name="two.jsonl",
+        )
+        section, counters = self.run_capture(store=False)
+        self.assertEqual(counters["unpartitioned"], 1)
+        self.assertEqual(section["series"]["totals"], [120 + 999, 230])
+        self.assertEqual(
+            {key: section["stats"][key] for key in _RT.STAT_CLASS_KEYS},
+            {"input": 50, "output": 25, "cache-read": 140, "cache-write": 10},
+        )
+        self.assertEqual(sum(section["modelStats"][0]["totals"].values()), 230)
+        self.assertEqual(section["stats"]["sessions"], 2)
+
+    def test_every_class_tile_is_stated_even_at_zero(self):
+        # The origin requires every class tile a source ships to be refreshed,
+        # so a class the record never spent is a stated zero, never absent.
+        self.write_tree(
+            [declaration_line(), counted_line("2026-08-21T10:00:00.000Z", {
+                _RT.RUNNING_INPUT_FIELD: 7, _RT.RUNNING_TOTAL_FIELD: 7})]
+        )
+        section, _counters = self.run_capture(store=False)
+        self.assertEqual(
+            {key: section["stats"][key] for key in _RT.STAT_CLASS_KEYS},
+            {"input": 7, "output": 0, "cache-read": 0, "cache-write": 0},
+        )
+
+
+class CorrectedDayTest(unittest.TestCase):
+    """The store lets a proven correction through, and only a proven one.
+
+    The day below was stored by a walk that billed an opening balance: 1,000
+    carried plus 120 spent. Today's walk bills 120 and sets 1,000 aside. When
+    the old figure is still exactly measurable from disk (120 + 1,000 reaches
+    the store), the corrected figure wins; when the store holds more than that
+    (records were lost since), the store keeps winning.
+    """
+
+    MEMBER = EXACT_MEMBERS[0]
+
+    def setUp(self):
+        self.scratch = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.tree = self.scratch / "tree"
+        self.tree.mkdir()
+        self.store = self.scratch / "store.json"
+        self.member_id = exact_identifier(self.MEMBER)
+        (self.tree / "review.jsonl").write_text(
+            "\n".join(
+                [
+                    declaration_line(parent="p"),
+                    counted_line(
+                        "2026-08-20T09:00:01.000Z", five_way(900, 800, 0, 100, 0), five_way(70, 60, 0, 10, 0)
+                    ),
+                    turn_model_line(self.member_id, stamp="2026-08-20T09:00:02.000Z"),
+                    counted_line("2026-08-20T10:00:00.000Z", five_way(1000, 860, 0, 120, 0)),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        # A later, ordinary day so the corrected day is not the newest one.
+        (self.tree / "later.jsonl").write_text(
+            "\n".join(
+                [
+                    declaration_line(),
+                    turn_model_line(self.member_id, stamp="2026-08-21T09:00:00.000Z"),
+                    counted_line("2026-08-21T10:00:00.000Z", five_way(40, 0, 0, 10, 0)),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def store_day(self, total):
+        # The old walk's own entry: the balance landed on the residual (no
+        # model was declared yet) as cache reads and output.
+        self.store.write_text(
+            json.dumps(
+                {
+                    _RT.HISTORY_SCHEMA_KEY: _RT.HISTORY_SCHEMA,
+                    _RT.HISTORY_DAYS_KEY: {
+                        "2026-08-20": {
+                            "total": total,
+                            "categories": {"input": total - 960 - 120 + 100, "cache-read": 860, "output": 120},
+                            "modelIds": {_RT.UNIDENTIFIED_MODEL: total - 120, self.member_id: 120},
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def run_capture(self):
+        section, counters = _RT.capture(
+            self.tree,
+            _RT.FORMAT_RUNNING_TOTALS,
+            today=datetime.date(2026, 8, 21),
+            history_store=self.store,
+            source=RUNNING_SOURCE,
+        )
+        stored = json.loads(self.store.read_text(encoding="utf-8"))[_RT.HISTORY_DAYS_KEY]
+        return section, counters, stored
+
+    def test_a_day_the_old_rule_still_reproduces_is_corrected_and_stays_corrected(self):
+        self.store_day(1_120)
+        section, counters, stored = self.run_capture()
+        self.assertEqual(counters["opened"], 1)
+        self.assertEqual(section["series"]["totals"], [120, 50])
+        self.assertEqual(stored["2026-08-20"]["total"], 120)
+        self.assertEqual(stored["2026-08-20"]["modelIds"], {self.member_id: 120})
+        # The corrected day is the walk's own again, so the per-model split
+        # covers it.
+        self.assertEqual(sum(section["modelStats"][0]["totals"].values()), 170)
+        # Idempotent: the next run measures the corrected figure and keeps it.
+        section, _counters, stored = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [120, 50])
+        self.assertEqual(stored["2026-08-20"]["total"], 120)
+
+    def test_a_day_whose_records_were_lost_keeps_the_stored_figure(self):
+        self.store_day(1_500)
+        section, _counters, stored = self.run_capture()
+        self.assertEqual(section["series"]["totals"], [1_500, 50])
+        self.assertEqual(stored["2026-08-20"]["total"], 1_500)
+        # Not the walk's day, so no per-model figure is claimed for it.
+        self.assertEqual(sum(section["modelStats"][0]["totals"].values()), 50)
+
+    def test_without_a_balance_the_rule_is_the_old_one(self):
+        merged = _RT.merge_history(
+            {"startDate": "2026-08-20", "totals": [120], "recorded": True},
+            {"input": [120]},
+            {},
+            ["2026-08-20"],
+            {"2026-08-20": {"total": 1_120, "categories": None, "models": None, "modelIds": None}},
+            {},
+        )
+        self.assertEqual(merged[0]["totals"], [1_120])
+        self.assertEqual(merged[5], {"2026-08-20"})
+        merged = _RT.merge_history(
+            {"startDate": "2026-08-20", "totals": [120], "recorded": True},
+            {"input": [120]},
+            {},
+            ["2026-08-20"],
+            {"2026-08-20": {"total": 1_120, "categories": None, "models": None, "modelIds": None}},
+            {},
+            {"2026-08-20": 1_000},
+        )
+        self.assertEqual(merged[0]["totals"], [120])
+        self.assertEqual(merged[5], set())
 
 
 if __name__ == "__main__":

@@ -45,6 +45,16 @@ jobs:
   # projects took nine minutes in a row, and the two device projects are the
   # same engines at phone metrics, so each engine's runner takes its device
   # project too and the matrix finishes in the time of its slowest engine.
+  #
+  # Except the iPhone, which has a WebKit runner of its own and runs one test
+  # at a time (owner's choice, 2026-10-20). WebKit here draws without a GPU and
+  # takes three to six times as long as Chromium or Firefox over the same
+  # lanes, and at three device pixels to the CSS pixel the iPhone's heaviest
+  # lanes passed one by one but ran out of their budgets when two ran at once
+  # on four CPUs (the J lane, the scrub, the torches, the tome's turn, the card
+  # text: 7 failed at 0774bb3, every one green alone). Two workers on its own
+  # runner would keep that contention; one removes it without touching a test,
+  # a budget or the page.
   lanes:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -54,10 +64,11 @@ jobs:
       fail-fast: false
       matrix:
         engine:
-          - { install: chromium, projects: chromium android-chrome }
-          - { install: firefox, projects: firefox }
-          - { install: webkit, projects: webkit ios-safari }
-    name: lanes (${{ matrix.engine.install }})
+          - { lane: chromium, install: chromium, projects: chromium android-chrome, workers: 2 }
+          - { lane: firefox, install: firefox, projects: firefox, workers: 2 }
+          - { lane: webkit, install: webkit, projects: webkit, workers: 2 }
+          - { lane: ios-safari, install: webkit, projects: ios-safari, workers: 1 }
+    name: lanes (${{ matrix.engine.lane }})
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -137,12 +148,19 @@ jobs:
         # playwright.config.mjs). Across the matrix it drives five projects —
         # three desktop engines plus an Android and an iPhone viewport — and
         # THIS runner drives only the ones the matrix hands it: its engine and
-        # that engine's device project. Each becomes one --project flag, so a
-        # runner that ran every project would show up as three equal
-        # durations in the matrix rather than pass unnoticed.
+        # that engine's device project, or the iPhone alone. Each becomes one
+        # --project flag, so a runner that ran every project would show up as
+        # four equal durations in the matrix rather than pass unnoticed, and
+        # the matrix's worker count for this runner overrides the config's.
+        env:
+          LANE_WORKERS: ${{ matrix.engine.workers }}
         run: |
+          case "${LANE_WORKERS}" in
+            [1-9]) ;;
+            *) printf 'worker count is not a single digit: %s\n' "${LANE_WORKERS}" >&2; exit 1 ;;
+          esac
           set --
           for project in ${{ matrix.engine.projects }}; do
             set -- "$@" --project "$project"
           done
-          npm run test:browsers -- "$@"
+          npm run test:browsers -- "$@" --workers "${LANE_WORKERS}"

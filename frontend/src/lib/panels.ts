@@ -180,6 +180,12 @@ export interface VCSActivityData {
   totalContributions: number;
   weeks: number[][];
   streak: number;
+  /* The commits pushed each day, in the same week columns as `weeks`, and
+   * their total — the "Commits Pushed" figure (owner direction, 2026-10-16).
+   * Optional: additive inside the kind, so a payload from a replica that
+   * predates them still renders, and the figure reads as the page's dash. */
+  commitWeeks?: number[][];
+  totalCommits?: number;
   /* The private days, newest first. Optional: additive inside the kind, so a
    * payload from a replica that predates it still renders — this chart runs a
    * RollingUpdate, and a browser holding the new frontend can reach an old

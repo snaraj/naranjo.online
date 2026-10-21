@@ -738,10 +738,12 @@ func TestVisitorReadsTheProjectFeed(t *testing.T) {
 			bundled = append(bundled, response.Body...)
 		}
 		// Structure and markers, never copy: the panel id the block subscribes
-		// to, the table-count class the ledger table's figures render in (the
-		// entry-count class went with the card feed, owner directive 2026-09-03,
-		// issue 287), and the provenance mark a captured figure carries.
-		for _, marker := range []string{"coding-projects", "table-count", "recorded"} {
+		// to, the repo-figure class each repository's figures render in (the
+		// ledger table's table-count went with the table when Ongoing Work
+		// replaced it, owner direction 2026-10-16, as the card feed's
+		// entry-count went before it, issue 287), and the provenance mark a
+		// captured figure carries.
+		for _, marker := range []string{"coding-projects", "repo-figure", "recorded"} {
 			if !bytes.Contains(bundled, []byte(marker)) {
 				t.Errorf("built assets lack the project-feed marker %q", marker)
 			}
@@ -1091,90 +1093,68 @@ func TestHostileVisitorStaysBlind(t *testing.T) {
 	drainScenario(t, runResult)
 }
 
-// TestVisitorPicksAReadingMode is the reading-modes story (issue #22) over
-// real transport: a first visit gets the unstamped default document, choosing
-// a mode makes the very next navigation ship that theme inside the HTML —
-// stamped by the origin from the cookie the toggle set, so there is nothing
-// to flash — each mode carries its own cache identity, returning in a mode
-// revalidates to a cheap 304, and a hostile cookie value falls back to the
-// default. The harness asserts the security baseline on every navigation.
-func TestVisitorPicksAReadingMode(t *testing.T) {
+// TestVisitorWithAnOldReadingModeCookie is what is left of the reading-modes
+// story (issue #22) now the control is gone (owner, 2026-10-19: the control
+// went with the footer, and every visit is the night). A visitor who chose a
+// mode before carries its cookie for up to a year, and the origin used to
+// stamp the document from it — with
+// no control left to change it, that visitor would be held in slate or sepia
+// for as long as the cookie lived. So over real transport: the document is
+// unstamped and carries no Vary, and every value the old control could write
+// — and a hostile one — gets that same document, revalidating to the same
+// empty 304 as a visitor with no cookie at all.
+func TestVisitorWithAnOldReadingModeCookie(t *testing.T) {
 	requireBuiltFrontend(t)
 	base, runResult := bootServer(t, nil)
 	session := testsupport.NewVisitor(t, base)
-	variantETags := map[string]string{}
+	var etag string
 
-	t.Run("first visit, no choice: the unstamped document follows the OS scheme", func(t *testing.T) {
-		visitor := session.On(t)
-		shell := visitor.Navigate("/")
+	t.Run("first visit: one unstamped document that follows the OS scheme", func(t *testing.T) {
+		shell := session.On(t).Navigate("/")
 		if shell.StatusCode != http.StatusOK {
 			t.Fatalf("GET / = %d", shell.StatusCode)
 		}
 		if bytes.Contains(shell.Body, []byte("data-theme")) {
-			t.Error("the default document must ship unstamped; prefers-color-scheme owns it")
+			t.Error("the document must ship unstamped; prefers-color-scheme owns it")
 		}
-		if got := shell.Header.Get("Vary"); got != "Cookie" {
-			t.Errorf("document Vary = %q, want Cookie so shared caches key stored copies per theme", got)
+		if got := shell.Header.Get("Vary"); got != "" {
+			t.Errorf("document Vary = %q; it is the same bytes for every visitor", got)
 		}
 		if got := shell.Header.Get("Cache-Control"); got != "no-cache" {
 			t.Errorf("document Cache-Control = %q, want no-cache", got)
 		}
 		if !bytes.Contains(shell.Body, []byte("data-static-fallback")) {
-			t.Error("themed serving lost the static application fallback marker")
+			t.Error("the document lost the static application fallback marker")
 		}
-		variantETags["default"] = shell.Header.Get("ETag")
+		etag = shell.Header.Get("ETag")
+		if etag == "" {
+			t.Fatal("the document carried no ETag")
+		}
 	})
 
-	t.Run("chooses each mode: the stamped variant with its own cache identity", func(t *testing.T) {
+	t.Run("an old mode's cookie changes nothing: the same document, revalidated", func(t *testing.T) {
 		visitor := session.On(t)
-		for _, theme := range []string{"dark", "sepia", "slate", "light"} {
-			// The toggle writes the cookie; the browser replays the previous
-			// variant's validator. The switch must answer a full 200 of the
-			// new representation, never a 304 into the wrong colors.
-			visitor.SetCookie("theme", theme)
+		for _, value := range []string{"dark", "sepia", "slate", "light", "browntown"} {
+			visitor.SetCookie("theme", value)
 			response := visitor.Navigate("/")
-			if response.StatusCode != http.StatusOK {
-				t.Fatalf("GET / with the %s cookie = %d, want 200", theme, response.StatusCode)
+			if response.StatusCode != http.StatusNotModified || len(response.Body) != 0 {
+				t.Errorf("GET / with theme=%s = %d with %d body bytes, want the empty 304 every visitor gets", value, response.StatusCode, len(response.Body))
 			}
-			if stamp := []byte(`<html data-theme="` + theme + `"`); !bytes.Contains(response.Body, stamp) {
-				t.Errorf("%s document lacks its stamp %q", theme, stamp)
-			}
-			if got := response.Header.Get("Vary"); got != "Cookie" {
-				t.Errorf("%s document Vary = %q, want Cookie", theme, got)
-			}
-			variantETags[theme] = response.Header.Get("ETag")
-		}
-		holders := map[string]string{}
-		for theme, etag := range variantETags {
-			if etag == "" {
-				t.Errorf("%s document carried no ETag", theme)
-			}
-			if holder, duplicate := holders[etag]; duplicate {
-				t.Errorf("%s and %s share one ETag; every variant needs its own validator", theme, holder)
-			}
-			holders[etag] = theme
 		}
 	})
 
-	t.Run("returns in the chosen mode: revalidates to an empty 304", func(t *testing.T) {
-		revisit := session.On(t).Navigate("/")
-		if revisit.StatusCode != http.StatusNotModified || len(revisit.Body) != 0 {
-			t.Fatalf("revisit = %d with %d body bytes, want an empty 304 from the replayed validator", revisit.StatusCode, len(revisit.Body))
-		}
-	})
-
-	t.Run("hostile cookie value: fails closed to the default document", func(t *testing.T) {
-		visitor := session.On(t)
-		visitor.SetCookie("theme", "browntown")
+	t.Run("a fresh visitor with an old cookie: the full default document", func(t *testing.T) {
+		visitor := testsupport.NewVisitor(t, base).On(t)
+		visitor.SetCookie("theme", "sepia")
 		response := visitor.Navigate("/")
 		if response.StatusCode != http.StatusOK {
-			t.Fatalf("GET / with an unregistered cookie = %d, want the full default document", response.StatusCode)
+			t.Fatalf("GET / with theme=sepia = %d, want 200", response.StatusCode)
 		}
 		if bytes.Contains(response.Body, []byte("data-theme")) {
-			t.Error("an unregistered theme value must never select a stamped variant")
+			t.Error("a cookie from the retired control still stamps the document")
 		}
-		if got := response.Header.Get("ETag"); got != variantETags["default"] {
-			t.Errorf("fallback ETag = %q, want the default document identity %q", got, variantETags["default"])
+		if got := response.Header.Get("ETag"); got != etag {
+			t.Errorf("ETag = %q, want the one document's %q", got, etag)
 		}
 	})
 

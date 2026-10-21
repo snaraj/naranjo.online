@@ -23,7 +23,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
 import { relativeAge } from '../src/lib/age.ts';
-import { section, sectionHref, sectionOrdinal, staticBlock } from '../src/lib/blocks.ts';
+import { section, sectionOrdinal, staticBlock } from '../src/lib/blocks.ts';
 import { spreadFromRem, spreadMediaQuery } from '../src/lib/columnWidth.ts';
 import { commitColumnHead, commitColumnId, projectsCommitsProps } from '../src/lib/commits.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
@@ -42,7 +42,7 @@ import {
   projects,
   projectsCapturedOn,
   projectsEmptyNote,
-  projectTableHeads,
+  projectColumnHead,
   projectTableProps,
   projectUrl,
   shownProjectRows,
@@ -103,9 +103,7 @@ const [
   styles,
   manifest,
   feedCard,
-  sectionNav,
   pageSectionSource,
-  pageHeader,
   blockHost,
   ledgerLog,
   ledgerSpread,
@@ -115,9 +113,7 @@ const [
   read('../src/styles.css'),
   read('../src/page.ts'),
   read('../src/lib/components/FeedCard.svelte'),
-  read('../src/lib/components/SectionNav.svelte'),
   read('../src/lib/components/PageSection.svelte'),
-  read('../src/lib/components/PageHeader.svelte'),
   read('../src/lib/components/Block.svelte'),
   read('../src/lib/components/LedgerLog.svelte'),
   read('../src/lib/components/LedgerSpread.svelte'),
@@ -144,31 +140,36 @@ const [workBinding, mediaBinding, projectsBinding, galleryModule] = await Promis
   read('../src/lib/gallery.ts'),
 ]);
 
-/* The generic components this architecture renders the page through. The
-   content half is the ledger's five now (owner directive of 2026-09-03, issue
-   287) where it used to be the entry log and the gallery; every sweep below
-   that walked the old pair walks all of them, so the redesign added surfaces
-   to these guards rather than removing any. */
-const [contributionCalendar, ledgerBoard, ticker] = await Promise.all([
-  read('../src/lib/components/ContributionCalendar.svelte'),
-  read('../src/lib/components/LedgerBoard.svelte'),
+/* The generic components this architecture renders the page through: every
+   content component the manifest mounts (owner directive of 2026-09-03, issue
+   287, where it used to be the entry log and the gallery). The calendar and
+   the board left the sweep with the components themselves when the Chronicle
+   took over drawing them (owner direction, 2026-10-16); the Chronicle is in
+   it, so the surfaces they drew are still swept. */
+const [chronicle, ticker, tome] = await Promise.all([
+  read('../src/lib/components/Chronicle.svelte'),
   read('../src/lib/components/Ticker.svelte'),
+  /* The accounts' leaves, which the Chronicle hands to the chained tome
+     (owner, 2026-10-20); their swords are drawn there. */
+  read('../src/lib/components/Tome.svelte'),
 ]);
 
 const contentComponents = {
+  Chronicle: chronicle,
   LedgerLog: ledgerLog,
   LedgerSpread: ledgerSpread,
-  ContributionCalendar: contributionCalendar,
-  LedgerBoard: ledgerBoard,
   Ticker: ticker,
   MediaGallery: mediaGallery,
 };
 
+/* The page's own chrome joins the sweep in place of the header row and the
+   section nav (owner direction, 2026-10-16: both gone "for now"): App.svelte
+   is where the name and J's seat are drawn, so it is held to the same
+   no-colour, token-font, no-network rules they were. */
 const introduced = {
+  App: app,
   FeedCard: feedCard,
-  SectionNav: sectionNav,
   PageSection: pageSectionSource,
-  PageHeader: pageHeader,
   Block: blockHost,
   ...contentComponents,
 };
@@ -218,11 +219,16 @@ const manifestSections = [...manifest.matchAll(
  * The IDS of the surviving sections do not move — an id is the fragment a nav
  * link jumps to and an address a reader may already have shared — and `commits`
  * does not stop resolving just because it stopped being a section: the commit
- * COLUMN carries it, which is pinned below. */
+ * COLUMN carries it, which is pinned below.
+ *
+ * THE PAIRED SECTION IS "ONGOING WORK" (owner direction, 2026-10-16: "replace
+ * to 'Ongoing Work'"). Its LABEL moved and its ID did not: `projects` is the
+ * fragment the nav jumps to and an address a reader may have shared, so the id
+ * below is unchanged while the words above it are the owner's new ones. */
 test('the manifest names the owner’s four sections, in the order the page stacks them', () => {
   assert.deepEqual(
     manifestSections.map((entry) => entry.label),
-    ['Professional Experience', 'Projects · Commits', 'Trackers', 'Gallery'],
+    ['Professional Experience', 'Ongoing Work', 'Trackers', 'Gallery'],
     'the section labels are the owner’s words and their order is the page’s order'
   );
   assert.deepEqual(
@@ -234,7 +240,7 @@ test('the manifest names the owner’s four sections, in the order the page stac
     [
       ['workHistory'],
       ['projectsCommits'],
-      ['tokenBoard', 'contributionCalendar', 'bossTicker'],
+      ['trackerChronicle', 'bossTicker'],
       ['mediaGallery'],
     ],
     'each section holds exactly its blocks; reordering the page is moving one name here'
@@ -269,7 +275,6 @@ test('the manifest names the owner’s four sections, in the order the page stac
     assert.equal(built.label, entry.label);
     assert.equal(built.mark, entry.mark, 'the constructor drops the section mark');
     assert.equal(built.layout, entry.layout);
-    assert.equal(sectionHref(built), `#${entry.id}`);
   }
   // And a block constructor holds a block together: key, component, binding
   // and presentation survive construction unchanged.
@@ -316,59 +321,42 @@ test('the empty About Me section is gone, and nothing renders in its place', asy
  * the id: the adapter names it once, hands it through as data, and the
  * component renders it on the log's own wrapper.
  *
- * The nav never links it, and that is the other half of the claim — a nav link
- * to a non-section would be a second address for one place, and the nav is
- * derived from the manifest precisely so it cannot invent one. */
-test('the retired commits address still lands on the commits, and the nav never links it', () => {
+ * It is not a section, and that is the other half of the claim: the manifest
+ * names four, none of them this one. (It used to be stated as "the nav never
+ * links it"; the nav is gone with the chrome row — owner direction,
+ * 2026-10-16: "do away with it for now" — and the address is still exactly
+ * one place.) */
+test('the retired commits address still lands on the commits, and is not a section of its own', () => {
   assert.equal(commitColumnId, 'commits');
   // The adapter hands it through; no component spells it.
   assert.equal(projectsCommitsProps([null, null]).logAnchor, commitColumnId);
-  assert.match(ledgerSpread, /<div class="spread-column" id=\{logAnchor\}>/);
+  assert.match(ledgerSpread, /<div class="ongoing-column" id=\{logAnchor\}>/);
   for (const [name, source] of Object.entries(componentSources)) {
     assert.doesNotMatch(source, /id="commits"/, `${name} spells a page address of its own`);
   }
   // And it is not a section any more: the manifest names four, none of them
-  // this one, so the nav has nothing to point at it with.
+  // this one.
   assert.ok(
     !manifestSections.some((entry) => entry.id === commitColumnId),
     'the commits section came back; the sheet pairs it with Projects now'
   );
 });
 
-test('every nav link lands on the section the manifest renders', () => {
-  // Structural now, not counted: the nav and the sections read the SAME
-  // manifest entry, so a link cannot point at a section nobody rendered.
-  assert.match(sectionNav, /import \{ page \} from '\.\.\/\.\.\/page\.ts'/);
-  assert.match(sectionNav, /\{#each page as section \(section\.id\)\}/);
-  assert.match(sectionNav, /href=\{sectionHref\(section\)\}/);
-  assert.match(sectionNav, /class="section-link"/);
-  /* A LINK IS ITS SECTION'S WORD (owner ruling, 2026-09-12, issue 325: "put
-     back words in here instead of the icons"). The word is the link's own
-     text, read from the manifest entry the section renders from, so a section
-     renamed renames its link and no component spells either.
-
-     The three things issue 313 put here are pinned ABSENT, each by name,
-     because each is a separate way the ruling could be half-undone: a mark
-     drawn beside the word, the ordinal printed with it, and the word demoted
-     back to an aria-label that only a screen-reader user ever receives. A
-     positive pin on the word alone would pass with any of the three back. */
-  assert.match(sectionNav, />\{section\.label\}</, 'the nav link no longer prints the section word');
-  assert.doesNotMatch(sectionNav, /<Icon\b/, 'the nav link draws a mark again; the owner asked for words');
-  assert.doesNotMatch(
-    sectionNav,
-    /sectionOrdinal|section-link-number/,
-    'the nav link prints the sheet number again; the word replaced it'
-  );
-  assert.doesNotMatch(
-    sectionNav,
-    /aria-label=\{section\.label\}/,
-    'the word is back in an aria-label; it is the link\u2019s own text now'
-  );
-  /* THE ORDINAL RULE, EXECUTED rather than matched. It has ONE caller since
-     the owner's ruling of 2026-09-12 — the page, which numbers the section
-     heads — and it stays a shared rule rather than being folded into its one
-     caller because the numbering is a property of the sheet, not of the head
-     that prints it. Two digits, and the position is the caller's. */
+/* EVERY SECTION THE MANIFEST NAMES RENDERS AT ITS OWN ID, NUMBERED BY ITS
+ * POSITION. This was "every nav link lands on the section the manifest
+ * renders", and its nav half is retired with the nav (owner direction,
+ * 2026-10-16: the bar is gone for now): the four links, their words, their
+ * hrefs and their tap handling have no element left to describe. What it
+ * proved about the SECTIONS has a subject still and stays — every id is still
+ * an address a reader may have shared (the deep-link lane in
+ * e2e/rendering-lanes.spec.mjs lands one), so one renderer draws each section
+ * from its manifest entry and no component spells one beside it. */
+test('every section the manifest names renders at its own id, numbered by its position', () => {
+  /* THE ORDINAL RULE, EXECUTED rather than matched. Its one caller is the
+     page, which numbers the section heads; it stays a shared rule rather than
+     being folded into that caller because the numbering is a property of the
+     sheet, not of the head that prints it. Two digits, and the position is
+     the caller's. */
   assert.equal(sectionOrdinal(0), '01');
   assert.equal(sectionOrdinal(4), '05');
   assert.equal(sectionOrdinal(9), '10');
@@ -393,53 +381,48 @@ test('every nav link lands on the section the manifest renders', () => {
   }
 });
 
-// A tap must not leave the fragment sitting in the URL for a later refresh
-// to re-apply (owner report, issue 171). There is no DOM here by contract
-// (see the file banner), so this pins the SHAPE of the fix — the browser
-// lanes in e2e/rendering-lanes.spec.mjs execute the actual reload behavior
-// against a real History API and a real scrollIntoView.
-test('a nav tap drops the fragment from the URL instead of the href (issue 171)', () => {
-  // The href is untouched: a real fragment link, readable by assistive tech
-  // and a genuine deep link when shared or typed directly.
-  assert.match(sectionNav, /href=\{sectionHref\(section\)\}/);
-  // A modified click (opening in a new tab) must reach the browser's own
-  // handling rather than this one.
-  assert.match(sectionNav, /event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey/);
-  // The scroll happens in script now — never a bare anchor jump, which is
-  // the mechanism that left the fragment behind in the first place.
-  assert.match(sectionNav, /event\.preventDefault\(\)/);
-  assert.match(sectionNav, /\.scrollIntoView\(\)/);
-  // The URL is corrected AFTER the scroll, and by REPLACING history rather
-  // than pushing it — a pushed entry would put "back" one step behind where
-  // the reader actually was.
-  assert.match(
-    sectionNav,
-    /history\.replaceState\(null, '', window\.location\.pathname \+ window\.location\.search\)/
-  );
-});
+/* RETIRED WITH THE NAV (owner direction, 2026-10-16: "do away with it for
+ * now"): "a nav tap drops the fragment from the URL instead of the href (issue
+ * 171)". Its subject was the nav link's click handler — scroll in script, then
+ * replace the URL with the fragment-free path — and no link on the page
+ * carries a section fragment any more. A shared .../#trackers still deep-links
+ * on arrival (the rendering lane of that name), and the other half of issue
+ * 171 survives below, on the page itself. */
 
-// A live probe (see the component's own doc comment) showed the fragment is
-// only half the bug: the browser remembers a scroll offset per history entry
-// independent of the URL, and replaceState does not clear it — so a refresh
-// still restored the reader's old position even with no fragment left to
-// reapply. This is the other half of the fix.
+// A live probe (see App.svelte's own comment) showed the fragment was only
+// half of issue 171: the browser remembers a scroll offset per history entry
+// independent of the URL, so a refresh restored the reader's old position even
+// with no fragment left to reapply. That half is the PAGE's behaviour, not the
+// nav's, so it moved to the page when the nav left (owner direction,
+// 2026-10-16) — set once, at the page's own mount.
 test('scroll restoration is turned off once, so a refresh cannot silently reposition the reader (issue 171)', () => {
-  assert.match(sectionNav, /history\.scrollRestoration = 'manual'/);
+  assert.match(app, /history\.scrollRestoration = 'manual'/);
+  for (const [name, source] of Object.entries(componentSources)) {
+    if (name === 'App.svelte') continue;
+    assert.doesNotMatch(source, /scrollRestoration/, `${name} sets the page's scroll restoration a second time`);
+  }
 });
 
-test('the page stacks the chrome row, the name and the sections in one column', () => {
-  /* THE NAV MOVED INTO THE CHROME ROW (owner directive of 2026-09-03, issue
-     287): the ledger's drawing puts the five section links between the
-     wordmark and the reading mode, and a nav in a row that is the sheet's own
-     top rule stays one line at every width instead of wrapping under a
-     masthead that is already the tallest thing on the page. It is the SAME
-     component reading the SAME manifest — only its mount point moved — so
-     every pin below about what a link is and does is untouched. */
-  assert.match(pageHeader, /<SectionNav \/>/, 'the nav is no longer in the chrome row');
-  assert.doesNotMatch(app, /<SectionNav/, 'the nav is mounted twice');
-  // The name keeps its own block, and the rule the owner asked to be DRAWN
-  // under it is part of that block rather than a border somewhere else.
-  assert.match(app, /<div class="page-intro">\s*<h1 id="page-title">[^<]+<\/h1>/);
+test('the page opens on the name, then the sections, in one column (owner direction, 2026-10-16)', () => {
+  /* "remove the stock image from this only leave it with my name, also find a
+     better way to work the navigation bar away from the top of the screen and
+     just do away with it for now, put J elsewhere" (owner direction,
+     2026-10-16). The chrome row — the home link, the section nav, the place,
+     the reading mode and J at both ends — and the picture band under it are
+     gone, so the sheet's first child is the name. The row is gone "for now":
+     bringing a nav back is a conscious edit of this pin, which is the point of
+     pinning a decision where it is made. J flies inside the heading, as the
+     dot of its j since 2026-10-20 — aria-hidden, so the heading still opens
+     on the name and still names the page with it (experience.test.mjs
+     computes that name and pins his seat). */
+  assert.match(
+    withoutHtmlComments(app),
+    /<main aria-labelledby="page-title">\s*<div class="page-intro">\s*<h1 id="page-title"><span class="page-name-line">/,
+    'the sheet no longer opens on the name'
+  );
+  assert.doesNotMatch(app, /<PageHeader\b|<SectionNav\b|<TextureBand\b/, 'the chrome row or the picture band is back above the name');
+  // The rule the owner asked to be DRAWN under the name is still part of the
+  // name's own block rather than a border somewhere else.
   assert.match(app, /<svg class="masthead-rule"/);
   // The trackers are one section of the page rather than the whole of it, and
   // the panel stack renders behind the manifest's one stack layout.
@@ -448,10 +431,19 @@ test('the page stacks the chrome row, the name and the sections in one column', 
     /\{#if section\.layout === 'stack'\}(?:\s*<!--[\s\S]*?-->)?\s*<div class="panel-stack" data-block-count=\{section\.blocks\.length\}>/,
     'the stack layout must hold the panel stack, and it must declare how many blocks it holds (issue 210)'
   );
+  /* EVERY SECTION IS STILL NAMED BY ITS HEADING, which is what keeps the
+     document navigable with no nav at all: a screen reader's heading list and
+     its landmark list both walk the sections by these names, and the section's
+     own aria-labelledby points at this id. */
   assert.match(
     pageSectionSource,
     /<h2 class="section-title" id=\{`\$\{section\.id\}-title`\}>\{section\.label\}<\/h2>/,
     'every section opens with its manifest label'
+  );
+  assert.match(
+    pageSectionSource,
+    /<section class="page-section" id=\{section\.id\} aria-labelledby=\{`\$\{section\.id\}-title`\}>/,
+    'a section is no longer a landmark named by its own heading'
   );
   /* The ledger's numbered head wraps that heading (owner directive of
      2026-09-03, issue 287) and the number is drawn BESIDE it, hidden from
@@ -465,46 +457,21 @@ test('the page stacks the chrome row, the name and the sections in one column', 
     /<div class="section-head">(?:\s*<!--[\s\S]*?-->)?\s*<span class="section-number" aria-hidden="true"\s*><Icon name=\{section\.mark\} slot="row" \/>\{ordinal\}<\/span\s*>/,
     'the section head must lead with the manifest mark and the ordinal, both hidden from assistive technology (issue 313)'
   );
-  /* A section link has to be a real touch target: 44px on both axes, as a
-     minimum rather than a fixed box so an enlarged base font grows it. It
-     reads the ledger's one control token now (owner directive of 2026-09-03,
-     issue 287) instead of restating the length, so BOTH halves are pinned —
-     the link reads the token, and the token is the floor. A link that read a
-     token which had quietly become 32px would pass a check on either half
-     alone. */
-  const link = /\.section-link\s*\{([^}]*)\}/.exec(styles);
-  assert.ok(link, 'the section links are not styled where this pin expects them');
-  assert.match(link[1], /min-block-size:\s*var\(--control-target\)/);
-  assert.match(link[1], /min-inline-size:\s*var\(--control-target\)/);
+  /* NO ORPHANED REFERENCE. The home link was named by the masthead through
+     aria-labelledby="page-title"; it left with the row, and the only reference
+     to the name left is main's own, which resolves to the h1 above. */
+  const labelledBy = [...app.matchAll(/aria-labelledby="([^"]+)"/g)].map(([, id]) => id);
+  assert.deepEqual(labelledBy, ['page-title'], 'the page shell points an aria reference somewhere new');
+  // The one control token the page's 44px targets read is still the floor.
   assert.match(styles, /--control-target:\s*2\.75rem;/);
 });
 
-test('the nav link carries no idle underline, but hover and focus still mark it as a link (issue 157)', () => {
-  const idle = /\.section-link\s*\{([^}]*)\}/.exec(styles);
-  assert.ok(idle, 'the section links are not styled where this pin expects them');
-  assert.match(idle[1], /text-decoration:\s*none/, 'the idle nav link must not carry an underline');
-
-  const hover = /\.section-link:hover\s*\{([^}]*)\}/.exec(styles);
-  assert.ok(hover, 'the hover state is not styled where this pin expects it');
-  assert.match(
-    hover[1],
-    /text-decoration:\s*underline/,
-    'hover must add back the affordance the idle state no longer carries'
-  );
-  /* The ink hover reaches for is the ledger's one highlight now (owner
-     directive of 2026-09-03, issue 287) rather than the brand orange, which
-     the redesign spends on nothing: the sheet is monochrome and the highlight
-     is its single chromatic mark. Both are defined tokens in every reading
-     mode, so this is a change of which token, never of whether one. */
-  assert.match(hover[1], /color:\s*var\(--ledger-highlight\)/, 'hover keeps its ink affordance too');
-
-  // The site's own focus ring must survive this change untouched — a nav
-  // link is still a link the moment keyboard focus lands on it.
-  const focus = /\.section-link:focus-visible\s*\{([^}]*)\}/.exec(styles);
-  assert.ok(focus, 'the focus-visible state is not styled where this pin expects it');
-  assert.match(focus[1], /outline:\s*2px solid var\(--color-accent\)/);
-  assert.match(focus[1], /outline-offset:\s*2px/);
-});
+/* RETIRED WITH THE NAV (owner direction, 2026-10-16): "the nav link carries no
+ * idle underline, but hover and focus still mark it as a link (issue 157)".
+ * The .section-link class has no element left; the site-wide link doctrine it
+ * applied to the nav is still held over EVERY link class the markup declares,
+ * by "no link wears a resting underline, and every one marks itself on intent"
+ * in tests/experience.test.mjs. */
 
 // ---------------------------------------------------------------------------
 // The feed card primitive
@@ -733,11 +700,47 @@ test('the card token defaults are global, and resolve through the reading modes'
      declares its variable WIDTH span, because the masthead reads that axis and
      a face that shipped without it would silently synthesize the width. */
   const faces = styles.match(/@font-face \{[^}]*\}/gs) ?? [];
-  assert.equal(faces.length, 6, 'expected four JetBrains Mono faces and two Archivo faces');
+  /* Cinzel, the Keep's display face of 2026-10-16, left with the gold
+     (owner, 2026-10-17: "not happy with … the font used"); the display role
+     is Instrument Serif since the owner's pick of 2026-10-19 (over Fraunces),
+     two more faces by the same two ranges. It is the one family drawn in a
+     single weight, so its faces declare exactly that weight rather than a
+     span; the span pin below holds every other face.
+
+     The chained tome (owner, 2026-10-20: T3, "what I like the most here is
+     the font … this fixture looks great") is set in Cormorant Garamond, by
+     the same two ranges, and its initials in UnifrakturMaguntia, whose one
+     latin file is all a capital ever needs. Cormorant's variable file draws
+     300 to 700 and claims exactly that; the blackletter is one cut at 400. */
+  assert.equal(
+    faces.length,
+    11,
+    'expected four JetBrains Mono faces, two Archivo, two Instrument Serif, two Cormorant Garamond and one UnifrakturMaguntia'
+  );
+  const tomeFaces = faces.filter((face) => /font-family: 'Cormorant Garamond';/.test(face));
+  assert.equal(tomeFaces.length, 2, 'the tome face is two files, the latin and latin-ext ranges');
+  for (const face of tomeFaces) {
+    assert.match(face, /font-weight: 300 700;/, 'the tome face claims a weight span its file does not draw');
+  }
+  const initialFaces = faces.filter((face) => /font-family: 'UnifrakturMaguntia';/.test(face));
+  assert.equal(initialFaces.length, 1, 'the initial face is its one latin file');
+  assert.match(initialFaces[0], /font-weight: 400;/, 'the initial face claims a weight its one cut does not draw');
+  assert.match(styles, /--font-tome:\s*'Cormorant Garamond', var\(--font-tome-fallback\);/);
+  assert.match(styles, /--font-initial:\s*'UnifrakturMaguntia', var\(--font-initial-fallback\);/);
+  const displayFaces = faces.filter((face) => /font-family: 'Instrument Serif';/.test(face));
+  assert.equal(displayFaces.length, 2, 'the display face is two files, the latin and latin-ext ranges');
+  for (const face of displayFaces) {
+    assert.match(face, /font-weight: 400;/, 'the display face claims a weight its one cut does not draw');
+  }
+  assert.match(styles, /--font-display:\s*'Instrument Serif', var\(--font-display-fallback\);/);
+  assert.doesNotMatch(styles, /Fraunces/, 'the retired display face is still declared or named');
+  assert.doesNotMatch(styles, /Cinzel/, 'the retired display face is still declared or named');
   let variableWidthFaces = 0;
   for (const face of faces) {
     assert.match(face, /src: url\('\.\/assets\/fonts\//, 'a webfont loads from outside the bundle');
-    assert.match(face, /font-weight: 100 (?:800|900)/, 'a face lost its variable weight span');
+    if (![...displayFaces, ...tomeFaces, ...initialFaces].includes(face)) {
+      assert.match(face, /font-weight: (?:100|400) (?:800|900)/, 'a face lost its variable weight span');
+    }
     assert.match(face, /font-display: swap/, 'a face would hold first paint invisible');
     if (/font-stretch: 62% 125%/.test(face)) {
       variableWidthFaces += 1;
@@ -755,13 +758,573 @@ test('the card token defaults are global, and resolve through the reading modes'
   assert.match(styles, /font-family:\s*var\(--font-sans\)/);
 });
 
-/* Six content components now instead of two (owner directive of 2026-09-03,
+/* THE PAGE PAINTS IN ITS OWN FACES. A face that lands after the first paint
+ * swaps in and moves every line that wraps differently in it than in its
+ * fallback: on Linux Chromium the name, the plaques and a ledger role moved
+ * the page by 0.03 at 1440px and 0.06 at 390px, because the faces' bytes were
+ * here but the main thread took them up only after the application had
+ * painted. So the document asks for each face's latin file itself, and the
+ * application mounts once those faces are loaded or a short bound has passed,
+ * whichever is first. Text pins, because the browser lanes measure the shift
+ * and these hold the two halves it depends on. */
+test('the page asks for its faces with the document and paints in them', async () => {
+  const [index, entry] = await Promise.all([read('../index.html'), read('../src/main.ts')]);
+  const preloaded = [
+    ...withoutHtmlComments(index).matchAll(
+      /<link rel="preload" href="\/src\/assets\/fonts\/([^"]+)" as="font" type="font\/woff2" crossorigin \/>/g
+    ),
+  ].map((match) => match[1]);
+  const upright = [
+    ...styles.matchAll(/font-family: '([^']+)';\s*font-style: normal;[^}]*?src: url\('\.\/assets\/fonts\/([^']+-latin\.woff2)'\)/g),
+  ];
+  assert.equal(upright.length, 5, 'expected one upright latin file for each of the five families');
+  const faces = /const faces = \{([^}]*)\};/.exec(entry);
+  assert.ok(faces, 'main.ts no longer names the faces it waits for');
+  const stacks = [...faces[1].matchAll(/(\w+): "1em '([^']+)'"/g)].map((match) => ({ stack: match[1], family: match[2] }));
+  assert.deepEqual(
+    stacks.map((face) => face.family).sort(),
+    upright.map((match) => match[1]).sort(),
+    'main.ts waits for a different set of faces than the stylesheet declares'
+  );
+  /* A STACK WAITS FOR WHAT IT DRAWS, AND THE DOCUMENT ASKS FOR IT (the review
+     of fc87a89). A face is split into files by unicode-range and fonts.load()
+     with no text loads only the latin one, so the display stack names the
+     dotless j the stylesheet draws for the name, U+0237 in Instrument Serif's
+     latin-ext file, beside a latin letter, and counts as loaded only with
+     both files in. Every file a stack's sample reaches is preloaded: the five
+     latin files, and the latin-ext file of each family whose sample goes past
+     U+00FF. */
+  const drawn = /^const drawn: Record<string, string> = \{(.*)\};$/m.exec(entry);
+  assert.ok(drawn, 'main.ts no longer names what each stack must be able to draw');
+  const samples = Object.fromEntries(
+    [...drawn[1].matchAll(/(\w+): `([^`]*)`/g)].map(([, stack, text]) => [
+      stack,
+      text.replace(/\$\{String\.fromCodePoint\(0x([0-9a-f]+)\)\}/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16))),
+    ])
+  );
+  const dotless = /\.page-name-j::before \{\s*content: '\\([0-9a-f]{4})';/i.exec(styles);
+  assert.ok(dotless, 'the name no longer draws its j from a code point in generated content');
+  assert.ok(
+    (samples.display ?? '').includes(String.fromCodePoint(Number.parseInt(dotless[1], 16))),
+    `the display stack does not wait for U+${dotless[1].toUpperCase()}, the j the name draws`
+  );
+  assert.match(samples.display ?? '', /[A-Za-z]/, 'the display stack waits for its j without a latin letter, so its latin file can still be late');
+  const extended = stacks
+    .filter(({ stack }) => [...(samples[stack] ?? '')].some((character) => character.codePointAt(0) > 0xff))
+    .map(({ family }) => {
+      const file = new RegExp(`font-family: '${family}';\\s*font-style: normal;[^}]*?src: url\\('\\./assets/fonts/([^']+-latin-ext\\.woff2)'\\)`).exec(styles);
+      assert.ok(file, `${family} draws past latin but declares no upright latin-ext file`);
+      return file[1];
+    });
+  assert.ok(extended.length > 0, 'no stack waits for anything past latin, so the dotless j can still land late');
+  assert.deepEqual(
+    [...preloaded].sort(),
+    [...upright.map((match) => match[2]), ...extended].sort(),
+    'the document preloads a different set of files than the subsets the faces must draw'
+  );
+  const wait = /const faceWait = (\d+);/.exec(entry);
+  assert.ok(wait && Number(wait[1]) > 0 && Number(wait[1]) <= 1000, 'the mount must wait for the faces a moment at most');
+  assert.match(
+    entry,
+    /Promise\.race\(\[\s*Promise\.all\(\s*Object\.entries\(faces\)\.map\(\(\[stack, face\]\) =>\s*document\.fonts\.load\(face, drawn\[stack\]\)\.then\(\(found\) => \{\s*if \(found\.length > 0\) loaded\.add\(stack\);\s*\}\)\s*\)\s*\),\s*new Promise\(\(resolve\) => setTimeout\(resolve, faceWait\)\),\s*\]\)\.then\(start, start\);/,
+    'the mount no longer waits for the faces, or for what each draws, or waits without a bound, or never runs when a face fails, or counts a face as loaded that did not load'
+  );
+  assert.equal(entry.match(/mount\(App/g)?.length, 1, 'the application mounts somewhere other than behind the faces');
+  assert.equal(entry.match(/\bstart\b/g)?.length, 3, 'start runs somewhere other than as the race’s two answers, so the page can mount before its faces');
+  /* A FACE THAT MISSED THE MOUNT IS NOT USED ON THIS VISIT: before the
+     application mounts, every stack whose face had not loaded is marked, and
+     the stylesheet sets a marked stack in its fallbacks alone, so the face has
+     no painted text to swap into when it lands (the review of eaa62d1). */
+  assert.match(
+    entry,
+    /const start = \(\) => \{\s*for \(const stack of Object\.keys\(faces\)\) \{\s*if \(!loaded\.has\(stack\)\) document\.documentElement\.setAttribute\(`data-face-\$\{stack\}`, 'fallback'\);\s*\}\s*target\.replaceChildren\(\);\s*mount\(App, \{ target \}\);\s*\};/,
+    'the application mounts without first marking the stacks whose face has not loaded'
+  );
+  assert.equal(entry.match(/loaded\.add\(/g)?.length, 1, 'a face is counted as loaded somewhere other than on its own load');
+  for (const { stack, family } of stacks) {
+    const declared = new RegExp(`--font-${stack}: '${family}', var\\(--font-${stack}-fallback\\);`).test(styles);
+    assert.ok(declared, `--font-${stack} is not '${family}' over its own fallback token`);
+    const fallback = new RegExp(`--font-${stack}-fallback: ([^;]+);`).exec(styles);
+    assert.ok(fallback && !fallback[1].includes(family), `--font-${stack}-fallback is missing or still names ${family}`);
+    assert.match(
+      styles,
+      new RegExp(`:root\\[data-face-${stack}='fallback'\\] \\{\\s*--font-${stack}: var\\(--font-${stack}-fallback\\);\\s*\\}`),
+      `a marked ${stack} stack is not set in its fallbacks alone`
+    );
+  }
+});
+
+/* The sheet's vignette is four gradients, never a blurred shadow: the sheet is
+ * the whole page tall, and WebKit without a GPU recomputed a 7rem inset blur
+ * over all of it whenever anything on the sheet repainted (1056ms a frame on
+ * the CI runner with the ticker in view; 18ms without it). */
+test('the sheet paints its vignette without a blur over its whole height', () => {
+  const sheet = /main::before \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.ok(sheet.length > 0, 'the sheet layer is not where this pin expects it');
+  assert.doesNotMatch(sheet, /box-shadow/, 'the sheet layer paints a blurred shadow again');
+  assert.equal((sheet.match(/linear-gradient\(to (?:right|left|bottom|top), var\(--keep-vignette-ink\), transparent var\(--keep-vignette-reach\)\)/g) ?? []).length, 4, 'the vignette lost an edge');
+});
+
+/* main is not a stacking context and casts no shadow. The sheet layer needs
+ * neither to sit between the sky and the content (it orders itself by z-index
+ * in the root's context; the test after this one pins the order), and together they cost
+ * WebKit without a GPU a repaint of main's whole layer each time the ticker
+ * moved: 1156ms a frame on the CI runner's iPhone profile at 1440px, 25ms with
+ * the ticker still. */
+test('main paints no layer of its own for the ticker to repaint', () => {
+  const rules = [...styles.matchAll(/(?:^|\n)main \{([^}]*)\}/g)].map((match) => match[1]);
+  assert.ok(rules.length > 0, 'no main rule is where this pin expects it');
+  for (const rule of rules) {
+    assert.doesNotMatch(rule, /isolation|z-index|box-shadow|filter|opacity|transform|will-change|contain:/, 'main paints a layer of its own again');
+  }
+  assert.ok(app.indexOf('<NightSky') >= 0 && app.indexOf('<NightSky') < app.indexOf('<main'), 'the sky must come before main, or the sheet paints under it');
+});
+
+/* The night's layers stack by z-index in the root's context, all under every
+ * word: the sky lowest; then the sheet's wall and frame; then the frame's
+ * greenery, at the wall's level and after it in the document, or above it;
+ * then the torches, so their light falls on the wall, the frame and the
+ * leaves alike (owner, 2026-10-19: "light particle diffusion against all the
+ * surfaces that it is hitting"). */
+test('the sky, the wall, the greenery and the torches stack in that order, under the words', async () => {
+  const [nightSky, torchSource] = await Promise.all([
+    read('../src/lib/components/NightSky.svelte'),
+    read('../src/lib/components/Torches.svelte'),
+  ]);
+  const level = (source, selector) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = new RegExp(`(?:^|\\n)\\s*${escaped} \\{[^}]*?z-index: (-?\\d+);`).exec(source);
+    assert.ok(match, `${selector} states no z-index this pin can read`);
+    return Number(match[1]);
+  };
+  const sky = level(nightSky, '.night-sky');
+  const wall = level(styles, 'main::before');
+  const greenery = level(styles, 'main::after');
+  const torches = level(torchSource, '.keep-torches');
+  assert.ok(sky < wall, 'the sky paints over the sheet’s wall');
+  assert.ok(wall <= greenery, 'the greenery paints under the stone it grows on');
+  assert.ok(greenery < torches, 'the greenery paints over the torches, so their light never reaches the leaves');
+  assert.ok(torches < 0, 'the torches and their light paint over the words');
+});
+
+/* The sheet is a castle wall in every reading mode (owner, 2026-10-19:
+ * "stone, castle wall … manipulated in a way where it looks a little bit
+ * blurry and pixelated"), and a wall is opaque: nothing behind the sheet shows
+ * through it, so the sheet filters nothing behind it — a blur behind an opaque
+ * sheet shows nothing and still cost every frame the sky or J painted, which
+ * WebKit without a GPU redid each time. Every mode that sets the sheet's ground
+ * sets its wall beside it, and the wall keeps its square pixels at its tile
+ * size; its softness is in the picture, not a filter. */
+test('the sheet is an opaque wall in every reading mode and filters nothing behind it', async () => {
+  const sheet = /main::before \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.ok(sheet.length > 0, 'the sheet layer is not where this pin expects it');
+  assert.doesNotMatch(sheet, /filter/, 'the sheet filters what is behind it again');
+  assert.match(sheet, /background-size: auto, auto, auto, auto, var\(--keep-wall-tile\);/, 'the wall is not drawn at its tile size');
+  // Sharp, not pixelated (owner, 2026-10-19: "less pixelated and more sharp").
+  assert.doesNotMatch(sheet, /image-rendering: pixelated;/, 'the wall is drawn in square pixels again');
+  /* The wall's own ceiling, as every asset class carries one: exactly the
+     two tiles, WebP, each within 192 KiB (113,926 and 60,650 bytes as
+     drawn), so a sharper or larger wall is a decision rather than drift. */
+  const wallDir = new URL('../src/assets/images/keep/', import.meta.url);
+  assert.deepEqual((await readdir(wallDir)).sort(), ['wall-day.webp', 'wall-night.webp']);
+  for (const name of ['wall-day.webp', 'wall-night.webp']) {
+    const bytes = await readFile(new URL(name, wallDir));
+    assert.ok(bytes.length <= 192 * 1024, `${name} is ${bytes.length} bytes, past the wall's 192 KiB ceiling`);
+    assert.equal(bytes.subarray(0, 4).toString('latin1') + bytes.subarray(8, 12).toString('latin1'), 'RIFFWEBP', `${name} is not a WebP`);
+  }
+  const walls = [...styles.matchAll(/--keep-sheet: ([^;]+);\s*--keep-sheet-ground: ([^;]+);/g)];
+  const grounds = [...styles.matchAll(/--keep-sheet-ground: /g)];
+  assert.equal(walls.length, grounds.length, 'a reading mode sets the sheet ground without its wall');
+  assert.equal(walls.length, 2, 'light (the :root default) and dark (the prefers-color-scheme block) each set a wall');
+  for (const [, wall, ground] of walls) {
+    assert.match(wall, /^var\(--keep-texture-wall-(?:night|day)\)$/, `${wall} is not one of the two walls`);
+    assert.match(ground, /^var\(--(?:color-surface|palette-keep-wall-night)\)$/, `the ground under ${wall} is not an opaque colour`);
+  }
+  assert.doesNotMatch(styles, /--keep-sheet-blur|--palette-keep-glass/, 'the glass came back');
+});
+
+/* The frame's greenery (owner, 2026-10-19: "a bit of grassy vines to the
+ * border") is scenery like the torches: out of the flow, under every word,
+ * taking no pointer, drawn at the frame's own grain. And the section titles
+ * are plain type at the column's start (the same day: "I don't like these
+ * button like borders for the sections. Not sleek at all"): no box, no
+ * border, no picture behind them, in the page's own ink — with a line from
+ * the title to the column's end, the owner's pick of the three settings tried
+ * on the page ("left + line"). The line is a VINE since the same day ("the
+ * plain lines should be tree branches, or vines"): the vine's own drawing,
+ * repeated along the line at the props' grain, so every one of its pixels is
+ * square at the size it is drawn. */
+test('the frame wears its greenery as scenery, and each title is plain type at the column’s start with a line to its end', async () => {
+  const greenery = /main::after \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.ok(greenery.length > 0, 'the greenery is not where this pin expects it');
+  for (const [pattern, message] of [
+    [/position: absolute;/, 'the greenery is in the flow'],
+    [/inset: calc\(var\(--keep-frame-page\) \* -1\);/, 'the greenery does not cover exactly the sheet and its frame'],
+    [/z-index: -2;/, 'the greenery is not at the wall’s level, under the torches and the words'],
+    [/pointer-events: none;/, 'the greenery takes the pointer'],
+    [/image-rendering: pixelated;/, 'the greenery lost its square pixels'],
+    [/--keep-frame-unit: calc\(var\(--keep-frame-page\) \/ 8\);/, 'the greenery is not drawn at the frame’s grain']
+  ]) {
+    assert.match(greenery, pattern, message);
+  }
+  for (const name of ['ivy-start', 'ivy-end', 'grass-start', 'grass-end']) {
+    assert.match(styles, new RegExp(`--keep-${name}: url\\('\\./assets/images/frame/${name}\\.svg'\\);`), `--keep-${name} is not its drawing`);
+    assert.match(greenery, new RegExp(`var\\(--keep-${name}\\)`), `the greenery no longer draws ${name}`);
+  }
+
+  const titles = [...styles.matchAll(/(?:^|\n)\.section-title \{([^}]*)\}/g)].map((match) => match[1]);
+  const keep = titles.find((body) => body.includes('--font-display'));
+  assert.ok(keep, 'the section title rule is not where this pin expects it');
+  assert.match(keep, /text-align: start;/, 'the titles are no longer set at the column’s start');
+  assert.match(keep, /color: var\(--ledger-ink\);/, 'a title is not in the page’s own ink');
+  for (const body of titles) {
+    assert.doesNotMatch(body, /border-image|background|box-shadow|outline/, 'a title wears a box again');
+  }
+  const head = [...styles.matchAll(/(?:^|\n)\.section-head \{([^}]*)\}/g)].map((match) => match[1]).at(-1) ?? '';
+  assert.match(head, /flex-direction: row;/, 'the title and its line are no longer one row');
+  assert.match(head, /align-items: center;/, 'the line is not centred on the title');
+  assert.match(head, /border: 0;/, 'the section head draws a border again');
+  const lines = [...styles.matchAll(/(?:^|\n)\.section-head::after \{([^}]*)\}/g)].map((match) => match[1]);
+  assert.equal(lines.length, 1, 'the line from the title to the column’s end is gone, or drawn by more than one rule');
+  const [line] = lines;
+  /* The vine is drawn at its own size times the grain: its height is the
+     drawing's height and its repeat the drawing's width, both read from the
+     file rather than restated, so a redrawn vine cannot be squashed into the
+     old box unnoticed. */
+  const vine = await read('../src/assets/images/props/vine.svg');
+  const [, vineW, vineH] = /viewBox="0 0 (\d+) (\d+)"/.exec(vine) ?? [];
+  assert.ok(vineW && vineH, 'the vine drawing no longer states a viewBox this pin can read');
+  for (const [pattern, message] of [
+    [/content: '';/, 'the line is not drawn'],
+    [/flex: 1 1 auto;/, 'the line no longer takes what the title leaves of the column'],
+    [new RegExp(`block-size: calc\\(${vineH} \\* var\\(--keep-prop\\)\\);`), 'the line is not the vine’s own height at the props’ grain'],
+    [
+      new RegExp(`background: var\\(--keep-vine\\) left center / calc\\(${vineW} \\* var\\(--keep-prop\\)\\) 100% repeat-x;`),
+      'the line is not the vine repeated at its own width'
+    ]
+  ]) {
+    assert.match(line, pattern, message);
+  }
+  assert.doesNotMatch(line, /--ledger-rule|--color-|border|box-shadow|gradient/, 'the line is a plain rule again rather than the vine');
+});
+
+/* THE KEEP'S PROPS (owner, 2026-10-19: "the plain lines should be tree
+ * branches, or vines, we should have swords and skulls or castle wall
+ * fixtures"). Each is a small vendored drawing in src/assets/images/props/,
+ * named by ONE token in the stylesheet, or imported by the one component that
+ * draws it into an SVG of its own. Four promises, each pinned where it is
+ * decided:
+ *   · every name resolves: a token or an import names a file that is there,
+ *     the folder holds no drawing nothing names, and every token is read;
+ *   · the props that tile each have one tile token, their own size times one
+ *     whole-pixel grain, read from each drawing's own viewBox, so every pixel
+ *     is square. That every painted box sizes them by it is measured in the
+ *     browser lanes ("every branch, twig and grain is painted at its own
+ *     drawing’s size in prop pixels"), since no text here sees a box;
+ *   · the trackers' roll stands the role scroll's own rollers upright, and
+ *     its calendar and key are one set of inks, level for level;
+ *   · a model's share is a sword whose hilt and point are always whole, and
+ *     only its blade grows, by a unitless share. */
+test('the keep’s props are vendored drawings at their own grain, and the trackers’ roll is the role scroll stood upright', async () => {
+  const sheet = styles.replace(/\/\*[\s\S]*?\*\//g, '');
+  const propsDir = new URL('../src/assets/images/props/', import.meta.url);
+  const files = (await readdir(propsDir)).sort();
+  const viewBox = async (file) => {
+    const drawing = await readFile(new URL(file, propsDir), 'utf8');
+    const box = /viewBox="0 0 (\d+) (\d+)"/.exec(drawing);
+    assert.ok(box, `${file} states no viewBox this pin can read`);
+    return { w: Number(box[1]), h: Number(box[2]) };
+  };
+
+  // EVERY NAME RESOLVES. A prop token is `--keep-<file>` naming exactly
+  // `./assets/images/props/<file>.svg`, and nothing else in the sheet reaches
+  // into the folder, so a prop has one name.
+  const tokens = [...sheet.matchAll(/(--keep-[a-z0-9-]+):\s*url\('\.\/assets\/images\/props\/([^']+)'\);/g)].map(
+    ([, token, file]) => ({ token, file })
+  );
+  assert.ok(tokens.length > 0, 'the sheet names no prop; this pin has lost its subject');
+  assert.equal(
+    (sheet.match(/assets\/images\/props\//g) ?? []).length,
+    tokens.length,
+    'the sheet reaches into the props folder somewhere other than a prop’s one token'
+  );
+  for (const { token, file } of tokens) {
+    assert.equal(`--keep-${file.replace(/\.svg$/, '')}`, token, `${token} names ${file}; a prop token is named for its drawing`);
+    assert.ok(files.includes(file), `${token} names ${file}, which is not in src/assets/images/props/`);
+    const readers = [sheet, ...Object.values(componentSources)].join('\n');
+    assert.ok(readers.includes(`var(${token})`), `${token} is declared and read nowhere; a prop nobody draws is dead weight`);
+  }
+  const imports = Object.entries(componentSources).flatMap(([name, source]) =>
+    [...source.matchAll(/import (\w+) from '(?:\.\.\/)+assets\/images\/props\/([^']+)';/g)].map(([, binding, file]) => ({
+      name,
+      binding,
+      file,
+    }))
+  );
+  for (const { name, file } of imports) {
+    assert.ok(files.includes(file), `${name} imports ${file}, which is not in src/assets/images/props/`);
+  }
+  const named = new Set([...tokens.map(({ file }) => file), ...imports.map(({ file }) => file)]);
+  assert.deepEqual(
+    files.filter((file) => !named.has(file)),
+    [],
+    'the props folder holds a drawing no token and no import names'
+  );
+
+  // AT THEIR OWN GRAIN. The grain is a whole number of CSS pixels, and each
+  // prop that tiles is its drawing's own width and height times it — the
+  // stone's grain the torchlight falls through (2026-10-19) included. The
+  // branches and the twigs are families (2026-10-19: "make the branches more
+  // unique"), many drawings sharing one tile, so every member is its family's
+  // one size: a member drawn at another would be stretched to the tile.
+  const grain = /--keep-prop: (\d+)px;/.exec(sheet);
+  assert.ok(grain, 'the props’ grain is not a whole number of pixels, so their pixels are not square');
+  const family = (prop) => files.filter((file) => new RegExp(`^${prop}-\\d+\\.svg$`).test(file)).sort();
+  assert.deepEqual(family('branch'), ['branch-1.svg', 'branch-2.svg', 'branch-3.svg', 'branch-4.svg'], 'the roles no longer have four branches to take turns with');
+  assert.deepEqual(family('twig'), ['twig-1.svg', 'twig-2.svg', 'twig-3.svg'], 'the lists no longer have three twigs to take turns with');
+  for (const [prop, members] of [
+    ['branch', family('branch')],
+    ['twig', family('twig')],
+    ['grain', ['grain.svg']],
+  ]) {
+    const sizes = await Promise.all(members.map(viewBox));
+    for (const [index, { w, h }] of sizes.entries()) {
+      assert.match(
+        sheet,
+        new RegExp(`--keep-${prop}-tile: calc\\(${w} \\* var\\(--keep-prop\\)\\) calc\\(${h} \\* var\\(--keep-prop\\)\\);`),
+        `${members[index]} is not the ${prop}’s tile, its ${w}x${h} drawing at the props’ grain`
+      );
+    }
+  }
+  // A role's row clears its branch: the row's bottom padding is the
+  // drawing's own depth, so the leaves growing up off the bough never reach
+  // the row's last line, at any width.
+  const [{ h: branchDepth }] = await Promise.all(family('branch').slice(0, 1).map(viewBox));
+  assert.match(
+    sheet,
+    new RegExp(`\\.ledger-row \\{\\s*padding-block-end: calc\\(${branchDepth} \\* var\\(--keep-prop\\)\\);\\s*\\}`),
+    `a role’s row is not padded by its branch’s ${branchDepth}-pixel depth, so the branch’s leaves grow into the row’s last line`
+  );
+  // A role's scroll (2026-10-19) has two rollers, each a rolled edge tiled
+  // between two wooden knobs, every part at its own size times the grain and
+  // all three one height: the knobs drawn once at each end of the border box,
+  // the roll repeated in the content box between them.
+  const [roll, knobStart, knobEnd] = await Promise.all(['scroll-roll.svg', 'scroll-knob-start.svg', 'scroll-knob-end.svg'].map(viewBox));
+  assert.ok(knobStart.h === roll.h && knobEnd.h === roll.h && knobStart.w === knobEnd.w, 'the scroll’s roll and knobs are not one height, or its knobs not one width');
+  const grainOf = (n) => (n === 1 ? 'var\\(--keep-prop\\)' : `calc\\(${n} \\* var\\(--keep-prop\\)\\)`);
+  const roller = /\.ledger-scroll::before,\s*\.ledger-scroll-end \{([^}]*)\}/.exec(sheet)?.[1]?.replace(/\s+/g, ' ') ?? '';
+  assert.ok(roller, 'the scroll’s two rollers are not drawn by one rule');
+  for (const [pattern, message] of [
+    [new RegExp(`block-size: ${grainOf(roll.h)};`), 'a roller is not its drawing’s height at the grain'],
+    [/box-sizing: border-box;/, 'a roller’s knobs are not drawn at its own edges'],
+    [new RegExp(`padding-inline: ${grainOf(knobStart.w)};`), 'the roll does not run between the knobs'],
+    [new RegExp(`var\\(--keep-scroll-knob-start\\) left center / ${grainOf(knobStart.w)} 100% no-repeat border-box`), 'the start knob is not drawn once, whole, at the roller’s start'],
+    [new RegExp(`var\\(--keep-scroll-knob-end\\) right center / ${grainOf(knobEnd.w)} 100% no-repeat border-box`), 'the end knob is not drawn once, whole, at the roller’s end'],
+    [new RegExp(`var\\(--keep-scroll-roll\\) left center / ${grainOf(roll.w)} 100% repeat-x content-box`), 'the roll is not its own drawing repeated between the knobs'],
+  ]) {
+    assert.match(roller, pattern, message);
+  }
+
+  // The sword is drawn one CSS pixel a pixel wherever it lies: whole under a
+  // picked layer or set, and in three parts as a model's share.
+  const sword = await viewBox('sword.svg');
+  assert.match(
+    sheet,
+    new RegExp(`--keep-sword-underline: var\\(--keep-sword\\) center bottom 0\\.25rem / ${sword.w}px ${sword.h}px no-repeat;`),
+    'the underline sword is not drawn at its own size'
+  );
+  /* The trackers' layers are wax seals now (owner, 2026-10-20), so the
+     sword lies under the gallery's picked set alone. */
+  for (const [name, source, selector] of [['MediaGallery', mediaGallery, /\.gallery-set\[aria-pressed='true'\] \{([^}]*)\}/]]) {
+    const picked = selector.exec(source)?.[1] ?? '';
+    assert.match(picked, /background: var\(--keep-sword-underline\);/, `${name}’s picked choice is not underlined by the sword`);
+    assert.doesNotMatch(picked, /border/, `${name}’s picked choice draws a coloured rule under it again`);
+  }
+
+  // THE TRACKERS' ROLL (owner, 2026-10-20: "The Rotulus") hangs between the
+  // role scroll's own rollers stood upright: the upright roll and its two
+  // knobs are the horizontal drawings turned a quarter, pixel for pixel, and
+  // each roller is drawn as the role's are, at the drawings' own size times
+  // the grain, the knobs once at each end of its border box and the roll
+  // repeated in the content box between them.
+  const rectsOf = async (file, turn) => {
+    const drawing = await readFile(new URL(file, propsDir), 'utf8');
+    const out = [];
+    for (const [, fill, data] of drawing.matchAll(/<path fill="(#[0-9a-f]{6})" d="([^"]+)"\/>/g)) {
+      for (const [, x, y, w, h] of data.matchAll(/M(\d+) (\d+)h(\d+)v(\d+)h-\d+z/g)) {
+        for (let dx = 0; dx < Number(w); dx += 1) {
+          for (let dy = 0; dy < Number(h); dy += 1) {
+            const [px, py] = [Number(x) + dx, Number(y) + dy];
+            out.push(`${turn ? py : px},${turn ? px : py} ${fill}`);
+          }
+        }
+      }
+    }
+    return out.sort();
+  };
+  for (const [flat, upright] of [
+    ['scroll-roll.svg', 'scroll-roll-upright.svg'],
+    ['scroll-knob-start.svg', 'scroll-knob-top.svg'],
+    ['scroll-knob-end.svg', 'scroll-knob-bottom.svg'],
+  ]) {
+    const [turned, drawn] = await Promise.all([rectsOf(flat, true), rectsOf(upright, false)]);
+    assert.ok(drawn.length > 0, `${upright} draws no pixel this pin can read`);
+    assert.deepEqual(drawn, turned, `${upright} is not ${flat} turned a quarter, pixel for pixel`);
+  }
+  const [upright, knobTop, knobBottom] = await Promise.all(['scroll-roll-upright.svg', 'scroll-knob-top.svg', 'scroll-knob-bottom.svg'].map(viewBox));
+  assert.ok(knobTop.w === upright.w && knobBottom.w === upright.w && knobTop.h === knobBottom.h, 'the upright roll and its knobs are not one width, or its knobs not one height');
+  const cellStyle = chronicle.replace(/\/\*[\s\S]*?\*\//g, '');
+  const ruleOf = (selector) =>
+    new RegExp(`(?:^|\\n)\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(cellStyle)?.[1]?.replace(/\s+/g, ' ') ?? '';
+  assert.match(ruleOf('.chronicle-scroll'), new RegExp(`--chronicle-roller: ${grainOf(upright.w)};`), 'a roller is not its drawing’s width at the grain');
+  const uprightRoller = ruleOf('.chronicle-roller');
+  for (const [pattern, message] of [
+    [/inline-size: var\(--chronicle-roller\);/, 'a roller is not the roll’s own width'],
+    [/box-sizing: border-box;/, 'a roller’s knobs are not drawn at its own ends'],
+    [new RegExp(`padding-block: ${grainOf(knobTop.h)};`), 'the roll does not run between the knobs'],
+    [new RegExp(`var\\(--keep-scroll-knob-top\\) center top / 100% ${grainOf(knobTop.h)} no-repeat border-box`), 'the top knob is not drawn once, whole, at the roller’s top'],
+    [new RegExp(`var\\(--keep-scroll-knob-bottom\\) center bottom / 100% ${grainOf(knobBottom.h)} no-repeat border-box`), 'the bottom knob is not drawn once, whole, at the roller’s foot'],
+    [new RegExp(`var\\(--keep-scroll-roll-upright\\) center top / 100% ${grainOf(upright.h)} repeat-y content-box`), 'the roll is not its own drawing repeated between the knobs'],
+  ]) {
+    assert.match(uprightRoller, pattern, message);
+  }
+  // Its parchment is the role scroll's: the same tokens, darkening the same
+  // four props where it curls onto each roller.
+  const sheetRule = ruleOf('.chronicle-sheet');
+  for (const token of ['--keep-parchment-edge', '--keep-parchment', '--keep-parchment-ink']) {
+    assert.match(sheetRule, new RegExp(`var\\(${token}\\)`), `the roll’s parchment is not the role scroll’s ${token}`);
+  }
+  assert.match(sheetRule, /var\(--keep-parchment\) calc\(4 \* var\(--keep-prop\)\)/, 'the roll’s parchment does not curl over the role scroll’s four props');
+
+  // ONE SET OF INKS. A day is a square inked on the roll, a quiet one in the
+  // parchment's own ink, faint, and a busier one in the calendar's greens,
+  // the darkest last; the key's five steps are the same five inks, level for
+  // level; and the busiest day wears nothing of its own (owner, 2026-10-20:
+  // "we don't need to highlight the highest day like that").
+  const inkOf = (body, paint, strength) => [
+    new RegExp(`${paint}: ([^;]+);`).exec(body)?.[1] ?? null,
+    new RegExp(`${strength}: ([^;]+);`).exec(body)?.[1] ?? null,
+  ];
+  assert.deepEqual(inkOf(ruleOf('.chronicle-cell'), 'fill', 'fill-opacity'), ['var(--keep-parchment-ink)', '0.09'], 'a quiet day is not the parchment’s ink, faint');
+  assert.deepEqual(inkOf(ruleOf('.chronicle-step'), 'background', 'opacity'), ['var(--keep-parchment-ink)', '0.09'], 'the key’s quiet step is not the quiet day’s ink');
+  const greens = [];
+  for (const level of [1, 2, 3, 4]) {
+    const cell = inkOf(ruleOf(`.chronicle-cell[data-grid-level='${level}']`), 'fill', 'fill-opacity');
+    const step = inkOf(ruleOf(`.chronicle-step[data-grid-level='${level}']`), 'background', 'opacity');
+    assert.ok(cell[0] !== null && cell[1] !== null, `a level-${level} day is inked with nothing`);
+    assert.deepEqual(step, cell, `the key’s level-${level} step is not the level-${level} day’s ink`);
+    greens.push(cell[0]);
+  }
+  assert.deepEqual(
+    greens,
+    ['var(--palette-dark-grid-4)', 'var(--palette-dark-grid-3)', 'var(--palette-dark-grid-2)', 'var(--palette-dark-grid-1)'],
+    'the days are not the calendar’s greens, deepening as a day was busier'
+  );
+  assert.doesNotMatch(cellStyle, /\.chronicle-cell\[data-peak='true'\]/, 'the busiest day wears a mark of its own again');
+  assert.match(
+    chronicle,
+    /\{#each \[0, 1, 2, 3, 4\] as level \(level\)\}<i class="chronicle-step" data-grid-level=\{level\}><\/i>\{\/each\}/,
+    'the key no longer draws one step per level'
+  );
+  assert.doesNotMatch(chronicle, /stone/i, 'the calendar paints stones again');
+  assert.match(chronicle, /<rect\s+class="chronicle-cell"[\s\S]*?x=\{cell\.x\}\s+y=\{cell\.y\}\s+width=\{CELL\}\s+height=\{CELL\}/, 'a cell is not the CELL square at its own place');
+
+  // THE SWORD'S SHARE. The hilt and the point are fixed lengths, each its
+  // drawing's own width, and the track is the sword's own height; the blade
+  // is the content box between them, and only it grows — by the unitless
+  // share, from nothing (a hilt and its point) to the whole track.
+  const [hilt, tip] = await Promise.all(['sword-hilt.svg', 'sword-tip.svg'].map(viewBox));
+  assert.ok(hilt.h === sword.h && tip.h === sword.h, 'the sword’s parts are not one height');
+  // THE BLADE IS ITS ROWS OF STEEL, drawn once along it as bands (2026-10-20:
+  // a one-pixel drawing repeated cost WebKit without a GPU one drawing per
+  // pixel of blade). Each band is one pixel row inside the sword's height, in
+  // a steel token, and the rows are the hilt's own last column, so the blade
+  // still runs out of the hilt with no seam.
+  const bladeBands = /--keep-sword-blade:\s*linear-gradient\(([^;]*)\);/.exec(sheet)?.[1]?.replace(/\s+/g, ' ') ?? '';
+  const bands = [...bladeBands.matchAll(/var\(--(palette-keep-steel[a-z-]*)\) (\d+)px (\d+)px/g)].map(([, token, from, to]) => ({
+    token,
+    from: Number(from),
+    to: Number(to),
+  }));
+  assert.equal(bands.length, 3, 'the blade is not its three rows of steel');
+  for (const [index, band] of bands.entries()) {
+    assert.equal(band.to - band.from, 1, `the blade’s ${band.token} band is not one pixel row`);
+    assert.ok(band.from >= 0 && band.to <= sword.h, `the blade’s ${band.token} band lies outside the sword`);
+    if (index > 0) assert.equal(band.from, bands[index - 1].to, 'the blade’s rows of steel are not contiguous');
+  }
+  const hiltDrawing = await readFile(new URL('sword-hilt.svg', propsDir), 'utf8');
+  const hiltEnd = new Map();
+  for (const [, colour, path] of hiltDrawing.matchAll(/<path fill="(#[0-9a-f]{6})" d="([^"]+)"\/>/g)) {
+    for (const [, x, y, w, h] of path.matchAll(/M(\d+) (\d+)h(\d+)v(\d+)/g)) {
+      if (Number(x) <= hilt.w - 1 && hilt.w - 1 < Number(x) + Number(w)) {
+        for (let row = Number(y); row < Number(y) + Number(h); row += 1) hiltEnd.set(row, colour);
+      }
+    }
+  }
+  for (const band of bands) {
+    const colour = new RegExp(`--${band.token}:\\s*(#[0-9a-f]{6});`).exec(sheet)?.[1];
+    assert.ok(colour, `--${band.token} is not a colour in the token layer`);
+    assert.equal(colour, hiltEnd.get(band.from), `the blade’s row ${band.from} is not the hilt’s own steel there`);
+  }
+  const swordStyle = tome.replace(/\/\*[\s\S]*?\*\//g, '');
+  const track = /\.chronicle-track \{([^}]*)\}/.exec(swordStyle)?.[1] ?? '';
+  assert.match(track, new RegExp(`block-size: ${sword.h}px;`), 'the share’s track is not the sword’s own height');
+  assert.doesNotMatch(track, /background|border/, 'the share’s track paints a bar behind the sword again');
+  const fill = /\.chronicle-fill \{([^}]*)\}/.exec(swordStyle)?.[1]?.replace(/\s+/g, ' ') ?? '';
+  assert.doesNotMatch(cellStyle, /\.chronicle-(?:track|fill) \{/, 'the Chronicle draws a sword of its own beside the tome\u2019s');
+  for (const [pattern, message] of [
+    [new RegExp(`--sword-hilt: ${hilt.w}px;`), 'the hilt is not a fixed length of its own drawing’s width'],
+    [new RegExp(`--sword-tip: ${tip.w}px;`), 'the point is not a fixed length of its own drawing’s width'],
+    [/box-sizing: border-box;/, 'the sword’s length is not its whole box'],
+    [
+      /inline-size: calc\(var\(--sword-hilt\) \+ var\(--sword-tip\) \+ \(100% - var\(--sword-hilt\) - var\(--sword-tip\)\) \* var\(--chronicle-share, 0\)\);/,
+      'the sword is not its hilt and point plus the share of the rest of the track'
+    ],
+    [/padding-inline: var\(--sword-hilt\) var\(--sword-tip\);/, 'the blade is not the box between the hilt and the point'],
+    [
+      /var\(--keep-sword-hilt\) left center \/ var\(--sword-hilt\) 100% no-repeat border-box/,
+      'the hilt is not drawn once, whole, at the sword’s start'
+    ],
+    [
+      /var\(--keep-sword-tip\) right center \/ var\(--sword-tip\) 100% no-repeat border-box/,
+      'the point is not drawn once, whole, at the sword’s end'
+    ],
+    [
+      /var\(--keep-sword-blade\) left center \/ 100% 100% no-repeat content-box/,
+      'the blade is not its rows of steel drawn once between the hilt and the point'
+    ],
+  ]) {
+    assert.match(fill, pattern, message);
+  }
+  assert.doesNotMatch(fill, /--keep-sword-blade\)[^,;]* (?:repeat|space|round)\b/, 'the blade is a picture repeated along it again');
+});
+
+/* Every content component instead of two (owner directive of 2026-09-03,
  * issue 287) — the structural closure got WIDER with the redesign, not
  * narrower: every surface the ledger introduced renders through the same card
  * primitive the entry log and the gallery did, so a look is still a variant
- * plus its tokens rather than a component that builds its own chrome. */
-test('every content component renders through the card primitive', () => {
-  assert.ok(Object.keys(contentComponents).length >= 6, 'the content-component walk lost a surface');
+ * plus its tokens rather than a component that builds its own chrome.
+ *
+ * The walk is EXACTLY the components the block modules bind, read off
+ * lib/blocks/ rather than counted: a count only ever said "at least this
+ * many", so it could not notice a surface added there and missing here, or
+ * one still swept after its block retired (the calendar and the board did,
+ * 2026-10-16). */
+test('every content component renders through the card primitive', async () => {
+  const blocksDir = new URL('../src/lib/blocks/', import.meta.url);
+  const bound = new Set();
+  for (const entry of await readdir(blocksDir)) {
+    const source = await readFile(new URL(entry, blocksDir), 'utf8');
+    for (const [, name] of source.matchAll(/^import (\w+) from '\.\.\/components\/\1\.svelte';$/gm)) {
+      bound.add(name);
+    }
+  }
+  assert.ok(bound.size > 0, 'no block module binds a component; this walk has lost its subject');
+  assert.deepEqual(
+    Object.keys(contentComponents).sort(),
+    [...bound].sort(),
+    'the content-component walk is not exactly the components the block modules bind'
+  );
   for (const [name, source] of Object.entries(contentComponents)) {
     assert.match(
       source,
@@ -814,6 +1377,10 @@ test('the experience section carries four complete real entries, newest first', 
     for (const field of ['company', 'short', 'years', 'markFile', 'role', 'dates', 'location', 'site']) {
       assert.ok(entry[field].trim().length > 0, `an experience entry has an empty ${field}`);
     }
+    /* A span reads in full (owner, 2026-10-17: "having the time - cut off like
+       this makes no sense, it should say 2023 - present"): whole years, and a
+       role still held says so in a word rather than with a dangling dash. */
+    assert.match(entry.years, /^\d{4}(?: – (?:\d{4}|present))?$/, `${entry.short} reads "${entry.years}"`);
     /* The employer's own home on the web (issue 243), and it is checked rather
        than merely present: an absolute https origin, no credentials, no query,
        no path pretending to be one. A relative or http value would render an
@@ -1092,7 +1659,7 @@ test(
   { skip: reducedContextNote },
   async () => {
     /* The repository's one attribution index points at the note beside the
-       tiles, the way it already points at the textures' (AGENTS.md,
+       tiles, the way it pointed at the band textures' while they shipped (AGENTS.md,
        "Attribution for third-party assets"). These four are somebody else's
        TRADEMARKS, which is the fact a reviewer opens ATTRIBUTION.md to find — a
        provenance note only the directory knows about is a note nobody reads.
@@ -1563,31 +2130,41 @@ test('the closed-pull tally and the released version are told with a mark and a 
   /* The words are hidden by CLIPPING, never by display:none or hidden, both of
      which would take them out of the accessibility tree and leave the mark
      carrying the figure alone. */
-  assert.match(ledgerSpread, /<span class="table-clipped">\{count\.label\}<\/span>/);
-  assert.match(styles, /\.table-clipped \{[^}]*clip-path: inset\(50%\)/s);
-  assert.doesNotMatch(styles, /\.table-clipped \{[^}]*display: none/s);
-  /* THE HEAD ROW IS WORDS TOO (owner directive, 2026-09-11, issue #317): the
-     visible head is a mark, so the word it replaced has to reach a screen
-     reader from the head itself — which is why the row is no longer hidden
-     wholesale. */
-  assert.doesNotMatch(ledgerSpread, /<div class="table-head" aria-hidden="true">/);
-  assert.match(ledgerSpread, /<span class="table-clipped">\{head\}<\/span>/);
-  /* EACH COLUMN HAS ITS OWN RULED HEAD (owner design decision, 2026-09-11,
-     issue 318). The table's names its five columns; the log's names the whole
-     stream, in the adapter's words, under the same class so the two heads are
-     drawn at one height by one rule rather than by two that must agree. */
+  const spreadStyle = styleBlock(ledgerSpread);
+  assert.match(ledgerSpread, /<span class="ongoing-clipped">\{count\.label\}<\/span>/);
+  assert.match(spreadStyle, /\.ongoing-clipped \{[^}]*clip-path: inset\(50%\)/s);
+  assert.doesNotMatch(spreadStyle, /\.ongoing-clipped \{[^}]*display: none/s);
+  /* NO HEAD ROW OF MARKS ANY MORE (owner direction, 2026-10-16). It carried
+     each mark's word for a screen reader (issue #317) because a mark over a
+     column states nothing; every figure now carries its own mark beside its
+     value AND its own words, so a row of marks over them would be a second
+     statement of what each figure already says. The column wears one word. */
+  assert.doesNotMatch(ledgerSpread, /\{#each heads/, 'the head row of marks came back');
+  assert.equal(projectColumnHead, 'Repositories');
+  assert.equal(projectTableProps(null).head, projectColumnHead);
+  /* EACH COLUMN KEEPS ITS WORD, AND NOTHING IS DRAWN OVER IT (owner,
+     2026-10-19: "remove this heading … remove the icons there as well"). The
+     two ruled heads of issue 318 and their marks are gone from the page, but a
+     screen reader has no other name for either column, so each word is kept
+     in the tree by the same clipping the figures' words use — the log's still
+     naming the whole stream, in the adapter's words. */
   assert.equal(commitColumnHead, 'Commits · every repository');
   assert.equal(projectsCommitsProps([null, null]).logHead, commitColumnHead);
+  const spreadMarkup = withoutHtmlComments(ledgerSpread);
+  assert.match(spreadMarkup, /<div class="ongoing-column">\s*<span class="ongoing-clipped">\{head\}<\/span>/, 'the repositories column lost its word');
   assert.match(
-    ledgerSpread,
-    /<div class="table-head spread-log-head">\s*<span class="table-label"><Icon name="commit" slot="cell" \/>\{logHead\}<\/span>/
+    spreadMarkup,
+    /<div class="ongoing-column" id=\{logAnchor\}>\s*<span class="ongoing-clipped">\{logHead\}<\/span>/,
+    'the log column lost its word'
   );
-  assert.match(styles, /\.spread-log-head \{[^}]*grid-template-columns: minmax\(0, 1fr\);/s);
-  /* A VERSION LONGER THAN ITS CELL ELLIPSIZES rather than wrapping the row: a
-     wrapped figure is a row taller than the reserve the column beside it was
-     built from, which is the zero-CLS pairing breaking on a tag nobody chose
-     the length of. The cell is one unbreakable line that clips. */
-  const figure = /\.table-figure \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.doesNotMatch(spreadMarkup, /class="ongoing-head"/, 'a column draws its head again');
+  assert.doesNotMatch(spreadStyle, /\.ongoing-head\b/, 'a column head is styled again');
+  assert.doesNotMatch(spreadMarkup, /<Icon name="(?:folder|commit)"/, 'a column head’s mark came back');
+  /* A VERSION LONGER THAN ITS CELL ELLIPSIZES rather than wrapping the entry:
+     a wrapped figure is an entry taller than the reserve the column beside it
+     was built from, which is the zero-CLS pairing breaking on a tag nobody
+     chose the length of. The value is one unbreakable line that clips. */
+  const figure = /\.repo-value \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '';
   assert.match(figure, /overflow: hidden/);
   assert.match(figure, /white-space: nowrap/);
   assert.match(figure, /text-overflow: ellipsis/);
@@ -1605,137 +2182,113 @@ test('the closed-pull tally and the released version are told with a mark and a 
   assert.equal(tagged.rows[0].counts.find((count) => count.key === 'release').value, longTag);
 });
 
-/* THE CLUSTER BECAME COLUMNS (owner directive of 2026-09-03, issue 287), and
- * issue 188's claim survives the move in the form the new shape can carry it.
+/* THE CLUSTER BECAME COLUMNS (owner directive of 2026-09-03, issue 287), the
+ * columns became two-line entries (owner direction, 2026-10-16), and issue
+ * 188's claim survives both moves in the form the new shape can carry it.
  *
  * What issue 188 was about: nothing in the card's head could be placed by its
  * CONTENT — a long repository name must not push the counters, and the head
  * must not switch to a second layout at some width. A grid whose tracks are
  * declared once answered both.
  *
- * The table answers both the same way and more strictly: every counter sits in
- * a track the TABLE declares, identical on every row, so a figure cannot move
- * anything and there is nothing for a name's length to decide. The one thing
- * that did change is deliberate and is the owner's first requirement: the row
- * DOES restack on a phone. That is a width decision, not a content one — every
- * row takes the same shape at the same width — and it is what keeps a
- * six-column table off a 320px screen without scrolling the page sideways,
- * which is the floor a second layout was banned to protect in the first place.
+ * The entries answer both the same way: every figure sits in a track the
+ * COMPONENT declares, identical in every entry, so a figure cannot move
+ * anything and there is nothing for a name's length to decide — on the wide
+ * sheet the name's track ends exactly where the figure tracks begin, because
+ * the link reserves their summed width. What DOES change with the width is
+ * deliberate and is a width decision, not a content one: below the wide sheet
+ * the figures take a line of their own (a column narrower than a name plus
+ * four figures cannot hold both), and a phone stacks the two columns. Every
+ * entry takes the same shape at the same width.
  *
- * The accessibility half got stronger rather than weaker. The card put each
- * counter's whole sentence one interaction away, in a detail a reader had to
- * focus the tile to reach; the table keeps that detail AND carries the same
- * sentence unconditionally in the accessibility tree, clipped beside the
- * figure, so the words are there whether or not anyone reaches for them. */
-test('the table places every counter in a declared track, and no figure moves anything (issue 188; issue 287)', () => {
+ * The accessibility half is unchanged: each figure carries its detail AND the
+ * same sentence unconditionally in the accessibility tree, clipped beside the
+ * value, so the words are there whether or not anyone reaches for them. */
+test('every figure sits in a declared track, and no figure moves anything (issue 188; issue 287; owner 2026-10-16)', () => {
   const noonPlacement = Date.parse('2026-08-27T12:00:00Z');
-  const rowRules = [...styles.matchAll(/\.table-head,\s*\n\.table-row \{([^}]*)\}/g)].map(
-    ([, body]) => body
-  );
-  assert.equal(rowRules.length, 1, 'the row has grown a second base shape again');
-  assert.match(rowRules[0], /display:\s*grid/);
-  /* EVERY TRACK IS A minmax (owner design decision, 2026-09-11, issue 318):
-     the name track flexes, and each figure track takes its stated width
-     wherever there is room and shrinks below it rather than pushing the page
-     sideways when the table lives in half a sheet or a reader drags the
-     reading column in. A bare fixed track is what used to overflow. */
+  const spreadStyle = styleBlock(ledgerSpread);
+  const flat = spreadStyle.replace(/\s+/g, ' ');
+  /* THE WIDE SHEET: the four figure tracks are four named lengths, and the
+     link's own grid reserves exactly their sum plus their gaps beside the
+     name — so the name flexes up to the figures and never under them. */
   assert.match(
-    rowRules[0],
-    /grid-template-columns:\s*\n?\s*minmax\(0, 1fr\)(?:\s+minmax\(0, [0-9.]+rem\)){4};/,
-    'the name column must flex and every figure track must be able to shrink'
+    flat,
+    /\.repo-figures \{ position: relative; z-index: 1; grid-area: 1 \/ 1; justify-self: end; align-self: start; grid-template-columns: var\(--repo-pull\) var\(--repo-tag\) var\(--repo-star\) var\(--repo-age\);/,
+    'the wide figure tracks are no longer the four declared lengths'
   );
-  /* And the LOG column beside it is declared the same way, for the same
-     reason: a subject that flexes between an age, a repository and an
-     identity, each of which can shrink. */
-  const logRule = /\.commit-row \{([^}]*)\}/.exec(styles)?.[1] ?? '';
   assert.match(
-    logRule,
-    /grid-template-columns:\s*\n?\s*minmax\(0, [0-9.]+rem\) minmax\(0, [0-9.]+rem\) minmax\(0, 1fr\) minmax\(0, [0-9.]+rem\);/,
-    'the commit row must flex on its subject and shrink on the rest'
+    flat,
+    /grid-template-columns: minmax\(0, 1fr\) calc\(var\(--repo-pull\) \+ var\(--repo-tag\) \+ var\(--repo-star\) \+ var\(--repo-age\) \+ 3 \* var\(--repo-figures-gap\)\);/,
+    'the name track no longer stops where the figures begin'
+  );
+  /* BELOW IT, four tracks in the same proportion on a line of their own —
+     shares of the line rather than lengths, so they shrink with a phone
+     rather than pushing it sideways, and rather than four equal quarters,
+     which ellipsized a release tag. */
+  assert.match(
+    /\.repo-figures \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '',
+    /grid-template-columns:\s*minmax\(0, 3\.25fr\) minmax\(0, 4\.75fr\) minmax\(0, 2\.5fr\) minmax\(0, 3fr\);/
+  );
+  for (const [name, rem] of [['pull', 3.25], ['tag', 4.75], ['star', 2.5], ['age', 3]]) {
+    assert.match(spreadStyle, new RegExp(`--repo-${name}: ${rem}rem;`), `the ${name} track and its share disagree`);
+  }
+  /* And the LOG's supporting line flexes on the repository and holds the age
+     and the identity at the column's end. */
+  assert.match(
+    /\.log-meta \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '',
+    /grid-template-columns: minmax\(0, 1fr\) auto auto;/,
+    'the supporting line no longer flexes on the repository'
   );
   /* THE TWO COLUMNS ARE EQUAL HALVES that fill the sheet (the no-dead-space
      ruling) and can be narrowed (the no-sideways-scroll floor). Both claims
      are one declaration. */
-  const spreadRule = /\.ledger-spread \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  const spreadRule = /\.ongoing \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '';
   assert.match(spreadRule, /display:\s*grid/);
   assert.match(spreadRule, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\);/);
-  assert.match(spreadRule, /gap:\s*0 var\(--ledger-spread-gap\);/);
-  /* The head and the rows are laid on the SAME track list — one declaration
-     for both — so a column head can never sit over a different column than the
-     figures it names. */
-  assert.ok(
-    styles.includes('.table-head,\n.table-row {'),
-    'the head and the rows no longer share one track declaration'
-  );
+  assert.match(spreadRule, /gap:\s*0 var\(--ongoing-columns-gap\);/);
   /* ONE PHONE WIDTH, however many blocks express it: a sheet with two
      max-width breakpoints is a sheet whose parts disagree about where a phone
-     ends, which is the drift a single-layout rule was protecting against. The
-     WIDTHS are compared, not the block count — the chrome row drops its
-     location label at the same width the rows restack at, and those are two
-     decisions about one boundary. */
+     ends. The WIDTHS are compared, not the block count — the chrome row drops
+     its location label at the same width the columns stack at, and those are
+     two decisions about one boundary. The component states the SAME width. */
   /* The BOUNDARY MOVED from 40rem to 45rem (owner directive of 2026-09-03,
-     issue 287), and it moved because it was measured rather than chosen: the
-     wide row's own tracks — 15rem for the name, four counter columns, five
-     1.5rem gaps — came to 680px, so a page column narrower than that overflowed
-     the document sideways, which happened between 641px and 711px. The
-     restack happens at 720px, where the wide layout genuinely stopped fitting,
-     and it is the SAME boundary the two columns stack at (owner design
-     decision, 2026-09-11, issue 318). */
+     issue 287), and it moved because it was measured rather than chosen: it is
+     the SAME boundary the two columns stack at (owner design decision,
+     2026-09-11, issue 318). */
   const phoneWidths = new Set(
     [...styles.matchAll(/@media \(max-width: ([^)]+)\)/g)].map(([, width]) => width.trim())
   );
   assert.equal(phoneWidths.size, 1, `the sheet disagrees about where a phone ends: ${[...phoneWidths].join(', ')}`);
-  /* THE TABLE's head goes and the LOG's stays (owner design decision,
-     2026-09-11, issue 318): every cell under the table's head repeats its own
-     word, so five marks over a restacked row are five heads over nothing —
-     while the log's head is the only thing telling a reader where the
-     repositories stop and the commits start once the columns stack. */
-  assert.match(
-    styles,
-    /@media \(max-width: 45rem\)[\s\S]*?\.table-head:not\(\.spread-log-head\) \{\s*display: none;/
+  const componentWidths = new Set(
+    [...spreadStyle.matchAll(/@media \(max-width: ([^)]+)\)/g)].map(([, width]) => width.trim())
   );
-  assert.match(styles, /@media \(max-width: 45rem\)[\s\S]*?\.ledger-spread \{[^}]*grid-template-columns: minmax\(0, 1fr\);/);
+  assert.deepEqual([...componentWidths], [...phoneWidths], 'the component and the sheet disagree about where a phone ends');
+  assert.match(flat, /@media \(max-width: 45rem\) \{[^}]*?\.ongoing \{[^}]*grid-template-columns: minmax\(0, 1fr\);/);
   /* THE SCRIPT ASKS THE SAME QUESTION THE STYLESHEET DOES, and a media query
      cannot read a token — so the number is stated in lib/columnWidth.ts and
-     this holds the two equal. The commit row's short identity is rendered
-     against it, so a drift here is a phone row that grows a third line. */
+     this holds the two equal. The phone's disclosure is rendered against it,
+     so a drift here is a control a desktop draws or a phone lacks. */
   assert.equal(spreadFromRem, 45.0625);
   assert.equal(spreadMediaQuery, '(min-width: 45.0625rem)');
-  assert.match(ledgerSpread, /\{#if wide\}<span class="commit-mark">\{row\.mark\}<\/span>\{\/if\}/);
   assert.match(ledgerSpread, /browserMedia\(spreadMediaQuery\)\.matches/);
-  /* And the phone's restack keeps every counter in a track of its own. Three
-     counters sharing ONE grid area are three counters drawn on top of each
-     other — measured at 390px before this pin existed — so the count of them
-     is held at both ends: the desktop track list reserves exactly three
-     counters plus the age, and the phone declares exactly four equal tracks
-     with the name spanning the line above them. */
+  /* The count of figures is held at both ends: the adapter hands three
+     counters plus the age, and both layouts declare exactly four tracks. */
   assert.equal(projectTableProps(null, noonPlacement).rows[0].counts.length, 3);
-  assert.match(
-    styles,
-    /@media \(max-width: 45rem\)[\s\S]*?\.table-row \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/
-  );
-  assert.match(
-    styles,
-    /@media \(max-width: 45rem\)[\s\S]*?\.table-name-cell \{\s*grid-column: 1 \/ -1;/,
-    'the name no longer spans the row, so the four counters share its line'
-  );
-  /* THE MARK SLOT IS A DECLARED TRACK TOO (issue #317). A counter that packed
-     its mark and its figure inline put the mark wherever the figure's own
-     length left it, so a column of four-digit tallies drew its marks at a
-     different x than a column of one-digit ones — issue 188's own defect, one
-     level down. Two tracks fix both edges at once. */
-  const countRule = /\.table-count \{([^}]*)\}/.exec(styles)?.[1] ?? '';
-  assert.match(countRule, /display:\s*grid/);
-  assert.match(countRule, /grid-template-columns:\s*var\(--icon-cell\) minmax\(0, 1fr\)/);
+  /* THE MARK SLOT IS A DECLARED TRACK TOO (issue #317). A figure that packed
+     its mark and its value inline put the mark wherever the value's own length
+     left it. Two tracks fix both edges at once — and the value starts right
+     after its mark (owner ruling, 2026-10-15). */
+  const figureRule = /\.repo-figure \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '';
+  assert.match(figureRule, /display:\s*grid/);
+  assert.match(figureRule, /grid-template-columns:\s*var\(--icon-cell\) minmax\(0, 1fr\)/);
 
-  /* A digit may not jitter the column it sits in: the counters read tabular
-     figures. That is a LIVE requirement rather than a precaution — the
+  /* A digit may not jitter the column it sits in: the figures read tabular
+     numerals. That is a LIVE requirement rather than a precaution — the
      freshness figure is re-derived on every panel delivery, so "9m" becoming
      "10m" would nudge its neighbours once a minute forever without it. */
-  const counts = /\.table-count \{([^}]*)\}/.exec(styles)?.[1] ?? '';
-  assert.match(counts, /font-variant-numeric:\s*tabular-nums/);
+  assert.match(figureRule, /font-variant-numeric:\s*tabular-nums/);
 
-  /* And every counter's whole sentence is in the accessibility tree without
+  /* And every figure's whole sentence is in the accessibility tree without
      anyone reaching for it, CLIPPED rather than hidden: display:none or
      [hidden] would take the words out of the tree and leave the glyph carrying
      the figure alone, which is the dataviz floor breaking. */
@@ -1744,14 +2297,20 @@ test('the table places every counter in a declared track, and no figure moves an
   for (const count of [...row.counts, row.updated]) {
     assert.ok(count.label.trim().length > 0, `${count.key} carries no sentence for the tree`);
   }
-  assert.match(ledgerSpread, /<span class="table-clipped">\{count\.label\}<\/span>/);
-  /* Both are focus stops (owner directive, 2026-09-03, issue 287): each
-     carries a detail, and a detail only a pointer can open is half the
-     feature — the same reason the retired stat tiles carried a tabindex. */
-  assert.match(ledgerSpread, /<span class="table-count table-age" tabindex="0" aria-label=\{row\.updated\.label\}>/);
-  assert.match(ledgerSpread, /<span class="table-count" tabindex="0" aria-label=\{count\.label\}>/);
-  assert.match(styles, /\.table-count:focus-visible,\s*\.table-age:focus-visible \{[^}]*outline: 2px solid var\(--color-accent\)/);
-  const clipped = /\.table-clipped \{([^}]*)\}/.exec(styles)?.[1] ?? '';
+  assert.match(ledgerSpread, /<span class="ongoing-clipped">\{count\.label\}<\/span>/);
+  assert.match(ledgerSpread, /<span class="ongoing-clipped">\{row\.updated\.label\}<\/span>/);
+  /* Every figure is a focus stop (owner directive, 2026-09-03, issue 287):
+     each carries a detail, and a detail only a pointer can open is half the
+     feature — the same reason the retired stat tiles carried a tabindex. They
+     sit OUTSIDE the entry's link, because nothing interactive may sit inside
+     an anchor. */
+  assert.match(ledgerSpread, /<span class="repo-figure" tabindex="0" aria-label=\{row\.updated\.label\}>/);
+  assert.match(ledgerSpread, /<span class="repo-figure" tabindex="0" aria-label=\{count\.label\}>/);
+  assert.match(spreadStyle, /\.repo-figure:focus-visible \{[^}]*outline: 2px solid var\(--color-accent\)/);
+  for (const anchor of ledgerSpread.matchAll(/<a\b[\s\S]*?<\/a>/g)) {
+    assert.doesNotMatch(anchor[0], /tabindex|<DetailTip|<button/, 'a focus stop sits inside an entry’s link');
+  }
+  const clipped = /\.ongoing-clipped \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '';
   assert.match(clipped, /clip-path:\s*inset\(50%\)/);
   assert.doesNotMatch(clipped, /display:\s*none/);
 });
@@ -1911,13 +2470,15 @@ test('exactly the reviewed sixteen WebP files (plus the sources manifest) are ve
   assert.ok(total <= 16 * 1024 * 1024, `the vendored set is ${total} bytes, over the 16MB total ceiling`);
 });
 
-test('J’s typing sheet and its still are exactly the two vendored files, under one ceiling, laid out as the stylesheet steps them (owner 2026-09-11 issue 314, 2026-10-12)', async () => {
+test('J’s flight sheet and its still are exactly the two vendored files, under one ceiling, laid out as his component steps them (owner 2026-09-11 issue 314, 2026-10-16)', async () => {
   /* The second dated requirement-11 exception, and a narrower one than the
-     gallery's: the owner's own render of his own dragon — the typing sheet
-     and the still a reader who asked for less motion sees instead — carried
-     as hashed bundle assets because the alternative, a 3D runtime, a model
-     and an iframe from the media origin, is a new publish path and a new
-     content type for a mark at the ends of a row.
+     gallery's: the owner's own flight study of his own dragon — the sheet
+     restored byte for byte from before commit 792f49b swapped it for the
+     typing render (owner direction, 2026-10-16: "swap him for the flying J
+     again"), and the still a reader who asked for less motion sees instead —
+     carried as hashed bundle assets because the alternative, a 3D runtime, a
+     model and an iframe from the media origin, is a new publish path and a
+     new content type for a mark beside the name.
      The ceiling is 1,000,000 bytes for BOTH files together rather than the
      gallery's 2MB per image, because one of them is fetched on EVERY first
      paint, not when a reader opens a picture.
@@ -1928,49 +2489,66 @@ test('J’s typing sheet and its still are exactly the two vendored files, under
   const entries = (await readdir(dir)).filter((entry) => !entry.startsWith('.'));
   assert.deepEqual(
     entries.sort(),
-    ['j-typing-still.webp', 'j-typing.webp'],
-    'the vendored directory is not exactly the sheet and its still'
+    ['j-flight-still.webp', 'j-flight.webp'],
+    'the vendored directory is not exactly the flight sheet and its still'
   );
-  const styles = await read('../src/styles.css');
+  /* Named by J's own component, by relative path, so the bundler emits each
+     as a content-hashed same-origin file — and named nowhere else, so nothing
+     draws a second copy. */
+  const mark = await read('../src/lib/components/JMark.svelte');
+  const markStyle = /<style>([\s\S]*?)<\/style>/.exec(mark)?.[1] ?? '';
   for (const file of entries) {
     assert.match(
-      styles,
-      new RegExp(`url\\('\\./assets/images/j/${file.replaceAll('.', '\\.')}'\\)`),
-      `the stylesheet no longer names ${file}, so the bundler emits a file nothing draws`
+      markStyle,
+      new RegExp(`url\\('\\.\\./\\.\\./assets/images/j/${file.replaceAll('.', '\\.')}'\\)`),
+      `J’s component no longer names ${file}, so the bundler emits a file nothing draws`
     );
   }
   let total = 0;
   for (const file of entries) total += (await stat(new URL(file, dir))).size;
   assert.ok(total <= 1_000_000, `the sheet and the still are ${total} bytes, over their 1,000,000-byte ceiling`);
 
-  /* THE GRID THE STYLESHEET STEPS IS THE SHEET'S OWN. The cell ratio, the
-     column count and the row count are stated once, as tokens, and the
+  /* THE GRID THE COMPONENT STEPS IS THE SHEET'S OWN. The column and row
+     counts are stated once, as the two tokens the sheet is sized by, and the
      keyframes walk them; this reads them back and holds them to the file's
-     own canvas (the WebP extended header: 24-bit little-endian width and
-     height, each minus one). A sheet re-rendered on a different grid, or a
-     token edited away from the sheet, shows a cell straddling two frames on
-     every step — and the still is held to the cell's own shape, because it
-     is drawn at 100% 100% and any other shape stretches him. */
+     own canvas. The picture is a square drawn at the sheet's cell, so the
+     cells must be square, and the still must be EXACTLY one cell — it is
+     frame 0, at the sheet's own resolution, drawn at 100% 100%; any other
+     shape stretches him, and any other size is not the frame the flight
+     starts from. (The rendering lane compares the two frames' pixels.)
+
+     A WebP canvas lives in one of two headers: the extended VP8X (24-bit
+     little-endian width and height, each minus one) or the lossless VP8L
+     (after the 0x2f signature, 14-bit width and height, each minus one,
+     packed little-endian). The still is lossless — exact frame-0 pixels — so
+     both are read; any other header is a file this pin cannot measure. */
   const canvas = async (file) => {
     const bytes = await readFile(new URL(file, dir));
-    assert.equal(bytes.toString('ascii', 12, 16), 'VP8X', `${file} has no extended header to read its canvas from`);
-    return [bytes.readUIntLE(24, 3) + 1, bytes.readUIntLE(27, 3) + 1];
+    assert.equal(bytes.toString('ascii', 0, 4), 'RIFF', `${file} is not a RIFF file`);
+    assert.equal(bytes.toString('ascii', 8, 12), 'WEBP', `${file} is not a WebP file`);
+    const chunk = bytes.toString('ascii', 12, 16);
+    if (chunk === 'VP8X') return [bytes.readUIntLE(24, 3) + 1, bytes.readUIntLE(27, 3) + 1];
+    assert.equal(chunk, 'VP8L', `${file} has neither an extended nor a lossless header to read its canvas from`);
+    assert.equal(bytes[20], 0x2f, `${file} has a lossless chunk without its signature`);
+    const bits = bytes.readUInt32LE(21);
+    return [(bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1];
   };
-  const cell = /--j-cell-inline: calc\(var\(--j-cell-block\) \* (\d+) \/ (\d+)\);/.exec(styles);
-  const columns = /--j-sheet-inline: calc\(var\(--j-cell-inline\) \* (\d+)\);/.exec(styles);
-  const rows = /--j-sheet-block: calc\(var\(--j-cell-block\) \* (\d+)\);/.exec(styles);
-  assert.ok(cell && columns && rows, 'the stylesheet no longer states J’s grid as the three tokens this pin reads');
-  const [cellWidth, cellHeight] = [Number(cell[1]), Number(cell[2])];
-  assert.deepEqual(
-    await canvas('j-typing.webp'),
-    [Number(columns[1]) * cellWidth, Number(rows[1]) * cellHeight],
-    'the sheet is not the stylesheet’s grid of cells, so the box shows parts of two frames'
+  /* The sheet is sized from his box since he left the bar (owner direction,
+     2026-10-16): the picture is the box, so the box is the cell. */
+  const columns = /--j-sheet-inline: calc\(var\(--j-box\) \* (\d+)\);/.exec(markStyle);
+  const rows = /--j-sheet-block: calc\(var\(--j-box\) \* (\d+)\);/.exec(markStyle);
+  assert.ok(columns && rows, 'J’s component no longer states the sheet’s grid as the two tokens this pin reads');
+  const [sheetWidth, sheetHeight] = await canvas('j-flight.webp');
+  const [cellWidth, cellHeight] = [sheetWidth / Number(columns[1]), sheetHeight / Number(rows[1])];
+  assert.ok(
+    Number.isInteger(cellWidth) && Number.isInteger(cellHeight),
+    `the ${sheetWidth} x ${sheetHeight} sheet is not ${columns[1]} x ${rows[1]} whole cells, so every step shows parts of two frames`
   );
-  const [stillWidth, stillHeight] = await canvas('j-typing-still.webp');
-  assert.equal(
-    stillWidth * cellHeight,
-    stillHeight * cellWidth,
-    `the still is ${stillWidth} x ${stillHeight}, not the cell’s shape, so drawing it at 100% 100% stretches him`
+  assert.equal(cellWidth, cellHeight, `the sheet’s cells are ${cellWidth} x ${cellHeight}, not the square the picture draws`);
+  assert.deepEqual(
+    await canvas('j-flight-still.webp'),
+    [cellWidth, cellHeight],
+    'the still is not exactly one of the sheet’s cells, so it is not the frame the flight starts from'
   );
 });
 
@@ -2243,15 +2821,19 @@ test('the coding-projects block declares no heading of its own (owner ruling, 20
 
 /* THE GALLERY IS A ROW OF TILES (owner directive, 2026-09-03, issue 287). The
  * single visible frame of issues 176/202/219/243/265 is superseded by a grid of
- * reserved square tiles beside one control tile, with the native dialog as the
- * stage. These pins keep what those rulings were FOR — one full-size picture at
- * a time, bytes only on demand, films inline and never autoplaying, reserved
- * boxes, 44px controls, sets as data, tokens for every dimension — and pin the
- * behaviour rather than the markup wherever the source lets them. */
+ * reserved square tiles, with the native dialog as the stage. These pins keep
+ * what those rulings were FOR — one full-size picture at a time, bytes only on
+ * demand, films inline and never autoplaying, reserved boxes, 44px controls,
+ * sets as data, tokens for every dimension — and pin the behaviour rather than
+ * the markup wherever the source lets them. The control tile beside the row is
+ * gone (owner, 2026-10-17: "gallery should not have a right most box with
+ * information and dead content, instead the images should span across the
+ * space, so we should show 5 images not 4 … make the design intuitive enough
+ * to where you don't need to explain what to do"). */
 const galleryStyle = styleBlock(mediaGallery);
 
-test('the gallery is a row of reserved square tiles beside one control tile, and the row is the column (owner directive, 2026-09-03, issue 287)', () => {
-  assert.match(mediaGallery, /tiles = 4 \}: MediaGalleryProps = \$props\(\)/, 'the mock draws four tiles; the count is a prop with that default');
+test('the gallery is a row of five reserved square tiles that is the column, with nothing beside it and no instructions (owner directive, 2026-09-03, issue 287; 2026-10-17)', () => {
+  assert.match(mediaGallery, /tiles = 5 \}: MediaGalleryProps = \$props\(\)/, 'five pictures span the column; the count is a prop with that default');
   assert.match(mediaGallery, /visible\.slice\(0, Math\.max\(1, tiles\)\)/);
   assert.match(mediaGallery, /<div class="gallery-grid" data-gallery-tiles=\{shownTiles\.length\}>/);
   assert.match(mediaGallery, /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind="image"/);
@@ -2263,8 +2845,16 @@ test('the gallery is a row of reserved square tiles beside one control tile, and
   const phoneColumns = styles.indexOf('--gallery-columns: 2;');
   assert.ok(phoneColumns > styles.indexOf('--gallery-columns: 5;'), 'a phone folds the same tiles to two across — declared AFTER the token block, or the cascade hands the phone five columns');
   assert.match(styles.slice(styles.lastIndexOf('@media (max-width: 45rem)', phoneColumns), phoneColumns), /^@media \(max-width: 45rem\) \{[\s\S]*:root \{\s*$/m, 'and inside the phone block, on :root');
-  assert.equal((mediaGallery.match(/class="gallery-control"/g) ?? []).length, 1);
-  assert.match(mediaGallery, /`\$\{shownTiles\.length\} of \$\{visible\.length\} shown · open one to page through all`/, 'the control tile says how much of the set the row shows');
+  assert.doesNotMatch(mediaGallery, /gallery-control|gallery-set-name/, 'a box of information beside the row is back');
+  assert.doesNotMatch(mediaGallery, /open one to|page through|shown ·/, 'the row explains itself in words again');
+  /* The grid is ONLY tiles: every child the row draws is a tile, so the five
+     tracks hold five pictures and nothing else. */
+  const grid = /<div class="gallery-grid" data-gallery-tiles=\{shownTiles\.length\}>([\s\S]*?)\n {6}<\/div>\n {4}\{\/snippet\}/.exec(mediaGallery)?.[1] ?? '';
+  assert.ok(grid.length > 0, 'the grid is not where this pin expects it');
+  assert.match(grid, /^\s*\{#each shownTiles as tile \(tile\.key\)\}[\s\S]*\{\/each\}\s*$/, 'the grid holds something besides its tiles');
+  /* A phone folds to two across and shows four, so no tile stands alone in a
+     row; the stage still pages through all of them. */
+  assert.match(styles.slice(phoneColumns), /^\s*\.gallery-grid > :nth-child\(n \+ 5\) \{\s*display: none;\s*\}/m, 'a phone shows a lone fifth tile');
 });
 
 test('opening a tile is the only way onto the stage, a native <dialog> that loads the full derivative only then', () => {
@@ -2356,27 +2946,37 @@ test('the close mark is small, off the artwork and a 44px target; the scrim and 
   assert.match(galleryStyle, /max-inline-size: var\(--gallery-lightbox-max-inline\);[\s\S]*max-block-size: var\(--gallery-image-max-block\);/);
 });
 
-/* TWO LAYERS, NOT THE SET (owner directive, 2026-09-03, issue 287). The band
- * is handed EVERY vendored texture so a mode switch can crossfade across sets,
- * and it mounts only the texture showing and the one it left — eight files on
- * first paint was the cost of mounting them all. Pinned where it is decided;
- * the rendering lane "the picture band mounts the texture showing and the one
- * it left" counts the mounted layers in the browser. */
-test('the texture band is handed the whole set and mounts only the picture showing and the one it left', async () => {
-  const band = await readFile(new URL('../src/lib/components/TextureBand.svelte', import.meta.url), 'utf8');
-  const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
-  assert.match(app, /layers=\{bandTextures\}/, 'the band is handed every vendored texture, which is what makes the mount rule matter');
-  assert.match(band, /let recent = \$state<string\[\]>\(\[\]\);/, 'the band remembers which files it has shown');
-  assert.match(
-    band,
-    /recent = \[active, \.\.\.recent\.filter\(\(file\) => file !== active\)\]\.slice\(0, 2\);/,
-    'the memory is the active file and the one before it, never longer'
-  );
-  assert.match(
-    band,
-    /const mounted = \$derived\(layers\.filter\(\(layer\) => recent\.includes\(layer\.file\)\)\);/,
-    'what mounts is the remembered pair, filtered from the set'
-  );
-  assert.match(band, /\{#each mounted as layer \(layer\.file\)\}/, 'the template iterates the mounted pair');
-  assert.doesNotMatch(band, /\{#each layers as layer/, 'iterating the whole set is the first-paint cost this rule removes');
+/* THE PICTURE BANDS ARE GONE (owner direction, 2026-10-16: "remove the stock
+ * image from this only leave it with my name"). This was "the texture band is
+ * handed the whole set and mounts only the picture showing and the one it
+ * left" (issue 287): a mount rule for a component the page no longer draws,
+ * retired with it. What replaces it is the removal itself, pinned where it was
+ * DECIDED, the way the About Me section's removal is pinned above: the band,
+ * the two modules that chose and resolved its pictures, and every vendored
+ * picture left with it rather than lingering unreferenced — a picture nothing
+ * draws is weight the image carries for nobody, and the citadel's licence was
+ * never verified. */
+test('the picture bands left with every file that only they used (owner direction, 2026-10-16)', async () => {
+  for (const path of [
+    '../src/lib/components/TextureBand.svelte',
+    '../src/lib/textures.ts',
+    '../src/lib/textureAssets.ts',
+    '../src/assets/textures',
+  ]) {
+    await assert.rejects(
+      () => stat(new URL(path, import.meta.url)),
+      /ENOENT/,
+      `${path} survived the bands it existed for`
+    );
+  }
+  assert.doesNotMatch(app, /TextureBand|bandTextures|textureFor/, 'the page still mounts a picture band');
+  /* Declarations and markup only: a comment recalling where the pictures
+     used to live asks the bundler for nothing. */
+  for (const [name, source] of Object.entries({ styles, ...componentSources })) {
+    assert.doesNotMatch(
+      withoutHtmlComments(source).replace(/\/\*[\s\S]*?\*\//g, ''),
+      /assets\/textures\//,
+      `${name} still names a vendored band picture`
+    );
+  }
 });

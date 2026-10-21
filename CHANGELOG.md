@@ -7,6 +7,149 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.96] - 2026-10-20
+
+### Changed
+
+- The page is redesigned ("The Keep", #375):
+  - A night sky is drawn behind it on a canvas. It is still under reduced
+    motion, paused when hidden, 30 frames a second at most, and slower
+    wherever the page cannot afford it (a browser drawing without a GPU), so
+    the sky slows down rather than the page. Over its fine stars, crisp pixel
+    stars twinkle, some flaring as a little cross that grows and goes out,
+    each on its own beat.
+  - One sheet sits over the sky: a castle wall, from a dry-stone wall
+    photograph made seamless and kept sharp, dark stone at night and pale
+    limestone by day, each held to a narrow band of brightness so every text
+    colour keeps its contrast on it. Its frame is dressed castle stone drawn
+    in pixels, with a keystone at each corner, ivy over its top corners and
+    grass at its foot.
+  - Torches hang on both sides of the frame, leaning out over the sheet. At
+    night they burn with a pixel fire built from scratch; their light on
+    the stone brightens, dims and leans with the flame while each handle's
+    shadow swings the other way, and it fades before the sheet's words
+    begin. By day they are out, and under reduced motion a lit torch holds
+    still.
+  - No two torches burn alike: each has its own flame height, tempo, lean
+    and draught, its light reaches and dims its own way, and held still it
+    rests at its own brightness. The light breaks up on the rough stone it
+    falls on, frame and ivy included, and each flame throws sparks and lights
+    the dust drifting through its glow, never over the words.
+  - No gold: the name and the section titles are set in Instrument Serif in
+    the page's own ink, and each title starts its section with a fine line
+    running on to the column's end.
+  - The page opens on the name, close under the frame: its two words on two
+    centred lines, set no larger than 120px, with the j drawn without its dot and
+    J flying where the dot would be. Screen readers still read the name as
+    written. The header bar, the section nav, the picture bands and the
+    footer are gone, and every section keeps its id.
+  - One background on the sheet: no board, panel or control paints a
+    ground of its own, and pointing at a row brightens its ink rather than
+    painting one under it.
+  - The sheet's lines and bars are the castle's: a vine runs from each
+    section title to the column's end, a branch parts the roles and a twig
+    the rows of a list — four branches, one leafy, one heavy with moss, one
+    a thorn stem hung with sloes and one forked in blossom, and three twigs,
+    taking turns so no two rows in sight share one — and each model's share
+    is the blade of a sword.
+  - A role opens from an iron ring and unrolls as a parchment scroll, its
+    words in the day's inks and clear of the paper's darkened edges.
+  - Ongoing Work's two lists stand without their headings, and the commit log
+    has no scrollbar: its entries fade at an edge with more beyond it, and
+    reaching its end no longer scrolls the page.
+  - The boss log follows the hiscores' order, as RuneLite's Hiscore panel
+    lists the bosses, and reads 15% larger, with space rather than a rule
+    between bosses and no lead figure before them.
+- The page is the night on every visit, whatever the device prefers: the
+  night sky, the dark wall and the torches lit. The reading-mode control and
+  its slate and sepia modes are gone,
+  and the origin no longer stamps a chosen mode into the page from a cookie,
+  so a reader who picked one earlier gets the same page as everyone else.
+- The trackers are one diagram, written on a roll of parchment hung on the
+  wall between two upright rollers, which unrolls from its middle the first
+  time it is seen:
+  - Pull Requests Closed, Commits Pushed and Total Tokens Used open the roll
+    under one illuminated initial, beside a daily line on a desk and above it
+    on a phone, over the year's calendar; the line and the calendar run to
+    the end of the parchment.
+  - Every day of the line stands over its own week's column, and every
+    calendar day is a square inked in the calendar's greens, deeper as the
+    day was busier, with no mark of its own for the busiest.
+  - Three wax seals pick what both show: contributions, or each tool's
+    tokens.
+  - Pointing, touching or the arrow keys read one day across all of it; a
+    green seal hangs under the roll at that day, and the day's reading over
+    the line stays inside it on the narrowest phone.
+  - The Codex and Claude Code accounts are the leaves of a chained tome
+    open on a lectern built out from the wall. Each opens on its lifetime
+    total, then its cache read and written, today, this week and its
+    records, in the same rows in the same order, and each model's share is
+    a sword. Pressing the tome, or Enter on its turned-up corner, turns the
+    leaf to each model's own figures; a phone turns one page at a time. The
+    leaves are set in Cormorant Garamond with blackletter initials in
+    UnifrakturMaguntia, both vendored with their licences.
+  - The boss log sits on the same board.
+  - The board holds the room its data will fill while that data is on its
+    way, so nothing below it moves when it lands.
+- Ongoing Work shows one entry fewer per column, with more on each.
+- A role's span reads in full: "2023 – present", "2022 – 2023".
+- The gallery is five pictures across the column with nothing beside them;
+  a phone shows four. A set switch appears above them only when there is
+  a second set to choose.
+- The usage export gives Codex the same figures as Claude Code: input,
+  output, cache read and write, sessions, active and tracked days, and a
+  per-model split. It no longer counts the running total an auto-review
+  session opens with as usage. A stored day is lowered only where its
+  records are intact, so an inflated day whose records are gone keeps its
+  figure until it is corrected by hand.
+- Dependencies (#377, #378, #379):
+  - @playwright/test 1.64.1, for the browser lanes;
+  - github/codeql-action 4.39.0, for CodeQL's init and analyze;
+  - actions/create-github-app-token 3.3.0 in the release publisher, with
+    the publisher's pinned reference in the release contract moved with it.
+    3.3.0 adds permission inputs and drops one this workflow never asks
+    for; the administration-read token it mints is unchanged.
+
+### Added
+
+- The origin serves every day's commit count with the contribution
+  calendar (`commitWeeks` and `totalCommits`, additive inside
+  `vcs-activity/v1`), which is what Commits Pushed reads. The year is asked
+  for in four sub-windows of the same request, so a repository committed to
+  on more days than the upstream's page size is never cut short. A count
+  that cannot be placed exactly is left out whole, never estimated.
+
+### Fixed
+
+- A hover detail opened beside the pointer again everywhere on the page.
+  The sheet's glass had made it the containing block of every detail,
+  which sent them off the screen.
+- The page paints in its own faces. Their files are preloaded with the
+  document and the page appears once they are loaded, never more than a
+  second later, so a face landing late no longer moves the name, the
+  plaques or a ledger row.
+- The diagram's layer names fit a 320px screen in every engine.
+- The calendar is laid out at its own width from its first frame, rather
+  than a year wide and then cut to the weeks that fit once the browser
+  reported its size.
+- In Safari, a role row and an Ongoing Work heading take their new height
+  when the window widens or a phone rotates, instead of keeping the taller
+  height they had at the narrower width.
+- On a slow connection, the page no longer jumps when its typefaces arrive
+  after it has drawn: a visit whose faces take longer than a second is set
+  in the fallback faces throughout, and the next visit has them cached.
+- The moving trackers strip no longer makes the page repaint the whole sheet
+  on every frame: the sheet casts no shadow and the page column is no longer
+  its own layer. Without a GPU, WebKit with the strip on screen went from a
+  frame or two a second to the page's full rate.
+
+### Removed
+
+- The span buttons and the span outline. The graph is always the whole
+  calendar.
+- Eight components and modules the redesign retired, with about 1,100
+  lines of styles nothing read any more.
+
 ## [0.1.95] - 2026-10-13
 
 ### Changed

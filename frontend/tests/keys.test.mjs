@@ -14,7 +14,6 @@ import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { isChord, ringTarget } from '../src/lib/keys.ts';
-import { swatchKeyTarget } from '../src/lib/disclosure.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
@@ -67,26 +66,6 @@ test('the ring wraps both ways, ends at its ends, and leaves every other key alo
   }
 });
 
-test('the theme swatches move on the SAME ring, differing only by Escape', () => {
-  /* Executed rather than pinned in source: the popover's own key map used to
-     be a second copy of this arithmetic, and two copies of one decision are
-     free to disagree the day either moves. Escape is the one genuine
-     difference — a popover can be dismissed and an always-visible control
-     cannot — so it is asserted as the difference rather than assumed. */
-  const count = 5;
-  for (const key of ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Tab']) {
-    for (let index = 0; index < count; index += 1) {
-      assert.equal(
-        swatchKeyTarget(key, index, count),
-        ringTarget(key, index, count),
-        `the swatches and the shared ring disagree about ${key} at ${index}`
-      );
-    }
-  }
-  assert.equal(swatchKeyTarget('Escape', 1, count), 'dismiss');
-  assert.equal(ringTarget('Escape', 1, count), null, 'the shared ring claimed Escape');
-});
-
 /* ===========================================================================
  * A DECLARED COMPOSITE ROLE IS A PROMISE ABOUT KEYS.
  * ======================================================================== */
@@ -135,8 +114,14 @@ test('every composite widget on this page handles its own keys', () => {
   /* WAI-ARIA gives a composite ONE tab stop with the arrows moving inside it.
      Both halves or neither: a roving tabindex without a key handler takes
      every option but one out of the tab order and offers nothing in return,
-     which is strictly worse than the plain list of buttons it replaced. */
-  const composite = /role=(?:"(listbox|radiogroup|tablist|menu|tree)"|\{[^}]*'(listbox|radiogroup|tablist|menu|tree)'[^}]*\})/g;
+     which is strictly worse than the plain list of buttons it replaced.
+
+     A SLIDER makes the same promise about the arrows on one element, so it
+     is swept with them (carried from the daily line to the Chronicle's chart,
+     2026-10-16). It is also, since the calendar's listbox retired with its
+     grid that day, the one arrow-key widget the page draws — which is what
+     keeps this sweep's non-vacuity guard honest rather than deleted. */
+  const composite = /role=(?:"(listbox|radiogroup|tablist|menu|tree|slider)"|\{[^}]*'(listbox|radiogroup|tablist|menu|tree|slider)'[^}]*\})/g;
   let found = 0;
   for (const [name, source] of Object.entries(componentSources)) {
     for (const match of source.matchAll(composite)) {
@@ -159,8 +144,11 @@ test('a composite option is never a tab stop of its own unless it is the current
      the group is one stop rather than sixteen. Measured against the option
      roles that actually appear here. */
   const options = /role="(radio|option|tab)"/g;
+  const composites = /role=(?:"(listbox|radiogroup|tablist|menu|tree)"|\{[^}]*'(listbox|radiogroup|tablist|menu|tree)'[^}]*\})/;
   let swept = 0;
+  let owners = 0;
   for (const [name, source] of Object.entries(componentSources)) {
+    if (composites.test(source)) owners += 1;
     for (const match of source.matchAll(options)) {
       const tag = openingTag(source, match.index);
       /* A grid cell is an option inside a listbox whose single tab stop is
@@ -175,5 +163,12 @@ test('a composite option is never a tab stop of its own unless it is the current
       swept += 1;
     }
   }
-  assert.ok(swept > 0, 'the composite-option sweep found nothing to check; it is broken');
+  /* NON-VACUITY, TIED TO ITS SUBJECT. The page drew a composite until the
+     calendar's listbox retired (2026-10-16), and today it draws none, so an
+     option-free page is the honest reading rather than a broken sweep. A
+     component that declares a composite role again must also be one whose
+     options this walk reaches. */
+  if (owners > 0) {
+    assert.ok(swept > 0, 'the composite-option sweep found nothing to check; it is broken');
+  }
 });

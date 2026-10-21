@@ -348,6 +348,26 @@ function effectivePushedAt(
   return project?.pushedAt ?? live?.pushedAt;
 }
 
+/* THE ENTRY'S SUPPORTING LINE (owner direction, 2026-10-16): the repository's
+ * own description, chosen by the SAME provenance rule as the instant above —
+ * the panel's words when it vouched for them, the captured words otherwise —
+ * so a row that fell back never pairs a live name with a stale sentence, or
+ * the reverse. Verbatim apart from its outer whitespace: the host's text is
+ * the owner's own, and the one
+ * captured row trimmed for the provider-neutrality pin (see the module note)
+ * stays exactly as trimmed.
+ *
+ * An empty description is a REAL state — the repository has none — and it
+ * renders as the honest dash rather than as a blank line a reader would read
+ * as missing data, or as words this module invented to fill it. */
+export function effectiveDescription(project: Project | undefined, live?: CodingProjectRow): string {
+  const text =
+    live !== undefined && live.recorded !== true
+      ? live.description
+      : (project?.description ?? live?.description ?? '');
+  return text.trim() === '' ? unknownFigure : text.trim();
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -474,6 +494,12 @@ function viewInstant([project, live]: ProjectView): number {
  * column is gone — a half-sheet column holds a name and four figures, and a
  * repository's own words are one click away on its own link.
  *
+ * RE-CUT AGAIN as two-line entries (owner direction, 2026-10-16: one entry
+ * fewer, more information, more readable, no taller). The description came
+ * back — not as the column it was, but as each entry's second line under the
+ * name — and the head row of marks went, because each figure now carries its
+ * own. Five entries rather than six is what pays for the second line.
+ *
  * Everything the cards proved stays proved. The roster is still the payload's,
  * the order is still derived from each row's effective instant, the captured
  * face is still what renders when no payload arrived, the staleness line is
@@ -482,32 +508,34 @@ function viewInstant([project, live]: ProjectView): number {
  * SHAPE the same facts are handed to a component in.
  * ------------------------------------------------------------------------ */
 
-/* The table's column heads, in column order. They are the page's words for
- * what each column holds, and they are here rather than in the component for
- * the reason every label on this page is: a component that named a column
- * would be a component that knows what it is showing. */
-export const projectTableHeads: readonly string[] = [
-  'Repository',
-  'PRs closed',
-  'Version',
-  'Stars',
-  'Updated'
-];
+/* The column's one head (owner direction, 2026-10-16). It was five heads — a
+ * word over the names and a mark over each figure column — until the section
+ * stopped being a spreadsheet: every figure now carries its own mark beside it
+ * and its own words in the accessibility tree, so the list needs one word over
+ * it, like the log beside it, and nothing over its figures. The word is here
+ * rather than in the component for the reason every label on this page is: a
+ * component that named its list would be a component that knows what it is
+ * showing. */
+export const projectColumnHead = 'Repositories';
 
-/* HOW MANY ROWS EACH COLUMN OF THE SHEET HOLDS (owner ruling, 2026-09-12:
- * "remove latest, this makes no sense"). SIX, which is the host's own ceiling
- * on a pinned set — the table is the owner's curation and nothing else, so the
- * bound is the curation's own size rather than a number chosen for the box. It
- * was seven while a seventh row rode along for being the most recent push, and
- * four while the section was a full-width table of the most recent
- * (2026-09-03).
+/* HOW MANY ENTRIES EACH COLUMN OF THE SHEET HOLDS (owner direction,
+ * 2026-10-16: "show 1 less entry per but give more information and make it
+ * more readable … not trying to make this larger block in the page"). FIVE: the
+ * height the sixth row used to take is what pays for each remaining entry's
+ * second line — the repository's own description, and room for a commit's
+ * whole subject — so the section is no taller than it was with six one-line
+ * rows. It was six, the host's own ceiling on a pinned set (owner ruling,
+ * 2026-09-12), seven while a `latest` row rode along, and four while the
+ * section was a full-width table (2026-09-03). A pinned set of six now shows
+ * its five most recently pushed.
  *
  * ONE constant, TWO seats. The commit column beside this one reserves the same
- * number of rows — the two columns of one section are paired on a height — so
- * a second number would be the two free to disagree about it. The stylesheet's
- * reserve reads this through tests/activity.test.mjs, which recomputes the
- * box's own calc from this constant rather than from a number typed twice. */
-export const shownProjectRows = 6;
+ * number of entries — the two columns of one section are paired on a height —
+ * so a second number would be the two free to disagree about it. The
+ * component's reserve reads this through tests/activity.test.mjs, which
+ * recomputes the box's own calc from this constant rather than from a number
+ * typed twice. */
+export const shownProjectRows = 5;
 
 export const projectsEmptyNote = 'no repositories reported';
 
@@ -534,11 +562,11 @@ export const projectsEmptyNote = 'no repositories reported';
  *     here too, with nothing said about it.
  *   * It never pads. Three pinned repositories render as three rows, not as
  *     six with three rows of filler.
- *   * It never overflows the pair. The host's pinned set holds at most six, so
- *     six is the whole table; a payload claiming more is cut at the same
- *     constant the commit column reserves its rows from, keeping the most
- *     recently pushed of them, because the two columns are paired on one
- *     height.
+ *   * It never overflows the pair. A pinned set larger than the constant —
+ *     the host's own ceiling is six, and the column shows five (owner
+ *     direction, 2026-10-16) — is cut at the same constant the commit column
+ *     reserves its entries from, keeping the most recently pushed of them,
+ *     because the two columns are paired on one height.
  *   * It falls back rather than emptying. A payload with no `pinned` flag
  *     anywhere — an origin older than issue #317, mid-rollout — is not a
  *     payload with an empty pinned set, and rendering it as one would blank
@@ -579,17 +607,19 @@ export function projectTableProps(
         href: projectUrl({ name }),
         label: projectLinkLabel({ name })
       },
+      about: effectiveDescription(project, live),
       updated: columns.updated,
       counts: columns.counts
     };
   });
-  /* No title: the section head "02 / Projects · Commits" already names this
-     sheet, and the origin's own "Coding Projects" beneath it was one label too
-     many (owner directive, 2026-09-04, issue 292). */
+  /* No title: the section head ("Ongoing Work" since the owner's direction of
+     2026-10-16) already names this sheet, and the origin's own "Coding
+     Projects" beneath it was one label too many (owner directive, 2026-09-04,
+     issue 292). */
   return {
     status: envelope?.status ?? 'unavailable',
     generatedAt: envelope?.generatedAt,
-    heads: projectTableHeads,
+    head: projectColumnHead,
     rows,
     emptyNote: projectsEmptyNote
   };

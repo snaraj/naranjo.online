@@ -1,20 +1,17 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const [fallback, component, styles, themeRegistry, themeMenu, blocks, renderingLanes] =
-  await Promise.all([
-    readFile(new URL('../index.html', import.meta.url), 'utf8'),
-    readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
-    readFile(new URL('../src/styles.css', import.meta.url), 'utf8'),
-    readFile(new URL('../src/lib/themes.ts', import.meta.url), 'utf8'),
-    readFile(new URL('../src/lib/ThemeMenu.svelte', import.meta.url), 'utf8'),
-    // The block layer's own type declarations. The status-ink pin below derives
-    // the meter's severity names from the union declared there rather than
-    // restating them, so the two cannot drift.
-    readFile(new URL('../src/lib/blocks.ts', import.meta.url), 'utf8'),
-    readFile(new URL('../e2e/rendering-lanes.spec.mjs', import.meta.url), 'utf8'),
-  ]);
+const [fallback, component, styles, blocks] = await Promise.all([
+  readFile(new URL('../index.html', import.meta.url), 'utf8'),
+  readFile(new URL('../src/App.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../src/styles.css', import.meta.url), 'utf8'),
+  // The block layer's own type declarations. The status-ink pin below derives
+  // the meter's severity names from the union declared there rather than
+  // restating them, so the two cannot drift.
+  readFile(new URL('../src/lib/blocks.ts', import.meta.url), 'utf8'),
+]);
 
 /* Every component in the tree, keyed by file name — markup and scoped style
  * together, because the rendering-lane floors below need both halves: which
@@ -45,6 +42,52 @@ const componentStyles = Object.fromEntries(
   })
 );
 
+/* What assistive technology reads from a stretch of markup: its text, with
+ * every aria-hidden subtree taken out and every component it draws expanded
+ * to the markup that component renders. A heading may carry decoration (J
+ * flies inside the page's own, since 2026-10-19), so its name is read the way
+ * a screen reader reads it, never off raw markup. Anything this reader cannot
+ * compute — a template expression, an image, an SVG, an explicit label — fails
+ * loudly rather than being guessed at. */
+function accessibleText(markup, depth = 0) {
+  assert.ok(depth < 5, 'components nest deeper than this reader follows');
+  let out = stripComments(markup).replace(/<([A-Z]\w*)\b[^>]*\/>/g, (tag, name) => {
+    const file = Object.keys(componentSources).find((entry) => entry === `${name}.svelte` || entry.endsWith(`/${name}.svelte`));
+    assert.ok(file, `${tag} draws a component this reader cannot find`);
+    const rendered = cutBlock(cutBlock(stripComments(componentSources[file]), 'script').rest, 'style').rest;
+    return accessibleText(rendered, depth + 1);
+  });
+  // An aria-hidden element and everything inside it: found by its opening
+  // tag, closed at the matching end tag of the same name.
+  for (let open = out.search(/<\w+\b[^>]*\baria-hidden="true"[^>]*>/); open >= 0; open = out.search(/<\w+\b[^>]*\baria-hidden="true"[^>]*>/)) {
+    const tag = /^<(\w+)/.exec(out.slice(open))[1];
+    const head = out.indexOf('>', open) + 1;
+    if (out[head - 2] === '/') {
+      out = out.slice(0, open) + out.slice(head);
+      continue;
+    }
+    let depthOf = 1;
+    let cursor = head;
+    const pattern = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'g');
+    pattern.lastIndex = head;
+    for (let match = pattern.exec(out); match; match = pattern.exec(out)) {
+      depthOf += match[1] === '/' ? -1 : 1;
+      cursor = pattern.lastIndex;
+      if (depthOf === 0) break;
+    }
+    assert.equal(depthOf, 0, `an aria-hidden <${tag}> is never closed`);
+    out = out.slice(0, open) + out.slice(cursor);
+  }
+  assert.doesNotMatch(out, /[{}]|<img\b|<svg\b|\baria-label(?:ledby)?=|\balt=/, 'this markup computes its name in a way this reader does not model');
+  // Until a pass removes nothing, so no tag is left behind that a removal
+  // spliced together (js/incomplete-multi-character-sanitization).
+  let text = out;
+  while (text !== (text = text.replace(/<[^>]*>/g, ''))) {
+    /* until a pass removes nothing */
+  }
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 // Browser execution is deliberately outside this dependency-free test. These
 // assertions keep the accessible, responsive first response intact even when
 // JavaScript is slow, unavailable, or rejected by a visitor's policy.
@@ -55,8 +98,16 @@ test('static and hydrated shells preserve the same accessible identity', () => {
   assert.match(fallback, /<main aria-labelledby="static-page-title"/);
   // Structure, never copy: each shell must render a non-empty labelling
   // heading, but the text itself is temporary placeholder content and will be
-  // replaced by the real site — it is deliberately not a contract.
-  assert.match(fallback, /<h1 id="static-page-title">[^<]+<\/h1>/);
+  // replaced by the real site — it is deliberately not a contract. What IS
+  // the contract is that both shells name the page the same: the hydrated
+  // heading carries J inside it (2026-10-19), so its name is what a screen
+  // reader computes, and it must be exactly the static shell's.
+  const staticHeading = /<h1 id="static-page-title">([\s\S]*?)<\/h1>/.exec(fallback)?.[1];
+  const hydratedHeading = /<h1 id="page-title">([\s\S]*?)<\/h1>/.exec(stripComments(component))?.[1];
+  assert.ok(staticHeading !== undefined && hydratedHeading !== undefined, 'a shell no longer opens on its labelling heading');
+  const staticName = accessibleText(staticHeading);
+  assert.ok(staticName.length > 0, 'the static shell’s heading names nothing');
+  assert.equal(accessibleText(hydratedHeading), staticName, 'the hydrated heading names the page differently from the static shell');
   // The description and the link-preview identity live in the STATIC head
   // (0.1.52): the scrapers that build message previews read the document as
   // served and run no script, so a tag added at hydration does not exist for
@@ -68,7 +119,6 @@ test('static and hydrated shells preserve the same accessible identity', () => {
   assert.match(fallback, /name="twitter:card"/);
   assert.doesNotMatch(component, /name="description"/);
   assert.match(component, /<main aria-labelledby="page-title">/);
-  assert.match(component, /<h1 id="page-title">[^<]+<\/h1>/);
   // The tab mark rides in the same static head and for the same reason
   // (issue 239): a document that declares no icon shows the browser's blank
   // glyph and is probed for /favicon.ico on every visit.
@@ -169,11 +219,28 @@ test('initial source remains local and viewport-responsive', () => {
   );
   // The insets only report real values when the document opts into them.
   assert.match(fallback, /viewport-fit=cover/);
-  // Deliberate reading-modes change (issue #22): light is now the :root
-  // default palette, so the media query maps the DARK tokens in — and only
-  // for documents without an explicit stamped choice.
-  assert.match(stylesCode, /@media \(prefers-color-scheme: dark\)/);
-  assert.match(styles, /:root:not\(\[data-theme\]\)/);
+  // THE PAGE IS THE NIGHT (owner, 2026-10-19: "always set it to night by
+  // default", and then no toggle at all). The day is the :root default
+  // palette, and the night is mapped over it by a block that holds unless
+  // data-sky="day" is stamped on the root — which nothing does — on every
+  // visit, whatever the reader's device prefers.
+  assert.match(
+    stylesCode,
+    /:root:not\(\[data-sky='day'\]\)\s*\{[^}]*color-scheme:\s*dark/,
+    'the night block is gone, or no longer tells the browser its controls are dark'
+  );
+  assert.match(
+    stylesCode,
+    /:root:not\(\[data-sky='day'\]\)\s*\{[^}]*--color-surface:\s*var\(--palette-dark-surface\)/,
+    'the night block no longer remaps the sheet onto the dark palette'
+  );
+  // And the device has no say: a prefers-color-scheme block coming back would
+  // let a light-preferring device skip the night the owner made the default.
+  assert.doesNotMatch(
+    stylesCode,
+    /prefers-color-scheme/,
+    'the stylesheet follows the device again; every visit is to open on the night'
+  );
 });
 
 // occurrences counts literal appearances of needle in source, for the
@@ -221,8 +288,8 @@ function cssRules(css) {
   // Comments are blanked, and braces INSIDE string literals are defused: a
   // `content: "}"` declaration would otherwise close a rule early and hide
   // every repaint after it. Only the braces go — blanking whole strings also
-  // empties the quoted value in `[data-theme="dark"]`, which is a selector
-  // this walk has to keep reading.
+  // empties the quoted value in `:root[data-face-sans='fallback']`, which is a
+  // selector this walk has to keep reading.
   const source = css
     .replace(/\/\*[\s\S]*?\*\//g, (match) => ' '.repeat(match.length))
     .replace(/"[^"\n]*"|'[^'\n]*'/g, (match) => match.replace(/[{}]/g, ' '));
@@ -250,30 +317,21 @@ function cssRules(css) {
 }
 
 // A comment-blind copy, because a raw-text pin matches text that a browser
-// never reads. The delta review commented the whole prefers-color-scheme
-// block OUT and stayed 137/137 green: the raw-text pins matched the
-// commented copy while cssRules stripped it, so `auto` silently degenerated
-// to light — the mode with no stamp rendering as though a stamp existed.
+// never reads. The delta review commented the whole dark-mapping block OUT
+// and stayed 137/137 green: the raw-text pins matched the commented copy
+// while cssRules stripped it, so the dark mode silently degenerated to light
+// — the very rendering the block existed to make.
 const stylesCode = styles.replace(/\/\*[\s\S]*?\*\//g, '');
 
 const styleRules = cssRules(styles).map((rule, order) => ({ ...rule, order }));
-// WHICH preference, not merely that there is one. Matching the bare
-// substring routed a `prefers-color-scheme: light` block to auto-DARK and
-// skipped it for auto-light — exactly inverted, and inverted precisely in
-// the mode the auto split was added to model. An unrecognised preference
-// fails loudly rather than landing in whichever mode the substring reached.
-function colorSchemeOf(rule) {
-  const at = rule.enclosing.find((entry) => entry.includes('prefers-color-scheme'));
-  if (!at) return null;
-  const value = /prefers-color-scheme\s*:\s*([a-z]+)/.exec(at);
-  assert.ok(value, `"${at}" queries prefers-color-scheme without a value this resolver can read`);
-  assert.ok(
-    value[1] === 'dark' || value[1] === 'light',
-    `"${at}" asks for prefers-color-scheme: ${value[1]}, which this resolver cannot place in a mode`
-  );
-  return value[1];
-}
-const underColorScheme = (rule) => colorSchemeOf(rule) !== null;
+// The page's two reading modes (owner, 2026-10-19), named for what they are:
+// the NIGHT every visit is, and the DAY kept whole behind the data-sky
+// attribute ("keep the logic") for whatever stamps it next.
+const readingModes = ['night', 'day'];
+// The palette each mode paints from: the night is the dark palette and the
+// day is the light one, and the palette names in the stylesheet keep those
+// words.
+const modePalette = { night: 'dark', day: 'light' };
 // --palette-* belongs here as much as --color-*. The token layer resolves
 // --color-* THROUGH --palette-*, so a rule that redeclares only a palette
 // literal repaints exactly the same pixels while declaring nothing this
@@ -284,45 +342,51 @@ const themeTokenPattern = /^--(?:color|panel|grid-cell|palette)-/;
 const declaresThemeToken = (body) =>
   [...body.matchAll(/(--[a-z0-9-]+)\s*:/g)].some(([, name]) => themeTokenPattern.test(name));
 
-// Document order is NOT the cascade. `:root:not([data-theme])` carries
-// (0,2,0) against plain `:root`'s (0,1,0), so it wins from EARLIER in the
-// file — a repaint the previous order-only resolver could not see, and one
-// this stylesheet is already primed for because that selector is load-bearing
-// inside the prefers-color-scheme block.
+// THE TOKEN LAYER HAS EXACTLY TWO FORMS (owner, 2026-10-19: "always set it to
+// night by default"). Plain :root holds the day, and
+// `:root:not([data-sky='day'])` maps the night over it unless the root is
+// stamped with the day.
 //
-// Only the forms this token layer actually uses are recognised. Anything
-// else returns null and fails the caller LOUDLY, because a selector the
-// matcher does not understand is precisely where the next repaint would
-// hide, and silently skipping it is how an order-only model got here.
+// Document order is NOT the cascade. The :not() carries (0,2,0) against plain
+// :root's (0,1,0), so the night wins from EARLIER in the file as surely as from
+// later — a repaint an order-only resolver could not see. So each form carries
+// its real weight, and the rules a mode applies are sorted by weight before
+// order, exactly as a browser resolves them.
+//
+// Only those two forms are recognised. Anything else — a stamped block in
+// another spelling, an `html` rule, a doubled `:root:root` that would outweigh
+// the day from anywhere — returns null and fails the caller LOUDLY, because a
+// selector the matcher does not understand is precisely where the next repaint
+// would hide, and silently skipping it is how an order-only model got here.
+const nightSelector = ":root:not([data-sky='day'])";
 function tokenLayerSelector(selector) {
-  const parts = selector.split(',').map((part) => part.trim());
-  const forms = parts.map((part) => {
-    if (part === ':root') return { weight: 10, applies: () => true };
-    if (part === ':root:not([data-theme])')
-      return { weight: 20, applies: (mode) => mode.startsWith('auto') };
-    const stamp = /^(?::root)?\[data-theme="([a-z]+)"\]$/.exec(part);
-    if (stamp) return { weight: part.startsWith(':root') ? 20 : 10, applies: (mode) => mode === stamp[1] };
+  const forms = selector.split(',').map((part) => {
+    const trimmed = part.trim();
+    if (trimmed === ':root') return { weight: 10, modes: ['night', 'day'] };
+    if (trimmed === nightSelector) return { weight: 20, modes: ['night'] };
     return null;
   });
   if (forms.some((form) => form === null)) return null;
-  // No Math.max: hoisting the highest weight onto every part of a list
-  // makes the weak parts punch above their specificity, and a browser
-  // paints the difference. A list whose parts genuinely disagree is a form
-  // this resolver cannot weigh as one rule, so it says so.
-  const weights = new Set(forms.map((form) => form.weight));
-  if (weights.size > 1) return null;
+  // No Math.max: hoisting the highest weight onto every part of a list makes
+  // the weak parts punch above their specificity, and a browser paints the
+  // difference. A list whose parts genuinely disagree is a form this resolver
+  // cannot weigh as one rule, so it says so.
+  if (new Set(forms.map((form) => form.weight)).size > 1) return null;
   return {
     weight: forms[0].weight,
-    applies: (mode) => forms.some((form) => form.applies(mode)),
+    applies: (mode) => forms.some((form) => form.modes.includes(mode)),
   };
 }
+// The day's own rules and the night's: what each half of the layer declares.
+const isDayLayer = (rule) => tokenLayerSelector(rule.selector)?.weight === 10;
+const isNightLayer = (rule) => tokenLayerSelector(rule.selector)?.weight === 20;
 
-// The rules that paint one reading mode, base first and override second, each
-// in document order. `auto` is modelled because it is a real mode this page
-// serves: it is the ABSENCE of a stamp, so it resolves through the
-// prefers-color-scheme mapping — the one block nothing used to resolve, and
-// the block the auto mode is precisely what makes render.
+// The rules that paint one reading mode, base first and night second, each in
+// document order. Both modes are renderings this page really serves: the night
+// every visit opens on, and the day one press away. Validating the day alone
+// would leave the rendering every reader sees first entirely unmeasured.
 function modeRules(mode) {
+  assert.ok(readingModes.includes(mode), `${mode} is not one of the page's reading modes`);
   const applied = [];
   for (const rule of styleRules) {
     if (!declaresThemeToken(rule.body)) continue;
@@ -330,18 +394,15 @@ function modeRules(mode) {
     assert.ok(
       form,
       `"${rule.selector}" declares theme tokens through a selector this resolver cannot weigh; ` +
-        'the token layer is :root, :root:not([data-theme]), and [data-theme="…"]',
+        `the token layer is :root and ${nightSelector}`,
     );
-    // A media-query block is a further condition on top of the selector, and
-    // it is the condition that splits auto in two. An unstamped document
-    // renders one way when the device asks for dark and another when it asks
-    // for light, so "auto" is not one rendering to validate but two — and the
-    // OS-LIGHT one was entirely unmodelled until the delta review, because
-    // this resolver applied the dark media block to auto unconditionally.
-    // That is the rendering `:root:not([data-theme])` repaints, since it
-    // outweighs :root at (0,2,0) while the media block is not in force.
-    const scheme = colorSchemeOf(rule);
-    if (scheme !== null && mode !== `auto-${scheme}`) continue;
+    // The device no longer has a say (owner, 2026-10-19): a theme token under
+    // prefers-color-scheme is a rendering this resolver cannot place in the
+    // night or the day, so it is refused rather than guessed at.
+    assert.ok(
+      !rule.enclosing.some((at) => at.includes('prefers-color-scheme')),
+      `"${rule.selector}" declares theme tokens under prefers-color-scheme; the page opens on the night whatever the device prefers`,
+    );
     if (!form.applies(mode)) continue;
     applied.push({ ...rule, weight: form.weight });
   }
@@ -417,16 +478,16 @@ test('every reading mode paints panels at a legible contrast', () => {
     '--panel-accent': 4.5,
     '--panel-status-ok': 3,
   };
-  // Auto is the absence of a stamp, so it renders through the OS mapping and
-  // nothing else. If that block is deleted — or merely COMMENTED OUT, which
-  // the delta review did while staying 137/137 green — auto silently
-  // degenerates into light and this whole loop then validates light twice
+  // The night renders through its own block and nothing else. If that block
+  // is deleted — or merely COMMENTED OUT, which the delta review did to the
+  // old dark mapping while staying 137/137 green — the night silently
+  // degenerates into the day and this whole loop then validates the day twice
   // under two names. Fail on the block's absence, not on its contrast.
   assert.ok(
-    styleRules.some((rule) => underColorScheme(rule) && declaresThemeToken(rule.body)),
-    'no prefers-color-scheme block declares theme tokens; auto-dark would render as light while claiming to follow the device',
+    styleRules.some((rule) => isNightLayer(rule) && declaresThemeToken(rule.body)),
+    `no ${nightSelector} block declares theme tokens; every visit would open on the day while the page claims to open on the night`,
   );
-  for (const mode of ['light', 'auto-light', 'auto-dark', 'dark', 'slate', 'sepia']) {
+  for (const mode of readingModes) {
     const background = resolve('--panel-surface', mode);
     assert.ok(background, `${mode} has no raised surface to measure against`);
     for (const [hook, floor] of Object.entries(floors)) {
@@ -470,7 +531,8 @@ test('every reading mode paints panels at a legible contrast', () => {
  * brand mark's ink. --usage-meter-critical was read with a raw
  * `rgb(208, 59, 59)` behind it, which is a palette value living in the one
  * place the token floor forbids. And --color-border-strong, a non-text UI
- * boundary, sat below 1.4.11's 3:1 in three of the four reading modes.
+ * boundary, sat below 1.4.11's 3:1 in three of the four reading modes the
+ * page then had.
  *
  * What every one of them has in common is that NOTHING WENT RED. A var()
  * fallback still paints, so a missing token looks exactly like a present one,
@@ -519,7 +581,7 @@ test('every status ink is declared, resolves, and clears 1.4.11 on both surfaces
   // or with a printed figure — the meter prints its own percentage beside the
   // bar — so 3:1 is the correct floor and 4.5 would be the wrong one.
   const nonTextFloor = 3;
-  for (const mode of ['light', 'auto-light', 'auto-dark', 'dark', 'slate', 'sepia']) {
+  for (const mode of readingModes) {
     const tokens = tokensFor(mode);
     // BOTH surfaces. The panel card is what --panel-status-* paints on; the
     // usage tile is the page surface, and it is what the meter's own fill
@@ -562,11 +624,10 @@ test('every status ink is declared, resolves, and clears 1.4.11 on both surfaces
  * or by adding a new one that resolves to a literal nobody measured. */
 test('no component reads a status ink that is undeclared or fallback-shielded', () => {
   const declared = new Set(statusInkNames);
-  let reads = 0;
+  const statusReads = (source) =>
+    [...source.matchAll(/var\(\s*(--[a-z0-9-]+)\s*([,)])/g)].filter(([, token]) => statusInkPattern.test(token));
   for (const [name, source] of Object.entries(componentStyles)) {
-    for (const [, token, tail] of source.matchAll(/var\(\s*(--[a-z0-9-]+)\s*([,)])/g)) {
-      if (!statusInkPattern.test(token)) continue;
-      reads += 1;
+    for (const [, token, tail] of statusReads(source)) {
       assert.ok(
         declared.has(token),
         `${name} reads ${token}, which the token layer declares nowhere; its var() chain paints something the contrast guard never measured`
@@ -578,7 +639,24 @@ test('no component reads a status ink that is undeclared or fallback-shielded', 
       );
     }
   }
-  assert.ok(reads > 0, 'no component reads a status ink at all; this sweep proves nothing');
+  /* NON-VACUITY, PROVEN ON A PROBE. The board's utilization meter was the one
+     component that read a status ink, and it retired with the board (the
+     Chronicle that replaced it draws no meter), so today no component reads
+     one and the walk above has nothing to refuse. What keeps
+     the sweep honest is that its reader still FINDS a read and still sees
+     both of its tails — one bare, one behind a fallback — so the next
+     component that reads a status ink is checked rather than missed. */
+  const probe = statusReads(
+    '.a { color: var(--usage-meter-ok); } .b { color: var( --panel-status-stale , red); } .c { color: var(--color-text); }'
+  );
+  assert.deepEqual(
+    probe.map(([, token, tail]) => [token, tail]),
+    [
+      ['--usage-meter-ok', ')'],
+      ['--panel-status-stale', ','],
+    ],
+    'the status-ink reader no longer finds a read; this sweep proves nothing'
+  );
 });
 
 // The contrast guard above resolves the TOKEN LAYER, not the DOM. That is a
@@ -590,12 +668,11 @@ test('no component reads a status ink that is undeclared or fallback-shielded', 
 // sees nothing at all.
 //
 // Forbidding the declaration needs no tree. AGENTS.md already says the token
-// layer lives in styles.css — "the light palette on :root, every further
-// reading mode one [data-theme] override block" — and that components
-// "consume tokens, never raw palette literals". This makes that a red build
-// instead of a convention, which is the strictly stronger half of the pair:
-// the resolver proves the layer's VALUES are legible, and this proves there
-// is nowhere else for a value to come from.
+// layer lives in styles.css, and that components "consume tokens, never raw
+// palette literals". This makes that a red build instead of a convention,
+// which is the strictly stronger half of the pair: the resolver proves the
+// layer's VALUES are legible, and this proves there is nowhere else for a
+// value to come from.
 test('theme tokens are declared in the token layer and nowhere else', () => {
   for (const [name, source] of Object.entries(componentStyles)) {
     for (const [, property] of source.matchAll(/(--[a-z0-9-]+)\s*:/g)) {
@@ -606,11 +683,20 @@ test('theme tokens are declared in the token layer and nowhere else', () => {
     }
   }
   const declaring = styleRules.filter((rule) => declaresThemeToken(rule.body));
-  assert.ok(declaring.length >= 5, `only ${declaring.length} rules declare theme tokens; the layer is :root plus one block per stamped mode plus the OS mapping, so it cannot have shrunk this far`);
+  // The layer is the day's :root plus the night mapped over it, so both
+  // halves must be present; a count alone would pass with two day rules.
+  assert.ok(
+    declaring.some(isDayLayer),
+    'no plain :root rule declares theme tokens; the day kept behind the night is gone'
+  );
+  assert.ok(
+    declaring.some(isNightLayer),
+    `no ${nightSelector} rule declares theme tokens; the night every visit opens on is gone`
+  );
   for (const rule of declaring) {
     assert.ok(
       tokenLayerSelector(rule.selector),
-      `"${rule.selector}" declares theme tokens outside the token layer, which is :root, :root:not([data-theme]), and [data-theme="…"]`
+      `"${rule.selector}" declares theme tokens outside the token layer, which is :root and ${nightSelector}`
     );
   }
 });
@@ -652,17 +738,56 @@ test('nothing claims a hard inline size wider than the narrowest viewport', () =
   assert.match(styles, /\.panel-stack,\s*\n\.panel-stack > \*\s*\{[^}]*min-inline-size:\s*0/);
 });
 
-// Reading modes (issue #22): the stylesheet is a custom-property token layer.
-// Light is the default :root palette; each further mode is one override block
-// scoped by the data-theme attribute the origin stamps on <html>. The colors
-// themselves are placeholder palettes and deliberately not pinned — except
-// sepia's browntown seed, which the issue fixes until the owner repaints.
-test('reading modes: a token layer with attribute-scoped theme blocks', () => {
-  // The default document ships unstamped: stamping data-theme is the
-  // origin's job (cookie-selected precomputed variants), never the source's.
-  assert.doesNotMatch(fallback, /data-theme/);
+// Reading modes (issue #22; owner, 2026-10-19: "always set it to night by
+// default", then, of the toggle that turned it to day, "do away with this all
+// together but keep the logic"): the stylesheet is a custom-property token
+// layer with two modes. The day is the default :root palette; the night is the
+// one `:root:not([data-sky='day'])` block mapped over it. The page is the
+// night on every visit — nothing stamps the day any more — but the day is
+// kept whole behind the attribute, so bringing it back is one write. Whether
+// the colors are legible is the contrast guards' question; this pins the
+// layer's shape, the wiring, and that every value in it is written once.
+test('reading modes: a token layer that is always the night, with the day kept behind it', async () => {
+  // The default document ships unstamped, so the static shell paints the
+  // night too: a stamp in it would open every first paint on the day.
+  assert.doesNotMatch(fallback, /data-sky/, 'the static shell stamps a sky, so it no longer opens on the night');
 
-  // Light tokens are the :root defaults and declare their color-scheme.
+  // The page writes the attribute the night block keys on, and the one value
+  // it ever writes is the night: a constant, with no state a press or a
+  // binding could change.
+  const script = cutBlock(component, 'script').inner.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(script, /const phase: SkyPhase = 'night';/, 'the page is no longer the night');
+  assert.match(script, /document\.documentElement\.dataset\.sky = phase;/, 'the page no longer writes its phase on the root');
+  assert.doesNotMatch(script, /\$state\(|'day'/, 'the page holds a state, or a day, that could turn the sky');
+  assert.doesNotMatch(stripComments(component), /bind:/, 'the page hands a child a binding that could turn the sky');
+
+  // NOTHING WRITES THE DAY, anywhere in the source: App's one write of its
+  // constant is the only write of the attribute, by any spelling, in any
+  // file. And no control exists to make one — the toggle is gone, with its
+  // glyphs (icons.test.mjs holds the family to what is drawn).
+  const sources = await Promise.all(
+    (await readdir(new URL('../src', import.meta.url), { recursive: true }))
+      .filter((entry) => /\.(?:svelte|ts)$/.test(entry))
+      .map(async (entry) => [entry, await readFile(new URL(`../src/${entry}`, import.meta.url), 'utf8')])
+  );
+  const writes = sources.flatMap(([entry, source]) =>
+    [...source.matchAll(/dataset\.sky\s*=[^=]|dataset\[['"]sky['"]\]\s*=|setAttribute\(\s*['"]data-sky['"]|toggleAttribute\(\s*['"]data-sky['"]/g)].map(() => entry)
+  );
+  assert.deepEqual(writes, ['App.svelte'], 'something other than the page’s one constant writes the sky');
+  assert.ok(
+    !existsSync(new URL('../src/lib/components/SkyToggle.svelte', import.meta.url)),
+    'the sky’s control is back; the owner did away with it'
+  );
+  // And nothing remembers a sky: the next visit is the night again.
+  for (const [entry, source] of sources) {
+    if (!/(?:^|\/)(?:App\.svelte|NightSky\.svelte|Torches\.svelte|sky\.ts|themeColor\.ts)$/.test(entry)) continue;
+    assert.doesNotMatch(source, /localStorage|sessionStorage|indexedDB|document\.cookie/, `${entry} remembers the sky`);
+  }
+
+  // THE DAY IS KEPT WHOLE ("keep the logic"): its tokens are the :root
+  // defaults and declare their color-scheme, and the contrast guards above
+  // still measure every one of them, so the day is a palette that works the
+  // moment something stamps it, not a remnant. (Its sky: sky.test.mjs.)
   assert.match(styles, /:root\s*\{[^}]*color-scheme:\s*light/);
   assert.match(styles, /:root\s*\{[^}]*--color-surface:/);
   assert.match(styles, /:root\s*\{[^}]*--color-text:/);
@@ -671,55 +796,41 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
   assert.match(styles, /color:\s*var\(--color-text\)/);
   assert.match(styles, /background:\s*var\(--color-surface\)/);
 
-  // Each explicit mode is one attribute-scoped block with its color-scheme,
-  // remapping the active tokens onto its palette by reference only.
-  for (const theme of ['dark', 'slate', 'sepia']) {
-    assert.match(
-      styles,
-      new RegExp(`\\[data-theme="${theme}"\\]\\s*\\{[^}]*color-scheme:\\s*dark`),
-      `theme block for ${theme} must set its color-scheme`
-    );
-    assert.match(
-      styles,
-      new RegExp(`\\[data-theme="${theme}"\\]\\s*\\{[^}]*--color-surface:\\s*var\\(--palette-${theme}-surface\\)`),
-      `theme block for ${theme} must remap tokens onto its palette, never restate values`
-    );
-  }
+  // The night is its own block, with its own color-scheme, remapping the
+  // active tokens onto the dark palette by reference only.
   assert.match(
     stylesCode,
-    /prefers-color-scheme: dark\)\s*\{\s*:root:not\(\[data-theme\]\)\s*\{[^}]*var\(--palette-dark-/,
-    'the media query must remap onto the dark palette, never restate values'
+    /:root:not\(\[data-sky='day'\]\)\s*\{[^}]*color-scheme:\s*dark/,
+    'the night block must set its color-scheme'
+  );
+  assert.match(
+    stylesCode,
+    /:root:not\(\[data-sky='day'\]\)\s*\{[^}]*--color-surface:\s*var\(--palette-dark-surface\)/,
+    'the night block must remap onto the dark palette, never restate values'
   );
 
   // Palette deduplication (review finding): every palette value is written
   // exactly once, as a --palette-* definition; theme blocks and components
-  // only reference. The two anchor hexes appear exactly twice because
-  // light's text is SLATE's surface and vice versa — one occurrence per
-  // palette slot, still zero per consumer.
+  // only reference.
   const uniqueValues = [
-    '#f1efe7', '#e7e4da', '#d9d5c9', '#87877c', '#3d434f', // light ramp
+    // The parchment light ramp (owner direction, 2026-10-16: the Keep).
+    '#efe2c2', '#e6d5ac', '#dcc795', '#c4ab7a', '#8a6a3c', '#6b4e2a', '#2b1b0c', // light ramp
     // The true dark. Every one of these is a grey — red, green and blue
     // equal — which is the whole claim the mode makes and the one a repaint
     // toward navy would have to break to get past here.
     '#121212', '#1e1e1e', '#2e2e2e', '#383838', '#6c6c6c', '#a0a0a0', '#e0e0e0',
     '#2a2a2a', // its empty heatmap tile, the one hueless step the green ramp keeps
-    // The green calendar (owner directive, 2026-09-04, issue 292): four
+    // The green calendar (owner directive, 2026-09-04, issue 292): two
     // ramps of four steps plus each palette's own peak, every value its own
-    // hex so a repaint of one mode cannot quietly restate another's.
+    // hex so a repaint of one mode cannot quietly restate the other's.
     '#aadf9f', '#72cc6c', '#37b043', '#158a31', '#00d95a', // light greens + peak
-    '#10752a', // light's mark: a deeper step of the same hue, 4.5:1 as text where grid-4 is not
-    '#17492a', '#1f7d3d', '#2eb457', '#5ee97b', '#8dff97', // dark greens + peak
-    '#1e4b35', '#237f48', '#34b762', '#6ceb8a', '#9dffb2', // slate greens + peak
-    '#3d5330', '#55823f', '#79b455', '#a9e37e', '#ccff8a', // sepia greens + peak
-    '#161a23', '#1d222d', '#2a3040', '#5f6a84', '#b9c2d4', // slate ramp
-    '#1b1612', '#28221d', '#312a25', '#3e362f', '#7b6d60', '#b79d7e', '#f4eaea', // browntown seeds
-    // The token-usage entity sets (issue #142, widened at #302 and #369): four
-    // modes times ten slots, every value its own hex — including dark's neutral
-    // steps, which the r==g==b sweep above also holds to the no-hue rule.
+    '#0b6223', // light's mark: a deeper step of the same hue, 4.5:1 on every parchment surface where grid-4 is not
+    '#2c4a22', '#3f6a2b', '#5e8f3a', '#8fbf55', '#b8e07a', // dark greens + peak
+    // The token-usage entity sets (issue #142, widened at #302, #369 and
+    // #373): both modes, every value its own hex — including dark's neutral
+    // steps, which the r==g==b sweep below also holds to the no-hue rule.
     '#5f6672', '#2a63b8', '#96550a', '#0b8a6a', '#6d4bb8', '#a3315e', // light categories
     '#565656', '#6f6f6f', '#868686', '#a2a2a2', '#bebebe', '#dadada', // dark category steps
-    '#5a657e', '#3f81d9', '#b87e1f', '#1f9e7d', '#8a68d8', '#cf5585', // slate categories
-    '#77685a', '#5c88d8', '#bb7d24', '#2f9e7d', '#8f6ad4', '#d15a88', // sepia categories
     // Slots 6 and 7, added at issue #302 because the model vocabulary's larger
     // vendor group declares seven named members and no two members of one
     // group may share a slot. Chosen by the same measurement the five above
@@ -728,8 +839,6 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     // every chromatic mode. Dark keeps its no-hue rule, checked by the sweep.
     '#cc5145', '#698240', // light
     '#949494', '#f2f2f2', // dark steps
-    '#b46852', '#678546', // slate
-    '#b56754', '#6d8a4b', // sepia
     // Slots 8 and 9, added at issue #369 when the Anthropic group grew to nine
     // named members: an orchid and a cyan, 3.17:1 at the lowest on each mode's
     // raised surface, and the 7-8 and 8-9 pairs at worst 20.8 (normal) and
@@ -737,16 +846,12 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     // are greys at 3.88:1 and 10.38:1, held to the no-hue rule by the sweep.
     '#86318a', '#048aad', // light
     '#7a7a7a', '#cccccc', // dark steps
-    '#8e5793', '#01a2c5', // slate
-    '#985a96', '#0fa3bf', // sepia
     // Slot 10, added at issue #373 when the Anthropic group grew to ten named
     // members: a gold, 3.34:1 at the lowest on each mode's raised surface, and
     // the 9-10 pair at worst 21.6 (normal) and 18.9 (deuteranopia and
     // protanopia). Dark's is a grey at 3.52:1, held to the no-hue rule.
     '#9f7604', // light
     '#737373', // dark step
-    '#8d6803', // slate
-    '#926e10', // sepia
     // The two status inks added at issues 222 and 229, each with its own
     // darkened twin for the light card. They are enumerated here for the
     // same reason every value above is: a status ink restated at a second
@@ -767,14 +872,11 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
     const [red, green, blue] = [1, 3, 5].map((offset) => value.slice(offset, offset + 2));
     assert.ok(
       red === green && green === blue,
-      `${name} is ${value}; the dark mode is the NEUTRAL one, so every channel must agree — a tinted value belongs in slate or sepia`
+      `${name} is ${value}; the night's dark palette is the NEUTRAL one, so every channel must agree — a tinted value has no place in it`
     );
   }
   for (const value of uniqueValues) {
     assert.equal(occurrences(styles, value), 1, `${value} must be defined exactly once`);
-  }
-  for (const anchor of ['#faf9f5', '#10131a']) {
-    assert.equal(occurrences(styles, anchor), 2, `anchor ${anchor} fills exactly two palette slots`);
   }
 
   // Structural closure of the dedup pin (review F2): the enumerated counts
@@ -795,8 +897,9 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
  * killed most, a streak that has reached its own record — used to be ONE red
  * across every reading mode, a printer's spot colour belonging to no palette.
  * It is now a green of each mode's OWN calendar ramp: the fourth step where
- * that step is legible as text (the three dark modes, above 10:1), and for
- * light a deeper step of the same hue, because light's fourth step measures
+ * that step is legible as text (the night's dark palette, above 10:1), and
+ * for the day's light palette a deeper step of the same hue, because light's
+ * fourth step measures
  * 4.23:1 on the page and its peak 1.80:1, while every surface that spends the
  * mark paints TEXT — the ticker's figure at 0.75rem among them. The calendar's
  * busiest day keeps the peak (--grid-cell-peak), so the mark and the busiest
@@ -812,18 +915,21 @@ test('reading modes: a token layer with attribute-scoped theme blocks', () => {
  * measures what the token layer declares, and neither replaces the other. */
 test('the sheet spends its one mark on each mode’s own green, legible as text everywhere it prints', () => {
   const palette = paletteLiterals(styles);
-  for (const mode of ['light', 'dark', 'slate', 'sepia']) {
+  for (const mode of readingModes) {
+    const own = modePalette[mode];
     /* The fourth step, or the mode's own deeper mark where the fourth step
        is short of the floor — never the peak, and never a shallower step that
        happens to clear the floor on a dark ground: the mark is the ramp's
        darkest full step or deeper, in every mode, so it reads as the same
-       weight of green across the four. */
-    const mapping = styles.match(
-      new RegExp(`--color-highlight: var\\((--palette-${mode}-(?:grid-4|mark))\\);`)
+       weight of green across the two. Read from the mapping that WINS in the
+       mode, through the resolver, rather than from wherever the text first
+       appears in the file. */
+    const mapping = new RegExp(`^var\\((--palette-${own}-(?:grid-4|mark))\\)$`).exec(
+      tokensFor(mode)['--color-highlight'] ?? ''
     );
     assert.ok(
       mapping,
-      `${mode} does not map the page's one mark onto its own fourth step or its own deeper mark`
+      `${mode} does not map the page's one mark onto its own palette's fourth step or its own deeper mark`
     );
     const [, token] = mapping;
     const mark = palette[token];
@@ -831,7 +937,7 @@ test('the sheet spends its one mark on each mode’s own green, legible as text 
     const [red, green] = [1, 3].map((offset) => parseInt(mark.slice(offset, offset + 2), 16));
     assert.ok(green > red, `${mode}'s mark ${mark} is not a green at all`);
     for (const surface of ['surface', 'surface-raised', 'surface-overlay']) {
-      const ground = palette[`--palette-${mode}-${surface}`];
+      const ground = palette[`--palette-${own}-${surface}`];
       assert.ok(ground, `${mode} declares no ${surface} to measure the mark against`);
       const ratio = contrastRatio(mark, ground);
       assert.ok(
@@ -840,178 +946,19 @@ test('the sheet spends its one mark on each mode’s own green, legible as text 
       );
     }
   }
-  /* The auto-dark branch too: a document with no stamped choice reads the
-     dark palette through the media query, and a mark left behind there would
-     be red for every reader who never opened the menu. */
+  /* And in the block that actually paints the night: every visit opens on it
+     and it reaches the dark palette only through its own block, so the mapping
+     has to live THERE, in code a browser reads, or every first visit gets the
+     day's mark on the night's sheet. */
   assert.match(
     stylesCode,
-    /prefers-color-scheme: dark\)\s*\{\s*:root:not\(\[data-theme\]\)\s*\{[\s\S]*?--color-highlight: var\(--palette-dark-grid-4\);/,
-    'the auto-dark mode keeps a mark of its own'
+    /:root:not\(\[data-sky='day'\]\)\s*\{[^}]*--color-highlight: var\(--palette-dark-grid-4\);/,
+    'the night keeps a mark of its own'
   );
   assert.doesNotMatch(
     styles,
     /--palette-highlight/,
     'the mode-independent highlight literal is back; the mark is per palette now'
-  );
-});
-
-// The registry and toggle are the client half of the wiki mechanism: named
-// modes, an instant data-theme swap, and the cookie the origin stamps future
-// documents from. The id list mirrors readingThemes in
-// internal/server/types.go — update both in the same change (the Go parity
-// test names this file from its side).
-test('theme registry and toggle: named modes, exact cookie grammar, local only', () => {
-  for (const source of [themeRegistry, themeMenu]) {
-    assert.doesNotMatch(source, /https?:\/\//, 'theme sources must stay local-origin');
-  }
-
-  // Exactly the four registered modes, each carrying a visible name. These
-  // are the STAMPED ids — the ones the origin precomputes a document for —
-  // and they are what the Go parity test compares against readingThemes.
-  for (const id of ['light', 'dark', 'slate', 'sepia']) {
-    assert.match(themeRegistry, new RegExp(`id: '${id}', label: '[^']+'`), `registry lacks ${id}`);
-  }
-
-  // The swap is instant and attribute-based; persistence is the exact cookie
-  // the origin parses: whole-site path, 365 days, SameSite=Lax.
-  assert.match(themeRegistry, /setAttribute\('data-theme', id\)/);
-  assert.match(themeRegistry, /'theme=' \+ id \+ '; path=\/; max-age=31536000; samesite=lax'/);
-});
-
-// Auto is the one toggle choice that is NOT a stamped theme: it is the
-// absence of a choice. Modelling it as a stamped id would need a
-// [data-theme="auto"] block restating the whole media query, and a Go variant
-// that cannot be right for two visitors whose devices disagree — so the
-// registry keeps four ids and the menu derives five choices from them.
-test('auto is the no-choice choice: derived menu, attribute removed, cookie expired', () => {
-  // The menu is DERIVED from the registry, so a theme added above cannot fail
-  // to appear in the toggle and the two lists can never disagree.
-  assert.match(themeRegistry, /export const modes: readonly Mode\[\] = \[\{ id: autoMode, label: '[^']+' \}, \.\.\.themes\]/);
-  assert.match(themeRegistry, /export const autoMode = 'auto'/);
-
-  // Auto is deliberately outside ThemeId — the type the origin's stamped
-  // variants and the cookie contract are keyed on.
-  assert.match(themeRegistry, /export type ThemeId = 'light' \| 'dark' \| 'slate' \| 'sepia'/);
-  assert.match(themeRegistry, /export type ModeId = ThemeId \| typeof autoMode/);
-
-  // Choosing auto un-stamps the live document AND expires the cookie. Setting
-  // the cookie to any value instead would keep the origin answering with a
-  // stamped variant forever, which is the regression this pins.
-  assert.match(themeRegistry, /removeAttribute\('data-theme'\)/);
-  assert.match(themeRegistry, /'theme=; path=\/; max-age=0; samesite=lax'/);
-
-  // An unstamped document reads as auto SELECTED, never as nothing selected —
-  // otherwise the state every visitor starts in shows no pressed swatch.
-  assert.match(themeRegistry, /return documentTheme\(\) \?\? autoMode/);
-});
-
-// The toggle is the wiki's, minimally: a labeled moon button opening a
-// popover of one swatch per mode, each swatch an inline-SVG line icon drawn
-// in ONE ink (currentColor) with a genuinely different SILHOUETTE per mode
-// (issue #180: half-sun/half-moon on auto, sun on light, plain crescent on
-// dark, crescent-with-stars on slate, split disc on sepia) — shape tells the
-// five apart now, never color. No icon assets, no hex copies. These pins
-// cover DOM wiring only; the open/select/close/reopen behavior is EXECUTED
-// against src/lib/disclosure.ts in toggle.test.mjs.
-test('theme toggle: swatch popover, token-pure colors, machine-wired', () => {
-  // Trigger: a labeled plain-disclosure button with an inline moon glyph.
-  // Deliberately NO aria-haspopup: it would announce a menu, but the popover
-  // is a group of pressed-state buttons (review F4).
-  assert.match(themeMenu, /aria-label="Reading mode"/);
-  assert.doesNotMatch(themeMenu, /aria-haspopup=/, 'plain disclosure only: no haspopup attribute');
-  assert.match(themeMenu, /aria-expanded=\{disclosure\.open\}/);
-  assert.match(themeMenu, /aria-controls="reading-mode-menu"/);
-  assert.match(themeMenu, /<svg[^>]*aria-hidden="true"/);
-
-  // Popover: every menu entry becomes a named swatch button carrying
-  // pressed semantics for the current choice.
-  assert.match(themeMenu, /\{#each modes as mode \(mode\.id\)\}/);
-  assert.match(themeMenu, /aria-label=\{mode\.label\}/);
-  assert.match(themeMenu, /aria-pressed=\{selected === mode\.id\}/);
-
-  // Every glyph paints ONE ink — currentColor — never a palette token, so no
-  // mode carries its own color rule and there is zero theme branching to
-  // drift out of step (issue #180). .chip is the filled-shape class and it
-  // must resolve unconditionally, not per swatch-{id}.
-  assert.match(themeMenu, /\.chip \{\s*fill: currentColor;/);
-  assert.doesNotMatch(
-    themeMenu,
-    /\.swatch-(light|dark|slate|sepia|auto)[^{]*\{\s*fill:/,
-    'a swatch reads its own color rule again; shape alone must tell the modes apart'
-  );
-  // Never a hex anywhere in the component.
-  assert.doesNotMatch(
-    themeMenu,
-    /#[0-9a-fA-F]{3,8}(?![0-9a-zA-Z])/,
-    'the toggle must reference tokens, never hex values'
-  );
-
-  // Five distinct silhouettes, one branch per mode id — a shared branch (the
-  // old "one moon for all three darks") is exactly the regression issue #180
-  // reports, so each id gets its own markup to diverge from. Sepia is the
-  // final, unconditional {:else} — the fifth and last mode needs no
-  // condition of its own once the other four have theirs.
-  for (const id of ['auto', 'light', 'dark', 'slate']) {
-    assert.match(
-      themeMenu,
-      new RegExp(`mode\\.id === '${id}'`),
-      `no dedicated branch draws the "${id}" glyph; it would share markup with a neighbour`
-    );
-  }
-  assert.match(themeMenu, /\{:else\}/, 'sepia has no dedicated branch to draw its glyph in');
-  // The three dark variants are the owner's literal complaint ("all look
-  // exactly the same") — dark stays a bare crescent, slate adds star marks
-  // beside it, and sepia is not a crescent at all, so no two of the five
-  // <svg> blocks can be byte-identical.
-  const glyphBlocks = [...themeMenu.matchAll(/<svg class="glyph"[\s\S]*?<\/svg>/g)].map((m) => m[0]);
-  assert.equal(glyphBlocks.length, 5, 'the popover does not render five glyphs');
-  assert.equal(new Set(glyphBlocks).size, 5, 'two reading-mode glyphs render identical markup');
-  assert.doesNotMatch(themeMenu, /class="crater"/, 'the retired per-mode crater mark is still drawn');
-
-  // The component must delegate every open/close decision to the tested
-  // state machine — the trigger latch (F1 fix) and the swatch press-in-
-  // flight guard plus outside-press dismissal (F5 fix) included — and
-  // return focus to the trigger only when a dismissal reports it was open.
-  assert.match(themeMenu, /from '\.\/disclosure'/);
-  assert.match(themeMenu, /onpointerdown=\{onTriggerPointerdown\}/);
-  assert.match(themeMenu, /triggerPointerDown\(disclosure\)/);
-  assert.match(themeMenu, /triggerClick\(disclosure\)/);
-  assert.match(themeMenu, /onpointerdown=\{onSwatchPointerdown\}/);
-  assert.match(themeMenu, /pressBegan\(disclosure\)/);
-  assert.match(themeMenu, /<svelte:window onpointerdown=\{onWindowPointerdown\} \/>/);
-  assert.match(themeMenu, /outsidePress\(disclosure\)/);
-  assert.match(themeMenu, /if \(dismiss\(disclosure\)\) \{\n\s*trigger\?\.focus\(\)/);
-  assert.match(themeMenu, /hidden=\{!disclosure\.open\}/);
-
-  // Touch and motion: targets meet the 44px minimum, animation respects the
-  // OS setting.
-  assert.match(themeMenu, /2\.75rem/);
-  assert.match(themeMenu, /prefers-reduced-motion/);
-});
-
-/* Playwright 1.63.0 may scroll an already-visible absolute swatch during a
- * locator click's actionability step, before the page receives pointerdown.
- * That is driver motion, so a zero-scroll assertion after it cannot tell what
- * the product did. These lanes first prove the control is in the viewport and
- * then use the mouse directly; this source pin keeps the occasionally quiet
- * driver regression from making that repair vacuous. */
-test('zero-scroll theme lanes press a visible control without locator actionability scrolling', () => {
-  const helper = renderingLanes.match(
-    /const clickVisibleControl = async \(page, control, label\) => \{[\s\S]*?\n\};/
-  )?.[0];
-  assert.ok(helper, 'the zero-scroll browser lanes lost their visible-control pointer helper');
-  assert.match(helper, /control\.boundingBox\(\)/, 'the helper no longer proves the control is painted');
-  assert.match(helper, /page\.viewportSize\(\)/, 'the helper no longer proves the control is visible');
-  assert.match(
-    helper,
-    /page\.mouse\.click\(box\.x \+ box\.width \/ 2, box\.y \+ box\.height \/ 2\)/,
-    'the helper handed the press back to locator actionability scrolling'
-  );
-  assert.doesNotMatch(helper, /control\.click\(/, 'a locator click can move the page before pointerdown');
-  assert.equal(
-    [...renderingLanes.matchAll(/await clickVisibleControl\(/g)].length,
-    4,
-    'both zero-scroll lanes must use direct pointer presses for their mode loop and Auto return'
   );
 });
 
@@ -1190,8 +1137,8 @@ test('every progressive feature is guarded, and every guard has a base under it 
          which an engine keeps precisely because it discards the later one it
          cannot parse (the meter track uses this);
        * an @supports block, which is what a fallback spanning several
-         properties or living in a different rule needs (the page height, the
-         safe-area padding and the sepia glyph use this).
+         properties or living in a different rule needs (the page height and
+         the safe-area padding use this).
      Neither works for a CUSTOM property (coordinator quality pass on issue
      186): a custom property accepts any value syntax unconditionally, so an
      "earlier declaration of the same custom property" is not kept as a
@@ -1201,7 +1148,8 @@ test('every progressive feature is guarded, and every guard has a base under it 
      wherever it is CONSUMED: if the feature makes its own declaration
      invalid at computed-value time, the custom property resolves to its
      guaranteed-invalid value, and a var() reference with a second, fallback
-     argument (--header-inset-inline's own use site, .page-header below)
+     argument (the retired --header-inset-inline's own use site, on the
+     header row the page no longer has)
      is what actually recovers from that — so a bare feature-bearing custom
      property declaration is accepted here PROVIDED every place that reads
      it supplies that fallback argument, checked separately below. What is
@@ -1449,14 +1397,25 @@ test('no link wears a resting underline, and every one marks itself on intent', 
 
 /* The page's own top rhythm (owner directive, 2026-08-25: "Samuel Naranjo"
  * sat hard against the top of the viewport, "it almost feels like it's about
- * to escape"). The header row is fixed, so it reserves no flow space and
- * #app reserved none either — the h1 began at the document's first pixel.
+ * to escape"). The reserve was derived from the chrome row it cleared — the
+ * row's own top inset plus the 44px hit box it was — so the name began exactly
+ * where the chrome ended.
  *
- * Recomputed here from the two tokens it is derived from rather than compared
- * with a number somebody typed: the reserve is the chrome row's own top inset
- * plus the 44px hit box it is, so the name begins exactly where the chrome
- * ends and a change to either token moves it or turns this red. */
-test('the page reserves the space above its name, derived from the chrome that space clears', () => {
+ * THE ROW IS GONE (owner direction, 2026-10-16: "do away with it for now, put
+ * J elsewhere"), and the sky above the sheet keeps exactly that measure: the
+ * owner's 2026-08-25 directive still holds, so the name still does not touch
+ * the top of the viewport.
+ *
+ * THE OVERHANG IS RETIRED, BECAUSE ITS SUBJECT IS GONE. From 2026-10-16 this
+ * pin also held that J's phone overhang — half of him rising off the sheet's
+ * top-end corner into this space — fit inside it. J no longer perches on that
+ * corner (owner, 2026-10-19: "put J on the white space flying"): he flies in
+ * the room the name keeps at its end, centred on the name's own lines, at
+ * every width, a phone's included, so there is no overhang left to fit. The J
+ * pin below holds him there — one seat, placed from the name's own box,
+ * smaller than the name's two lines — which is what keeps an overhang from
+ * coming back unmeasured. */
+test('the page keeps its sky above the sheet (owner 2026-08-25, 2026-10-16)', () => {
   const token = (name) => {
     const found = new RegExp(`--${name}:\\s*([^;]+);`).exec(stylesCode);
     assert.ok(found, `--${name} is gone; the top rhythm is derived from it`);
@@ -1466,7 +1425,8 @@ test('the page reserves the space above its name, derived from the chrome that s
   const gutter = lengthInPx(token('page-gutter'));
   const rail = lengthInPx(token('page-rail-size'));
   assert.ok(gutter !== null && rail !== null, 'the top rhythm is built from a length this pin cannot read');
-  assert.equal(gutter + rail, 60, 'the reserved top space is no longer the 60px the chrome row occupies');
+  const topSpace = gutter + rail;
+  assert.equal(topSpace, 60, 'the sky above the sheet is no longer the 60px it has always been');
   // Used in BOTH branches of #app's padding, and the guarded one still
   // widens for a notch rather than replacing the rhythm with it: max() takes
   // the larger, so an inset shorter than the rhythm changes nothing and a
@@ -1499,31 +1459,19 @@ test('the page reserves the space above its name, derived from the chrome that s
  * issue 219 answered a third face of the same thing — content showing THROUGH
  * a control that painted nothing — with a translucent plate behind it.
  *
- * The ledger removes the cause all three were treating. The chrome is a ROW
- * across the sheet now, in the document's own flow, between two rules: it
- * cannot pass over scrolled content, because it scrolls with it; it cannot
- * take a lane from the column, because it spans the same column; and it needs
- * no plate, because nothing passes beneath it. So this pin changed direction
- * rather than value — what it proves now is that the row is in flow and that
- * none of the three retired mechanisms has come back.
- *
- * The one thing that did NOT change is the reason the corner was ever
- * defended: the controls in the row still clear the 44px touch floor, which
- * the floor sweep above measures on every one of them. */
-test('the chrome row is in the document, so no control owns a corner of the page (issues 219, 241, 264, 287)', () => {
-  // In flow: neither of the two positioning schemes that took it out of the
-  // document survives, in either range.
-  assert.doesNotMatch(
-    stylesCode,
-    /\.page-header \{[^}]*position:\s*(?:fixed|absolute)/,
-    'the chrome row is out of the document flow again; a row that floats over the page is the corner all three of these issues were about'
-  );
-  assert.doesNotMatch(
-    stylesCode,
-    /@media not all and \(min-width: 67\.5rem\) \{\s*\.page-header \{\s*position:/,
-    'the narrow-range positioning override is back, so the row is floating again in one range'
-  );
-
+ * The ledger removed the cause all three were treating by making the chrome a
+ * ROW in the document's flow (issue 287). The row itself is gone now (owner
+ * direction, 2026-10-16: "do away with it for now"), and its pins — in flow,
+ * one rule under it, its reserve — went with their subject. So did the
+ * reading-mode control the row handed to the page's footer, which left with
+ * the footer itself (owner, 2026-10-19), and so did the sky's toggle that sat
+ * beside the name for an afternoon ("do away with this all together but keep
+ * the logic"): the page's own chrome carries no control at all. What the pins
+ * were FOR stays: none of the three retired mechanisms is back, the page shell
+ * draws no control of its own, and the shared icon-control shape — the
+ * lightbox close wears it — neither floats nor drops under the 44px touch
+ * floor, which the floor sweep above measures on every control. */
+test('no control owns a corner of the page, and the name keeps its own block (issues 219, 241, 264, 287; owner 2026-10-16)', () => {
   // The lane the column used to pay for is still not being paid for, in any
   // of the three spellings issue 264 retired.
   assert.doesNotMatch(
@@ -1542,26 +1490,6 @@ test('the chrome row is in the document, so no control owns a corner of the page
     'the page reserves a rail-sized lane on #app again, by some other spelling'
   );
 
-  // The plate is gone with the float it existed to soften. It answered
-  // content showing THROUGH a viewport-glued control; a row in the flow has
-  // nothing passing beneath it, so a translucent wash and a backdrop blur
-  // would be chrome nothing needs.
-  assert.doesNotMatch(
-    stylesCode,
-    /\.page-header \{[^}]*backdrop-filter/,
-    'the plate is back under a control that no longer floats over anything'
-  );
-
-  // What the row IS: the site's own hit lane tall, ruled UNDER like every
-  // other head on the sheet — and only under (owner directive, 2026-09-04,
-  // issue 294): a top rule sat directly beneath a phone browser's toolbar edge
-  // and the two read as one band twice as thick.
-  /* The reserve is the touch row PLUS the row's own rule (owner directive,
-     2026-09-03, issue 287): the box is border-box and the static shell renders
-     this header EMPTY, so a reserve stated as the control alone measured short
-     of the row that arrives and mounting moved the page. The arithmetic is
-     what makes the shell's promise keepable, so it names the ONE rule the row
-     draws and nothing else. */
   /* THE NAME IS TWO LINES AT EVERY WIDTH (owner directive, 2026-09-04, issue
      294): the heading's box is its longest word, so the break lands at the
      space on a monitor exactly as it does on a phone, with the DOM text left
@@ -1572,24 +1500,38 @@ test('the chrome row is in the document, so no control owns a corner of the page
   assert.match(masthead[1], /inline-size: min-content;/, 'the name is no longer boxed to its longest word');
   assert.match(masthead[1], /text-transform: lowercase;/);
 
-  // The stylesheet states .page-header more than once (its width beside the
-  // column's, its ceiling under the rails); the ROW is the block that
-  // reserves its height, so that is the one read here.
-  const rows = [...stylesCode.matchAll(/\.page-header \{([^}]*)\}/g)].map((found) => found[1]);
-  const row = rows.find((body) => body.includes('min-block-size'));
-  assert.ok(row, 'the chrome row no longer states its reserve');
-  assert.match(row, /min-block-size: calc\(var\(--page-rail-size\) \+ var\(--ledger-heavy\)\)/);
-  assert.match(row, /border-block-end: var\(--ledger-heavy\) solid var\(--ledger-rule\)/);
-  assert.doesNotMatch(row, /border-block-start|border-top|border:/, 'the row grew a top rule back');
-
-  // And the control inside it still clears the touch floor on both axes.
+  // The page shell draws no control of its own: no button, no link-as-button,
+  // no component that is one. A control that comes back is a conscious edit
+  // of this pin, and then the floor and no-float rules below are its rules.
+  const shellMarkup = cutBlock(cutBlock(stripComments(component), 'script').rest, 'style').rest;
+  assert.doesNotMatch(
+    shellMarkup,
+    /<button\b|role="button"|<SkyToggle\b|onclick=/,
+    'the page shell draws a control of its own again'
+  );
+  assert.ok(!sweptRules.some((rule) => rule.file === 'App.svelte' && /\.page-sky\b/.test(rule.selector)), 'the retired toggle’s seat is still styled');
+  // And the page-level icon-control shape (the lightbox close wears it)
+  // still clears the touch floor on both axes and positions nothing: a
+  // control that floats is a control that can own a corner again.
   assert.match(stylesCode, /\.icon-button\s*\{[^}]*inline-size:\s*2\.75rem/);
   assert.match(stylesCode, /\.icon-button\s*\{[^}]*block-size:\s*2\.75rem/);
+  assert.ok(
+    sweptRules.some((rule) => selectorParts(rule.selector).includes('.icon-button')),
+    'no rule styles .icon-button; this pin has lost its subject'
+  );
+  assert.ok(
+    !sweptRules.some(
+      (rule) =>
+        selectorParts(rule.selector).includes('.icon-button') &&
+        declarationsOf(rule.body).some(({ property, value }) => property === 'position' && /fixed|absolute|sticky/.test(value))
+    ),
+    '.icon-button floats over the page'
+  );
 
-  /* The two insets the floating control needed are retired with it: #app's own
-     safe-area padding clears a notch for everything in the column, including
-     this row, so a second answer to the same question would be a second set of
-     numbers free to disagree with the first. */
+  /* The two insets the floating control needed stay retired: #app's own
+     safe-area padding clears a notch for everything in the column, so a
+     second answer to the same question would be a second set of numbers free
+     to disagree with the first. */
   assert.doesNotMatch(
     stylesCode,
     /--header-inset-(?:block|inline)/,
@@ -1597,11 +1539,14 @@ test('the chrome row is in the document, so no control owns a corner of the page
   );
 });
 
-/* J TYPES AT BOTH ENDS OF THE ROW (owner request, 2026-10-12: "use him typing
- * on the computer now instead of just flying"; the seats are issue 314's and
- * issue 325's), and everything that makes that safe is a source fact this pin
- * holds. The rendering lane of the same name measures the boxes, the requests
- * and the moving frames in a real engine; neither half replaces the other. */
+/* J FLIES OFF THE NAME (owner direction, 2026-10-16: "put J elsewhere"; the
+ * flight itself is the direction of the same day, "swap him for the flying J
+ * again and give him a bit of a back-forth rotation, subtle"). He bookended
+ * the chrome row from two seats (issue 314, and issue 325's mirrored one); the
+ * row is gone, and he has ONE seat beside the name. Everything that makes that
+ * safe is a source fact this pin holds; the rendering lane of the same name
+ * measures his box against every line of the name, the requests, the moving
+ * frames and the rock in a real engine. Neither half replaces the other. */
 /* Comments come out to a FIXPOINT, not in one pass: a single replace leaves
    a `<!--` behind when one comment's removal joins two halves of another,
    which is the incompleteness CodeQL's multi-character-sanitization rule
@@ -1614,214 +1559,429 @@ const stripComments = (source) => {
   return out;
 };
 
-test('J is a picture at both ends of the chrome row, reserved, silent, still at rest, and typing only where motion is welcome (owner 2026-09-11 issue 314, 2026-10-12)', () => {
-  const mark = componentSources['lib/components/JMark.svelte'];
-  assert.ok(mark, 'the mark component is not where this pin expects it');
-  const markup = stripComments(mark).trim();
+const jMarkFile = 'lib/components/JMark.svelte';
+/* One rule of J's own <style>, found by selector and by whether it sits in
+   the no-preference block — the two places every one of his rules can live. */
+const jRule = (selector, moving) =>
+  sweptRules.find(
+    (rule) =>
+      rule.file === jMarkFile &&
+      rule.selector === selector &&
+      rule.enclosing.some((at) => /prefers-reduced-motion\s*:\s*no-preference/.test(at)) === moving &&
+      (moving || !rule.enclosing.some((at) => at.startsWith('@media')))
+  );
+const declared = (rule) =>
+  Object.fromEntries(declarationsOf(rule.body).map(({ property, value }) => [property, value]));
+/* One block of a component's own source, cut at the tags the component
+   writes: what sits between `<tag …>` and `</tag>`, and the source without
+   the block. Cut by position rather than by pattern — this reads our own
+   file's structure, and it is not a sanitiser of anyone's markup. */
+const cutBlock = (source, tag) => {
+  const open = source.indexOf(`<${tag}`);
+  if (open < 0) return { inner: '', rest: source };
+  const start = source.indexOf('>', open) + 1;
+  const close = source.indexOf(`</${tag}>`, start);
+  if (start === 0 || close < 0) return { inner: '', rest: source };
+  return { inner: source.slice(start, close), rest: source.slice(0, open) + source.slice(close + tag.length + 3) };
+};
 
-  /* SILENT AND UNREACHABLE, in BOTH seats. The home link at the start of the
-     row carries the page's accessible name (below); a decorative dragon that
-     announced itself would be a name every screen reader reads past twice on
-     every visit, and a focusable one would be a new stop on a keyboard order
-     the rendering lanes pin. */
-  assert.match(markup, /aria-hidden="true"/, 'the mark is announced to a screen reader');
+test('J flies off the name from one seat, reserved, silent, still at rest, and flying with a gentle rock only where motion is welcome (owner 2026-09-11 issue 314, 2026-10-16)', () => {
+  const mark = componentSources[jMarkFile];
+  assert.ok(mark, 'the mark component is not where this pin expects it');
+  /* The ELEMENT, without its script and its style: what a reader's tree gets. */
+  const markup = cutBlock(cutBlock(stripComments(mark), 'script').rest, 'style').rest.trim();
+  const script = cutBlock(mark, 'script').inner;
+  const style = (componentStyles[jMarkFile] ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(style.trim(), 'J’s look is no longer stated in his own component');
+
+  /* SILENT AND UNREACHABLE. A decorative dragon that announced itself would be
+     a name every screen reader reads past on every visit, and a focusable one
+     would be a new stop on the page's keyboard order. */
+  assert.match(markup, /^<span class="j-flight" aria-hidden="true"><\/span>$/, 'the mark is no longer one empty, aria-hidden span');
   assert.doesNotMatch(markup, />[^<\s][\s\S]*</, 'the mark carries text');
   assert.doesNotMatch(
     markup,
     /\b(?:href|tabindex|role|onclick|onkeydown|aria-label|title)\b/,
     'the mark has grown a name, a role, or a way to reach it'
   );
-  /* And the component knows no file name of its own: the stylesheet names the
-     sheet and the still so the bundler resolves them to content-hashed URLs,
-     which is the same rule requirement 11 puts on every other picture this
-     page draws. */
-  assert.doesNotMatch(markup, /\.webp|import\.meta|src=/, 'the component resolves its own asset');
-
-  /* LAST IN THE ROW. After the reading mode, so the keyboard order through
-     the chrome — the home link, the nav, the mode — gains nothing between any
-     two of its stops. */
-  const header = stripComments(componentSources['lib/components/PageHeader.svelte']);
-  const chrome = /<div class="page-chrome">([\s\S]*?)<\/div>/.exec(header);
-  assert.ok(chrome, 'the row’s end cluster is not where this pin expects it');
-  assert.ok(
-    chrome[1].indexOf('<JMark') > chrome[1].indexOf('<ThemeMenu'),
-    'J is drawn before the reading mode, so he now sits between two keyboard stops'
+  /* SELF-HOSTED, and never named by the markup or imported by a script: the
+     component's own style names the sheet and the still by relative path, so
+     the bundler resolves each to a content-hashed same-origin URL (the build
+     inlines nothing — assetsInlineLimit 0, pinned by vite-config.test.mjs —
+     because the origin's default-src 'self' refuses a data: URI). */
+  assert.doesNotMatch(markup, /\.webp|src=|style=/, 'the element names a file or writes an inline style');
+  assert.doesNotMatch(script, /\.webp|import\.meta|assets\//, 'the script resolves J’s picture itself');
+  const urls = [...style.matchAll(/url\(([^)]*)\)/g)].map(([, inner]) => inner.trim());
+  assert.deepEqual(
+    urls.sort(),
+    ["'../../assets/images/j/j-flight-still.webp'", "'../../assets/images/j/j-flight.webp'"],
+    'J’s style names something other than exactly the vendored sheet and still, by relative path'
   );
 
-  /* BOTH FACING INTO THE ROW (owner ruling, 2026-09-12, issue 325: "replace
-     this with another dragon facing inwards to match the opposite side").
-     J's render faces screen-right, toward his laptop, so the START of the row
-     draws him as rendered and the END is the mirrored seat — the reverse of
-     the flying dragon's sheet, which faced the other way. The two seats are
-     the same component, not a second sprite or a second rule, which is what
-     makes the pair cost one file. */
-  const home = /<a class="page-mark"([^>]*)>([\s\S]*?)<\/a>/.exec(header);
-  assert.ok(home, 'the home link is not where this pin expects it');
-  assert.match(home[2].trim(), /^<JMark \/>$/, 'the home link no longer draws J as rendered, facing into the row');
-  assert.match(chrome[1], /<JMark mirrored \/>/, 'the row’s end no longer draws the mirrored J, so he faces out of the row');
+  /* ONE SEAT, AS THE DOT OF THE J (owner, 2026-10-20). The page shell draws
+     him once, inside the name's own heading, in a seat at the end of its
+     second word, after its dotless j — and no other component draws him, so there is no
+     second request and no second dragon. The mirrored seat left with the row
+     it faced into: no prop, no flip rule, anywhere. The static shell's
+     heading has no J at all: it is the mounted heading's very markup with
+     his flight taken out, inside the same intro, so the same runs of text are
+     set by the same rules and the page mounts without moving a letter on any
+     platform. (Its words alone were not enough: "Naranjo" as one run against
+     three moved the heading a pixel in Linux Chromium, which rounds each
+     run's width on its own — CI, 2026-10-20.) */
+  const seats = Object.entries(componentSources).flatMap(([file, source]) =>
+    (stripComments(source).match(/<JMark\b[^>]*\/>/g) ?? []).map((tag) => [file, tag])
+  );
+  assert.deepEqual(seats, [['App.svelte', '<JMark />']], 'J is drawn somewhere other than exactly once, as rendered, by the page shell');
+  /* The heading is cut where J's flight sits, so the shell is compared with
+     the rest of it as markup, nothing stripped. */
+  const heading = /<div class="page-intro">\s*<h1 id="page-title">(<span class="page-name-line">[^<]+<\/span> <span class="page-name-line">[^<]+<span class="page-name-j">j<\/span>[^<]*<span class="page-j-seat">)<span class="page-j"><JMark \/><\/span>(<\/span><\/span>)<\/h1>/.exec(
+    stripComments(component)
+  );
+  assert.ok(heading, 'J is not seated inside the name’s own heading, at the end of its second word, after its j, each word a line of its own');
+  const shell = /<div class="page-intro">\s*<h1 id="static-page-title">([\s\S]*?)<\/h1>/.exec(fallback);
+  assert.ok(shell, 'the static shell’s heading is not in the same intro the page draws');
   assert.equal(
-    (header.match(/<JMark\b/g) ?? []).length,
-    2,
-    'the row no longer holds exactly two of him'
+    shell[1],
+    `${heading[1]}${heading[2]}`,
+    'the static shell’s heading is not the mounted heading’s markup with J’s flight taken out, so its text is set in other runs and the name moves when the page mounts'
   );
-  assert.doesNotMatch(home[2], /SN\./, 'the wordmark is back inside the home link');
-  /* The link is still a link to the page's own name, and it is NAMED — by the
-     heading it scrolls to, so "Samuel Naranjo" is written once, in the
-     masthead, and never a second time in this component. Its content is
-     aria-hidden, so without this the row's first stop would announce nothing
-     at all. */
-  assert.match(home[1], /href="#page-title"/, 'the home link stopped pointing at the page name');
-  assert.match(home[1], /aria-labelledby="page-title"/, 'the home link has no accessible name');
-  assert.doesNotMatch(home[1], /aria-label=/, 'the home link spells the page name a second time');
-  /* And the link HOLDS all of him. He is wider than the 44px floor its own
-     minimum states, so a link the row may shrink leaves him overhanging it
-     toward the nav on a phone, with the focus ring round a box narrower than
-     the picture; the rendering lane measures the boxes. */
-  const homeRule = sweptRules.find(
-    (rule) => rule.selector === '.page-mark' && !rule.enclosing.some((at) => at.startsWith('@media'))
+  assert.doesNotMatch(
+    stripComments(mark).replace(/\/\*[\s\S]*?\*\//g, ''),
+    /mirrored|\$props/,
+    'the retired mirrored seat is back as a prop'
   );
-  assert.ok(homeRule, 'the home link has no rule of its own');
   assert.ok(
-    declarationsOf(homeRule.body).some(({ property, value }) => property === 'flex' && value === 'none'),
-    'the row may shrink the home link narrower than the J inside it'
+    !sweptRules.some((rule) => /j-flight-mirrored/.test(rule.selector)),
+    'a rule still flips a J nobody mirrors'
   );
 
-  /* ONE component, TWO seats, and the mirror is a class rather than a second
-     copy of the sprite: `mirrored` is a prop the element turns into a class,
-     and the class's whole rule is the flip. A style attribute could not do it
-     at all — this origin serves no unsafe-inline. */
-  assert.match(
-    markup,
-    /let \{ mirrored = false \}: \{ mirrored\?: boolean \} = \$props\(\);/,
-    'the mark no longer takes the mirror as a prop'
-  );
-  assert.match(markup, /class:j-mark-mirrored=\{mirrored\}/, 'the mirror is not a class on the shared element');
-  assert.doesNotMatch(markup, /style=/, 'the mark writes an inline style; this origin serves no unsafe-inline');
-
-  const flipped = sweptRules.find((rule) => rule.selector === '.j-mark-mirrored');
-  assert.ok(flipped, 'the mirrored seat has no rule, so both dragons face the same way');
-  assert.ok(
-    !flipped.enclosing.some((at) => at.startsWith('@media')),
-    'the flip is inside a media block, so a reader who asked for less motion gets a dragon facing the wrong way'
-  );
-  const flip = Object.fromEntries(
-    declarationsOf(flipped.body).map(({ property, value }) => [property, value])
-  );
-  assert.deepEqual(
-    flip,
-    { transform: 'scaleX(-1)', 'transform-origin': 'center' },
-    'the mirrored rule states something other than the flip; the pictures, the box and the loop are shared'
-  );
-  /* SHARED, and this is the pin that proves it rather than asserting it: the
-     sheet and the still are each named exactly once in the whole stylesheet,
-     so the second J can never become a second URL, and the box and the loop
-     are declared on the base class both seats carry. */
-  for (const file of ['j-typing.webp', 'j-typing-still.webp']) {
+  /* SHARED, and this proves it rather than asserting it: the sheet and the
+     still are each named exactly once across the whole stylesheet AND every
+     component style, so no second seat can become a second URL. */
+  const everyStyle = [stylesCode, ...Object.values(componentStyles)]
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const file of ['j-flight.webp', 'j-flight-still.webp']) {
     assert.equal(
-      (stylesCode.match(new RegExp(`/${file.replaceAll('.', '\\.')}`, 'g')) ?? []).length,
+      (everyStyle.match(new RegExp(`/${file.replaceAll('.', '\\.')}`, 'g')) ?? []).length,
       1,
-      `${file} is named more than once (or not at all); the second J is a second request`
+      `${file} is named more than once (or not at all); a second J is a second request`
     );
   }
 
-  const rest = sweptRules.find(
-    (rule) => rule.selector === '.j-mark' && !rule.enclosing.some((at) => at.startsWith('@media'))
-  );
-  assert.ok(rest, 'the mark has no rule outside a media block, so it renders nothing at all for a reader who asked for less motion');
-  const resting = Object.fromEntries(
-    declarationsOf(rest.body).map(({ property, value }) => [property, value])
-  );
-  /* THE BOX IS RESERVED, not measured from the picture: the row is the same
-     height before either file arrives as after it, which is the page's
-     zero-CLS floor. It stands the row's own control height, at the render's
-     own ratio. */
-  assert.equal(resting['inline-size'], 'var(--j-cell-inline)');
-  assert.equal(resting['block-size'], 'var(--j-cell-block)');
-  assert.equal(resting.flex, 'none', 'the row may squeeze him');
-  /* AT REST HE IS THE STILL — the render's own reduced-motion frame, drawn
-     whole into the box — rather than a cancelled animation, and the sheet is
-     not named here: an element fetches only the background it computes, so a
-     reader who asked for less motion never downloads the loop. */
-  assert.equal(resting['background-position'], '0 0');
-  assert.equal(resting['background-image'], "url('./assets/images/j/j-typing-still.webp')");
-  assert.equal(resting['background-size'], '100% 100%', 'the still is not drawn whole into the box');
-  /* The box and the sheet are DERIVED from the control target rather than
-     restated in pixels: the box is a rem length, so literals stop dividing it
-     the moment a reader runs a browser font size other than 16px and the next
-     cell starts showing inside the mark. The cell is the render's 176 x 128,
-     the sheet is 12 of them across and 10 down. */
-  for (const declaration of [
-    '--j-cell-block: var(--control-target);',
-    '--j-cell-inline: calc(var(--j-cell-block) * 176 / 128);',
-    '--j-sheet-inline: calc(var(--j-cell-inline) * 12);',
-    '--j-sheet-block: calc(var(--j-cell-block) * 10);',
-  ]) {
-    assert.ok(
-      stylesCode.includes(declaration),
-      `${declaration} is gone, so the grid is no longer derived from the mark’s own box`
-    );
-  }
-  /* ON A PHONE HE STANDS THE DRAWN MARK'S HEIGHT (owner ruling, 2026-10-12):
-     two of him at the touch row's height took 33px from the nav's window at
-     390px. Only the height token is restated, on :root inside the phone block,
-     so the cell, the sheet and the keyframes all follow it from one line. */
-  const phoneRoot = sweptRules.find(
-    (rule) =>
-      rule.selector === ':root' &&
-      rule.enclosing.some((at) => at === '@media (max-width: 45rem)') &&
-      /--j-cell-block/.test(rule.body)
-  );
-  assert.ok(phoneRoot, 'the phone block no longer lowers J, so two of him narrow the nav again');
-  assert.deepEqual(
-    declarationsOf(phoneRoot.body)
-      .filter(({ property }) => property.startsWith('--j-'))
-      .map(({ property, value }) => `${property}: ${value}`),
-    ['--j-cell-block: var(--control-mark)'],
-    'the phone block restates more of J than his height, so the derived grid can disagree with it'
-  );
-
-  /* THE LOOP, and only inside no-preference. The sweep below proves no rule
-     animates outside that block; this proves the sheet arrives THERE, sized to
-     its grid, and that the two steps() that make the sprite advance are
-     DECLARED, that they are steps rather than a tween (a tween paints two
-     half-frames at once), and that each walks its own axis's whole sheet. */
-  const moving = sweptRules.find(
-    (rule) =>
-      rule.selector === '.j-mark' &&
-      rule.enclosing.some((at) => /prefers-reduced-motion\s*:\s*no-preference/.test(at))
-  );
-  assert.ok(moving, 'J never types; the mark declares no loop where motion is welcome');
-  const looping = Object.fromEntries(
-    declarationsOf(moving.body).map(({ property, value }) => [property, value])
-  );
-  assert.equal(looping['background-image'], "url('./assets/images/j/j-typing.webp')");
-  assert.equal(looping['background-size'], 'var(--j-sheet-inline) var(--j-sheet-block)');
-  assert.ok(looping.animation, 'the mark’s motion rule declares no animation');
-  assert.match(looping.animation, /j-typing-row var\(--j-typing-row\) steps\(12\) infinite/);
-  assert.match(looping.animation, /j-typing var\(--j-typing\) steps\(10\) infinite/);
-  /* The loop is the render's 8s, and the row is the loop DIVIDED by the
-     sheet's 10 rows, never a written duration of its own that could drift
-     from it. */
-  assert.ok(stylesCode.includes('--j-typing: 8s;'), 'the loop is no longer the render’s 8s (120 frames at 15fps)');
+  /* THE BOX IS RESERVED, not measured from the picture: the square his seat
+     hands him (the site's control square when no seat says), so his box is
+     the same before either file arrives as after (the zero-CLS floor). */
+  const box = jRule('.j-flight', false);
+  assert.ok(box, 'J has no box outside a media block, so he renders nothing for a reader who asked for less motion');
+  const boxed = declared(box);
+  assert.equal(boxed['--j-box'], 'var(--j-size, var(--control-target))', 'J’s box is no longer the square his seat hands him');
+  assert.equal(boxed['inline-size'], 'var(--j-box)');
+  assert.equal(boxed['block-size'], 'var(--j-box)');
+  assert.equal(boxed.flex, 'none', 'a flex parent may squeeze him');
+  assert.equal(boxed.position, 'relative', 'the picture is no longer placed against J’s own box');
+  assert.ok(!('animation' in boxed) && !('transform' in boxed), 'the reserved box itself moves');
   assert.ok(
-    stylesCode.includes('--j-typing-row: calc(var(--j-typing) / 10);'),
-    'the row duration is no longer the loop divided by its 10 rows, so the two animations drift apart'
+    !sweptRules.some((rule) => rule.file === jMarkFile && rule.selector === '.j-flight' && rule.enclosing.length > 0),
+    'J’s box is restated inside a media block; his size is his seat’s to decide'
   );
-  for (const [name, token] of [
-    ['j-typing-row', '--j-sheet-inline'],
-    ['j-typing', '--j-sheet-block'],
-  ]) {
-    const frames = sweptRules.find((rule) =>
-      rule.enclosing.some((at) => at === `@keyframes ${name}`)
+
+  /* THE PICTURE IS THE BOX: the ::before, out of flow so it sizes nothing,
+     drawn into exactly his square — there is no bar left to fly past — and it
+     takes no pointer, so nothing under him is ever unpressable. At rest it is
+     the still, drawn whole. */
+  const picture = jRule('.j-flight::before', false);
+  assert.ok(picture, 'J’s picture has no rule outside a media block');
+  const resting = declared(picture);
+  assert.equal(resting.content, "''");
+  assert.equal(resting.position, 'absolute', 'the picture is in the flow, so its size moves the page');
+  assert.equal(resting.inset, '0', 'the picture is not drawn into his box');
+  assert.equal(resting['pointer-events'], 'none', 'the picture catches presses meant for what is under it');
+  assert.equal(resting['background-image'], "url('../../assets/images/j/j-flight-still.webp')");
+  assert.equal(resting['background-position'], '0 0');
+  assert.equal(resting['background-size'], '100% 100%', 'the still is not drawn whole into the picture');
+  assert.ok(!('animation' in resting) && !('transform' in resting), 'the resting picture moves');
+  /* The sheet's drawn size is DERIVED from his square, 20 cells across and
+     24 down, so one cell is always exactly the picture and the keyframes walk
+     whole cells at any size his seat asks for. */
+  assert.equal(boxed['--j-sheet-inline'], 'calc(var(--j-box) * 20)');
+  assert.equal(boxed['--j-sheet-block'], 'calc(var(--j-box) * 24)');
+
+  /* THE SEAT, AS THE DOT OF THE J (owner, 2026-10-20, picking "the dot of the
+     j, stacked", and of its size: "make the title not be GIGANTIC"). The name
+     is its two words centred on two lines, its j drawn dotless, and J hovers
+     where the dot would be. Each fact the seat rests on is pinned where it is
+     decided:
+       · the seat is a box with no font at the second word's END: a box of
+         no height on the baseline in every engine, so J is placed from the
+         letters and not from a line box each engine derives differently, and
+         at the end because a placed box INSIDE a word splits it in the
+         heading's accessible name (measured in all three engines: "Samuel
+         Naran jo", then "Samuel Naranj o");
+       · he is carried back over the stem and his feet are lifted to the
+         hover, by the face's facts stated once on the name, in its own size —
+         the stem as its derivation from the j's and the o's advances and the
+         name's tracking after each;
+       · he is out of the flow and takes no pointer, by ONE rule at every
+         width, and nothing about the seat moves;
+       · his size is a share of the name's own size, capped where his 80px
+         flight frames would blur, and never so large that his body, from the
+         hover up, reaches the line above;
+       · and the j is still a j: the dotless letter is only DRAWN over it,
+         in the face's own glyph, spoken as nothing. */
+  /* The name's parts are global rules, so the static shell's heading — the
+     same markup, which the page shell's scoped style never reaches — is set
+     by them too. */
+  const seatRules = sweptRules.filter((rule) => rule.file === 'styles' && selectorParts(rule.selector).includes('.page-j-seat'));
+  assert.equal(seatRules.length, 1, 'J’s seat is shaped by more than one rule, or none');
+  const seat = declared(seatRules[0]);
+  assert.ok(!seatRules[0].enclosing.some((at) => /^@(?:media|supports|container)/.test(at)), 'J’s seat sits inside a condition, so some reader gets no seat');
+  assert.ok(!('display' in seat), 'J’s seat is not an ordinary inline box, so it splits the name for a screen reader or leaves the baseline');
+  assert.equal(seat['font-size'], '0', 'J’s seat has a font, so it is not a box of no height on the baseline');
+  assert.equal(seat.position, 'relative', 'J is not placed from his seat');
+  const lines = sweptRules.filter((rule) => rule.file === 'styles' && selectorParts(rule.selector).includes('.page-name-line'));
+  assert.equal(lines.length, 1, 'the name’s lines are shaped by more than one rule, or none');
+  assert.deepEqual(
+    [declared(lines[0]).display, declared(lines[0])['white-space']],
+    ['block', 'nowrap'],
+    'a word of the name is not a whole line of its own, so the seat — a place a line may break — can split it'
+  );
+  const pageJRules = sweptRules.filter((rule) => rule.file === 'App.svelte' && selectorParts(rule.selector).includes('.page-j'));
+  assert.equal(pageJRules.length, 1, 'J is seated by more than one rule, so the seat and the flight can part at some width');
+  const [wideSeat] = pageJRules;
+  assert.ok(!wideSeat.enclosing.some((at) => at.startsWith('@')), 'J’s one seat sits inside a condition, so some reader gets no seat');
+  const seated = declared(wideSeat);
+  assert.deepEqual(
+    Object.keys(seated).filter((property) => /^(?:position|inset(?:-.+)?|top|right|bottom|left)$/.test(property)).sort(),
+    ['inset-block-end', 'inset-inline-start', 'position'],
+    'J is placed by something other than one offset on each axis'
+  );
+  assert.equal(seated.position, 'absolute', 'J is in the flow, so his arrival moves the name');
+  assert.equal(seated['inset-inline-start'], 'calc(var(--j-stem) - var(--j-size) / 2)', 'J is not centred over the j’s stem');
+  assert.equal(
+    seated['inset-block-end'],
+    'calc(var(--j-hover) - 0.1125 * var(--j-size))',
+    'J’s feet (0.1125 of his square above its foot) are not lifted to the hover'
+  );
+  assert.equal(seated['pointer-events'], 'none');
+  assert.equal(seated['line-height'], '0', 'J’s seat sets a line box of its own inside the name');
+  assert.equal(seated['font-size'], 'var(--keep-name-size)', 'J does not take the name’s size back from a seat of none, so his size is no longer a share of the name’s');
+  assert.ok(
+    !sweptRules.some((rule) => rule.file === jMarkFile && declarationsOf(rule.body).some(({ property }) => property === 'font-size' || property === 'font')),
+    'J’s own component re-sizes his em, so his size is no longer a share of the name’s'
+  );
+  for (const rule of [...seatRules, wideSeat]) {
+    assert.ok(
+      !declarationsOf(rule.body).some(({ property }) => /^(?:animation|transition|transform)/.test(property)),
+      'the seat moves; motion is J’s own, inside the no-preference block'
     );
-    assert.ok(frames, `@keyframes ${name} is missing, so the animation names nothing`);
+  }
+
+  // The name, with J's measures: the keep layer's one masthead rule that sizes J.
+  const names = sweptRules.filter(
+    (rule) =>
+      rule.file === 'styles' &&
+      selectorParts(rule.selector).includes('h1') &&
+      declarationsOf(rule.body).some(({ property }) => /^--j-/.test(property))
+  );
+  assert.equal(names.length, 1, 'J’s measures are not stated once, on the name');
+  const [nameRule] = names;
+  assert.ok(!nameRule.enclosing.some((at) => at.startsWith('@media')), 'the name seats J only at some widths');
+  const name = declared(nameRule);
+  const size = /^min\(([\d.]+)em, clamp\(([\d.]+)rem, ([\d.]+)em, ([\d.]+)rem\)\)$/.exec(name['--j-size'] ?? '');
+  assert.ok(size, `J is ${name['--j-size']}, not a share of the name held between two sizes and under a share it may never pass`);
+  const [, most, , share, cap] = size.map(Number);
+  assert.ok(cap <= 7.5, 'J is allowed past 7.5rem, where his 80px flight frames blur');
+  assert.ok(share <= most, 'J’s share of the name is past the most he may ever be');
+  const stem = /^calc\(([\d.]+)em - ([\d.]+)em - ([\d.]+)em - 2 \* var\(--masthead-tracking\)\)$/.exec(name['--j-stem'] ?? '');
+  const hover = /^([\d.]+)em$/.exec(name['--j-hover'] ?? '');
+  assert.ok(
+    stem && hover,
+    'the face’s facts that seat J are not stated in the name’s own size, the stem as its way back from the word’s end over two tracked letters'
+  );
+  assert.equal(name['font-size'], 'var(--keep-name-size)', 'the name is no longer set in --keep-name-size');
+  assert.equal(name['text-align'], 'center', 'the name’s two lines are not centred on each other');
+  assert.ok(!('margin-inline-end' in name), 'the name keeps a room at its end again, so it is no longer centred by itself');
+  for (const rule of sweptRules.filter((entry) => entry.file === 'styles' && selectorParts(entry.selector).includes('h1'))) {
+    for (const property of ['grid-area', 'grid-column', 'justify-self']) {
+      assert.ok(!(property in declared(rule)), `the name sets ${property}, so it leaves the intro’s centre`);
+    }
+  }
+  // The intro centres the name: the last word on its items.
+  const introAlign = sweptRules
+    .filter(
+      (rule) =>
+        rule.file === 'styles' &&
+        selectorParts(rule.selector).includes('.page-intro') &&
+        !rule.enclosing.some((at) => at.startsWith('@media')) &&
+        'justify-items' in declared(rule)
+    )
+    .map((rule) => declared(rule)['justify-items']);
+  assert.equal(introAlign.at(-1), 'center', 'the intro no longer centres the name');
+  /* ...and J never reaches the line above. His drawn body is 0.7375 of his
+     square (measured off the still and every flight frame: from 0.15 to
+     0.8875 of it), standing on the hover, so at the most he may ever be his
+     head is at hover + 0.7375 × most, which must sit inside the name's own
+     leading — the last leading the name is set at, read rather than
+     restated. */
+  const leading = sweptRules
+    .filter((rule) => rule.file === 'styles' && selectorParts(rule.selector).includes('h1'))
+    .map((rule) => declared(rule)['line-height'])
+    .filter((value) => value !== undefined)
+    .at(-1);
+  assert.match(leading ?? '', /^[\d.]+$/, `the name is set at ${leading ?? 'no leading'}, not a plain number this pin can read`);
+  const head = Number(hover[1]) + 0.7375 * most;
+  assert.ok(
+    head <= Number(leading),
+    `J’s head reaches ${head.toFixed(3)} of a name-size, past the ${leading} between the name’s lines: he meets the line above`
+  );
+  /* The x-height the hover stands over, and the stem, are the face's: the
+     hover is a breath over 0.51, the stem sits inside the dotless j's own
+     advance, and the way back is that advance (0.215, as the dotless j's)
+     and the o's (0.408) — the browser lanes measure where it lands. */
+  assert.ok(Number(hover[1]) > 0.51 && Number(hover[1]) < 0.6, `J hovers at ${hover[1]}, not a breath over the face’s 0.51 x-height`);
+  assert.deepEqual(
+    stem.slice(2, 4).map(Number),
+    [0.215, 0.408],
+    'J’s way back from the word’s end is not the face’s j and o advances'
+  );
+  assert.ok(Number(stem[1]) > 0 && Number(stem[1]) < 0.215, `J’s stem at ${stem[1]} is outside the dotless j’s 0.215 advance`);
+
+  /* THE J IS STILL A J. Its letter stays in the text at no size, carrying no
+     tracking of its own, and the dotless j is drawn in its place from the
+     face itself (a vendored face whose range covers it), at the name's size
+     and with the name's tracking, spoken as nothing. */
+  const letter = sweptRules.find((rule) => rule.file === 'styles' && rule.selector === '.page-name-j');
+  assert.ok(letter, 'the j has no rule of its own');
+  assert.deepEqual([declared(letter)['font-size'], declared(letter)['letter-spacing']], ['0', '0'], 'the j’s own letter still takes room or tracking');
+  const drawn = sweptRules.find((rule) => rule.file === 'styles' && rule.selector === '.page-name-j::before');
+  assert.ok(drawn, 'no dotless j is drawn over the j');
+  const drawnContents = declarationsOf(drawn.body).filter(({ property }) => property === 'content').map(({ value }) => value);
+  assert.deepEqual(drawnContents, ["'\\0237'", "'\\0237' / ''"], 'the drawn letter is not the dotless j, spoken as nothing where an engine reads generated text');
+  assert.equal(declared(drawn)['font-size'], 'var(--keep-name-size)', 'the dotless j is not drawn at the name’s size');
+  assert.equal(declared(drawn)['letter-spacing'], 'var(--masthead-tracking)', 'the dotless j does not carry the name’s tracking');
+  const covered = [...stylesCode.matchAll(/@font-face\s*\{([^}]*)\}/g)]
+    .map(([, body]) => body)
+    .filter((body) => /font-family:\s*'Instrument Serif'/.test(body))
+    .some((body) =>
+      [...(/unicode-range:\s*([^;]+);/.exec(body)?.[1] ?? '').matchAll(/U\+([0-9A-F]+)(?:-([0-9A-F]+))?/gi)].some(
+        ([, from, to]) => parseInt(from, 16) <= 0x237 && 0x237 <= parseInt(to ?? from, 16)
+      )
+    );
+  assert.ok(covered, 'no vendored Instrument Serif face covers the dotless j, so it is drawn in some other face');
+
+  /* THE FLIGHT AND THE ROCK, and only inside no-preference. The sweep below
+     proves no rule animates outside that block; this proves the sheet
+     arrives THERE, sized to its grid, that the two steps() that walk it are
+     DECLARED and are steps rather than a tween (a tween paints two
+     half-frames at once), and that the rock is the gentle one the owner
+     asked for: smooth, alternating, a few degrees, slow. */
+  const moving = jRule('.j-flight::before', true);
+  assert.ok(moving, 'J never flies; the picture declares no motion where motion is welcome');
+  const flying = declared(moving);
+  assert.equal(flying['background-image'], "url('../../assets/images/j/j-flight.webp')");
+  assert.equal(flying['background-size'], 'var(--j-sheet-inline) var(--j-sheet-block)');
+  assert.ok(flying.animation, 'the picture’s motion rule declares no animation');
+  assert.match(flying.animation, /j-flight-row var\(--j-flight-row\) steps\(20\) infinite/);
+  assert.match(flying.animation, /j-flight-sheet var\(--j-flight\) steps\(24\) infinite/);
+  assert.match(
+    flying.animation,
+    /j-rock var\(--j-rock-swing\) ease-in-out infinite alternate/,
+    'the rock is not a smooth, alternating swing'
+  );
+  /* The loop is the study's 8s, and the row is the loop DIVIDED by the
+     sheet's 24 rows, never a written duration of its own that could drift
+     from it. */
+  assert.equal(boxed['--j-flight'], '8s', 'the loop is no longer the study’s 8s (480 frames at 60Hz)');
+  assert.equal(
+    boxed['--j-flight-row'],
+    'calc(var(--j-flight) / 24)',
+    'the row duration is no longer the loop divided by its 24 rows, so the two animations drift apart'
+  );
+  /* SUBTLE: a few degrees each way, never a spin, over a swing slow enough
+     to read as a glide. */
+  const angle = /^([\d.]+)deg$/.exec(boxed['--j-rock-angle'] ?? '');
+  assert.ok(angle, 'the rock’s angle is not a plain number of degrees');
+  assert.ok(Number(angle[1]) > 0 && Number(angle[1]) <= 6, `the rock leans ${angle[1]}deg each way; subtle is a few degrees`);
+  const swing = /^([\d.]+)s$/.exec(boxed['--j-rock-swing'] ?? '');
+  assert.ok(swing, 'the rock’s swing is not a plain number of seconds');
+  assert.ok(Number(swing[1]) >= 2, `the rock swings in ${swing[1]}s; slow is two seconds or more each way`);
+  for (const [name, pattern] of [
+    ['j-flight-row', /^\s*to\s*$/],
+    ['j-flight-sheet', /^\s*to\s*$/],
+  ]) {
+    const frames = sweptRules.filter(
+      (rule) => rule.file === jMarkFile && rule.enclosing.some((at) => at === `@keyframes ${name}`)
+    );
+    assert.equal(frames.length, 1, `@keyframes ${name} is missing or has grown, so the animation walks something else`);
+    assert.match(frames[0].selector, pattern);
+  }
+  for (const [name, token] of [
+    ['j-flight-row', '--j-sheet-inline'],
+    ['j-flight-sheet', '--j-sheet-block'],
+  ]) {
+    const frames = sweptRules.find(
+      (rule) => rule.file === jMarkFile && rule.enclosing.some((at) => at === `@keyframes ${name}`)
+    );
     assert.match(
       frames.body,
       new RegExp(`background-position-[xy]: calc\\(-1 \\* var\\(${token}\\)\\)`),
       `@keyframes ${name} travels a distance the sheet’s own size does not decide`
     );
   }
+  /* The rock is symmetrical about level: the same angle each way, so at rest
+     between swings he is the still's own pose rather than a lean. */
+  const rock = Object.fromEntries(
+    sweptRules
+      .filter((rule) => rule.file === jMarkFile && rule.enclosing.some((at) => at === '@keyframes j-rock'))
+      .map((rule) => [rule.selector, declared(rule)])
+  );
+  assert.deepEqual(
+    rock,
+    {
+      from: { transform: 'rotate(calc(-1 * var(--j-rock-angle)))' },
+      to: { transform: 'rotate(var(--j-rock-angle))' },
+    },
+    'the rock is not one rotation swung evenly either side of level'
+  );
 });
+
+test('the stylesheet no longer dresses the J it retired (owner direction, 2026-10-16)', () => {
+  /* J's whole look lives in his own component now. The global sheet's old
+     typing rules match no element any more, and a dead rule that still names
+     a picture is a picture the build still emits and the next reader has to
+     disprove — so they are gone, tokens and keyframes with them, rather than
+     kept warm for a render the owner swapped away. */
+  assert.doesNotMatch(stylesCode, /j-typing/, 'styles.css still names the typing render');
+  assert.doesNotMatch(stylesCode, /\.j-mark\b/, 'styles.css still styles the retired .j-mark');
+  /* The sheet states only his SEAT's measures, on the name he is the dot of
+     (2026-10-20): his size, and the face's stem and hover that seat him. Every
+     token his own component declares — his box, his sheet, his flight, his
+     rock — stays his component's alone. */
+  const ownTokens = new Set(
+    [...(componentStyles[jMarkFile] ?? '').matchAll(/(--j-[a-z-]+)\s*:/g)].map(([, token]) => token)
+  );
+  assert.ok(ownTokens.size > 0, 'J’s component declares no tokens of its own; this pin has lost its subject');
+  const sheetJ = styleRules.flatMap((rule) =>
+    declarationsOf(rule.body)
+      .filter(({ property }) => property.startsWith('--j-'))
+      .map(({ property }) => ({ property, selector: rule.selector }))
+  );
+  for (const { property, selector } of sheetJ) {
+    assert.ok(!ownTokens.has(property), `styles.css declares ${property}, which J’s own component owns`);
+    assert.ok(
+      ['--j-size', '--j-stem', '--j-hover'].includes(property) && selectorParts(selector).includes('h1'),
+      `styles.css declares ${property} on "${selector}"; the sheet states only J’s seat, on the name`
+    );
+  }
+});
+
+/* RETIRED WITH THE NAV (owner direction, 2026-10-16: "do away with it for
+ * now"): "the nav is centred on the chrome row whatever its two ends hold".
+ * Its subject was the row's three-column grid and the nav's place in it; the
+ * row, its two ends and the nav are all gone, so there is nothing left to
+ * centre. */
 
 test('the document declares both marks a browser looks for, and nothing inlines them (owner 2026-09-11, issue 314)', () => {
   /* The tab mark keeps its name and its type (issue 239): the runtime image
@@ -1920,20 +2080,24 @@ test('motion exists only where the reader has not asked for less of it (issue #2
 });
 
 test('a reading-mode swap can only repaint, never re-lay-out (issue #26)', () => {
-  /* Zero CLS on the theme switch, made structural. The toggle swaps one
-     attribute on <html>, so everything a reading-mode block declares takes
-     effect INSTANTLY on a page the visitor is already reading — a padding, a
-     font-size, a border width in one of these blocks would move the text
+  /* Zero CLS on the sky switch, made structural. The day is kept behind one
+     attribute on <html> (owner, 2026-10-19: "keep the logic"), and whatever
+     stamps it next swaps that attribute on a page the visitor is already
+     reading, so everything a [data-sky] rule declares takes effect
+     INSTANTLY there — a padding, a
+     font-size, a border width in one of these rules would move the text
      under their eyes. Custom properties and color-scheme cannot: they change
-     what is painted, never how much room it takes. */
+     what is painted, never how much room it takes. A prefers-color-scheme
+     block anywhere is held to the same rule, should one come back: a device
+     switches while a page is open too. */
   const swapped = sweptRules.filter(
     (rule) =>
-      rule.selector.includes('[data-theme') ||
+      rule.selector.includes('[data-sky') ||
       rule.enclosing.some((at) => at.includes('prefers-color-scheme'))
   );
   assert.ok(
-    swapped.length >= 4,
-    `only ${swapped.length} reading-mode blocks were found; the stylesheet ships four swappable renderings — one per stamped mode above light, plus the OS mapping`
+    swapped.some((rule) => rule.file === 'styles' && isNightLayer(rule) && declaresThemeToken(rule.body)),
+    `no ${nightSelector} block declares the night's tokens; the swappable rendering this pin holds is gone`
   );
   for (const rule of swapped) {
     for (const { property } of declarationsOf(rule.body)) {
@@ -1950,224 +2114,396 @@ test('a reading-mode swap can only repaint, never re-lay-out (issue #26)', () =>
  *
  * The failure it forbids is silent rather than loud, which is why it needs a
  * test at all. A mode that omits one token does not render unstyled; it
- * inherits :root, which is the LIGHT palette, so a dark mode missing
+ * inherits :root, which is the LIGHT palette, so a night missing
  * --color-border paints one light seam and everything else stays dark. The
  * contrast guard above cannot see it either: that guard resolves the hooks it
- * measures, and a token nothing measures resolves happily to light's value.
+ * measures, and a token nothing measures resolves happily to the day's value.
  *
  * It matters more the more the page grows. Components read these roles by
  * name and must never ask which mode is active — a card, a panel or a feed
  * item that had to branch per theme would need editing every time a mode is
  * added, which is exactly the coupling the token layer exists to prevent. So
  * the roles are compared as SETS: adding a role to one mode is fine, adding
- * it to only one mode is a red build, and the message names both sides. */
+ * it to only one mode is a red build, and the message names both sides.
+ *
+ * The two sides are the page's two modes (owner, 2026-10-19). The day's roles
+ * are the ones its unconditional :root declares; the night's are the ones its
+ * `:root:not([data-sky='day'])` block remaps. The day's :root also holds every
+ * palette literal and every layout dial, which are the same in both modes by
+ * design, so the comparison is drawn on the day's MODE roles — the active
+ * --color-* layer components consume, and color-scheme — in one direction,
+ * and on everything the night declares in the other. */
 test('every reading mode declares the identical token set', () => {
-  const overrides = styleRules.filter(
-    (rule) =>
-      declaresThemeToken(rule.body) &&
-      (rule.selector.includes('[data-theme') ||
-        rule.enclosing.some((at) => at.includes('prefers-color-scheme')))
+  const declared = (rules) =>
+    new Set(rules.flatMap((rule) => declarationsOf(rule.body).map(({ property }) => property)));
+  // Unconditional :root only — a rule inside a media or supports query is a
+  // rendering some readers never get.
+  const dayRules = styleRules.filter(
+    (rule) => isDayLayer(rule) && !rule.enclosing.some((at) => /^@(?:media|supports|container)\b/.test(at))
   );
-  const named = overrides.map((rule) => ({
-    name: /\[data-theme="([a-z]+)"\]/.exec(rule.selector)?.[1] ?? 'auto (the OS dark mapping)',
-    properties: [...new Set(declarationsOf(rule.body).map(({ property }) => property))].sort(),
-  }));
+  const nightRules = styleRules.filter((rule) => declaresThemeToken(rule.body) && isNightLayer(rule));
   assert.ok(
-    named.length >= 4,
-    `only ${named.length} token-declaring reading-mode blocks were found; the parity comparison has nothing left to compare`
+    nightRules.length > 0,
+    `no ${nightSelector} block declares theme tokens; the parity comparison has nothing left to compare`
+  );
+  const day = declared(dayRules);
+  const night = declared(nightRules);
+  const dayRoles = [...day].filter((name) => name === 'color-scheme' || name.startsWith('--color-')).sort();
+  assert.ok(
+    dayRoles.some((name) => name.startsWith('--color-')),
+    'the day’s :root declares no --color-* role; the parity comparison has nothing left to compare'
   );
 
-  // Every stamped id in the registry owns a block, and no block answers to an
-  // id the registry never registered. Either half alone ships a mode the
-  // other side cannot reach: a cookie the stylesheet ignores, or a palette no
-  // toggle can select.
-  const stamped = named.filter((mode) => !mode.name.startsWith('auto')).map((mode) => mode.name);
-  const registered = [...themeRegistry.matchAll(/id: '([a-z]+)', label: '[^']+'/g)].map(
-    ([, id]) => id
-  );
+  // A role the day declares and the night omits falls through to the light
+  // palette at night; a token only the night declares is undefined by day.
+  // Either is the silent failure this pin exists for, so both directions are
+  // one assertion.
+  const missing = dayRoles.filter((name) => !night.has(name));
+  const extra = [...night].filter((name) => !day.has(name)).sort();
   assert.deepEqual(
-    stamped.slice().sort(),
-    registered.filter((id) => id !== 'light').sort(),
-    'the stylesheet and the registry disagree about which reading modes exist; light is the :root default and has no block of its own'
+    { missing, extra },
+    { missing: [], extra: [] },
+    `the night does not declare the same tokens as the day — missing ${missing.length > 0 ? missing.join(', ') : 'nothing'}; extra ${extra.length > 0 ? extra.join(', ') : 'nothing'}. A token the night omits falls through to the light palette, silently, on every first visit`
   );
-
-  const [reference, ...rest] = named;
-  for (const mode of rest) {
-    const missing = reference.properties.filter((name) => !mode.properties.includes(name));
-    const extra = mode.properties.filter((name) => !reference.properties.includes(name));
-    assert.deepEqual(
-      mode.properties,
-      reference.properties,
-      `${mode.name} does not declare the same tokens as ${reference.name} — missing ${missing.length > 0 ? missing.join(', ') : 'nothing'}; extra ${extra.length > 0 ? extra.join(', ') : 'nothing'}. A token a mode omits falls through to the light palette, silently, in that mode only`
-    );
-  }
 });
 
 /* ===========================================================================
- * The chrome-icon family (owner directive, 2026-08-24)
+ * THE SHEET DRAWS NO PLAIN LINE (owner, 2026-10-19: "the plain lines should
+ * be tree branches, or vines, we should have swords and skulls or castle wall
+ * fixtures").
  *
- * "These icons are not matching the small, sleek, translucid, appearance of
- * the parent icons, they should not look this overwhelming." The reading-mode
- * popover's five swatches were 2.75rem filled discs, each rimmed and — when
- * chosen — ringed a further two pixels, sitting directly under an 18px line
- * glyph that wears no chrome at all. They are one family now, and these pins
- * are what stops the two halves of it drifting apart again.
+ * Every rule that used to part one thing from the next on the sheet is a prop
+ * now — a vine after a section's title, a branch under a role, a twig under a
+ * repository and a commit — or nothing at all: the boss log's bosses, and the
+ * band the strip ran in, are parted by space alone (the same day: "the skulls
+ * here do not look good"). The ledger's own rules still declare the hairlines
+ * underneath — the keep layer is written over them — so "no rule draws a
+ * line" is a question of the CASCADE, and it is answered as one: for each
+ * surface, every declaration that would draw a line (a border on any side, a
+ * shadow, a solid ground) must be beaten by a declaration that draws nothing,
+ * by specificity and then by order; and the picture that wins is the
+ * surface's own prop, or — where space parts it — no picture at all.
  *
- * A second chrome icon used to sit beside that glyph — the manual refresh
- * control's stroked arrow — and its own hardcoded stroke-width attribute was
- * this suite's second, independent data point for the swatch stroke pin
- * below. It is gone now (owner directive, issue 179: the site is responsive
- * on its own, and a failed read logs an error rather than waiting on a
- * visitor to press something), so only the reading-mode trigger remains, and
- * the stroke pin rests on the token alone.
- *
- * THE DRIFT THIS GUARDS CHANGED SHAPE (owner design decision, 2026-09-11,
- * issue 313). The trigger used to draw its own crescent and state its painted
- * size as a `width="18"` ATTRIBUTE — markup, which no custom property can
- * reach — so this pin read that attribute back out and compared it with the
- * token the swatches consume. The trigger is a member of the Hairline family
- * now and carries no size attribute at all: it is sized by `--icon-chrome`.
- * So the comparison moved to where the size is DECIDED, which is the stricter
- * direction — a chrome glyph can no longer be resized in markup at all, and
- * this pin measures two declarations against each other rather than a
- * declaration against a hopeful copy. The browser lanes still measure the two
- * families' painted boxes against each other in a real engine.
+ * Conservative wherever the source cannot say: a rule inside a media or
+ * supports query may apply, so it can draw a line but never clear one; a
+ * component's rule carries Svelte's scoping class; and two rules from
+ * different files that tie are read as the line winning, because which one a
+ * bundle emits last is not something a source pin can know.
  * ======================================================================== */
 
-// One rule from one file, by exact selector. Fails loudly rather than
-// returning undefined: a rule this pin cannot find is a rule it cannot
-// measure, which is precisely where an undersized or re-chromed swatch hides.
-const ruleNamed = (file, selector) => {
-  const found = sweptRules.find((rule) => rule.file === file && rule.selector === selector);
-  assert.ok(found, `${file} no longer declares "${selector}"; this pin has lost its subject`);
+// A selector's specificity as [ids, classes, elements]. Only the forms this
+// sheet uses are weighed; a functional pseudo-class fails loudly rather than
+// being guessed at.
+function specificityOf(part) {
+  assert.ok(!/:(?:not|is|where|has)\(/.test(part), `"${part}" uses a selector form this pin does not weigh`);
+  const ids = (part.match(/#[\w-]+/g) ?? []).length;
+  const classes = (part.match(/\.[\w-]+|\[[^\]]*\]|(?<!:):(?!:)[\w-]+/g) ?? []).length;
+  const elements = (part.match(/(?:^|[\s>+~])[a-z][\w-]*|::[\w-]+/gi) ?? []).length;
+  return [ids, classes, elements];
+}
+const compoundsOf = (part) => part.trim().split(/\s*[>+~]\s*|\s+/).filter(Boolean);
+const conditional = (rule) => rule.enclosing.some((at) => /^@(?:media|supports|container)\b/.test(at));
+// Every rule that can style one surface, each part weighed on its own.
+function surfaceRules(target) {
+  const found = [];
+  sweptRules.forEach((rule, index) => {
+    for (const part of selectorParts(rule.selector)) {
+      const last = compoundsOf(part).at(-1) ?? '';
+      if (last !== target && !(last.startsWith(target) && /^[:[]/.test(last.slice(target.length)) && !last.slice(target.length).startsWith('::'))) {
+        continue;
+      }
+      const [ids, classes, elements] = specificityOf(part);
+      const scoped = rule.file === 'styles' ? 0 : compoundsOf(part).length;
+      found.push({ rule, index, part, state: last !== target, specificity: [ids, classes + scoped, elements] });
+    }
+  });
   return found;
+}
+// Whether `a` wins over `b` for certain: higher specificity, or the same
+// specificity later in the same file. Across files a tie is never certain.
+function beats(a, b) {
+  for (let i = 0; i < 3; i += 1) {
+    if (a.specificity[i] !== b.specificity[i]) return a.specificity[i] > b.specificity[i];
+  }
+  return a.rule.file === b.rule.file && a.index > b.index;
+}
+// The channels a line can be drawn in, and whether one declaration draws in
+// them: each side's border, the shadow, and a solid ground.
+const sideNames = { top: ['bs'], bottom: ['be'], left: ['is'], right: ['ie'], block: ['bs', 'be'], inline: ['is', 'ie'] };
+function lineChannels(property, value) {
+  const tokens = value.toLowerCase().split(/\s+/);
+  const border = /^border(?:-(top|bottom|left|right|block|inline)(?:-(start|end))?)?(?:-(width|style))?$/.exec(property);
+  if (border) {
+    const [, axis, end, facet] = border;
+    let sides = ['bs', 'be', 'is', 'ie'];
+    if (axis) sides = sideNames[axis];
+    if (end) sides = sides.filter((side) => side.endsWith(end === 'start' ? 's' : 'e'));
+    let draws;
+    if (facet === 'width') draws = tokens.some((token) => !/^0(?:px|rem|em)?$/.test(token));
+    else if (facet === 'style') draws = tokens.some((token) => token !== 'none' && token !== 'hidden');
+    else draws = !tokens.some((token) => /^(?:0(?:px|rem|em)?|none|hidden|transparent)$/.test(token));
+    return sides.map((side) => ({ channel: `border-${side}`, draws }));
+  }
+  if (property === 'box-shadow') return [{ channel: 'shadow', draws: value.trim() !== 'none' }];
+  if (property === 'background-color') return [{ channel: 'ground', draws: !/^(?:transparent|none)$/i.test(value.trim()) }];
+  if (property === 'background') {
+    const colour = /var\(--(?:color|ledger|palette|panel|card|grid|usage|tip)-[\w-]*\)|#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|color-mix|oklch|oklab|lab|lch)\(|\bcurrentcolor\b|-gradient\(/i;
+    return [{ channel: 'ground', draws: colour.test(value) }];
+  }
+  if (property === 'background-image') return [{ channel: 'ground', draws: /-gradient\(/i.test(value) }];
+  return [];
+}
+
+test('the sheet draws no plain line: every separator is the keep’s own prop (owner 2026-10-19)', () => {
+  // A surface's prop, or null where it is parted by space alone. (The list
+  // heads that wore a branch are gone from the page, 2026-10-19; the column
+  // words that replaced them are pinned in tests/sections.test.mjs. The
+  // strip's lead went the same day, so the strip is its band and its items.)
+  const surfaces = {
+    '.section-head::after': 'vine',
+    '.ledger-entry': 'branch',
+    '.repo-entry': 'twig',
+    '.log-entry': 'twig',
+    '.ticker-strip': null,
+    '.ticker-item': null,
+  };
+  for (const [target, prop] of Object.entries(surfaces)) {
+    const found = surfaceRules(target);
+    assert.ok(found.some((entry) => !entry.state), `no rule styles ${target}; this pin has lost its subject`);
+    const declarations = found.flatMap((entry) =>
+      declarationsOf(entry.rule.body).flatMap(({ property, value }) =>
+        lineChannels(property, value).map((channel) => ({ ...entry, ...channel, property, value }))
+      )
+    );
+    for (const line of declarations.filter((entry) => entry.draws)) {
+      const cleared = declarations.some(
+        (entry) => entry.channel === line.channel && !entry.draws && !conditional(entry.rule) && !entry.state && beats(entry, line)
+      );
+      assert.ok(
+        cleared,
+        `${line.rule.file}: "${line.part}" draws ${line.property}: ${line.value} on ${target}, and nothing that draws nothing beats it — the sheet's lines are props now`
+      );
+    }
+    /* And the picture that wins is the surface's own prop, read through its
+       token — by specificity, then order, among the rules that always apply,
+       with no conditional rule beating it to a different picture. Where space
+       parts the surface, every picture that could win is no picture: no prop,
+       no file, no gradient drawn where the line used to be. */
+    const pictures = found
+      .filter((entry) => !entry.state)
+      .flatMap((entry) =>
+        declarationsOf(entry.rule.body)
+          .filter(({ property }) => property === 'background' || property === 'background-image')
+          .map(({ value }) => ({ ...entry, value }))
+      );
+    const always = pictures.filter((entry) => !conditional(entry.rule));
+    const winners = always.filter((entry) => !always.some((other) => other !== entry && beats(other, entry)));
+    /* A row picked by its place in the list — a role's own bough, a list
+       row's own twig (2026-10-19: "make the branches more unique") — wins on
+       that row, so its picture is held to the same answer as the surface's. */
+    const placed = found
+      .filter((entry) => entry.state && /^:nth-(?:child|of-type)\([^()]*\)$/.test(compoundsOf(entry.part).at(-1).slice(target.length)))
+      .flatMap((entry) =>
+        declarationsOf(entry.rule.body)
+          .filter(({ property }) => property === 'background' || property === 'background-image')
+          .map(({ value }) => ({ ...entry, value }))
+      );
+    const contenders = [
+      ...winners,
+      ...pictures.filter((entry) => conditional(entry.rule) && winners.every((w) => !beats(w, entry))),
+      ...placed,
+    ];
+    if (prop === null) {
+      for (const contender of contenders) {
+        assert.doesNotMatch(
+          contender.value,
+          /url\(|var\(--keep-|-gradient\(/,
+          `${contender.rule.file}: "${contender.part}" draws ${contender.value} on ${target}, which is parted by space alone`
+        );
+      }
+      continue;
+    }
+    assert.ok(winners.length > 0, `${target} draws no picture at all; its ${prop} is gone`);
+    for (const winner of contenders) {
+      assert.match(
+        winner.value,
+        new RegExp(`var\\(--keep-${prop}(?:-\\d+)?\\)`),
+        `${winner.rule.file}: "${winner.part}" paints ${target} with ${winner.value}, not its ${prop}`
+      );
+    }
+    /* EACH ROW ITS OWN (owner, 2026-10-19: "make the branches more unique.
+       they all seem to be the same sprite"). Where the prop is a family of
+       drawings, the surface's rows take turns with every one of them: a
+       member no row is given is a sprite the rows lost, and a surface that
+       names only one is every row the same bough again. */
+    const members = [...new Set([...styles.matchAll(new RegExp(`--keep-(${prop}-\\d+):`, 'g'))].map((match) => match[1]))].sort();
+    if (members.length > 0) {
+      const given = new Set(contenders.flatMap((entry) => [...entry.value.matchAll(new RegExp(`var\\(--keep-(${prop}-\\d+)\\)`, 'g'))].map((match) => match[1])));
+      assert.deepEqual(
+        members.filter((member) => !given.has(member)),
+        [],
+        `${target}'s rows never take turns with every ${prop}; the ones they skip are listed`
+      );
+    }
+  }
+  /* NON-VACUITY, PROVEN ON THE REAL SHEET: the ledger's own hairline under a
+     role is still declared underneath the keep layer, so the walk above has a
+     real line to clear — and the reader still sees it as one. */
+  const hairline = surfaceRules('.ledger-entry').find((entry) =>
+    declarationsOf(entry.rule.body).some(({ property, value }) =>
+      lineChannels(property, value).some((channel) => channel.draws)
+    )
+  );
+  assert.ok(hairline, 'the reader finds no line under .ledger-entry to clear; this pin proves nothing');
+});
+
+/* THE RING NEVER TURNS (owner, 2026-10-19). A role's opener hangs in an iron
+ * ring, the knocker of a castle door, and the open state is the chevron's own
+ * glyph — down to open, up to close — so nothing rotates: a ring turned over
+ * hangs from nothing. No rule may transform, animate or transition a
+ * transform on the ring or anything inside it. */
+test('the ring never turns: a role opens by its chevron’s swap, never by a rotation (owner 2026-10-19)', () => {
+  const ringRules = sweptRules.filter((rule) =>
+    selectorParts(rule.selector).some((part) => compoundsOf(part).some((compound) => compound.startsWith('.ledger-chevron')))
+  );
+  assert.ok(ringRules.length > 0, 'no rule styles the ring; this pin has lost its subject');
+  for (const rule of ringRules) {
+    for (const { property, value } of declarationsOf(rule.body)) {
+      assert.ok(
+        !/^(?:transform|rotate|translate|scale|animation(?:-name)?)$/.test(property),
+        `${rule.file}: "${rule.selector}" sets ${property}: ${value}; the ring turns`
+      );
+      if (/^transition(?:-property)?$/.test(property)) {
+        assert.doesNotMatch(value, /\b(?:transform|rotate|translate|scale|all)\b/, `${rule.file}: "${rule.selector}" eases a turn of the ring`);
+      }
+    }
+  }
+  const log = componentSources['lib/components/LedgerLog.svelte'];
+  assert.ok(log, 'the ledger log is not where this pin expects it');
+  assert.match(
+    stripComments(log),
+    /<span class="ledger-chevron" aria-hidden="true">\s*<Icon name=\{open \? 'chevron-up' : 'chevron-down'\} slot="row" \/>/,
+    'the open state is no longer the chevron’s own swap, so something else must be turning'
+  );
+});
+
+/* A ROLE OPENS AS A SCROLL (owner, 2026-10-19: "have it open up like a scroll
+ * instead of just re-using the plain background"). The parchment and its upper
+ * roller sit inside the drawer's clip, so they are revealed from the top as
+ * the drawer opens; the lower roller is the drawer's own last child, outside
+ * the clip, so it rides the clip's growing edge down and the scroll unrolls —
+ * and it is not drawn at all while the drawer is shut, so a closed role draws
+ * no roller under it. The words on the parchment are set in the DAY's inks,
+ * at night as by day: the scroll re-points the sheet's ink roles at the
+ * parchment tokens, everything drawn on it reads those roles and nothing
+ * else, and every ink clears the 4.5:1 text floor on the paper it sits on. */
+const scrollGrounds = (tokens) => {
+  const scroll = styleRules.filter((rule) => rule.selector === '.ledger-scroll');
+  assert.equal(scroll.length, 1, 'the parchment is not drawn by one rule');
+  const background = declared(scroll[0]).background ?? '';
+  // The grain is a length in the gradient's stops, not a colour.
+  const grounds = [...new Set([...background.matchAll(/var\((--[a-z0-9-]+)\)/g)].map(([, token]) => token))].filter(
+    (token) => token !== '--keep-prop'
+  );
+  assert.ok(grounds.length > 0, 'the parchment draws no ground this pin can measure');
+  for (const ground of grounds) {
+    assert.match(ground, /^--keep-parchment(?:-edge)?$/, `the parchment is drawn in ${ground}, which is not one of its own two papers`);
+  }
+  return Object.fromEntries(grounds.map((ground) => [ground, resolveToken(ground, tokens)]));
 };
 
-const declaredValue = (rule, property) =>
-  declarationsOf(rule.body).find((declaration) => declaration.property === property)?.value;
-
-test('the reading-mode swatches are drawn in the header chrome grammar', () => {
-  const menuFile = 'lib/ThemeMenu.svelte';
-  const tokens = tokensFor('light');
-
-  /* The shared grammar, resolved through however many var() hops the token
-     layer takes. A token that stopped resolving would fail inside
-     resolveToken rather than quietly comparing undefined to undefined. */
-  const glyphSize = resolveToken('--swatch-glyph-size', tokens);
-  const strokeWidth = resolveToken('--swatch-stroke', tokens);
-  assert.equal(
-    glyphSize,
-    resolveToken('--chrome-icon-glyph-size', tokens),
-    'the swatch glyph no longer derives from the chrome glyph token; the two families can now drift'
-  );
-  assert.equal(
-    strokeWidth,
-    resolveToken('--chrome-icon-stroke', tokens),
-    'the swatch line weight no longer derives from the chrome stroke token'
-  );
-
-  /* ...and the one chrome glyph left is the icon family's, at the family's
-     chrome size, which is a THIRD token that has to agree with the other two
-     or the trigger and the swatches under it are drawn at different scales
-     again — the owner's original complaint, exactly. The component states no
-     size of its own: it names a slot, and the slot is a token. */
-  const glyphPx = lengthInPx(glyphSize);
-  assert.ok(glyphPx !== null, `--chrome-icon-glyph-size is "${glyphSize}", which this pin cannot measure`);
+test('a role opens as a parchment scroll, its words in the day’s inks on its own paper (owner 2026-10-19)', () => {
+  const log = stripComments(componentSources['lib/components/LedgerLog.svelte'] ?? '');
   assert.match(
-    componentSources[menuFile],
-    /<Icon name="mode-dark" slot="chrome" \/>/,
-    `${menuFile} draws its own trigger glyph again instead of the icon family's`
+    log,
+    /<div class="ledger-drawer" data-open=\{open \? 'true' : 'false'\} inert=\{!open\}>\s*<div class="ledger-drawer-clip">\s*<div class="ledger-scroll">\s*<ul class="ledger-points">[\s\S]*?<\/ul>[\s\S]*?<\/div>\s*<\/div>\s*<span class="ledger-scroll-end" aria-hidden="true"><\/span>\s*<\/div>/,
+    'the parchment is not inside the drawer’s clip with its lower roller after the clip, or that roller is announced'
   );
-  const familyPx = lengthInPx(resolveToken('--icon-chrome', tokens));
-  assert.equal(
-    familyPx,
-    glyphPx,
-    `the icon family's chrome mark is ${familyPx}px while the chrome grammar says ${glyphPx}px`
-  );
-  assert.doesNotMatch(
-    componentSources[menuFile],
-    /<svg[^>]*\bwidth="/,
-    `${menuFile} states a painted glyph size as an attribute again; a chrome size is a token`
-  );
+  const shown = (selector) => styleRules.filter((rule) => rule.selector === selector).map((rule) => declared(rule).display);
+  assert.deepEqual(shown('.ledger-scroll-end'), ['none'], 'a shut drawer draws a roller under its role');
+  assert.deepEqual(shown(".ledger-drawer[data-open='true'] > .ledger-scroll-end"), ['block'], 'an open drawer draws no lower roller');
 
-  /* The swatch wears the chrome's absence of chrome. Each of these is one
-     innocent-looking declaration away from returning, and together they are
-     what the owner actually rejected: a disc, a rim, a fill, and a ring. */
-  const swatch = ruleNamed(menuFile, '.swatch');
-  assert.equal(declaredValue(swatch, 'border'), '0', 'a swatch wears a border again');
-  assert.equal(declaredValue(swatch, 'background'), 'none', 'a swatch wears a fill again');
-  for (const rule of sweptRules.filter((entry) => entry.file === menuFile)) {
-    if (!selectorParts(rule.selector).some((part) => part.startsWith('.swatch'))) continue;
+  const scroll = declared(styleRules.find((rule) => rule.selector === '.ledger-scroll'));
+  assert.equal(scroll['--ledger-ink'], 'var(--keep-parchment-ink)', 'the parchment’s words are not in its own ink');
+  assert.equal(scroll['--ledger-muted'], 'var(--keep-parchment-muted)', 'the parchment’s quiet words are not in its own muted ink');
+  assert.equal(scroll['--ledger-highlight'], 'var(--keep-parchment-mark)', 'the parchment’s link is not marked in its own ink');
+  assert.equal(scroll.color, 'var(--keep-parchment-ink)', 'the parchment’s own text colour is not its ink');
+  // Everything drawn on the paper reads the re-pointed roles, never a sheet
+  // colour a role cannot re-point.
+  const onTheScroll = sweptRules.filter((rule) =>
+    selectorParts(rule.selector).some((part) =>
+      compoundsOf(part).some((compound) => /^\.ledger-(?:scroll|points?|link)\b/.test(compound) && !compound.startsWith('.ledger-scroll-end'))
+    )
+  );
+  assert.ok(onTheScroll.length > 0, 'nothing is drawn on the parchment; this pin has lost its subject');
+  for (const rule of onTheScroll) {
     for (const { property, value } of declarationsOf(rule.body)) {
-      assert.ok(
-        !/^(border-radius|box-shadow)$/.test(property) || rule.selector.includes('::after'),
-        `${rule.selector} paints ${property}: ${value}; the swatches are line icons, not discs`
-      );
-      assert.ok(
-        !(property === 'background' && value.startsWith('var(')) || rule.selector.includes('::after'),
-        `${rule.selector} paints a surface behind a swatch again`
-      );
+      if (!/^(?:color|background(?:-color)?|border(?:-[a-z-]+)?-color|outline(?:-color)?|text-decoration(?:-color)?|fill|stroke)$/.test(property)) continue;
+      for (const [, token] of value.matchAll(/var\((--[a-z0-9-]+)/g)) {
+        assert.match(
+          token,
+          // The roles, the parchment's own colours, and the rollers' drawings
+          // and grain (images and a length, which paint no colour of their own).
+          /^--(?:ledger-(?:ink|muted|highlight)|keep-parchment(?:-[a-z]+)?|keep-scroll-[a-z-]+|keep-prop)$/,
+          `${rule.file}: "${rule.selector}" paints ${property} in ${token}, a colour the scroll does not re-point to its paper`
+        );
+      }
+      assert.doesNotMatch(value, /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/i, `${rule.file}: "${rule.selector}" paints a raw colour on the parchment`);
     }
   }
 
-  /* The 44px hit area survives the shrink — that is the whole point of
-     shrinking only what is PAINTED — and it stays a literal so the
-     touch-floor walk above can keep measuring it. */
-  assert.equal(declaredValue(swatch, 'inline-size'), '2.75rem');
-  assert.equal(declaredValue(swatch, 'block-size'), '2.75rem');
-  assert.equal(
-    lengthInPx(declaredValue(swatch, 'inline-size')) / glyphPx > 2,
-    true,
-    'the painted glyph has grown to most of its own hit area again'
-  );
-
-  // Translucent at rest, fully present when pointed at or chosen: the
-  // swatch's answer to the chrome's ink change, and the reason the popover
-  // reads as quiet rather than as five objects demanding attention.
-  const rest = Number(resolveToken('--swatch-rest-opacity', tokens));
-  const active = Number(resolveToken('--swatch-active-opacity', tokens));
-  assert.ok(rest > 0 && rest < active, `a swatch rests at ${rest} against an active ${active}`);
-  assert.equal(declaredValue(swatch, 'opacity'), 'var(--swatch-rest-opacity)');
-
-  /* Selection is COLORED IN, not underlined (owner directive, 2026-08-28:
-     "do not underline the icon, instead color it in and grey out the ones
-     not on use"). The chosen swatch joins hover and focus on the brand ink
-     at full presence; unchosen swatches keep the muted rest opacity above.
-     The bar pseudo-element is gone WITH its tokens — a chosen-mode ::after
-     coming back is the retired design returning. aria-pressed still names
-     the state for assistive technology, so the choice never rides on the
-     visual channel alone. */
-  const menuSource = componentSources[menuFile];
-  assert.doesNotMatch(
-    menuSource,
-    /aria-pressed='true'\]::after/,
-    'the retired chosen-mode underline bar is back'
-  );
-  assert.doesNotMatch(menuSource, /--swatch-mark-/, 'the underline mark tokens are read again');
-  assert.doesNotMatch(styles, /--swatch-mark-/, 'the underline mark tokens are declared again');
-  assert.match(
-    menuSource,
-    /\.swatch\[aria-pressed='true'\] \{[^}]*opacity: var\(--swatch-active-opacity\)/,
-    'the chosen swatch no longer reaches full presence'
-  );
-  assert.match(
-    menuSource,
-    /\.swatch\[aria-pressed='true'\] \{[^}]*color: var\(--color-brand\)/,
-    'the chosen swatch no longer wears the brand ink'
-  );
-
-  /* Every dimension the component states is a token — no raw px, no raw
-     line weight, no second copy of a size that styles.css already owns. The
-     44px hit box is the one deliberate literal, for the reason above. */
-  for (const rule of sweptRules.filter((entry) => entry.file === menuFile)) {
-    for (const { property, value } of declarationsOf(rule.body)) {
-      if (!/^(inline-size|block-size|stroke-width|opacity|gap|padding)$/.test(property)) continue;
-      assert.ok(
-        value.startsWith('var(') || value === '2.75rem' || value === '0',
-        `${rule.selector} sets ${property}: ${value}; a dimension here is a token with a global default`
-      );
+  // And every ink clears the text floor on the paper. The link's mark is
+  // measured on the parchment itself, the only paper a word sits on: the next
+  // pin keeps every word off the darkened edge.
+  for (const mode of readingModes) {
+    const tokens = tokensFor(mode);
+    const grounds = scrollGrounds(tokens);
+    for (const ink of ['--keep-parchment-ink', '--keep-parchment-muted']) {
+      for (const [ground, paper] of Object.entries(grounds)) {
+        const ratio = contrastRatio(resolveToken(ink, tokens), paper);
+        assert.ok(ratio >= 4.5, `${mode}: ${ink} on ${ground} is ${ratio.toFixed(2)}:1, below the 4.5:1 text floor`);
+      }
     }
+    const mark = contrastRatio(resolveToken('--keep-parchment-mark', tokens), resolveToken('--keep-parchment', tokens));
+    assert.ok(mark >= 4.5, `${mode}: the link’s mark on the parchment is ${mark.toFixed(2)}:1, below the 4.5:1 text floor`);
   }
+});
+
+/* NO WORD ON THE DARKENED EDGE (2026-10-19). The parchment shades to
+ * --keep-parchment-edge at each side, where the link's mark — the brand
+ * orange on light — measures 3.71:1, under the 4.5:1 text floor; on a phone
+ * the drawer's list and link start at the scroll's own edge (the link's
+ * 10.25rem inset is dropped at 45rem). That gap was recorded as a ratchet
+ * pair and closed by geometry rather than by colour: the darkened band is a
+ * fixed width in the props' grain, the same at both sides, and the scroll's
+ * words begin inside its padding, which is wider than the band. So every word
+ * sits on --keep-parchment, where the floor above holds, at any width. */
+test('no word on a role’s scroll sits on the parchment’s darkened edge', () => {
+  const rule = styleRules.find((candidate) => candidate.selector === '.ledger-scroll');
+  const { background = '', 'padding-inline': padding = '' } = declared(rule);
+  const paper = 'var\\(--keep-parchment\\)';
+  const edge = 'var\\(--keep-parchment-edge\\)';
+  const bands = new RegExp(
+    `^linear-gradient\\(\\s*to right,\\s*${edge},\\s*${paper} calc\\((\\d+) \\* var\\(--keep-prop\\)\\),\\s*${paper} calc\\(100% - (\\d+) \\* var\\(--keep-prop\\)\\),\\s*${edge}\\s*\\)$`
+  ).exec(background.trim());
+  assert.ok(bands, `the parchment's darkened edge is not a fixed band in the props' grain at each side: ${background}`);
+  const [, start, end] = bands.map(Number);
+  assert.equal(start, end, 'the parchment darkens further at one side than the other');
+  const inset = /^calc\((\d+) \* var\(--keep-prop\)\)$/.exec(padding.trim());
+  assert.ok(inset, `the scroll's words are not inset from its edges in the props' grain: "${padding}"`);
+  assert.ok(Number(inset[1]) > start, `the scroll's words begin ${inset[1]} props in, on or before its ${start}-prop darkened band`);
+  // The scroll's own mark is the one ink whose floor fails on the edge paper;
+  // it stays out of reach of every rule that could pull a word back onto it.
+  const pulled = sweptRules.filter(
+    (candidate) =>
+      selectorParts(candidate.selector).some((part) => compoundsOf(part).some((compound) => /^\.ledger-(?:points?|link)\b/.test(compound))) &&
+      Object.entries(declared(candidate)).some(
+        ([property, value]) =>
+          /^margin(?:-inline(?:-start|-end)?)?$/.test(property) &&
+          /(?:^|[\s(,*])-\s*(?:[\d.]|calc|var|min|max)/.test(value.replace(/var\(--[a-z0-9-]+\)/g, 'var'))
+      )
+  );
+  assert.deepEqual(pulled.map((candidate) => `${candidate.file}: ${candidate.selector}`), [], 'a rule pulls the scroll’s words out over its padding');
 });
 
 /* ===========================================================================

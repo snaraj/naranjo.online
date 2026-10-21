@@ -96,20 +96,20 @@ const literalNames = callSites
 const dataDrivenNames = {
   /* The four section marks, beside the labels they stand for. The `commit`
      mark left this list with the section it named (owner design decision,
-     2026-09-11, issue 318) and did not leave the page: the commit column's own
-     ruled head draws it, spelled at its call site in LedgerSpread.svelte, so
-     it is covered by the literal walk above rather than declared here. */
+     2026-09-11, issue 318), lived on in the commit column's ruled head, and
+     left the page with that head (owner, 2026-10-19: "remove this heading …
+     remove the icons there as well"), so the family no longer carries it. */
   '../src/page.ts': ['work', 'folder', 'chip', 'photo'],
-  /* The projects table's head marks and its counters' glyphs (issue 317). */
-  '../src/lib/components/LedgerSpread.svelte': ['pull', 'tag', 'star', 'clock'],
+  /* The repositories' figure glyphs (issue 317), chosen by the adapter. The
+     component's own row of head marks that spelled the same four left with
+     the spreadsheet look (owner direction, 2026-10-16): each figure carries
+     its mark beside its value now, so the four arrive as data only. */
   '../src/lib/projects.ts': ['star', 'pull', 'tag', 'clock'],
   /* The records card's mark, decided by the adapter. The board's own title
      mark left with the title (owner directive, 2026-09-12, issue 323); `chip`
      itself did not leave the page — the Trackers section head draws it, one
      line above, which is where the page names the thing this board counts. */
   '../src/lib/token-usage.ts': ['sessions'],
-  /* The strip's lead mark, in the binding layer where the domain lives. */
-  '../src/lib/blocks/bossTicker.ts': ['sword'],
   /* The gallery segment's mark, derived from what the set holds. */
   '../src/lib/components/MediaGallery.svelte': ['photo', 'film'],
   /* The disclosure chevron, which points at what pressing the row does. */
@@ -215,7 +215,7 @@ test('a glyph is geometry and nothing else', () => {
       }
       /* Paint is the shell's, always. A part says only WHETHER it is filled;
          it never names an ink, so no glyph can escape currentColor and the
-         family stays theme-branch-free in all four reading modes. */
+         family stays theme-branch-free in both reading modes. */
       assert.ok(
         part.solid === undefined || part.solid === true,
         `"${name}" has a solid flag that is neither absent nor true`
@@ -455,11 +455,12 @@ test('a link that is already words grows no trailing mark', () => {
     }
   }
 
-  /* And the three row kinds the ruling names, by name, so the rule is legible
-     where a reader would look for it. None of them draws a mark at all. */
+  /* And the row kinds the ruling names, by name, so the rule is legible where
+     a reader would look for it. None of them draws a mark at all. (The
+     calendar block left this list with the block itself, 2026-10-16: the
+     Chronicle that draws the calendar now carries no link.) */
   for (const file of [
     'lib/components/LedgerSpread.svelte',
-    'lib/components/ContributionCalendar.svelte',
   ]) {
     for (const control of controls(componentSources[file])) {
       if (control.tag !== 'a') continue;
@@ -482,32 +483,28 @@ test('the words the marks replaced are still on the page or in its accessibility
      allowed to replace a word when the word survives somewhere a reader can
      still reach it, and this is the walk that proves it for every surface the
      map names. */
-  const header = componentSources['lib/components/PageHeader.svelte'];
-  /* The pin and the place beside it. The WORD moved once more (owner ruling,
-     2026-09-12, issue 327): the line reads California, the state, rather than
-     Irvine, the city — a portfolio line owes a reader the region, not the
-     street. The city is pinned gone by name, so a revert of the ruling is a
-     red build rather than a quiet reappearance, and the role rows keep their
-     own "Irvine, CA" because that is a different fact in a different place
-     (lib/work.ts). */
-  assert.match(header, /<Icon name="location" slot="chrome" \/>California</, 'the place lost its state');
-  assert.doesNotMatch(markup(header), /Irvine/, 'the chrome row names the city again');
+  /* THE PLACE LEFT WITH THE CHROME ROW (owner direction, 2026-10-16: "do away
+     with it for now"). The pin and "California" beside it were this map's
+     first row, and the row they sat in is gone — so they are not a word a mark
+     replaced any more, they are simply not on the page, and the `location`
+     glyph left the family with them (the reverse-coverage walk above is what
+     holds that). The role rows keep their own "Irvine, CA", a different fact
+     in a different place (lib/work.ts). */
 
-  // The owner removed the footer credits in issue 345; keep the build version.
-  const footer = markup(componentSources['App.svelte']).match(/<footer\b[^>]*>([\s\S]*?)<\/footer>/)?.[1];
-  assert.ok(footer, 'the footer is missing');
-  assert.match(footer, /naranjo\.online v\{__SITE_VERSION__\}/, 'the footer lost its build version');
-  assert.doesNotMatch(footer, /<Icon\b|\bMIT\b|snaraj|github\.com|footer-meta/, 'the footer credits returned');
+  // The owner removed the footer credits in issue 345, and then the footer
+  // itself — its build version and its reading mode with it (owner,
+  // 2026-10-19). The credits stay gone from the page shell, footer or not.
+  assert.doesNotMatch(
+    markup(componentSources['App.svelte']),
+    /\bMIT\b|snaraj|github\.com|footer-meta/,
+    'the footer credits returned'
+  );
 
-  /* THE NAV LINK'S WORD CAME BACK TO THE PAGE (owner ruling, 2026-09-12, issue
-     325), so it is no longer a row of this map at all: a word nobody replaced
-     needs nowhere to have survived to. What replaces the old row is the
-     stronger claim in the same direction — the word is PRINTED, in the channel
-     every reader shares, and it is the same word the heading it points at is
-     called. */
-  const nav = componentSources['lib/components/SectionNav.svelte'];
-  assert.match(nav, />\{section\.label\}</, 'the nav link stopped printing the section word');
-  assert.doesNotMatch(nav, /<Icon\b/, 'the nav link draws a mark instead of its word again');
+  /* THE SECTION'S WORD IS PRINTED ON ITS HEAD. It was printed twice — by the
+     nav link (owner ruling, 2026-09-12, issue 325: words, not icons) and by
+     the heading the link pointed at; the nav is gone with the chrome row
+     (owner direction, 2026-10-16), and the heading is the one that carries it,
+     in the channel every reader shares. */
   const head = componentSources['lib/components/PageSection.svelte'];
   assert.match(head, /<h2 class="section-title" id=\{`\$\{section\.id\}-title`\}>\{section\.label\}<\/h2>/);
   /* The mark on the head is decoration, exactly as the number beside it
@@ -531,10 +528,11 @@ test('the words the marks replaced are still on the page or in its accessibility
   assert.doesNotMatch(log, /class="ledger-mark"[^>]*alt="[^"]*"/, 'the mark tile carries a literal alt instead of the row\u2019s name');
   assert.match(log, /aria-label=\{`\$\{open \? collapseLabel : expandLabel\} \$\{row\.name\}`\}/);
 
-  /* The strip's lead: a second decorative mark beside the picture, with the
-     collection's name still on the panel head above it and in the strip's own
-     label. The component names neither — the binding layer hands both over. */
+  /* The strip has no lead (owner, 2026-10-19, of the lead's figure and its
+     blade: "remove this"), so no mark stands in for its name: the collection
+     is named by the panel head above it and by the strip's own label, and the
+     strip draws no picture or glyph of its own. */
   const ticker = componentSources['lib/components/Ticker.svelte'];
-  assert.match(ticker, /\{#if mark\.glyph\}\s*<Icon name=\{mark\.glyph\} slot="row" \/>/);
-  assert.doesNotMatch(markup(ticker), /<Icon name="/, 'the strip names a glyph of its own');
+  assert.match(ticker, /<div class="ticker-strip" aria-label=\{label\}/, 'the strip lost its own name');
+  assert.doesNotMatch(markup(ticker), /<Icon\b|ticker-lead|ticker-mark|\bmark\b/, 'the strip grew a lead or a mark again');
 });

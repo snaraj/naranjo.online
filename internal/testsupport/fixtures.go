@@ -22,8 +22,7 @@ const FrontendShellSentinel = "naranjo-fixture-shell"
 // FrontendFS returns the canonical healthy frontend bundle every suite builds
 // handlers from:
 //
-//	index.html            the entrypoint, carrying the <html> element the
-//	                      reading-mode variants are stamped onto, the
+//	index.html            the entrypoint, carrying the <html> element, the
 //	                      data-static-fallback structural marker, and the
 //	                      FrontendShellSentinel text
 //	assets/app-abc123.js  one content-hashed asset (immutable cache class)

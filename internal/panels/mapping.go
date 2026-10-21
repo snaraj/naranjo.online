@@ -160,15 +160,19 @@ func mapContributions(raw []byte) (json.RawMessage, error) {
 		daily[offset] = counts[first.AddDate(0, 0, offset).Format(dayLayout)]
 		total += daily[offset]
 	}
-	return calendarPayload(daily, total, first, last, CoveragePublic)
+	// The public document counts contributions and nothing finer, so it
+	// carries no commit days: the page's dash is this producer's answer.
+	return calendarPayload(daily, total, first, last, CoveragePublic, nil)
 }
 
 // calendarPayload assembles the served activity payload from a contiguous run
 // of daily counts. Both producers end here, which is what keeps the week
 // chunking, the streak rule, the end date and the empty commit list identical
 // no matter which document was read — the two mappers differ only in how they
-// get from bytes to days.
-func calendarPayload(daily []int, total int, first, last time.Time, coverage string) (json.RawMessage, error) {
+// get from bytes to days. `commits`, when not nil, is the commits pushed on
+// each of the same days, and it is chunked by the same function so its
+// columns can never disagree with the calendar's.
+func calendarPayload(daily []int, total int, first, last time.Time, coverage string, commits []int) (json.RawMessage, error) {
 	if first.Weekday() != time.Sunday {
 		// SUNDAY ALIGNMENT. Week columns are sliced seven days at a time from
 		// the first covered day, and the frontend derives the trailing padding
@@ -189,6 +193,14 @@ func calendarPayload(daily []int, total int, first, last time.Time, coverage str
 		RecentCommits: []VCSCommit{},
 		Coverage:      coverage,
 	}
+	if commits != nil {
+		sum := 0
+		for _, count := range commits {
+			sum += count
+		}
+		payload.CommitWeeks = chunkWeeks(commits)
+		payload.TotalCommits = &sum
+	}
 	// Marshaling the package-owned payload cannot fail.
 	data, _ := json.Marshal(payload)
 	return data, nil
@@ -207,7 +219,15 @@ func calendarPayload(daily []int, total int, first, last time.Time, coverage str
 // differ is one this package has half-understood. Refusing keeps the last good
 // payload; serving either number would be picking which of two disagreeing
 // claims to publish.
-func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
+//
+// The same answer may carry the window's commit buckets too, and then the
+// payload carries the commits pushed each day (mapCalendarCommits). The second
+// return is the closed reason those commit fields were omitted, empty when they
+// were served or never asked for: an omission costs the commit figure and
+// nothing else, because the calendar beside it was proven on its own. `now` is
+// the clock reading the request's variables were derived from, so the window
+// the buckets are placed against is the one that was asked for.
+func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, string, error) {
 	// Two decodes, and which one is strict is the point (issue 246, finding
 	// 2) — both live in graphQLPayload now, which every credentialed producer
 	// enters through. The ENVELOPE is read leniently, because it is the
@@ -221,7 +241,7 @@ func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
 	// catches an empty calendar too.
 	var data calendarData
 	if err := graphQLPayload(raw, "contribution calendar", &data); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	calendar := data.Viewer.Contributions.Calendar
 	counts := make(map[string]int, maxCalendarDays)
@@ -231,13 +251,13 @@ func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
 		for _, day := range week.Days {
 			parsed, err := time.Parse(dayLayout, day.Date)
 			if err != nil {
-				return nil, fmt.Errorf("contribution calendar: cell date %q: %w", day.Date, err)
+				return nil, "", fmt.Errorf("contribution calendar: cell date %q: %w", day.Date, err)
 			}
 			if day.Count < 0 {
-				return nil, fmt.Errorf("contribution calendar: %s reports a negative count", day.Date)
+				return nil, "", fmt.Errorf("contribution calendar: %s reports a negative count", day.Date)
 			}
 			if _, repeated := counts[day.Date]; repeated {
-				return nil, fmt.Errorf("contribution calendar: %s appears twice", day.Date)
+				return nil, "", fmt.Errorf("contribution calendar: %s appears twice", day.Date)
 			}
 			counts[day.Date] = day.Count
 			if dated == 0 || parsed.Before(first) {
@@ -250,7 +270,7 @@ func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
 		}
 	}
 	if dated < minCalendarDays {
-		return nil, fmt.Errorf("contribution calendar: only %d dated cells found, want at least %d", dated, minCalendarDays)
+		return nil, "", fmt.Errorf("contribution calendar: only %d dated cells found, want at least %d", dated, minCalendarDays)
 	}
 	// TRAILING WEEK PADDING. The window this package asks for ends today, but a
 	// calendar is drawn in whole week columns, so an upstream may legitimately
@@ -272,29 +292,29 @@ func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
 	for last.After(today) {
 		key := last.Format(dayLayout)
 		if counts[key] != 0 {
-			return nil, fmt.Errorf("contribution calendar reports %d contributions on %s, which has not happened yet", counts[key], key)
+			return nil, "", fmt.Errorf("contribution calendar reports %d contributions on %s, which has not happened yet", counts[key], key)
 		}
 		delete(counts, key)
 		dated--
 		dropped++
 		if dropped >= daysPerWeek {
-			return nil, fmt.Errorf("contribution calendar runs %d days past the window that was requested", dropped)
+			return nil, "", fmt.Errorf("contribution calendar runs %d days past the window that was requested", dropped)
 		}
 		last = last.AddDate(0, 0, -1)
 	}
 	if dated < minCalendarDays {
-		return nil, fmt.Errorf("contribution calendar: only %d dated cells remain inside the requested window, want at least %d", dated, minCalendarDays)
+		return nil, "", fmt.Errorf("contribution calendar: only %d dated cells remain inside the requested window, want at least %d", dated, minCalendarDays)
 	}
 	span := int(last.Sub(first)/(24*time.Hour)) + 1
 	if span > maxCalendarDays {
-		return nil, fmt.Errorf("contribution calendar spans %d days, over the %d day bound", span, maxCalendarDays)
+		return nil, "", fmt.Errorf("contribution calendar spans %d days, over the %d day bound", span, maxCalendarDays)
 	}
 	// CONTIGUITY, for the identical reason the public path checks it: lose a
 	// day to an upstream change and the remaining cells still number in the
 	// hundreds and still span under a year, so the day would be zero-filled
 	// and the panel would serve a plausible, FRESH, WRONG total.
 	if dated != span {
-		return nil, fmt.Errorf("contribution calendar: %d dated cells cover a %d day span; the document is missing days", dated, span)
+		return nil, "", fmt.Errorf("contribution calendar: %d dated cells cover a %d day span; the document is missing days", dated, span)
 	}
 	daily := make([]int, span)
 	total := 0
@@ -303,9 +323,241 @@ func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, error) {
 		total += daily[offset]
 	}
 	if total != calendar.Total {
-		return nil, fmt.Errorf("contribution calendar: the document reports %d contributions but its days sum to %d", calendar.Total, total)
+		return nil, "", fmt.Errorf("contribution calendar: the document reports %d contributions but its days sum to %d", calendar.Total, total)
 	}
-	return calendarPayload(daily, total, first, last, CoverageComplete)
+	commits, omitted, err := mapCalendarCommits(data.Viewer, now, first, last, daily)
+	if err != nil {
+		return nil, "", err
+	}
+	payload, err := calendarPayload(daily, total, first, last, CoverageComplete, commits)
+	return payload, omitted, err
+}
+
+// mapCalendarCommits places the calendar answer's commit buckets on the
+// calendar's own days and returns the commits pushed on each, or nil with the
+// closed reason they could not all be placed exactly.
+//
+// THE WINDOW IS THE CALENDAR'S BY CONSTRUCTION. The buckets come out of the
+// calendar's own request, in calendarCommitWindows aliased sub-collections that
+// run from the calendar's $from to its $to, chained through seams derived from
+// that same $from (calendarVariables). `now` is the clock reading those
+// variables were derived from, so the windows below are the ones that were
+// asked for, and there is no second request whose clock could differ.
+// Placement then holds every bucket to the calendar's own days:
+//
+//   - A bucket is the account's local midnight as a UTC instant. Before
+//     commitBucketDateHorizon its UTC date is its day; at or past it the date
+//     cannot be told, and the fields are omitted (commit-day-ambiguous).
+//   - Each sub-window reports the days from bounds[k] to bounds[k+1] and no
+//     others. The first sub-window starts on the day before the calendar: the
+//     upstream reports the local day straddling a requested start
+//     (contributionWindowSlack), and that day is set aside — it is no day the
+//     grid draws, so it is in neither CommitWeeks nor TotalCommits. Every
+//     later sub-window starts on the seam day it shares with the one before
+//     (calendarCommitSeamHour), and the last ends today. A bucket on any
+//     other day is omission (commit-outside-window).
+//   - A day's commits can never exceed that day's contributions, because a
+//     commit IS a contribution. Exceeding it means the two halves bucket days
+//     differently, and the fields are omitted (commit-exceeds-calendar-day)
+//     rather than shifted.
+//   - ARITHMETIC, the rule every credentialed producer here rests on, at two
+//     levels. A repository's buckets must add up to its own totalCount, which
+//     is its commit count in the sub-window, not its bucket count
+//     (commit-repository-total-mismatch); and what a sub-window reported must
+//     account for its own commit total — with its first day or without it,
+//     whichever way the upstream counts the day it starts inside
+//     (commit-total-mismatch). That makes the bounds safe: a repository list
+//     cut at maxCalendarCommitRepositories drops positive counts the
+//     sub-window total still holds, so it can only fall short; and a page cut
+//     at maxCalendarCommitBuckets is named outright by the connection's own
+//     hasNextPage (commit-buckets-truncated), and falls short of its
+//     repository's count besides. Neither can yield a figure from part of
+//     the buckets.
+//
+// THE SEAMS. Both sub-windows meeting at a seam report the seam's day, and the
+// two reports mean one of two things: the same day, reported to both (the
+// upstream's collections select whole local days), or the two halves of it
+// either side of the seam instant (they select by instant). Equal reports are
+// read as the same day, counted once; unequal ones as halves, added. Neither
+// reading is trusted on its own. The calendar's collection carries its own
+// commit total for the WHOLE window, over the very same $from and $to, and the
+// placed days must equal it exactly — plus the set-aside day when that total
+// counts it, which the first sub-window shows, because it starts at the same
+// $from (commit-window-total-mismatch). A seam day counted twice puts the
+// placed days above that total; a half dropped, including a day split into two
+// equal halves and read as one, puts them below. So a day is served only when
+// every seam was read the way the whole window adds up. (The sub-windows'
+// totals summed are no such check: when the upstream reports whole days, every
+// seam day sits in two of them.)
+//
+// A document that cannot be READ refuses the whole calendar, as every other
+// drift here does: half a commit section, a bound the query itself sets
+// exceeded, a page that does not say whether it was cut, an instant that does
+// not parse, a negative count. An omission is a
+// bound or a placement the answer did not satisfy, and costs only the commit
+// figure.
+func mapCalendarCommits(viewer calendarViewer, now, first, last time.Time, daily []int) ([]int, string, error) {
+	windows := [calendarCommitWindows]*calendarCommitWindow{viewer.Commits1, viewer.Commits2, viewer.Commits3, viewer.Commits4}
+	whole := viewer.Contributions.CommitTotal
+	for _, window := range windows {
+		if (window != nil) != (whole != nil) || window != nil && (window.Total == nil || window.Repositories == nil) {
+			return nil, "", errors.New("contribution calendar: the document carries half of its commit section")
+		}
+	}
+	if whole == nil {
+		return nil, "", nil
+	}
+	if *whole < 0 {
+		return nil, "", errors.New("contribution calendar: the document reports a negative commit total")
+	}
+	// bounds[k] and bounds[k+1] are the first and last day sub-window k may
+	// report.
+	start := calendarWindowStart(now)
+	var bounds [calendarCommitWindows + 1]time.Time
+	bounds[0] = start.AddDate(0, 0, -1)
+	for index, seam := range calendarSeams(start) {
+		bounds[index+1] = seam.Add(-calendarCommitSeamHour)
+	}
+	today := now.UTC()
+	bounds[calendarCommitWindows] = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)
+	commits := make([]int, len(daily))
+	// heads[k] is what sub-window k reported on its first day; tails[k] what
+	// sub-window k-1 reported on that same day, the seam day they share.
+	var heads, tails, reported [calendarCommitWindows]int
+	omitted := ""
+	omit := func(reason string) {
+		if omitted == "" {
+			omitted = reason
+		}
+	}
+	if !first.Equal(start) {
+		// The seams split the window that was asked for. A calendar starting
+		// anywhere else is not that window, so its days cannot be matched to
+		// the sub-windows — the document is still read in full below, and
+		// refused if it cannot be.
+		omit(commitOmittedWindow)
+	}
+	for window, collection := range windows {
+		if *collection.Total < 0 {
+			return nil, "", errors.New("contribution calendar: the document reports a negative commit total")
+		}
+		repositories := *collection.Repositories
+		if len(repositories) > maxCalendarCommitRepositories {
+			return nil, "", fmt.Errorf("contribution calendar: %d commit repositories reported, over the %d bound", len(repositories), maxCalendarCommitRepositories)
+		}
+		for index, repository := range repositories {
+			// Entries are named by POSITION only: nothing else identifies them,
+			// and one of them may be private (requirement 12).
+			position := fmt.Sprintf("commit sub-window %d entry %d", window+1, index+1)
+			buckets := repository.Contributions
+			if len(buckets.Nodes) > maxCalendarCommitBuckets {
+				return nil, "", fmt.Errorf("contribution calendar: %s reports %d buckets, over the %d bound", position, len(buckets.Nodes), maxCalendarCommitBuckets)
+			}
+			if buckets.PageInfo == nil {
+				return nil, "", fmt.Errorf("contribution calendar: %s carries no page information", position)
+			}
+			if buckets.TotalCount < 0 {
+				return nil, "", fmt.Errorf("contribution calendar: %s reports a negative commit count", position)
+			}
+			if buckets.PageInfo.HasNextPage {
+				omit(commitOmittedTruncated)
+			}
+			// The repository's buckets must add up to its own commit count:
+			// summed over EVERY bucket, before any is placed or set aside, and
+			// held to the shared count bound so the sum cannot overflow.
+			entryCommits := 0
+			for _, bucket := range buckets.Nodes {
+				at, err := time.Parse(time.RFC3339, bucket.At)
+				if err != nil {
+					// Not wrapped: the parse error quotes the upstream's own bytes.
+					return nil, "", fmt.Errorf("contribution calendar: %s carries a bucket instant that does not parse", position)
+				}
+				if bucket.Count < 0 {
+					return nil, "", fmt.Errorf("contribution calendar: %s reports a negative count", position)
+				}
+				if bucket.Count > maxCountValue-entryCommits {
+					omit(commitOmittedRepositoryTotal)
+				} else {
+					entryCommits += bucket.Count
+				}
+				at = at.UTC()
+				day := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.UTC)
+				if at.Sub(day) >= commitBucketDateHorizon {
+					omit(commitOmittedDay)
+					continue
+				}
+				switch {
+				case day.Before(bounds[window]) || day.After(bounds[window+1]):
+					omit(commitOmittedWindow)
+					continue
+				case window == 0 && day.Equal(bounds[0]):
+					// The set-aside day is held to the shared count bound rather
+					// than to a calendar day, because the grid has none for it;
+					// either way the sums below cannot overflow.
+					if bucket.Count > maxCountValue-heads[0] {
+						omit(commitOmittedTotal)
+						continue
+					}
+					heads[0] += bucket.Count
+				case day.Before(first) || day.After(last):
+					omit(commitOmittedWindow)
+					continue
+				default:
+					offset := int(day.Sub(first) / (24 * time.Hour))
+					slot := &commits[offset]
+					if day.Equal(bounds[window]) {
+						slot = &heads[window]
+					} else if window+1 < calendarCommitWindows && day.Equal(bounds[window+1]) {
+						slot = &tails[window+1]
+					}
+					// Bounded by the day's own contributions, so no sum here
+					// can overflow either.
+					if bucket.Count > daily[offset]-*slot {
+						omit(commitOmittedExceeds)
+						continue
+					}
+					*slot += bucket.Count
+				}
+				reported[window] += bucket.Count
+			}
+			if entryCommits != buckets.TotalCount {
+				omit(commitOmittedRepositoryTotal)
+			}
+		}
+	}
+	if omitted != "" {
+		return nil, omitted, nil
+	}
+	for window, collection := range windows {
+		if total := *collection.Total; total != reported[window] && total != reported[window]-heads[window] {
+			return nil, commitOmittedTotal, nil
+		}
+	}
+	for seam := 1; seam < calendarCommitWindows; seam++ {
+		if heads[seam] == 0 && tails[seam] == 0 {
+			continue
+		}
+		offset := int(bounds[seam].Sub(first) / (24 * time.Hour))
+		commits[offset] += tails[seam]
+		if heads[seam] != tails[seam] {
+			if heads[seam] > daily[offset]-commits[offset] {
+				return nil, commitOmittedExceeds, nil
+			}
+			commits[offset] += heads[seam]
+		}
+	}
+	placed := 0
+	for _, count := range commits {
+		placed += count
+	}
+	counted := 0
+	if *windows[0].Total == reported[0] {
+		counted = heads[0]
+	}
+	if *whole != placed+counted {
+		return nil, commitOmittedWindowTotal, nil
+	}
+	return commits, "", nil
 }
 
 // isRepositoryName admits a repository name through the code host's own

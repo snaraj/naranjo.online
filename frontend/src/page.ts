@@ -12,10 +12,9 @@
 
 import { section, type PageSection } from './lib/blocks.ts';
 import { bossTicker } from './lib/blocks/bossTicker.ts';
-import { contributionCalendar } from './lib/blocks/contributionCalendar.ts';
 import { mediaGallery } from './lib/blocks/mediaGallery.ts';
 import { projectsCommits } from './lib/blocks/projectsCommits.ts';
-import { tokenBoard } from './lib/blocks/tokenBoard.ts';
+import { trackerChronicle } from './lib/blocks/trackerChronicle.ts';
 import { workHistory } from './lib/blocks/workHistory.ts';
 
 /* THE LEDGER'S FOUR SECTIONS (owner design decision, 2026-09-11, issue 318),
@@ -54,8 +53,8 @@ import { workHistory } from './lib/blocks/workHistory.ts';
  * moved renumbers itself and no two can claim the same number. */
 export const page: readonly PageSection[] = [
   section('work', 'Professional Experience', [workHistory], { mark: 'work' }),
-  section('projects', 'Projects · Commits', [projectsCommits], { mark: 'folder' }),
-  section('trackers', 'Trackers', [tokenBoard, contributionCalendar, bossTicker], {
+  section('projects', 'Ongoing Work', [projectsCommits], { mark: 'folder' }), // owner direction, 2026-10-16; id unchanged
+  section('trackers', 'Trackers', [trackerChronicle, bossTicker], {
     mark: 'chip',
     layout: 'stack'
   }),

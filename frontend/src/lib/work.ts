@@ -82,7 +82,7 @@ export const workEntries: readonly WorkEntry[] = [
   {
     company: 'Panasonic Avionics Corporation',
     short: 'Panasonic Avionics',
-    years: '2023 —',
+    years: '2023 – present',
     markFile: 'panasonic.png',
     role: 'Software Engineer, Automation, DevOps and Tools',
     dates: 'July 2023 – Present',
@@ -100,7 +100,7 @@ export const workEntries: readonly WorkEntry[] = [
   {
     company: 'Fathom5',
     short: 'Fathom5',
-    years: '2022 – 23',
+    years: '2022 – 2023',
     markFile: 'fathom5.png',
     role: 'Software Engineer, Condition Based Maintenance',
     dates: 'Mar 2022 – July 2023',

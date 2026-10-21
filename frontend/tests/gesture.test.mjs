@@ -772,7 +772,8 @@ test('no component wires its own pointer drag; the gesture layer is one module',
     // component reaching for setPointerCapture or a raw pointer listener is a
     // second gesture implementation being born — which is exactly why the
     // daily line's scrubber (issue 316) went into lib/gesture.ts as
-    // scrubAlong instead of into Sparkline.svelte.
+    // scrubAlong instead of into its own component — and why the Chronicle's
+    // chart and calendar reuse it rather than growing a second one.
     assert.doesNotMatch(
       source,
       /setPointerCapture|addEventListener\(\s*'pointer/,
@@ -813,18 +814,18 @@ test('every horizontal gesture surface declares a touch-action that spares the p
   // scrub takes the same axis a swipe does and owes the same declaration
   // (issue 316).
   //
-  // The sheet joins the component sources because a declaration is pinned
-  // WHERE IT IS DECIDED: the gallery states its own inside its component, and
-  // the daily line's paint lives in the page's token sheet with the rest of
-  // that chart. Reading both is what keeps this sweep true for either home
-  // instead of forcing a rule to move for a test's convenience.
-  const sheet = await read('../src/styles.css');
+  // A declaration is pinned WHERE IT IS DECIDED, and every surface decides its
+  // own now: the gallery inside its component, and the Chronicle's chart and
+  // calendar inside theirs. The page's token sheet used to join the sweep
+  // because the daily line's paint lived there; that line retired with the
+  // board (2026-10-16), and reading the sheet beside each component would let
+  // one surface's declaration stand in for another's missing one.
   const bound = Object.entries(componentSources).filter(([, source]) =>
     /use:(swipeHorizontal|scrubAlong)/.test(source)
   );
   assert.ok(bound.length > 1, 'fewer than two gesture surfaces remain; this pin guards almost nothing');
   for (const [name, source] of bound) {
-    const declarations = `${source}\n${sheet}`;
+    const declarations = source;
     assert.match(
       declarations,
       /touch-action:\s*pan-y/,

@@ -128,6 +128,29 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
       }
     }
   }
+  /* The daily commit counts are admitted by SHAPE, the same way the weeks are:
+   * the same number of seven-day columns, every cell a count, and a total that
+   * is exactly their sum. Any drift refuses the whole payload rather than
+   * printing a commit figure nobody can reconcile with its own days. */
+  const { commitWeeks, totalCommits } = document;
+  if ((commitWeeks === undefined) !== (totalCommits === undefined)) {
+    return null;
+  }
+  if (commitWeeks !== undefined) {
+    if (!Array.isArray(commitWeeks) || commitWeeks.length !== weeks.length || !isCount(totalCommits)) {
+      return null;
+    }
+    let sum = 0;
+    for (const week of commitWeeks) {
+      if (!Array.isArray(week) || week.length !== 7 || !week.every(isCount)) {
+        return null;
+      }
+      sum += (week as number[]).reduce((total, day) => total + day, 0);
+    }
+    if (sum !== totalCommits) {
+      return null;
+    }
+  }
   const activity: VCSActivityData = {
     totalContributions,
     weeks: weeks as number[][],
@@ -141,6 +164,10 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
   };
   if (typeof endDate === 'string') {
     activity.endDate = endDate;
+  }
+  if (commitWeeks !== undefined) {
+    activity.commitWeeks = commitWeeks as number[][];
+    activity.totalCommits = totalCommits as number;
   }
   if (coverage !== undefined) {
     activity.coverage = coverage;
@@ -243,14 +270,6 @@ export function isValidRepoSlug(repo: string): boolean {
 /* The repository's own address, or null when the slug does not validate. */
 export function commitRepoUrl(repo: string): string | null {
   return isValidRepoSlug(repo) ? `${projectHost}/${repo}` : null;
-}
-
-/* The accessible name a repo-name link carries — the same shape
- * projectLinkLabel already gives the Coding Projects feed's own outbound
- * links, so a reader hears one convention for "this leaves the page"
- * everywhere on the page. */
-export function commitRepoLinkLabel(repo: string): string {
-  return `${repo} on ${projectHostLabel}, opens in a new tab`;
 }
 
 /* The trailing "(#123)" a squash-merged subject line carries. Anchored at
