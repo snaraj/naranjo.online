@@ -34,11 +34,14 @@
     <!-- The page's two faces, asked for with the page rather than after the
       stylesheet has been read: the application waits for them before it
       paints (src/main.ts), so the sooner they are here the sooner the page
-      is. The latin subsets only: the page's text is latin, and the other
-      subsets are fetched if a word ever reaches them. -->
+      is. The latin subsets, and the one other subset the page always draws
+      from: the name's dotless j is in Instrument Serif's latin-ext file, which
+      the display stack waits for too. Any other subset is fetched if a word
+      ever reaches it. -->
     <link rel="preload" href="/src/assets/fonts/Archivo-Variable-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/src/assets/fonts/JetBrainsMono-Variable-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/src/assets/fonts/InstrumentSerif-Regular-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/src/assets/fonts/InstrumentSerif-Regular-latin-ext.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/src/assets/fonts/CormorantGaramond-Variable-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/src/assets/fonts/UnifrakturMaguntia-Regular-latin.woff2" as="font" type="font/woff2" crossorigin />
     <!-- Link-preview identity (owner directive, 0.1.52: "when I text a link

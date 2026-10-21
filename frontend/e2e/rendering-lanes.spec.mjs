@@ -11110,6 +11110,114 @@ for (const viewport of [
   });
 }
 
+/* THE NAME'S OWN SUBSET THAT MISSES THE MOUNT MOVES NOTHING EITHER (the review
+ * of fc87a89). The lane above holds every file at once. This one holds only
+ * Instrument Serif's latin-ext file, the one the name's dotless j is drawn
+ * from, and lets every other file load. Waited for with no text, the display
+ * stack counted as loaded on its latin file alone, the page mounted with it
+ * unmarked, and the j swapped into the painted name when its file landed
+ * (Chromium: 288.9px to 273.1px at 1440px, 210.1px to 198.6px at 390px). Now
+ * the display stack must mount marked; J must hang over the stem of the j the
+ * fallback face drew, which the stylesheet's Instrument Serif metrics alone
+ * put 0.17em to its right; and the name and the page must not move when the
+ * held file lands. Motion is reduced so J is level and his body's middle is
+ * his square's. */
+for (const viewport of [
+  { width: 1440, height: 900 },
+  { width: 390, height: 844 },
+]) {
+  test(`the name's late subset moves nothing when it lands, and J keeps to the drawn j, at ${viewport.width}px`, async ({ page }) => {
+    let release = () => {};
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/InstrumentSerif-Regular-latin-ext*.woff2', async (route) => {
+      await released;
+      await route.continue();
+    });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.setViewportSize(viewport);
+    await page.addInitScript(() => {
+      window.__lateShift = { supported: false, armed: false, total: 0 };
+      const types = window.PerformanceObserver?.supportedEntryTypes ?? [];
+      if (!types.includes('layout-shift')) return;
+      window.__lateShift.supported = true;
+      new window.PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (window.__lateShift.armed && !entry.hadRecentInput) window.__lateShift.total += entry.value;
+        }
+      }).observe({ type: 'layout-shift', buffered: false });
+    });
+    /* Not visit(): the load event waits for the preloaded file this lane is
+       holding. settled() still waits for the application. */
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await settled(page);
+    expect(
+      await page.evaluate(() => window.document.documentElement.getAttribute('data-face-display')),
+      'the page mounted with the display stack unmarked while the j it draws was still on its way'
+    ).toBe('fallback');
+    const measure = () =>
+      page.evaluate(() => {
+        const heading = window.document.querySelector('h1');
+        const letter = window.document.querySelector('.page-name-j');
+        const art = getComputedStyle(letter, '::before');
+        const size = parseFloat(art.fontSize);
+        const canvas = window.document.createElement('canvas');
+        canvas.width = Math.ceil(size * 2);
+        canvas.height = Math.ceil(size * 2);
+        const ink = canvas.getContext('2d', { willReadFrequently: true });
+        ink.font = `${art.fontWeight} ${size}px ${art.fontFamily}`;
+        const pad = size / 2;
+        const base = size * 1.5;
+        ink.fillText(String.fromCodePoint(0x237), pad, base);
+        const row = ink.getImageData(0, Math.round(base - ink.measureText('x').actualBoundingBoxAscent / 2), canvas.width, 1).data;
+        let first = -1;
+        let last = -1;
+        for (let x = 0; x < canvas.width; x += 1) {
+          if (row[x * 4 + 3] > 128) {
+            if (first < 0) first = x;
+            last = x;
+          }
+        }
+        const square = window.document.querySelector('.j-flight').getBoundingClientRect();
+        const round = (value) => Math.round(value * 100) / 100;
+        const box = (node) => {
+          const rect = node.getBoundingClientRect();
+          return [rect.x, rect.y, rect.width, rect.height].map(round);
+        };
+        return {
+          stem: first < 0 ? null : letter.getBoundingClientRect().left + (first + last) / 2 - pad,
+          body: square.left + ((0.075 + 0.8875) / 2) * square.width,
+          name: box(heading),
+          j: box(window.document.querySelector('.j-flight')),
+          height: window.document.documentElement.scrollHeight,
+          stack: getComputedStyle(heading).fontFamily,
+        };
+      });
+    const before = await measure();
+    expect(before.stem, 'the fallback face drew the dotless j with no stem to measure').not.toBeNull();
+    expect(
+      Math.abs(before.body - before.stem),
+      `J is ${(before.body - before.stem).toFixed(1)}px off the stem of the j the fallback face drew`
+    ).toBeLessThanOrEqual(2);
+    await page.evaluate(() => {
+      window.__lateShift.armed = true;
+    });
+    release();
+    await page.evaluate(() => window.document.fonts.load("1em 'Instrument Serif'", String.fromCodePoint(0x237)));
+    await settled(page);
+    const after = await measure();
+    expect(after.stack, 'the name is set in its late face').not.toMatch(/Instrument Serif/);
+    expect(after.name, 'the name moved when the file its j is drawn from landed').toEqual(before.name);
+    expect(after.j, 'J moved when the file the j is drawn from landed').toEqual(before.j);
+    expect(after.height, 'the page changed height when the file the j is drawn from landed').toBe(before.height);
+    const shift = await page.evaluate(() => window.__lateShift);
+    if (shift.supported) {
+      expect(shift.total, 'the engine recorded a layout shift as the j landed').toBe(0);
+    }
+  });
+}
+
 /* ===========================================================================
  * The Hairline icon family (owner design decision, 2026-09-11, issue 313)
  *

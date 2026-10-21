@@ -52,6 +52,16 @@ const faces = {
   tome: "1em 'Cormorant Garamond'",
   initial: "1em 'UnifrakturMaguntia'",
 };
+// What a stack must be able to draw before it counts as loaded. A face is split
+// into files by unicode-range, and fonts.load() with no text loads only the
+// file a space falls in, the latin one. The name's dotless j (U+0237, drawn by
+// .page-name-j in styles.css) is in Instrument Serif's latin-ext file, so the
+// display stack asks for a latin letter and that j together, and loads only
+// once both files are in. Waited for with no text, the latin-ext file could
+// miss the bound unmarked and swap its j into the painted name: the review of
+// fc87a89 held that one file and the heading narrowed from 288.9px to 273.1px
+// at 1440px when it landed.
+const drawn: Record<string, string> = { display: `A${String.fromCodePoint(0x237)}` };
 const loaded = new Set<string>();
 const start = () => {
   for (const stack of Object.keys(faces)) {
@@ -63,7 +73,7 @@ const start = () => {
 Promise.race([
   Promise.all(
     Object.entries(faces).map(([stack, face]) =>
-      document.fonts.load(face).then((found) => {
+      document.fonts.load(face, drawn[stack]).then((found) => {
         if (found.length > 0) loaded.add(stack);
       })
     )

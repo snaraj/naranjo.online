@@ -38,6 +38,50 @@
     document.documentElement.dataset.sky = phase;
     syncThemeColor();
   });
+
+  /* J OVER THE j THE ENGINE DREW (the review of fc87a89). The stylesheet seats
+     J by Instrument Serif's own advances (--j-stem). When that face missed the
+     mount (main.ts marks the display stack), the name is set in the device's
+     serif, whose j and o are wider, and J hung 0.17em right of the stem
+     (measured: 20.7px at 1440px). So then, and only then, the stem is found
+     where it was drawn: the dotless j drawn once in the face the engine chose
+     for it, its ink read half way up the x-height, and J's offset from his
+     seat written in pixels. An effect runs before the browser paints, so he
+     is never seen elsewhere, and he follows the name when it changes size. */
+  $effect(() => {
+    const name = document.getElementById('page-title');
+    const letter = name?.querySelector('.page-name-j');
+    const seat = name?.querySelector('.page-j-seat');
+    if (!name || !letter || !seat || document.documentElement.getAttribute('data-face-display') !== 'fallback') return;
+    const place = (): void => {
+      const art = getComputedStyle(letter, '::before');
+      const size = parseFloat(art.fontSize);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = Math.ceil(size * 2);
+      const ink = canvas.getContext('2d', { willReadFrequently: true });
+      if (ink === null || !(size > 0)) return;
+      ink.font = `${art.fontWeight} ${size}px ${art.fontFamily}`;
+      const pad = size / 2;
+      const base = size * 1.5;
+      ink.fillText(String.fromCodePoint(0x237), pad, base);
+      const row = ink.getImageData(0, Math.round(base - ink.measureText('x').actualBoundingBoxAscent / 2), canvas.width, 1).data;
+      let first = -1;
+      let last = -1;
+      for (let x = 0; x < canvas.width; x += 1) {
+        if (row[x * 4 + 3] > 128) {
+          if (first < 0) first = x;
+          last = x;
+        }
+      }
+      if (first < 0) return;
+      const stem = letter.getBoundingClientRect().left + (first + last) / 2 - pad;
+      name.style.setProperty('--j-stem', `${(stem - seat.getBoundingClientRect().left).toFixed(2)}px`);
+    };
+    place();
+    const watcher = new ResizeObserver(place);
+    watcher.observe(name);
+    return () => watcher.disconnect();
+  });
 </script>
 
 <!-- The description meta moved to index.html's static head with the

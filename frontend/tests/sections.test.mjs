@@ -778,11 +778,6 @@ test('the page asks for its faces with the document and paints in them', async (
     ...styles.matchAll(/font-family: '([^']+)';\s*font-style: normal;[^}]*?src: url\('\.\/assets\/fonts\/([^']+-latin\.woff2)'\)/g),
   ];
   assert.equal(upright.length, 5, 'expected one upright latin file for each of the five families');
-  assert.deepEqual(
-    [...preloaded].sort(),
-    upright.map((match) => match[2]).sort(),
-    'the document preloads a different set of files than the faces the stylesheet declares'
-  );
   const faces = /const faces = \{([^}]*)\};/.exec(entry);
   assert.ok(faces, 'main.ts no longer names the faces it waits for');
   const stacks = [...faces[1].matchAll(/(\w+): "1em '([^']+)'"/g)].map((match) => ({ stack: match[1], family: match[2] }));
@@ -791,12 +786,48 @@ test('the page asks for its faces with the document and paints in them', async (
     upright.map((match) => match[1]).sort(),
     'main.ts waits for a different set of faces than the stylesheet declares'
   );
+  /* A STACK WAITS FOR WHAT IT DRAWS, AND THE DOCUMENT ASKS FOR IT (the review
+     of fc87a89). A face is split into files by unicode-range and fonts.load()
+     with no text loads only the latin one, so the display stack names the
+     dotless j the stylesheet draws for the name, U+0237 in Instrument Serif's
+     latin-ext file, beside a latin letter, and counts as loaded only with
+     both files in. Every file a stack's sample reaches is preloaded: the five
+     latin files, and the latin-ext file of each family whose sample goes past
+     U+00FF. */
+  const drawn = /^const drawn: Record<string, string> = \{(.*)\};$/m.exec(entry);
+  assert.ok(drawn, 'main.ts no longer names what each stack must be able to draw');
+  const samples = Object.fromEntries(
+    [...drawn[1].matchAll(/(\w+): `([^`]*)`/g)].map(([, stack, text]) => [
+      stack,
+      text.replace(/\$\{String\.fromCodePoint\(0x([0-9a-f]+)\)\}/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16))),
+    ])
+  );
+  const dotless = /\.page-name-j::before \{\s*content: '\\([0-9a-f]{4})';/i.exec(styles);
+  assert.ok(dotless, 'the name no longer draws its j from a code point in generated content');
+  assert.ok(
+    (samples.display ?? '').includes(String.fromCodePoint(Number.parseInt(dotless[1], 16))),
+    `the display stack does not wait for U+${dotless[1].toUpperCase()}, the j the name draws`
+  );
+  assert.match(samples.display ?? '', /[A-Za-z]/, 'the display stack waits for its j without a latin letter, so its latin file can still be late');
+  const extended = stacks
+    .filter(({ stack }) => [...(samples[stack] ?? '')].some((character) => character.codePointAt(0) > 0xff))
+    .map(({ family }) => {
+      const file = new RegExp(`font-family: '${family}';\\s*font-style: normal;[^}]*?src: url\\('\\./assets/fonts/([^']+-latin-ext\\.woff2)'\\)`).exec(styles);
+      assert.ok(file, `${family} draws past latin but declares no upright latin-ext file`);
+      return file[1];
+    });
+  assert.ok(extended.length > 0, 'no stack waits for anything past latin, so the dotless j can still land late');
+  assert.deepEqual(
+    [...preloaded].sort(),
+    [...upright.map((match) => match[2]), ...extended].sort(),
+    'the document preloads a different set of files than the subsets the faces must draw'
+  );
   const wait = /const faceWait = (\d+);/.exec(entry);
   assert.ok(wait && Number(wait[1]) > 0 && Number(wait[1]) <= 1000, 'the mount must wait for the faces a moment at most');
   assert.match(
     entry,
-    /Promise\.race\(\[\s*Promise\.all\(\s*Object\.entries\(faces\)\.map\(\(\[stack, face\]\) =>\s*document\.fonts\.load\(face\)\.then\(\(found\) => \{\s*if \(found\.length > 0\) loaded\.add\(stack\);\s*\}\)\s*\)\s*\),\s*new Promise\(\(resolve\) => setTimeout\(resolve, faceWait\)\),\s*\]\)\.then\(start, start\);/,
-    'the mount no longer waits for the faces, or waits without a bound, or never runs when a face fails, or counts a face as loaded that did not load'
+    /Promise\.race\(\[\s*Promise\.all\(\s*Object\.entries\(faces\)\.map\(\(\[stack, face\]\) =>\s*document\.fonts\.load\(face, drawn\[stack\]\)\.then\(\(found\) => \{\s*if \(found\.length > 0\) loaded\.add\(stack\);\s*\}\)\s*\)\s*\),\s*new Promise\(\(resolve\) => setTimeout\(resolve, faceWait\)\),\s*\]\)\.then\(start, start\);/,
+    'the mount no longer waits for the faces, or for what each draws, or waits without a bound, or never runs when a face fails, or counts a face as loaded that did not load'
   );
   assert.equal(entry.match(/mount\(App/g)?.length, 1, 'the application mounts somewhere other than behind the faces');
   assert.equal(entry.match(/\bstart\b/g)?.length, 3, 'start runs somewhere other than as the race’s two answers, so the page can mount before its faces');
