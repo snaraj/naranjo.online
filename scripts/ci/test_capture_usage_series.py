@@ -3165,6 +3165,10 @@ class ImportSurfaceTest(unittest.TestCase):
             # entry, and a bare `except OSError` cannot. It is a table of
             # integers with no callables at all.
             "errno",
+            # `fcntl` joined with issue #382's second review round: `flock`
+            # holds the kept tree for one run at a time. Its other members
+            # (`fcntl`, `ioctl`) stay out by the exact attribute pin below.
+            "fcntl",
             "json",
             "os",
             "pathlib",
@@ -3203,18 +3207,16 @@ class ImportSurfaceTest(unittest.TestCase):
             # entered through `dir_fd` with O_NOFOLLOW (mkdir), and a kept
             # journal opened ONCE — created at 0600 when absent — to be
             # compared and have only its new tail appended (O_RDWR, O_CREAT,
-            # O_APPEND). lockf and F_LOCK hold the kept tree for one run at a
-            # time (2026-10-22 review of e63bd72, finding 3): a second run
-            # waits rather than appending the same tail twice. Nothing is
-            # renamed, truncated or removed — the forbidden set below still
+            # O_APPEND). The run lock is `fcntl.flock`, pinned below, and
+            # not `lockf`: a record lock is released when the process closes
+            # ANY descriptor for the file (2026-10-22 review of 9aad77b,
+            # finding 1). Nothing is renamed, truncated or removed — the forbidden set below still
             # refuses every call that would — and none of these creates a
             # process or opens a socket, which is what this pin exists to
             # keep out.
-            "F_LOCK",
             "O_APPEND",
             "O_CREAT",
             "O_RDWR",
-            "lockf",
             "mkdir",
         }
     )
@@ -3305,6 +3307,20 @@ class ImportSurfaceTest(unittest.TestCase):
             and node.value.id == "os"
         }
         self.assertEqual(named, set(self.ALLOWED_OS_ATTRIBUTES))
+
+    # Every `fcntl.` attribute the module may name: the run lock and nothing
+    # else, so `fcntl.fcntl` and `fcntl.ioctl` arrive only by a widening here.
+    ALLOWED_FCNTL_ATTRIBUTES = frozenset({"LOCK_EX", "flock"})
+
+    def test_the_fcntl_surface_is_exactly_the_run_lock(self):
+        named = {
+            node.attr
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "fcntl"
+        }
+        self.assertEqual(named, set(self.ALLOWED_FCNTL_ATTRIBUTES))
 
     def test_the_enumerated_os_attributes_cannot_spawn_or_connect(self):
         # Guards the attribute allowlist against itself, the way the module
@@ -6968,16 +6984,156 @@ class RetainedJournalsTest(unittest.TestCase):
         self.assertEqual(result[3]["retain_conflicts"], 1)
 
     HOLDER = (
-        "import os, sys\n"
+        "import fcntl, os, sys\n"
         "lock = os.open(sys.argv[1], os.O_RDWR)\n"
         "try:\n"
-        "    os.lockf(lock, os.F_TLOCK, 0)\n"
+        "    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
         "except OSError:\n"
         "    print('busy', flush=True)\n"
         "    sys.exit(1)\n"
         "print('held', flush=True)\n"
         "sys.stdin.readline()\n"
     )
+
+    def probe(self):
+        """What another process finds the run lock to be: 'held' or 'busy'."""
+        with subprocess.Popen(
+            [sys.executable, "-I", "-c", self.HOLDER, str(self.kept / _RT.RETAIN_LOCK_NAME)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        ) as other:
+            assert other.stdout is not None
+            return other.stdout.readline().strip()
+
+    def test_no_second_name_for_the_run_lock_can_release_it(self):
+        # 2026-10-22 review of 9aad77b, finding 1, reproduced as written: the
+        # lock file has a second name in the kept tree, the live tree holds a
+        # journal under that name, and the walk opens it, refuses it for its
+        # second name and closes it. A record lock was released by that close
+        # and another run could take it. A second name planted before the run
+        # and one planted once the lock is held are both covered: no refusal
+        # at open could see the second, so ownership itself must survive.
+        (self.live / "alias.jsonl").write_text(
+            "\n".join([declaration_line(), turn_model_line(exact_identifier(self.MEMBER)), running_line(100)]) + "\n",
+            encoding="utf-8",
+        )
+        for planted in ("before", "after"):
+            with self.subTest(planted=planted):
+                shutil.rmtree(self.kept, ignore_errors=True)
+                self.kept.mkdir(mode=0o700)
+                lock = self.kept / _RT.RETAIN_LOCK_NAME
+                if planted == "before":
+                    lock.write_bytes(b"")
+                    os.link(lock, self.kept / "alias.jsonl")
+                retain = _RT.open_retained(self.kept)
+                try:
+                    if planted == "after":
+                        os.link(lock, self.kept / "alias.jsonl")
+                    self.assertEqual(self.probe(), "busy")
+                    counters = _RT.new_counters()
+                    rows = _RT.read_running_totals(
+                        str(self.live), counters, [], scope=RUNNING_SCOPE, carried={}, retain=retain
+                    )
+                    for _ in rows:
+                        pass
+                    self.assertEqual(counters["retain_conflicts"], 1, "the aliased journal was not the one refused")
+                    self.assertEqual(self.probe(), "busy", "the walk released the run lock to another process")
+                finally:
+                    retain.close()
+                self.assertEqual(self.probe(), "held")
+
+    def test_a_run_releases_the_root_and_lock_it_holds(self):
+        retain = _RT.open_retained(self.kept)
+        held = (retain.lock, retain.directory)
+        self.walk(self.live, retain)
+        for descriptor in held:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def replace_root(self):
+        """Rename the kept root aside and put a link to an empty directory in its place."""
+        aside = self.kept.parent / "aside"
+        outside = self.kept.parent / "outside"
+        outside.mkdir()
+        self.kept.rename(aside)
+        self.kept.symlink_to(outside, target_is_directory=True)
+        return aside, outside
+
+    def test_a_kept_root_replaced_before_the_walk_is_refused(self):
+        # 2026-10-22 review of 9aad77b, finding 2: the run locked one
+        # directory and the path now names another. Nothing in the
+        # replacement may be read or written, and the run says so.
+        self.walk(self.live, _RT.open_retained(self.kept))
+        retain = _RT.open_retained(self.kept)
+        aside, outside = self.replace_root()
+        (outside / "2026" / "08" / "21").mkdir(parents=True)
+        planted = outside / "2026" / "08" / "21" / "pruned.jsonl"
+        planted.write_text(running_line(999_999) + "\n", encoding="utf-8")
+        with self.assertRaises(_RT.CaptureError):
+            self.walk(self.live, retain)
+        self.assertEqual(sorted(p.name for p in outside.rglob("*")), ["08", "2026", "21", "pruned.jsonl"])
+        self.assertEqual(planted.read_text(encoding="utf-8"), running_line(999_999) + "\n")
+
+    class RootSwappedOnOpen:
+        """`os` as the capture sees it, except that opening the kept root
+        renames it aside and makes a fresh directory in its place: the window
+        between holding the root and opening the lock beneath it, which no
+        ordinary schedule reaches on its own."""
+
+        def __init__(self, root, aside):
+            self.root, self.aside, self.swapped = os.fspath(root), os.fspath(aside), False
+
+        def __getattr__(self, name):
+            return getattr(os, name)
+
+        def open(self, target, *args, **kwargs):
+            descriptor = os.open(target, *args, **kwargs)
+            if not self.swapped and "dir_fd" not in kwargs and os.fspath(target) == self.root:
+                self.swapped = True
+                os.rename(self.root, self.aside)
+                os.mkdir(self.root, 0o700)
+            return descriptor
+
+    def test_the_run_lock_is_taken_in_the_root_the_run_holds(self):
+        # Finding 2's other half: the lock and the writes must name ONE
+        # directory, so the lock is opened beneath the held root, never by
+        # its path beside it.
+        self.kept.mkdir(mode=0o700)
+        aside = self.kept.parent / "aside"
+        fake = self.RootSwappedOnOpen(self.kept, aside)
+        _RT.os = fake
+        try:
+            retain = _RT.open_retained(self.kept)
+        finally:
+            _RT.os = os
+        retain.close()
+        self.assertTrue(fake.swapped, "the root was never opened by its path")
+        self.assertEqual([p.name for p in aside.iterdir()], [_RT.RETAIN_LOCK_NAME])
+        self.assertEqual(list(self.kept.iterdir()), [], "the lock was taken in a directory the run does not hold")
+
+    def test_a_kept_root_replaced_during_the_walk_keeps_writing_where_it_was_locked(self):
+        # Finding 2 again, once the walk is under way: every journal opened
+        # after the swap is still written beneath the directory the run
+        # locked, reached by the descriptor it holds, never by its path.
+        reference = self.kept.parent / "reference"
+        self.walk(self.live, _RT.open_retained(reference))
+        expected = sorted(str(p.relative_to(reference)) for p in reference.rglob("*.jsonl"))
+        retain = _RT.open_retained(self.kept)
+        counters = _RT.new_counters()
+        try:
+            rows = _RT.read_running_totals(str(self.live), counters, [], scope=RUNNING_SCOPE, carried={}, retain=retain)
+            next(rows)
+            aside, outside = self.replace_root()
+            for _ in rows:
+                pass
+        finally:
+            retain.close()
+        self.assertEqual(list(outside.iterdir()), [], "a kept journal was written beneath the replacement")
+        self.assertEqual(sorted(str(p.relative_to(aside)) for p in aside.rglob("*.jsonl")), expected)
+        self.assertEqual(counters["kept"], len(expected))
+        for name in expected:
+            self.assertEqual((aside / name).read_bytes(), (reference / name).read_bytes())
 
     def test_a_second_run_waits_for_the_first_and_keeps_nothing_twice(self):
         # Finding 3: two runs that both compared before either appended would

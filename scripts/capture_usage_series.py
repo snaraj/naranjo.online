@@ -234,6 +234,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import errno
+import fcntl
 import json
 import os
 import pathlib
@@ -1137,10 +1138,15 @@ def _descend(parent, name, counters):
         return None
 
 
-def admitted_records(root, counters=None):
+def admitted_records(root, counters=None, anchored=None):
     """Every journal file under root, in one deterministic order, each paired
     with the IDENTITY it had when it was admitted and the ROOTED path by which
     it may be re-opened.
+
+    `anchored`, when given, is the (device, inode) the root must turn out to
+    be once opened: the kept tree's, taken when its run lock was (issue #382).
+    A root that opens as anything else was replaced after that, and is refused
+    before one name in it is read.
 
     DESCRIPTOR-ROOTED TRAVERSAL (2026-08-25 round-5 review, finding 1). The
     previous walk was path-based: it proved containment with `resolve()`, took
@@ -1190,6 +1196,8 @@ def admitted_records(root, counters=None):
     admitted = []
     try:
         root_identity = _identity(os.fstat(anchor))
+        if anchored is not None and root_identity != anchored:
+            raise CaptureError("the retained journal directory was replaced during the run")
         # Annotated because the seed's empty tuple would otherwise narrow the
         # element type to the EMPTY tuple, and every descent below pushes a
         # populated path onto it. The stack holds (open directory descriptor,
@@ -1750,9 +1758,15 @@ MAX_KEPT_LINE_BYTES = 64 << 10
 class RetainedJournals:
     """The walk's own kept copy of a running-totals tree (issue #382).
 
-    `root` is the configured directory, opened by path exactly as the walked
-    root is: it is the trust anchor, not tree content. Everything beneath it
-    is reached through directory descriptors with `O_NOFOLLOW`, as the
+    `root` is the configured directory, opened ONCE, without following a
+    link, by `open_retained`; `directory` is that descriptor, held until
+    `close`, and `identity` the (device, inode) it names. Every write descends
+    from that descriptor and never from the path again, so a root renamed
+    aside and replaced while the run holds it cannot redirect a write
+    (2026-10-22 review of 9aad77b, finding 2); the reads that go back to the
+    path — the union's walk of what is kept, and each kept record's open — are
+    refused unless it still names the locked directory. Beneath the root,
+    every directory is entered through descriptors with `O_NOFOLLOW`, as the
     admission reaches the walked tree, so a link planted anywhere in the kept
     tree is refused rather than written through: a symbolic one by the
     no-follow open, a hard one by its link count.
@@ -1774,28 +1788,41 @@ class RetainedJournals:
     this object holds an exclusive lock on the kept tree from `open_retained`
     until `close`, and a second run — another process, a capture started by
     hand while the scheduled one runs — waits for the first to finish, then
-    compares against what the first wrote.
+    compares against what the first wrote. The lock is `flock`'s, which
+    belongs to the one open file that took it: a record lock (`lockf`) belongs
+    to the PROCESS and is released when the process closes ANY descriptor for
+    the same file, so a second name planted for the lock file, opened and
+    closed by the walk as a refused journal, silently ended the run's hold
+    (2026-10-22 review of 9aad77b, finding 1).
     """
 
-    def __init__(self, root, lock):
+    def __init__(self, root, directory, identity, lock):
         self.root = root
+        self.directory = directory
+        self.identity = identity
         self.lock = lock
 
     def close(self):
         """Release the kept tree to the next run."""
-        if self.lock is not None:
-            os.close(self.lock)
-            self.lock = None
+        for name in ("lock", "directory"):
+            held = getattr(self, name)
+            if held is not None:
+                os.close(held)
+                setattr(self, name, None)
 
     def union(self, records, counters):
         """The walked records plus every kept journal whose live file is gone.
 
         Sorted on the same key the admission sorts on, so a pruned file is
         walked exactly where it used to be and two runs over the same trees
-        produce the same series.
+        produce the same series. Admitted only from the directory this run
+        locked: a path that names another one now is refused, and every kept
+        record carries the locked directory's identity, which its read
+        re-checks (`open_record_file`), so a later swap is refused there too.
         """
         live = {record[2] for record in records}
-        kept = [record for record in admitted_records(self.root, counters) if record[2] not in live]
+        admitted = admitted_records(self.root, counters, anchored=self.identity)
+        kept = [record for record in admitted if record[2] not in live]
         counters["retained"] += len(kept)
         return sorted(records + kept, key=lambda record: "/".join(record[2]))
 
@@ -1807,7 +1834,8 @@ class RetainedJournals:
         try:
             return KeptJournal(self._leaf(directory, components[-1], counters), counters)
         finally:
-            os.close(directory)
+            if directory != self.directory:
+                os.close(directory)
 
     @staticmethod
     def _leaf(directory, name, counters):
@@ -1841,12 +1869,12 @@ class RetainedJournals:
         return os.fdopen(leaf, "r+b")
 
     def _directory(self, components, counters):
-        """The kept tree's directory for `components`, created 0700 where absent."""
-        try:
-            parent = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-        except OSError:
-            counters["unreadable"] += 1
-            return None
+        """The kept tree's directory for `components`, created 0700 where absent.
+
+        Descended from the held root descriptor, never from the path, which
+        is returned itself for a journal at the root and never closed here.
+        """
+        parent = self.directory
         for name in components:
             try:
                 os.mkdir(name, 0o700, dir_fd=parent)
@@ -1854,10 +1882,12 @@ class RetainedJournals:
                 pass
             except OSError:
                 counters["unreadable"] += 1
-                os.close(parent)
+                if parent != self.directory:
+                    os.close(parent)
                 return None
             child = _descend(parent, name, counters)
-            os.close(parent)
+            if parent != self.directory:
+                os.close(parent)
             if child is None:
                 return None
             parent = child
@@ -1937,14 +1967,18 @@ class KeptJournal:
 def open_retained(path):
     """The kept tree's root, created 0700 when absent and locked for this run.
 
-    Refused when it is a link. The PARENT must already exist, for the history
-    store's reason: a mistyped location would otherwise keep nothing, run
-    after run, in silence. The caller releases the lock with `close`, or by
-    exiting; a second run waits on it (see `RetainedJournals`).
+    Refused when it is a link or not a directory: the root is opened ONCE,
+    without following a link, and that descriptor is the run's root from here
+    on (see `RetainedJournals`). The PARENT must already exist, for the
+    history store's reason: a mistyped location would otherwise keep nothing,
+    run after run, in silence. The caller releases the lock and the root with
+    `close`, or by exiting; a second run waits on the lock.
 
-    The lock file is opened without following a link and is never read or
-    written, only locked: whatever a planted entry in its place names, the
-    walk can at most hold a lock on it, never change it.
+    The lock file is opened beneath the held root without following a link,
+    and is never read or written, only locked: whatever a planted entry in its
+    place names, the walk can at most hold a lock on it, never change it, and
+    `flock` binds the hold to this one open file, so no other name for it
+    that the walk opens and closes can let it go.
     """
     try:
         os.mkdir(path, 0o700)
@@ -1953,15 +1987,9 @@ def open_retained(path):
     except OSError:
         raise CaptureError("the retained journal directory cannot be created")
     try:
-        info = os.lstat(path)
-    except OSError:
-        raise CaptureError("the retained journal directory cannot be read")
-    if (info.st_mode & FILE_TYPE_MASK) != DIRECTORY:
-        raise CaptureError("the retained journal directory is not a directory")
-    try:
         root = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError:
-        raise CaptureError("the retained journal directory cannot be read")
+        raise CaptureError("the retained journal directory is not a directory, or cannot be read")
     try:
         lock = os.open(
             RETAIN_LOCK_NAME,
@@ -1970,15 +1998,15 @@ def open_retained(path):
             dir_fd=root,
         )
     except OSError:
-        raise CaptureError("the retained journal lock cannot be opened")
-    finally:
         os.close(root)
+        raise CaptureError("the retained journal lock cannot be opened")
     try:
-        os.lockf(lock, os.F_LOCK, 0)
+        fcntl.flock(lock, fcntl.LOCK_EX)
     except OSError:
         os.close(lock)
+        os.close(root)
         raise CaptureError("the retained journal lock cannot be taken")
-    return RetainedJournals(path, lock)
+    return RetainedJournals(path, root, _identity(os.fstat(root)), lock)
 
 
 def new_session():

@@ -22,7 +22,7 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   no prompt, reply, title, path, branch or identifier can be kept. A kept
   journal is only ever extended, never rewritten, renamed or removed. It is
   refused when it is a link or a second name, compared line by line, and
-  written by one run at a time (#382).
+  written by one run at a time, beneath the one root that run opened (#382).
 
 ## [0.1.97] - 2026-10-21
 

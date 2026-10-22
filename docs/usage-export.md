@@ -919,7 +919,15 @@ pruned by the tool, and the kept tree was the only record of them.
 first, then compares against what the first wrote. This applies even to a
 capture started by hand while the scheduled one runs. Without the lock, two
 runs could append the same tail, and the doubled readings would replay as a
-restart.
+restart. The lock belongs to the one open file that took it (`flock`), so no
+other name for the lock file, opened and closed by the walk, can release it.
+
+**One root per run.** The kept root is opened once, without following a link,
+and the run keeps that directory open until it ends. Every write descends from
+it, never from the path, and the kept tree is read only while the path still
+names it, so a root renamed aside and replaced mid-run redirects nothing: a
+replacement found before the walk stops the run, and one made during the walk
+is neither read nor written.
 
 `retain_conflicts` above zero means a journal the tool rewrote rather than
 extended. It is worth a look; nothing is lost either way.
