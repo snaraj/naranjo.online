@@ -791,6 +791,15 @@ for triple in $MERGE_CAPTURES; do
         if [ -f "$HISTORY_DIR/$key.verified.json" ]; then
             set -- "$@" --verified-readings "$HISTORY_DIR/$key.verified.json"
         fi
+        # A running-totals tree is pruned by the tool that writes it, so the
+        # capture keeps each journal's accounting beside the stores and walks
+        # it once the journal is gone (issue #382). Machine-local, private,
+        # never sealed or pushed.
+        if [ "$format" = running-totals ]; then
+            mkdir -m 700 -p "$HISTORY_DIR/retained" \
+                || fail "the retained journal directory could not be created"
+            set -- "$@" --retain-dir "$HISTORY_DIR/retained/$key"
+        fi
     fi
     begin "recapture-$key"
     stamped sandbox-exec -f "$PRODUCER_PROFILE" \
