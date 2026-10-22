@@ -3172,8 +3172,8 @@ class ImportSurfaceTest(unittest.TestCase):
     )
 
     # Every `os.` attribute the module is allowed to name. Descriptor-rooted
-    # reading and nothing else: no process, no network, no filesystem
-    # mutation.
+    # reading, and descriptor-rooted writing into the walk's own kept tree:
+    # no process, no network.
     ALLOWED_OS_ATTRIBUTES = frozenset(
         {
             "O_CLOEXEC",
@@ -3193,6 +3193,24 @@ class ImportSurfaceTest(unittest.TestCase):
             "listdir",
             "lstat",
             "open",
+            # These six joined with issue #382: the walk keeps each journal's
+            # accounting projection (`RetainedJournals`) so the tool that
+            # writes the journals can no longer erase what the series is built
+            # from. They are the EXTEND-ONLY write half of the descriptor-rooted
+            # discipline the read half follows: a directory made and then
+            # entered through `dir_fd` with O_NOFOLLOW (mkdir), a kept journal
+            # created exclusively at 0600 (O_WRONLY, O_CREAT, O_EXCL), and an
+            # existing one opened once to be compared and have only its new
+            # tail appended (O_RDWR, O_APPEND). Nothing is renamed, truncated
+            # or removed — the forbidden set below still refuses every call
+            # that would — and none of these creates a process or opens a
+            # socket, which is what this pin exists to keep out.
+            "O_APPEND",
+            "O_CREAT",
+            "O_EXCL",
+            "O_RDWR",
+            "O_WRONLY",
+            "mkdir",
         }
     )
 
@@ -6651,6 +6669,213 @@ class CorrectedDayTest(unittest.TestCase):
         )
         self.assertEqual(merged[0]["totals"], [120])
         self.assertEqual(merged[5], set())
+
+
+class RetainedJournalsTest(unittest.TestCase):
+    """The walk keeps its own copy of every journal's accounting (issue #382).
+
+    The tool that writes running-totals journals prunes them, and on
+    2026-10-22 a correction proven from pruned files' opening balances could
+    no longer be proven by anything. These pin the four promises the kept
+    tree makes: a kept journal replays EXACTLY as its live file did, a pruned
+    file keeps counting, nothing but accounting is kept, and a kept journal
+    is only ever extended, through no link.
+    """
+
+    MEMBER = EXACT_MEMBERS[0]
+    OTHER = EXACT_MEMBERS[1]
+    PRIVATE = (
+        "a sentence nobody outside this machine may read",
+        "/home/someone/work/a-private-project",
+        "someone/secret-feature",
+        "a-private-tool",
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "the-parent-thread-identifier",
+    )
+
+    def tree(self):
+        """Journals covering every case the reader distinguishes."""
+        balance = OpeningBalanceTest()
+        prompt = json.dumps(
+            {"type": "response_item", "payload": {"type": "message", "content": [{"text": self.PRIVATE[0]}]}}
+        )
+        return {
+            # A spawned thread whose first reading is an opening balance.
+            "2026/08/20/review.jsonl": [
+                declaration_line(parent=self.PRIVATE[5]),
+                prompt,
+                counted_line("2026-08-20T09:00:01.000Z", balance.CARRIED, balance.TURN),
+                turn_model_line(exact_identifier(self.MEMBER), stamp="2026-08-20T09:00:02.000Z"),
+                counted_line("2026-08-20T10:00:00.000Z", balance.LATER),
+            ],
+            # A top-level session that switches model, repeats a reading and restarts lower.
+            "2026/08/21/session.jsonl": [
+                declaration_line(stamp="2026-08-21T08:00:00.000Z"),
+                session_meta_line(),
+                turn_model_line(exact_identifier(self.MEMBER), stamp="2026-08-21T08:00:01.000Z"),
+                counted_line("2026-08-21T08:01:00.000Z", five_way(100, 40, 0, 20, 5)),
+                counted_line("2026-08-21T08:02:00.000Z", five_way(100, 40, 0, 20, 5)),
+                prompt,
+                turn_model_line(exact_identifier(self.OTHER), stamp="2026-08-21T08:03:00.000Z"),
+                counted_line("2026-08-21T08:04:00.000Z", five_way(300, 90, 10, 60, 15)),
+                counted_line("2026-08-21T08:05:00.000Z", five_way(50, 0, 0, 10, 0)),
+            ],
+            # Readings before any model is declared fold to the residual.
+            "2026/08/22/undeclared.jsonl": [
+                running_line(500, stamp="2026-08-22T07:00:00.000Z"),
+                running_line(800, stamp="2026-08-22T07:30:00.000Z", last=300),
+            ],
+        }
+
+    def write(self, root, files):
+        for name, lines in files.items():
+            path = pathlib.Path(root) / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def walk(self, root, retain=None):
+        counters, sessions, carried = _RT.new_counters(), [], {}
+        rows = list(
+            _RT.read_running_totals(
+                str(root), counters, sessions, scope=RUNNING_SCOPE, carried=carried, retain=retain
+            )
+        )
+        return rows, carried, sessions, counters
+
+    def token_counters(self, counters):
+        names = ("counted", "duplicates", "restarts", "opened", "unattributed", "cross_group", "unpartitioned")
+        return {name: counters[name] for name in names}
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.live = pathlib.Path(scratch.name) / "live"
+        self.kept = pathlib.Path(scratch.name) / "kept"
+        self.live.mkdir()
+        self.write(self.live, self.tree())
+
+    def test_a_kept_journal_replays_exactly_as_its_live_file(self):
+        live = self.walk(self.live, _RT.open_retained(self.kept))
+        kept = self.walk(self.kept)
+        self.assertEqual(live[3]["kept"], 3)
+        self.assertEqual(kept[0], live[0], "the kept journals bill different rows than the live files")
+        self.assertEqual(kept[1], live[1], "the kept journals carry different opening balances")
+        self.assertEqual(kept[2], live[2], "the kept journals describe different sessions")
+        self.assertEqual(self.token_counters(kept[3]), self.token_counters(live[3]))
+        # The fixture exercises what it claims to: a balance, a restart, a duplicate.
+        self.assertEqual(live[1], {"2026-08-20": 1000})
+        self.assertEqual(live[3]["restarts"], 1)
+        self.assertEqual(live[3]["duplicates"], 1)
+
+    def test_a_pruned_journal_still_counts(self):
+        first = self.walk(self.live, _RT.open_retained(self.kept))
+        (self.live / "2026/08/20/review.jsonl").unlink()
+        after = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(after[3]["retained"], 1)
+        self.assertEqual(after[0], first[0], "a pruned journal stopped counting")
+        self.assertEqual(after[1], first[1], "a pruned journal lost its opening balance")
+        self.assertEqual(after[2], first[2])
+
+    def test_a_live_journal_is_walked_once_beside_its_kept_copy(self):
+        self.walk(self.live, _RT.open_retained(self.kept))
+        again = self.walk(self.live, _RT.open_retained(self.kept))
+        alone = self.walk(self.live)
+        self.assertEqual(again[3]["retained"], 0)
+        self.assertEqual(again[3]["kept"], 0, "an unchanged journal was written again")
+        self.assertEqual(again[0], alone[0], "a journal kept AND live was walked twice")
+
+    def test_nothing_but_accounting_is_kept(self):
+        self.walk(self.live, _RT.open_retained(self.kept))
+        kept = "".join(path.read_text() for path in sorted(self.kept.rglob("*.jsonl")))
+        for private in self.PRIVATE:
+            self.assertNotIn(private, kept, "the kept tree holds a private value")
+        self.assertIn('"%s":"%s"' % (_RT.RUNNING_PARENT_FIELD, _RT.RETAINED_PARENT_MARK), kept)
+        for line in kept.splitlines():
+            record = json.loads(line)
+            self.assertLessEqual(set(record), {"type", "timestamp", "payload"})
+            self.assertLessEqual(set(record["payload"]), {_RT.RUNNING_PARENT_FIELD, _RT.MESSAGE_MODEL_FIELD, "info"})
+
+    def test_a_kept_journal_is_only_ever_extended(self):
+        name = "2026/08/21/session.jsonl"
+        self.walk(self.live, _RT.open_retained(self.kept))
+        before = (self.kept / name).read_bytes()
+        # The live file grows: only the tail is appended.
+        with open(self.live / name, "a", encoding="utf-8") as handle:
+            handle.write(counted_line("2026-08-21T09:00:00.000Z", five_way(90, 0, 0, 20, 0)) + "\n")
+        grown = self.walk(self.live, _RT.open_retained(self.kept))
+        after = (self.kept / name).read_bytes()
+        self.assertEqual(grown[3]["kept"], 1)
+        self.assertTrue(after.startswith(before) and len(after) > len(before))
+        # The live file shrinks: the kept journal is not shortened.
+        lines = (self.live / name).read_text().splitlines()
+        (self.live / name).write_text("\n".join(lines[:4]) + "\n")
+        shrunk = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(shrunk[3]["retain_conflicts"], 1)
+        self.assertEqual((self.kept / name).read_bytes(), after, "a kept journal was shortened")
+        # A kept journal that disagrees with its live file is not overwritten.
+        tampered = b'{"payload":{"model":"something-else"}}\n'
+        (self.kept / name).write_bytes(tampered)
+        disagreed = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(disagreed[3]["retain_conflicts"], 1)
+        self.assertEqual((self.kept / name).read_bytes(), tampered, "a disagreeing kept journal was overwritten")
+
+    def test_a_write_cut_short_is_completed_by_the_next_run(self):
+        name = "2026/08/21/session.jsonl"
+        self.walk(self.live, _RT.open_retained(self.kept))
+        whole = (self.kept / name).read_bytes()
+        (self.kept / name).write_bytes(whole[: len(whole) // 2])
+        resumed = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(resumed[3]["kept"], 1)
+        self.assertEqual((self.kept / name).read_bytes(), whole)
+
+    def test_the_kept_tree_is_private(self):
+        self.walk(self.live, _RT.open_retained(self.kept))
+        for path in [self.kept, *self.kept.rglob("*")]:
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode & 0o077, 0, "a kept entry is readable by others: %o" % mode)
+
+    def test_no_link_in_the_kept_tree_is_written_through(self):
+        outside = self.kept.parent / "outside"
+        outside.mkdir()
+        self.kept.mkdir(mode=0o700)
+        # A directory component that is a link, and a leaf that is a link.
+        (self.kept / "2026").symlink_to(outside, target_is_directory=True)
+        retain = _RT.open_retained(self.kept)
+        result = self.walk(self.live, retain)
+        self.assertEqual(list(outside.iterdir()), [], "a kept journal was written through a linked directory")
+        self.assertGreaterEqual(result[3]["symlinks"], 1)
+        (self.kept / "2026").unlink()
+        # The victim is EMPTY: an empty file is a prefix of every projection,
+        # so only the no-follow open stands between it and an append.
+        target = outside / "victim.jsonl"
+        target.write_text("")
+        (self.kept / "2026" / "08" / "21").mkdir(parents=True)
+        (self.kept / "2026" / "08" / "21" / "session.jsonl").symlink_to(target)
+        linked = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(target.read_text(), "", "a kept journal was written through a linked leaf")
+        self.assertGreaterEqual(linked[3]["retain_conflicts"], 1)
+
+    def test_the_kept_root_must_be_a_directory(self):
+        self.kept.symlink_to(self.live, target_is_directory=True)
+        with self.assertRaises(_RT.CaptureError):
+            _RT.open_retained(self.kept)
+
+    def test_a_message_tree_refuses_retention(self):
+        # A message tree has no running-totals projection, and keeping nothing
+        # in silence would read as protection that is not there. The control
+        # proves the tree itself captures, so only the refusal can raise.
+        messages = self.kept.parent / "messages"
+        self.write(messages, {"2026/08/10/session.jsonl": [transcript_line()]})
+        _RT.capture(messages, _RT.FORMAT_MESSAGES, source=MESSAGES_SOURCE)
+        with self.assertRaises(_RT.CaptureError):
+            _RT.capture(messages, _RT.FORMAT_MESSAGES, source=MESSAGES_SOURCE, retain=_RT.open_retained(self.kept))
+
+    def test_the_command_line_keeps_and_refuses_a_missing_parent(self):
+        self.assertEqual(
+            _RT.main(["--transcripts", str(self.live), "--source", RUNNING_SOURCE, "--format",
+                      _RT.FORMAT_RUNNING_TOTALS, "--retain-dir", str(self.kept / "missing" / "codex")]),
+            2,
+        )
 
 
 if __name__ == "__main__":

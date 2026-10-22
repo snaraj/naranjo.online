@@ -858,6 +858,45 @@ its next run says `SERVED`. Then the release with the snapshot deploys. In
 the other order, every push is refused until the exporter catches up, and
 the panel reads `stale` meanwhile.
 
+## The walk keeps its own copy of the journals (issue #382)
+
+The tool that writes the running-totals journals prunes them. On 2026-10-22 its
+own state database listed 1,957 threads while 163 journal files remained, and a
+hand correction proven on 2026-10-16 from pruned files' opening balances could
+no longer be proven by anything. The exporter had read every one of those files
+many times and kept none of it. It no longer depends on the tool to keep them.
+
+**What is kept.** Every run, the recapture of a running-totals source keeps
+each journal's ACCOUNTING PROJECTION under `HISTORY_DIR/retained/<key>/`, at the
+journal's own path below the tree root. The projection keeps only the records
+the reader acts on, and only the fields it reads:
+- the session declaration, holding whether a parent thread is named and never
+  the identifier;
+- each model declaration's identifier;
+- each running-totals reading's timestamp and cumulative token fields;
+- the turn figure that proves an opening balance.
+
+No prompt, reply, title, working directory, branch or identifier is kept.
+Measured on the owner's tree, the projection of 163 journals (781 MB) is 7.1 MB.
+
+**How it is used.** The projection is a journal of the same shape, so the same
+admission and reader walk it: a kept journal whose live file is gone is walked
+in its place (`retained=` on the capture's summary line), and counts exactly as
+the live file did, opening balance included. Measured on the owner's tree, the
+kept journals reproduce the live walk's 21,945 rows and 160 session entries
+exactly.
+
+**Only ever extended.** A kept journal is created exclusively at mode 0600, in
+directories made at 0700, entered through directory descriptors with no-follow
+at every component. When its live file grows, only the projection's new tail is
+appended, through the very file the comparison read (`kept=`). A projection
+that would shorten or contradict what is kept is written nowhere and counted
+(`retain_conflicts=`). Nothing in the kept tree is ever renamed, truncated or
+removed. A write killed midway leaves a prefix, which the next run completes.
+
+`retain_conflicts` above zero means a journal the tool rewrote rather than
+extended. It is worth a look; nothing is lost either way.
+
 ## The lifelong ledger's material (issue #267)
 
 The panel serves a windowed, sealed, byte-bounded document. The workstation's

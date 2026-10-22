@@ -7,6 +7,20 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.98] - 2026-10-22
+
+### Fixed
+
+- The usage exporter keeps its own copy of the second tool's accounting. That
+  tool prunes its session journals, and the exporter rebuilt the series from
+  whatever survived, so evidence it had read many times could vanish: on
+  2026-10-22 only 163 of 1,957 threads still had a journal. Each run now keeps
+  every journal's accounting projection beside the history stores, under
+  `retained/<source>/`, and walks it once the journal is gone, so a pruned
+  thread keeps counting, opening balance and all. Only the fields the walk reads
+  are kept: no prompt, reply, title, path, branch or identifier. A kept journal
+  is only ever extended, never rewritten, renamed or removed (#382).
+
 ## [0.1.97] - 2026-10-21
 
 ### Security

@@ -1065,6 +1065,13 @@ def new_counters():
         # are counted apart because the cause differs: the vocabulary knows the
         # model, and this source is simply not allowed to carry it.
         "cross_group": 0,
+        # The walk's own kept journals (issue #382): files walked from the kept
+        # tree because their live file is gone, projections written this run,
+        # and projections refused because they would have shortened or
+        # contradicted what is kept.
+        "retained": 0,
+        "kept": 0,
+        "retain_conflicts": 0,
     }
 
 
@@ -1497,7 +1504,7 @@ def read_records(root, counters, sessions=None, *, scope):
         close_session(sessions, opened)
 
 
-def read_running_totals(root, counters, sessions=None, *, scope, carried=None):
+def read_running_totals(root, counters, sessions=None, *, scope, carried=None, retain=None):
     """Yield (day, advance, parts, model, identity) rows from running-totals records.
 
     The running total is per FILE, so the high-water mark resets at each file
@@ -1544,12 +1551,22 @@ def read_running_totals(root, counters, sessions=None, *, scope, carried=None):
     no session at all. That marker never reaches the ledger's own shape
     (`ledger_session` copies named fields only); it is what the session tally
     counts (`walked_stats`).
+
+    `retain`, when a `RetainedJournals` is supplied, is this walk's own memory
+    of the tree (issue #382): every journal it kept whose live file is gone is
+    walked in the live file's place, and every live file's accounting
+    projection is handed back to it once the file has been read.
     """
-    for record in admitted_records(root, counters):
+    records = admitted_records(root, counters)
+    if retain is not None:
+        records = retain.union(records, counters)
+    for record in records:
         counters["files"] += 1
         handle = open_record_file(record, counters)
         if handle is None:
             continue
+        # Only a LIVE file is projected: a kept journal is already one.
+        projected = [] if retain is not None and record[0] == root else None
         previous = {field: 0 for field in RUNNING_FIELDS}
         member, identity = MODEL_OTHER, UNIDENTIFIED_MODEL
         opened = new_session()
@@ -1562,6 +1579,10 @@ def read_running_totals(root, counters, sessions=None, *, scope, carried=None):
                 decoded = decoded_record(line)
                 if decoded is None:
                     continue
+                if projected is not None:
+                    kept = accounting_projection(decoded)
+                    if kept is not None:
+                        projected.append(kept)
                 if opened[SESSION_TOP_LEVEL_KEY] is None:
                     top_level = declared_session_of(decoded)
                     if top_level is not None:
@@ -1604,6 +1625,224 @@ def read_running_totals(root, counters, sessions=None, *, scope, carried=None):
                 note_session(opened, instant, advance, parts, member, identity)
                 yield day, advance, parts, member, identity
         close_session(sessions, opened)
+        if projected and retain is not None:
+            retain.keep(record[2], projected, counters)
+
+
+# A RETAINED ACCOUNTING JOURNAL (issue #382). The tool that writes the
+# running-totals journals prunes them: measured 2026-10-22, its own state
+# database still listed 1,957 threads while 163 journal files remained, and a
+# correction proven from the pruned files' opening balances could no longer be
+# proven by anything. This walk reads every file on every run, so it keeps
+# what it reads instead of depending on the tool to.
+#
+# What it keeps is the ACCOUNTING PROJECTION of each file: the records the
+# reader above acts on, cut down to the fields it reads, in the order it read
+# them. The projection is itself a journal of the same shape, so the same
+# admission (descriptor-rooted, no-follow, bounded) and the same reader replay
+# it, and a file the tool has pruned counts exactly as it did while it lived —
+# opening balance and all. There is no second parser to drift from the first.
+#
+# The marker a kept session declaration carries in place of the parent
+# thread's identifier. The reader asks only whether a parent is NAMED, so the
+# identifier never needs to be kept, and is not.
+RETAINED_PARENT_MARK = "named"
+
+
+def accounting_projection(record):
+    """A decoded record cut to exactly what the running-totals reader reads, or None.
+
+    The reader asks four questions of a record, and this keeps the answer to
+    each and nothing else:
+
+      * `declared_session_of` — the record type, and whether a parent thread
+        is named (kept as RETAINED_PARENT_MARK, never the identifier);
+      * `declared_model_of` — the model identifier, the raw identity the data
+        layer already keeps (issue #371);
+      * `running_totals_of` — the timestamp and the cumulative token fields;
+      * `opening_balance` — the turn's own total, the one witness that a
+        file's first reading holds tokens it did not spend.
+
+    Each kept value is the record's own, unvalidated, so the reader applies
+    exactly the checks it applied to the original. A record that answers none
+    of the four is None, because the reader skips it without a tally. What is
+    never kept is everything else such a journal carries — prompts, replies,
+    titles, working directories, branches, identifiers — and that is the
+    point: the kept tree holds accounting, not a second copy of the work.
+    """
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    kept = {}
+    reduced = {}
+    if record.get("type") == RUNNING_SESSION_TYPE:
+        kept["type"] = RUNNING_SESSION_TYPE
+        if payload.get(RUNNING_PARENT_FIELD) not in (None, ""):
+            reduced[RUNNING_PARENT_FIELD] = RETAINED_PARENT_MARK
+    model = payload.get(MESSAGE_MODEL_FIELD)
+    if isinstance(model, str) and model:
+        reduced[MESSAGE_MODEL_FIELD] = model
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        info = {}
+    running = info.get(RUNNING_USAGE_KEY)
+    if isinstance(running, dict):
+        accounting = {RUNNING_USAGE_KEY: {field: running[field] for field in RUNNING_FIELDS if field in running}}
+        turn = info.get(RUNNING_TURN_KEY)
+        if isinstance(turn, dict) and RUNNING_TOTAL_FIELD in turn:
+            accounting[RUNNING_TURN_KEY] = {RUNNING_TOTAL_FIELD: turn[RUNNING_TOTAL_FIELD]}
+        reduced["info"] = accounting
+        stamp = record.get("timestamp")
+        if isinstance(stamp, str):
+            kept["timestamp"] = stamp
+    if not kept and not reduced:
+        return None
+    kept["payload"] = reduced
+    return kept
+
+
+class RetainedJournals:
+    """The walk's own kept copy of a running-totals tree (issue #382).
+
+    `root` is the configured directory, opened by path exactly as the walked
+    root is: it is the trust anchor, not tree content. Everything beneath it
+    is reached through directory descriptors with `O_NOFOLLOW`, as the
+    admission reaches the walked tree, so a link planted anywhere in the kept
+    tree is refused rather than written through.
+
+    One promise, and it is what makes the kept tree evidence: a kept journal
+    is only ever EXTENDED. It is created exclusively (mode 0600) when absent;
+    when a live file has grown, only the projection's new tail is appended,
+    through the same file the comparison read. A projection that disagrees
+    with what is kept, or is shorter, is counted as a conflict and written
+    nowhere. Nothing is ever renamed, truncated or removed — this module may
+    not name the calls that would (`ImportSurfaceTest`) — and none is needed:
+    a write killed midway leaves a PREFIX of what it was writing, which the
+    next run finds is a prefix and completes.
+    """
+
+    def __init__(self, root):
+        self.root = root
+
+    def union(self, records, counters):
+        """The walked records plus every kept journal whose live file is gone.
+
+        Sorted on the same key the admission sorts on, so a pruned file is
+        walked exactly where it used to be and two runs over the same trees
+        produce the same series.
+        """
+        live = {record[2] for record in records}
+        kept = [record for record in admitted_records(self.root, counters) if record[2] not in live]
+        counters["retained"] += len(kept)
+        return sorted(records + kept, key=lambda record: "/".join(record[2]))
+
+    def keep(self, components, projected, counters):
+        """Keep one live file's projection: create it, or append its new tail."""
+        content = "".join(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n" for record in projected
+        ).encode("utf-8")
+        directory = self._directory(components[:-1], counters)
+        if directory is None:
+            return
+        try:
+            name = components[-1]
+            if self._extend(directory, name, content, counters):
+                counters["kept"] += 1
+        except OSError:
+            counters["unreadable"] += 1
+        finally:
+            os.close(directory)
+
+    @staticmethod
+    def _extend(directory, name, content, counters):
+        """Make the kept journal `name` equal `content` by extending it; True when written.
+
+        The kept file is opened ONCE, for reading and appending, through the
+        directory's descriptor with O_NOFOLLOW, so the bytes compared are the
+        bytes of the file the tail is appended to — nothing can be swapped in
+        between the comparison and the write.
+        """
+        try:
+            leaf = os.open(
+                name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=directory,
+            )
+        except FileExistsError:
+            leaf = None
+        if leaf is not None:
+            with os.fdopen(leaf, "wb") as handle:
+                handle.write(content)
+            return True
+        try:
+            leaf = os.open(
+                name,
+                os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                dir_fd=directory,
+            )
+        except OSError as failure:
+            if failure.errno in (errno.ELOOP, errno.ENOTDIR):
+                counters["symlinks"] += 1
+            counters["retain_conflicts"] += 1
+            return False
+        with os.fdopen(leaf, "r+b") as handle:
+            if (os.fstat(handle.fileno()).st_mode & FILE_TYPE_MASK) != REGULAR_FILE:
+                counters["symlinks"] += 1
+                counters["retain_conflicts"] += 1
+                return False
+            existing = handle.read(MAX_RECORD_BYTES + 1)
+            if existing == content:
+                return False
+            if not content.startswith(existing):
+                counters["retain_conflicts"] += 1
+                return False
+            handle.write(content[len(existing):])
+            return True
+
+    def _directory(self, components, counters):
+        """The kept tree's directory for `components`, created 0700 where absent."""
+        try:
+            parent = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        except OSError:
+            counters["unreadable"] += 1
+            return None
+        for name in components:
+            try:
+                os.mkdir(name, 0o700, dir_fd=parent)
+            except FileExistsError:
+                pass
+            except OSError:
+                counters["unreadable"] += 1
+                os.close(parent)
+                return None
+            child = _descend(parent, name, counters)
+            os.close(parent)
+            if child is None:
+                return None
+            parent = child
+        return parent
+
+
+def open_retained(path):
+    """The kept tree's root, created 0700 when absent, refused when it is a link.
+
+    The PARENT must already exist, for the history store's reason: a mistyped
+    location would otherwise keep nothing, run after run, in silence.
+    """
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    except OSError:
+        raise CaptureError("the retained journal directory cannot be created")
+    try:
+        info = os.lstat(path)
+    except OSError:
+        raise CaptureError("the retained journal directory cannot be read")
+    if (info.st_mode & FILE_TYPE_MASK) != DIRECTORY:
+        raise CaptureError("the retained journal directory is not a directory")
+    return RetainedJournals(path)
 
 
 def new_session():
@@ -3808,6 +4047,7 @@ def capture(
     verified_readings=None,
     *,
     source,
+    retain=None,
 ):
     """Walk the transcripts and return (section, counters).
 
@@ -3861,9 +4101,14 @@ def capture(
     # day from a day whose records were lost. The message shape has none.
     carried = {}
     if record_format == FORMAT_MESSAGES:
+        if retain is not None:
+            # The kept journal is the running-totals projection; a message tree
+            # has no such projection, and silently keeping nothing would read
+            # as protection that is not there.
+            raise CaptureError("retained journals are kept for the running-totals format only")
         rows = read_records(root, counters, sessions, scope=scope)
     else:
-        rows = read_running_totals(root, counters, sessions, scope=scope, carried=carried)
+        rows = read_running_totals(root, counters, sessions, scope=scope, carried=carried, retain=retain)
     series, categories, models, partitioned, joint, identities, identity_joint = daily_series(rows)
     # The days whose emitted split is still the WALK's own, which is what the
     # ledger's joint is a refinement of. It starts as everything the walk
@@ -4173,6 +4418,10 @@ def parse_arguments(argv):
         help="verified per-day readings applied over the history store, in both directions",
     )
     parser.add_argument(
+        "--retain-dir",
+        help="directory this walk keeps each journal's accounting in, walked when the journal is gone",
+    )
+    parser.add_argument(
         "--snapshot",
         help="snapshot file to splice the series into; prints to stdout when omitted",
     )
@@ -4213,6 +4462,17 @@ def main(argv=None):
         if not verified.parent.is_dir():
             print("no such verified readings directory", file=sys.stderr)
             return 2
+    retain = None
+    if arguments.retain_dir is not None:
+        kept = pathlib.Path(arguments.retain_dir).expanduser()
+        if not kept.parent.is_dir():
+            print("no such retained journal directory", file=sys.stderr)
+            return 2
+        try:
+            retain = open_retained(kept)
+        except CaptureError as error:
+            print(str(error), file=sys.stderr)
+            return 1
     try:
         section, counters = capture(
             root,
@@ -4221,6 +4481,7 @@ def main(argv=None):
             history_store=history,
             verified_readings=verified,
             source=arguments.source,
+            retain=retain,
         )
     except CaptureError as error:
         print(str(error), file=sys.stderr)
@@ -4252,6 +4513,15 @@ def main(argv=None):
     # Which identities those unattributed folds were (issue #371): a model the
     # vocabulary does not name is visible the run it first appears.
     print(unattributed_summary(counters), file=sys.stderr)
+    if retain is not None:
+        # What the kept tree did this run (issue #382): a conflict is a kept
+        # journal this run refused to shorten or contradict, so a run that
+        # reports one has found something worth a person's look.
+        print(
+            "retained=%d kept=%d retain_conflicts=%d"
+            % (counters["retained"], counters["kept"], counters["retain_conflicts"]),
+            file=sys.stderr,
+        )
     generated_at = (
         datetime.datetime.now(datetime.timezone.utc)
         .replace(microsecond=0)
