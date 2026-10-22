@@ -18,8 +18,11 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   every journal's accounting projection beside the history stores, under
   `retained/<source>/`, and walks it once the journal is gone, so a pruned
   thread keeps counting, opening balance and all. Only the fields the walk reads
-  are kept: no prompt, reply, title, path, branch or identifier. A kept journal
-  is only ever extended, never rewritten, renamed or removed (#382).
+  are kept, each as the walk reads it (an identifier, an instant, a count), so
+  no prompt, reply, title, path, branch or identifier can be kept. A kept
+  journal is only ever extended, never rewritten, renamed or removed. It is
+  refused when it is a link or a second name, compared line by line, and
+  written by one run at a time (#382).
 
 ## [0.1.97] - 2026-10-21
 
