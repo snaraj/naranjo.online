@@ -276,11 +276,11 @@ describe('gallery/v1 item admission', () => {
 });
 
 /* The poster choice (issue 239), EXECUTED rather than described. It is the one
- * decision the strip makes about a film before a reader touches anything, and
- * it used to reach for the 4K master: the poster is painted into a stage a few
- * hundred CSS pixels wide, and the full still is never shown at any size —
- * enlarging is stills-only — so the strip paid for a rendition nothing on the
- * page uses. */
+ * decision the gallery makes about a film before a reader touches anything,
+ * and it used to reach for the 4K master: the poster is painted at no more
+ * than the stage's width, and a film's full still is never shown at any size —
+ * its stage plays its sources (issue 384) — so the 4K poster paid for a
+ * rendition nothing on the page uses. */
 describe('the poster a film shows before it plays', () => {
   it('takes the operator’s published poster when there is one', () => {
     const item = admitGalleryItem(videoItem());

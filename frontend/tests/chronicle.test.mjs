@@ -15,11 +15,12 @@ import {
   chronicleProps,
   commitsLabel,
   pullsLabel,
-  tokensLabel,
+  tokensWord,
+  overallCaption,
+  latestLabel,
   contributionsKey,
   gridTone,
   noReading,
-  totalSeriesKey,
   windowName
 } from '../src/lib/chronicle.ts';
 import { measuredCell, pendingWeeks } from '../src/lib/grid.ts';
@@ -27,7 +28,7 @@ import { parseVCSActivity } from '../src/lib/activity.ts';
 import { calendarPanelIds, contributionCalendarProps } from '../src/lib/commits.ts';
 import { codingProjectsPanelId } from '../src/lib/projects.ts';
 import { panelKinds } from '../src/lib/panels.ts';
-import { knownSourceKeys, sourceName, tokenBoardProps, tokenUsagePanelId } from '../src/lib/token-usage.ts';
+import { formatStatValue, knownSourceKeys, sourceName, tokenUsagePanelId } from '../src/lib/token-usage.ts';
 
 const sourceVocabulary = JSON.parse(
   await readFile(new URL('../../internal/panels/config/sources.json', import.meta.url), 'utf8')
@@ -54,6 +55,21 @@ const reporting = (label, startDate, totals, total) => ({
   stats: lifetime(total),
   series: { startDate, totals }
 });
+
+/* An activity panel with contributions and nothing else, so the diagram
+ * offers the contributions' seal. */
+const quietActivity = {
+  schema: 'panel/v1',
+  id: 'vcs-activity',
+  kind: 'vcs-activity/v1',
+  title: 'GitHub',
+  status: 'ok',
+  generatedAt: '2026-08-10T00:00:00Z',
+  data: { totalContributions: 3, weeks: [[0, 1, 0, 2, 0, 0, 0]], endDate: '2026-08-06', streak: 1, recentCommits: [] }
+};
+
+/* The figures one seal reads, by its layer's key. */
+const figuresOf = (props, key) => props.layers.find((layer) => layer.key === key)?.headlines ?? [];
 
 test('nothing answered yet renders nothing, so the block waits like every panel block', () => {
   assert.equal(chronicleProps([null, null], now), null);
@@ -114,11 +130,20 @@ test('each layer plots its own series, in its own ink, and words each day', () =
   const envelope = usage([reporting(first.key, '2026-08-01', [5, 0, 7], 1_000)]);
   const props = chronicleProps([activity, envelope, null], new Date('2026-08-06T12:00:00Z'));
   assert.ok(props);
-  const [contributions, tokens] = props.layers;
-  assert.equal(contributions.key, contributionsKey, 'the diagram opens on the contributions');
+  const [tokens, contributions] = props.layers;
+  // The tokens open the roll and the contributions come last (owner,
+  // 2026-10-21: "the order should be codex, then claude then contributions").
+  assert.equal(tokens.key, first.key, 'the diagram does not open on the first source');
+  assert.equal(props.layers.at(-1)?.key, contributionsKey, 'the contributions are not the last seal');
   assert.equal(contributions.tone, gridTone);
-  assert.equal(tokens.key, first.key);
   assert.equal(tokens.tone, '0');
+  // Every seal reads as many figures as every other, so a change of seal
+  // moves nothing on the page.
+  assert.deepEqual(
+    props.layers.map((layer) => layer.headlines.length),
+    props.layers.map(() => tokens.headlines.length),
+    'two seals read a different number of figures'
+  );
   assert.notDeepEqual(contributions.series.values, tokens.series.values, 'two layers plot the same line');
 
   const at = (date) => props.days.findIndex((day) => day.date === date);
@@ -134,53 +159,57 @@ test('each layer plots its own series, in its own ink, and words each day', () =
   assert.equal(tokens.readings[unmeasured], noReading);
 });
 
-test('the headline total reads each day as the sum of what was measured, and a day nobody measured as a gap', () => {
+/* THE FIGURES FOLLOW THE PICKED SEAL (owner, 2026-10-21, asked what the
+ * figures should read: "follow the picked seal"). A source's seal reads that
+ * source's tokens over its whole life, followed day by day as the reader
+ * scrubs, and its latest measured day, named. */
+test('a source’s seal reads its lifetime, scrubbed by its own line, and its latest measured day', () => {
   const envelope = usage([
     reporting(first.key, '2026-08-01', [5, 0, 7], 1_000),
     reporting(second.key, '2026-08-02', [1, 2, 3, 4], 2_000)
   ]);
   const props = chronicleProps([null, envelope], now);
   assert.ok(props);
-  const tracked = props.headlines.find((headline) => headline.key === 'tracked');
-  assert.ok(tracked);
-  assert.equal(tracked.daily?.key, totalSeriesKey);
-  for (let index = 0; index < props.days.length; index += 1) {
-    const measured = props.layers.map((layer) => layer.series.values[index]).filter((value) => value !== null);
-    const expected = measured.length === 0 ? null : measured.reduce((sum, value) => sum + value, 0);
-    assert.equal(tracked.daily.values[index], expected, `day ${props.days[index].date}`);
-    if (expected === null) {
-      assert.equal(tracked.daily.figures[index], noReading);
-    }
+  for (const layer of props.layers) {
+    const [overall, latest] = layer.headlines;
+    assert.deepEqual(layer.headlines.map((headline) => headline.key), ['overall', 'latest']);
+    assert.equal(overall.label, `${layer.label} ${tokensWord}`);
+    assert.equal(overall.caption, overallCaption);
+    assert.equal(overall.daily, layer.series, 'scrubbing does not read the seal’s own line');
+    assert.equal(latest.label, latestLabel);
+    assert.equal(latest.daily, undefined, 'the latest day moves while the reader scrubs');
   }
-  // Aug 1 only the first source measured; Aug 2 both did.
-  const august = (date) => props.days.findIndex((day) => day.date === date);
-  assert.equal(tracked.daily.values[august('2026-08-01')], 5);
-  assert.equal(tracked.daily.values[august('2026-08-02')], 1);
-  assert.equal(tracked.daily.values[august('2026-08-03')], 9);
+  const [one, two] = props.layers;
+  // The lifetime is the source's own, worded as its account words it.
+  assert.equal(one.headlines[0].figure, formatStatValue(1_000, 'tokens'));
+  assert.equal(two.headlines[0].figure, formatStatValue(2_000, 'tokens'));
+  assert.notEqual(one.headlines[0].figure, two.headlines[0].figure, 'two seals read one source’s lifetime');
+  // The first source measured Aug 1-3 and last read 7; the second Aug 2-5, 4.
+  const label = (date) => props.days.find((day) => day.date === date).label;
+  assert.equal(one.headlines[1].figure, '7');
+  assert.equal(one.headlines[1].caption, label('2026-08-03'));
+  assert.equal(two.headlines[1].figure, '4');
+  assert.equal(two.headlines[1].caption, label('2026-08-05'));
 });
 
-test('the headlines and accounts are the board’s own cards, read and never rewritten', () => {
+test('the contributions’ seal reads its two figures, the dash for what nobody reported', () => {
   const envelope = usage([
     reporting(first.key, '2026-08-01', [5, 0, 7], 1_000),
     reporting(second.key, '2026-08-02', [1, 2, 3, 4], 2_000)
   ]);
-  const props = chronicleProps([null, envelope], now);
-  const board = tokenBoardProps(envelope);
-  assert.ok(props && board);
-  const card = (key) => board.cards.find((entry) => entry.key === key);
-  // THE THREE FIGURES (owner direction, 2026-10-16), in the owner's order.
-  assert.deepEqual(
-    props.headlines.map((headline) => headline.label),
-    [pullsLabel, commitsLabel, tokensLabel]
-  );
-  const tokens = props.headlines.find((headline) => headline.key === 'tracked');
-  assert.equal(tokens.figure, card('tracked').figure, 'the token figure is the board’s own');
-  // With no projects and no activity panel, the other two print the dash.
-  assert.equal(props.headlines.find((headline) => headline.key === 'pulls').figure, noReading);
-  assert.equal(props.headlines.find((headline) => headline.key === 'commits').figure, noReading);
   // No activity panel: the calendar has no contributions to draw, so the
-  // diagram offers no contributions layer.
+  // diagram offers no contributions' seal.
+  const props = chronicleProps([null, envelope], now);
+  assert.ok(props);
   assert.equal(props.layers.some((layer) => layer.key === contributionsKey), false);
+  // With it, and with no projects and no commit counts, the seal reads the
+  // owner's two figures (2026-10-16), each the dash.
+  const contributing = chronicleProps([quietActivity, envelope, null], now);
+  assert.ok(contributing);
+  const figures = figuresOf(contributing, contributionsKey);
+  assert.deepEqual(figures.map((headline) => headline.label), [pullsLabel, commitsLabel]);
+  assert.equal(figures.find((headline) => headline.key === 'pulls').figure, noReading);
+  assert.equal(figures.find((headline) => headline.key === 'commits').figure, noReading);
 });
 
 /* THE GRAPH IS THE WHOLE CALENDAR (owner, 2026-10-16: "make the graph
@@ -196,11 +225,13 @@ test('the window ends today and the captions speak for the whole of it', () => {
   assert.ok(props);
   assert.equal(props.days[props.lastDay].date, '2026-08-10', 'the window ends today');
   assert.ok(props.days.slice(props.lastDay + 1).every((day) => day.absent), 'a day after today is in the window');
-  // Every measured day across the window: 5+0+7 and 1+2+3+4.
-  const tracked = props.headlines.find((headline) => headline.key === 'tracked');
-  assert.equal(tracked.caption, `+22 ${windowName}`);
-  assert.equal(props.headlines.find((headline) => headline.key === 'commits').caption, windowName);
-  assert.equal(props.headlines.find((headline) => headline.key === 'pulls').caption, 'all time');
+  // A source's seal speaks for its whole life; the contributions' for the
+  // window (commits) and for all time (pull requests).
+  assert.equal(props.layers[0].headlines[0].caption, overallCaption);
+  const contributing = chronicleProps([quietActivity, envelope, null], now);
+  assert.ok(contributing);
+  assert.equal(figuresOf(contributing, contributionsKey).find((headline) => headline.key === 'commits').caption, windowName);
+  assert.equal(figuresOf(contributing, contributionsKey).find((headline) => headline.key === 'pulls').caption, 'all time');
 });
 
 test('a day nobody measured is never drawn as a quiet day', () => {
@@ -251,7 +282,8 @@ test('pull requests closed sums every repository that reports them', () => {
     data: { repos }
   });
   const repo = (name, closedPulls) => ({ name, description: '', stars: 0, pushedAt: '2026-08-01T00:00:00Z', ...(closedPulls === undefined ? {} : { closedPulls }) });
-  const pulls = (repos) => chronicleProps([null, null, projects(repos)], now).headlines.find((headline) => headline.key === 'pulls');
+  const pulls = (repos) =>
+    figuresOf(chronicleProps([quietActivity, null, projects(repos)], now), contributionsKey).find((headline) => headline.key === 'pulls');
   assert.equal(pulls([repo('a', 75), repo('b', 211), repo('c', 0)]).figure, '286');
   assert.equal(pulls([repo('a', 3), repo('b')]).figure, '3');
   assert.equal(pulls([repo('a'), repo('b')]).figure, noReading);
@@ -281,7 +313,7 @@ test('commits pushed reads the daily commit counts, which must add up', () => {
     data: { ...base, commitWeeks: [[0, 2, 0, 1, 0, 0, 0]], totalCommits: 3 }
   };
   const props = chronicleProps([activity, null, null], new Date('2026-08-06T12:00:00Z'));
-  const commits = props.headlines.find((headline) => headline.key === 'commits');
+  const commits = figuresOf(props, contributionsKey).find((headline) => headline.key === 'commits');
   assert.equal(commits.figure, '3');
   const at = (date) => props.days.findIndex((day) => day.date === date);
   // Columns run Sunday to Saturday: Monday Aug 3 pushed 2, Wednesday Aug 5 pushed 1.

@@ -5,9 +5,9 @@
  * contributionCalendarProps and the figures, facts and model rows from
  * tokenBoardProps — the same two adapters, with every rule they already prove
  * — and this module only lays them side by side: every set becomes a layer
- * the line plots AND the calendar paints, the contributions the one it opens
- * on, and the board's cards become the headlines and the accounts under the
- * diagram. Because every set is laid on the same anchor and the same number
+ * the line plots AND the calendar paints, each with the figures its seal
+ * reads, the first source the one it opens on, and the board's cards become
+ * the accounts under the diagram. Because every set is laid on the same anchor and the same number
  * of weeks, the line and the cells share their days by construction, which is
  * what lets one cursor read both.
  *
@@ -26,7 +26,7 @@ import type {
 } from './blocks.ts';
 import { activityCells, parseVCSActivity } from './activity.ts';
 import { calendarPanelIds, contributionCalendarProps } from './commits.ts';
-import { formatCalendarDate, formatMagnitude, formatWhole, monthTicks, pendingWeeks, type GridCell, type ValueFormat } from './grid.ts';
+import { formatCalendarDate, formatWhole, monthTicks, pendingWeeks, type GridCell } from './grid.ts';
 import { panelKinds, type PanelEnvelope } from './panels.ts';
 import { codingProjectsPanelId, parseCodingProjects } from './projects.ts';
 import {
@@ -42,11 +42,13 @@ import {
  * the projects panel for the pull requests its repositories have closed. */
 export const chroniclePanelIds: readonly string[] = [...calendarPanelIds, codingProjectsPanelId];
 
-/* The three figures beside the graph, in the owner's words and order
- * (2026-10-16). */
+/* The figures beside the graph, in the owner's words (2026-10-16): the
+ * contributions' two, and the words a source's two are made of (2026-10-21). */
 export const pullsLabel = 'Pull Requests Closed';
 export const commitsLabel = 'Commits Pushed';
-export const tokensLabel = 'Total Tokens Used';
+export const tokensWord = 'Tokens';
+export const overallCaption = 'overall';
+export const latestLabel = 'Latest Day';
 
 /* AN ACCOUNT IS A LEAF OF THE CHAINED TOME (owner, 2026-10-20, picking T3 of
  * the tome's five settings, after "remove 'itemised' insted just put cache
@@ -81,7 +83,6 @@ export const accountModelSlots = maxDrawnModels;
 
 export const chronicleEmptyNote = 'no tracker data captured yet';
 export const contributionsKey = 'contributions';
-export const totalSeriesKey = 'total';
 /* The figure a day reads as when nothing was measured on it. */
 export const noReading = '—';
 /* The span the graph and the calendar cover (owner, 2026-10-16: "make the
@@ -113,8 +114,14 @@ function seriesOf(set: CalendarSet, length: number, label: string = set.label): 
   };
 }
 
-/* A layer: its series, the ink it is drawn in, and each day in words. */
-function layerOf(set: CalendarSet, series: ChronicleSeries, tone: string): ChronicleLayer {
+/* A layer: its series, the ink it is drawn in, each day in words, and the
+ * figures it reads beside the graph. */
+function layerOf(
+  set: CalendarSet,
+  series: ChronicleSeries,
+  tone: string,
+  headlines: readonly ChronicleHeadline[]
+): ChronicleLayer {
   return {
     key: set.key,
     label: series.label,
@@ -122,30 +129,35 @@ function layerOf(set: CalendarSet, series: ChronicleSeries, tone: string): Chron
     series,
     readings: series.values.map((value, index) =>
       value === null ? noReading : `${series.figures[index]} ${value === 1 ? set.noun : `${set.noun}s`}`
-    )
+    ),
+    headlines
   };
 }
 
-/* The tokens of every source on one day: the sum where any source measured
- * the day, null where none did. */
-function totalSeries(lines: readonly ChronicleSeries[], length: number): ChronicleSeries {
-  const values: (number | null)[] = [];
-  for (let index = 0; index < length; index += 1) {
-    let sum: number | null = null;
-    for (const line of lines) {
-      const value = line.values[index];
-      if (value !== null && value !== undefined) {
-        sum = (sum ?? 0) + value;
-      }
+/* A source's two figures: its tokens over its whole life, read day by day as
+ * the reader scrubs, and its latest measured day, named. */
+function tokenHeadlines(
+  series: ChronicleSeries,
+  overall: string,
+  days: readonly ChronicleDay[],
+  last: number
+): ChronicleHeadline[] {
+  let latest = -1;
+  for (let index = Math.min(last, series.values.length - 1); index >= 0; index -= 1) {
+    if (series.values[index] !== null) {
+      latest = index;
+      break;
     }
-    values.push(sum);
   }
-  return {
-    key: totalSeriesKey,
-    label: 'Tokens',
-    values,
-    figures: values.map((value) => (value === null ? noReading : formatMagnitude(value)))
-  };
+  return [
+    { key: 'overall', label: `${series.label} ${tokensWord}`, figure: overall, caption: overallCaption, daily: series },
+    {
+      key: 'latest',
+      label: latestLabel,
+      figure: latest < 0 ? noReading : series.figures[latest],
+      caption: latest < 0 ? noReading : days[latest].label
+    }
+  ];
 }
 
 /* The window's last day: today, or the last day it covers. */
@@ -156,18 +168,6 @@ function lastDayOf(days: readonly ChronicleDay[]): number {
     }
   }
   return -1;
-}
-
-/* What a series added over the window, worded: "+114B past year", or the
- * page's own dash where nothing in it was measured. */
-function windowCaption(series: ChronicleSeries, format: ValueFormat): string {
-  let sum: number | null = null;
-  for (const value of series.values) {
-    if (value !== null) {
-      sum = (sum ?? 0) + value;
-    }
-  }
-  return sum === null ? noReading : `+${format(sum)} ${windowName}`;
 }
 
 function cardByKey(cards: readonly LedgerCard[], key: string): LedgerCard | undefined {
@@ -229,19 +229,15 @@ export function chronicleProps(
     return seriesOf(set, length, card?.label ?? set.label);
   });
 
-  /* Picking a layer picks what the line plots, not only what the calendar
-     paints (owner, 2026-10-16: "it makes no sense that the graph doesn't
-     change to show contributions when I pick contributions"). */
-  const layers: ChronicleLayer[] = [];
-  if (contributionSet !== undefined && contributionSet.columns.length > 0) {
-    layers.push(layerOf(contributionSet, seriesOf(contributionSet, length), gridTone));
-  }
-  tokenSets.forEach((set, index) => {
-    layers.push(layerOf(set, lines[index], String(index)));
-  });
-
   const last = lastDayOf(days);
-  const headlines: ChronicleHeadline[] = [];
+  const sources = usageEnvelope === null ? [] : tokenUsageSources(usageEnvelope.data);
+  /* A source's lifetime, worded as its account in the tome words it. */
+  const lifetimeOf = (label: string): string => {
+    const lifetime = sources
+      .find((candidate) => candidate.label === label)
+      ?.stats?.find((candidate) => candidate.key === 'lifetime');
+    return lifetime === undefined || lifetime.value === null ? noReading : formatStatValue(lifetime.value, lifetime.unit);
+  };
 
   /* PULL REQUESTS CLOSED: every repository the projects panel lists, summed.
      The panel carries no per-day record of them, so the figure stays whole
@@ -251,12 +247,12 @@ export function chronicleProps(
   const closed = (projects?.repos ?? [])
     .map((repo) => repo.closedPulls)
     .filter((count): count is number => typeof count === 'number');
-  headlines.push({
+  const pulls: ChronicleHeadline = {
     key: 'pulls',
     label: pullsLabel,
     figure: closed.length === 0 ? noReading : formatWhole(closed.reduce((sum, count) => sum + count, 0)),
     caption: 'all time'
-  });
+  };
 
   /* COMMITS PUSHED: the activity panel's own daily commit counts, laid on the
      window by date; the figure is the window's total. A payload that predates
@@ -273,30 +269,33 @@ export function chronicleProps(
     const values = days.map((day) => byDate.get(day.date) ?? null);
     commits = { key: 'commits', label: commitsLabel, values, figures: values.map((value) => (value === null ? noReading : formatWhole(value))) };
   }
-  headlines.push({
+  const pushed: ChronicleHeadline = {
     key: 'commits',
     label: commitsLabel,
     figure: activity?.totalCommits === undefined ? noReading : formatWhole(activity.totalCommits),
     caption: windowName,
     daily: commits
-  });
+  };
 
-  /* TOTAL TOKENS USED: the board's lifetime figure, captioned with what the
-     window added, and read day by day as the sum of every source's line. */
-  const tracked = cardByKey(cards, 'tracked');
-  const daily = lines.length > 0 ? totalSeries(lines, length) : undefined;
-  headlines.push({
-    key: 'tracked',
-    label: tokensLabel,
-    figure: tracked?.figure ?? noReading,
-    caption: daily === undefined ? (tracked?.ctx ?? 'lifetime') : windowCaption(daily, formatMagnitude),
-    daily
-  });
+  /* THE FIGURES FOLLOW THE PICKED SEAL, and the tokens open the roll (owner,
+     2026-10-21: "put Codex tokens the first thing that renders on the website,
+     the order should be codex, then claude then contributions"; asked what
+     the figures should read, the owner picked "follow the picked seal"). A
+     source's seal reads that source's tokens over its whole life, followed
+     day by day as the reader scrubs, and its latest measured day; the
+     contributions' seal reads what the contributions are made of. Every seal
+     carries the same number of figures, so a change of seal moves nothing.
+     The token seals keep the calendar's order, which is the vocabulary's. */
+  const layers: ChronicleLayer[] = tokenSets.map((set, index) =>
+    layerOf(set, lines[index], String(index), tokenHeadlines(lines[index], lifetimeOf(sourceLabelOf(set)), days, last))
+  );
+  if (contributionSet !== undefined && contributionSet.columns.length > 0) {
+    layers.push(layerOf(contributionSet, seriesOf(contributionSet, length), gridTone, [pulls, pushed]));
+  }
 
   /* Every source that reported keeps its account — the ones with a daily
      line in the calendar's order, then any that sent figures but no line,
      which the diagram has nothing to plot for but the account still reads. */
-  const sources = usageEnvelope === null ? [] : tokenUsageSources(usageEnvelope.data);
   /* While the usage payload is still in flight, each source the vocabulary
      names holds its account's room, empty: it is coming, so its box is
      reserved rather than grown into when it lands. */
@@ -318,7 +317,6 @@ export function chronicleProps(
         const stat = source?.stats?.find((candidate) => candidate.key === key);
         return stat === undefined || stat.value === null ? undefined : stat.value;
       };
-      const lifetime = source?.stats?.find((candidate) => candidate.key === 'lifetime');
       for (const record of accountRecords) {
         const stat = source?.stats?.find((candidate) => candidate.key === record.key);
         const current = stat === undefined || stat.value === null ? undefined : formatStatValue(stat.value, stat.unit);
@@ -345,7 +343,7 @@ export function chronicleProps(
       return {
         key: label,
         label: card?.label ?? sourceName(label),
-        total: lifetime === undefined || lifetime.value === null ? noReading : formatStatValue(lifetime.value, lifetime.unit),
+        total: lifetimeOf(label),
         facts: [...accounting, ...records],
         lines: card?.sub ?? [],
         models: models?.models ?? []
@@ -367,7 +365,6 @@ export function chronicleProps(
        something is coming). */
     weeks: reference?.columns.length ?? (activityEnvelope === null || usageEnvelope === null ? pendingWeeks : 0),
     layers,
-    headlines,
     accounts,
     months,
     factSlots: accountFactSlots,

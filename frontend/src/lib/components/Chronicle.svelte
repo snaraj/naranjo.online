@@ -42,7 +42,6 @@
     days,
     weeks,
     layers,
-    headlines,
     accounts,
     months,
     factSlots,
@@ -81,6 +80,8 @@
   let pointerY = 0;
 
   const layer = $derived(layers.find((candidate) => candidate.key === layerKey) ?? layers[0]);
+  /* The figures beside the graph are the picked seal's own (owner, 2026-10-21). */
+  const headlines = $derived(layer?.headlines ?? []);
   const firstPresent = $derived(days.findIndex((day) => !day.absent));
 
   /* --- The calendar's weeks --------------------------------------------- */
@@ -428,7 +429,7 @@
 <PanelShell {status} {generatedAt}>
   <FeedCard variant="board">
     <div class="chronicle" data-shown={shown ? 'true' : 'false'}>
-      {#if days.length === 0 && headlines.length === 0}
+      {#if days.length === 0 && layers.length === 0}
         <p class="chronicle-note">{emptyNote}</p>
       {:else}
         <!-- THE ROLL: a cord between two pegs, two upright rollers, and the

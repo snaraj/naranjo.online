@@ -457,13 +457,13 @@ export function parseGalleryManifest(document: unknown): GalleryItem[] {
  * The order is poster, then preview, and the second half is the fix. A
  * published poster wins, always: it is the one frame the operator chose. With
  * none, the stand-in is the PREVIEW derivative and no longer the full-size
- * still, because a poster is painted into a stage of a few hundred CSS pixels
- * and the still is a 4K master — on the volume's own film the two measure
+ * still, because a poster is painted at no more than the stage's width and
+ * the still is a 4K master — on the volume's own film the two measure
  * ~86-91 KB against ~315 KB for the same visible frame. The old default was
  * defended as "the picture the lightbox would have shown anyway", and that
- * defence expired: enlarging is stills-only, so a film's full-size still is
- * never shown to anybody at any size, and the strip was paying 3.5x for a
- * rendition nothing else on the page uses.
+ * defence expired: a film's stage plays its sources and never shows its still
+ * (issue 384), so a film's full-size still is shown to nobody at any size,
+ * and the 4K poster cost 3.5x for a frame the film replaces at the press.
  *
  * There is no third rung and no null: `preview` is required of every admitted
  * item, so this function always has an answer. */

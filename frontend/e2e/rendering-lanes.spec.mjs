@@ -110,10 +110,13 @@ const touchFloorPx = 44;
  * exactly one place: the stage's meta block. The tile grid has no caption
  * lane — the lane, and the zero-shift lane that measured it, went with the
  * strip (owner directive, 2026-09-03, issue 287) — so an item's words reach
- * a reader only when that item is opened, which is a still and never a film.
- * The film's description is kept for precisely that reason: it is the copy
- * that must NOT render anywhere, on a page where the film is on screen the
- * whole time, and a fixture with nothing to leak could not show that.
+ * a reader only when that item is opened, and since issue 384 a film is
+ * opened exactly as a still is. The film's description is kept for precisely
+ * that reason: it is the copy that must render ONLY while the film is on the
+ * stage — nowhere on a page where the film's tile is on screen the whole
+ * time, nowhere once the stage pages on to the still, nowhere after it closes
+ * — and the film lane reads it in all four states. A fixture with nothing to
+ * leak could not show that.
  * The two are DELIBERATELY UNEQUAL and the taller one is deliberately SECOND,
  * as they were: a lane that only ever measured the first item's metadata is
  * one a mutation walks straight past. */
@@ -5998,8 +6001,8 @@ test('every rendered link is unmarked at rest and marks itself on hover', async 
  * beside them), and the stage is a native <dialog> a tile opens. What the rulings of issues 176, 202, 219, 233, 241,
  * 243, 265 and 275 were FOR survives that move and is re-aimed here — one
  * full-size picture at a time, the full derivative fetched only on demand,
- * nothing autoplaying, a film inline behind one control, every box reserved
- * before a byte arrives, prev/next as real 44px targets with the swipe as an
+ * nothing autoplaying, a film opened by its tile like a picture (issue 384),
+ * every box reserved before a byte arrives, prev/next as real 44px targets with the swipe as an
  * addition to them, Escape and the backdrop and the close mark all closing,
  * focus handed back to the tile that opened the stage. What was about the
  * STRIP itself is deleted rather than re-pointed, each with the reason on the
@@ -6164,18 +6167,22 @@ test('prev/next cycle the enlarged photograph without leaving the page (issue 17
  * to move through the images/videos, only on full screen I can do it").
  *
  * RE-AIMED at the stage the pair now lives on (owner directive, 2026-09-03,
- * issue 287). The "pages every KIND" half is deleted rather than moved: a
- * film is never in the dialog now — it plays in its own tile — so a lane that
- * paged a playing film through this pair would be driving a route the design
- * does not have. What is left is every claim that was about the READER: two
- * real 44px targets, visible on every device rather than gated behind a fine
- * pointer, sitting ON the picture's own edges instead of adrift in a track,
- * and a set that WRAPS in both directions so neither end is a dead stop.
+ * issue 287), with every claim that was about the READER: two real 44px
+ * targets, visible on every device rather than gated behind a fine pointer,
+ * sitting ON the picture's own edges instead of adrift in a track, and a set
+ * that WRAPS in both directions so neither end is a dead stop.
+ *
+ * The "pages every KIND" half is BACK (issue 384): a film is opened on the
+ * stage like a still, so the stage pages the whole set, and the mixed fixture
+ * — one still and one film in one set — is walked through the pair from the
+ * still onto the film and round again, with the pair on the FILM's own edges
+ * as well as the picture's.
  *
  * The absent branch rides the same lane, because "when there is more than one
- * still" is the condition the pair is drawn under: the manifest fixture holds
- * exactly one still, and a stage with nothing to page to must offer no pair
- * and no count at all rather than two controls that do nothing. */
+ * item" is the condition the pair is drawn under: the same fixture served
+ * untagged splits into a set of one still and a set of one film, and a stage
+ * with nothing to page to must offer no pair and no count at all rather than
+ * two controls that do nothing. */
 test('the stage pair pages the set inside 44px targets on every device, wraps both ways, and is absent when there is nowhere to go (owner sketch 2026-08-31; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
@@ -6231,20 +6238,69 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
 
-  /* AND THE ABSENT BRANCH, on a set with exactly one still: the fixture's
-     other item is a film, which never reaches this stage, so there is nowhere
-     to page to and nothing may be drawn that says otherwise. */
+  /* EVERY KIND (issue 384): the mixed fixture's set is a still and a film, so
+     the walk from the still goes onto the film and wraps back, and the pair
+     sits on the film's own span exactly as it sits on the picture's. */
   await serveGalleryManifest(page);
   await visit(page);
   await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
   await expect(dialog).toBeVisible();
+  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
+  await expect(next).toHaveAttribute('aria-label', 'Next film');
+  await next.click();
+  await expect(page.locator('.gallery-count'), 'the stage skipped the film in its own set').toHaveText(
+    'Film 2 of 2'
+  );
+  const film = await page.locator('dialog video.gallery-lightbox-film').boundingBox();
+  expect(film, 'paging onto a film staged no player').not.toBeNull();
+  for (const control of [previous, next]) {
+    const box = await control.boundingBox();
+    expect(box.width, 'a stage control fell under the touch floor on a film').toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
+    expect(box.height, 'a stage control fell under the touch floor on a film').toBeGreaterThanOrEqual(
+      touchFloorPx - subPixel
+    );
+    const centre = box.x + box.width / 2;
+    expect(centre, 'a nav control sits off the film’s own span').toBeGreaterThanOrEqual(film.x - subPixel);
+    expect(centre, 'a nav control sits off the film’s own span').toBeLessThanOrEqual(
+      film.x + film.width + subPixel
+    );
+  }
+  await expect(previous).toHaveAttribute('aria-label', 'Previous photograph');
+  await next.click();
+  await expect(page.locator('.gallery-count'), 'the end of a mixed set is a dead stop').toHaveText(
+    'Photograph 1 of 2'
+  );
+  await expect(page.locator('dialog video'), 'the film’s player outlived the page it was on').toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+
+  /* AND THE ABSENT BRANCH, on a set with exactly one item: served untagged,
+     the fixture's still is the whole of the Photographs set, so there is
+     nowhere to page to and nothing may be drawn that says otherwise. */
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await page.route('**/media/mutable/gallery/manifest.json', (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      body: JSON.stringify({
+        schema: 'gallery/v1',
+        items: galleryManifestFixture.items.map(({ set: _set, ...item }) => item),
+      }),
+    })
+  );
+  await visit(page);
+  await expect(page.locator('.gallery-tile')).toHaveCount(1);
+  await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
+  await expect(dialog).toBeVisible();
   await expect(
     page.locator('.gallery-nav'),
-    'a stage with one still still draws a pair of controls that can only return to it'
+    'a stage with one item still draws a pair of controls that can only return to it'
   ).toHaveCount(0);
   await expect(
     page.locator('.gallery-count'),
-    'a stage with one still counts a position nobody can move'
+    'a stage with one item counts a position nobody can move'
   ).toHaveCount(0);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -6498,10 +6554,10 @@ test('opening a tile shows a real modal dialog with a larger, unframed photograp
  * this measures the real offset on every engine the matrix runs, across all
  * three ways the dialog can be closed.
  *
- * It drives a STILL's tile deliberately, and that is no longer a choice about
- * which surface to prefer: since the 2026-09-03 redesign a film plays in its
- * own tile and the dialog is stills only, so a still's tile is the only thing
- * that opens this at all. The focus half is asserted by IDENTITY rather than
+ * It drives a STILL's tile because the vendored set it reads is all stills;
+ * a film's tile opens this same dialog since issue 384, and the film lane
+ * below proves its close hands focus back to the film's own tile. The focus
+ * half is asserted by IDENTITY rather than
  * by class — the tile that was pressed, not merely something that looks like
  * one — because a grid has four of them and a restore to the wrong one is
  * exactly the defect a class check cannot see.
@@ -6580,198 +6636,336 @@ test('opening and closing the enlarged media leaves the reader exactly where the
   }
 });
 
-/* A FILM IS A TILE, PLAYED WHERE IT SITS, BEHIND ONE CONTROL (issue 233,
- * issue 243; RE-AIMED by the owner directive of 2026-09-03, issue 287).
+/* A FILM'S TILE OPENS THE STAGE LIKE A PICTURE'S (issue 384; RE-AIMED from
+ * issues 233 and 243 and the owner directive of 2026-09-03, issue 287).
  *
- * The owner's rulings this lane carries are unchanged and every one of them
- * outlived the strip: "make it one single block that doesn't expand, reduce
- * based on the media" (2026-08-28), "the sensitive area should only be the
- * button and not the entire video", and nothing anywhere ever autoplaying.
- * What changed is the block. A film no longer shares a stage with a still —
- * it has its OWN square tile in the same grid, so "one single block" becomes
- * the strongest form of itself: a film's tile and a still's tile are on
- * screen together and must be the identical box, measured side by side in one
- * layout rather than across a navigation.
+ * The user, on an iPhone, 2026-10-22: "the videos are not responsive to the
+ * touch, I should be able to click the video to expand it just as the
+ * pictures in the gallery". That supersedes the film this lane used to prove
+ * — played INLINE in its own tile behind one play control ("the sensitive
+ * area should only be the button and not the entire video") and never in the
+ * dialog — because a press on the film's picture did nothing, which is the
+ * defect the user reported. What the older rulings were FOR is kept and
+ * measured: "make it one single block that doesn't expand, reduce based on the
+ * media" (2026-08-28) holds for the TILE, which is the still's identical box,
+ * and for the stage, which reserves the film's box from what the item
+ * declares; nothing ever autoplays; the source ladder is the manifest's own.
  *
  * What it proves, in a real engine, on a gallery whose items came down a
  * manifest exactly as the operator's own would:
- *   - the film mounts as one real inline <video> inside its own tile — never
- *     in the dialog, never one of eight;
- *   - the ONE control a film carries is the play control, at the touch floor,
- *     over the poster;
- *   - native controls are NOT declared until the press, and the press is what
- *     declares them, in the tile, with no dialog opening behind it;
- *   - nothing autoplays, measured (no attribute, still paused, time 0);
- *   - the source ladder is the manifest's own order, sizes and poster;
- *   - the tile is the IDENTICAL box the still's tile is, with the film
- *     reduced inside it by `object-fit: contain`, before AND after the press.
+ *   - the film's tile is a BUTTON, the same box as the still's tile, over the
+ *     film's own preview, with a centred play mark that is decoration only;
+ *   - the page holds ZERO <video> until the press;
+ *   - pressing the film's tile opens the dialog with exactly one <video> in
+ *     it: native controls, playsinline, preload metadata, the manifest's
+ *     poster, the ladder in the manifest's order with its types, no autoplay
+ *     attribute, and a box reserved from the item's declared size;
+ *   - that press called play() exactly once, and paging onto the still and
+ *     back onto the film — by the pair and by the arrow keys — calls it NO
+ *     further times;
+ *   - a horizontal swipe across the film's stage does not page, and an arrow
+ *     key pressed on the film's own player does not either;
+ *   - a keyboard reader turning between the film and the still keeps focus
+ *     on the pair, though the turn swaps the stage the pair sits in;
+ *   - the film's description renders while the film is staged and nowhere
+ *     else, before, between or after;
+ *   - closing hands focus back to the film's tile, leaves no <video> on the
+ *     page, and the row behind the scrim never moved.
  *
- * The e2e origin serves no media volume, so the fixture's files 404. That is
- * deliberate rather than a gap: every assertion here is about the element,
- * its attributes, its reserved box and the control beside it, all of which
- * are byte-independent by this page's own zero-CLS floor, and publishing a
- * fixture film into the repository to change that would be exactly the heavy
- * media requirement 11 keeps out of git. */
-test('a film is a tile of its own square, plays inline behind one control, and never reaches the stage (issue 233, 243; owner 2026-09-03, issue 287)', async ({
+ * play() is COUNTED rather than observed. The e2e origin serves no media
+ * volume, so the fixture's files 404 and no engine could ever report the film
+ * playing; publishing a fixture film into the repository to change that would
+ * be exactly the heavy media requirement 11 keeps out of git. A wrapper
+ * installed before the page's own script records each call and hands it
+ * straight on to the engine's own play(), so the component runs unchanged and
+ * the count is the one fact this lane needs. */
+test('a film’s tile is a button that opens the stage, where one native player starts on that press and never on a page turn (issue 384; issues 233, 243, 207)', async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    const enginePlay = HTMLMediaElement.prototype.play;
+    window.__playCalls = [];
+    HTMLMediaElement.prototype.play = function countedPlay(...args) {
+      window.__playCalls.push(this.closest('dialog') === null ? 'page' : 'stage');
+      return enginePlay.apply(this, args);
+    };
+  });
   await serveGalleryManifest(page);
   await visit(page);
   const grid = page.locator('.gallery-grid');
   await grid.scrollIntoViewIfNeeded();
+  const dialog = page.locator('dialog.gallery-lightbox');
+  const counter = page.locator('.gallery-count');
+  const filmTile = page.locator('.gallery-tile[data-gallery-kind="video"]');
+  const description = galleryManifestFixture.items[1].description;
+  const plays = () => page.evaluate(() => window.__playCalls.slice());
+  /* Two painted frames: every state change this lane makes is flushed by the
+     component before the next frame, so anything still to happen has. */
+  const painted = () =>
+    page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))
+    );
+  const onPage = (text) => page.evaluate((copy) => window.document.documentElement.textContent.includes(copy), text);
 
   // The manifest replaced the vendored set wholesale, so the row is the
   // fixture's own: one still and one film, and nothing beside them.
   await expect(page.locator('.gallery-tile')).toHaveCount(2);
   await expect(page.locator('.gallery-control')).toHaveCount(0);
+  const rowBefore = await galleryRowShape(page);
 
-  const shape = await page.evaluate(() => {
+  const tiles = await page.evaluate(() => {
     const round = (box) => ({
       width: Math.round(box.width * 10) / 10,
       height: Math.round(box.height * 10) / 10,
     });
+    const centre = (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
     const still = window.document.querySelector('.gallery-tile[data-gallery-kind="image"]');
     const film = window.document.querySelector('.gallery-tile[data-gallery-kind="video"]');
-    const video = window.document.querySelector('video');
+    const mark = film.querySelector('.gallery-play-disc');
+    const filmBox = film.getBoundingClientRect();
+    const markBox = mark?.getBoundingClientRect();
     return {
       still: round(still.getBoundingClientRect()),
       stillTag: still.tagName,
-      film: round(film.getBoundingClientRect()),
+      film: round(filmBox),
       filmTag: film.tagName,
+      label: film.getAttribute('aria-label'),
       videos: window.document.querySelectorAll('video').length,
-      dialogVideos: window.document.querySelectorAll('dialog video').length,
-      inTile: film.contains(video),
-      plays: window.document.querySelectorAll('.gallery-play').length,
-      /* A film's tile is not a button: it must not carry the enlarge press
-         that would eat the play control's own. */
-      opens: film.matches('button'),
-      player: {
-        controls: video.controls,
-        autoplay: video.autoplay,
-        /* The ATTRIBUTE, not the IDL mirror. Gecko implements the attribute's
-           behaviour but exposes no `playsInline` property, so reading the
-           property here reported `undefined` on Firefox (MEASURED) — and the
-           stage-1 floor is about the declaration anyway, which is what every
-           engine agrees on. */
-        playsinline: video.hasAttribute('playsinline'),
-        preload: video.preload,
-        paused: video.paused,
-        currentTime: video.currentTime,
-        poster: video.getAttribute('poster'),
-        fit: getComputedStyle(video).objectFit,
-        box: round(video.getBoundingClientRect()),
-        sources: [...video.querySelectorAll('source')].map((source) => ({
-          src: source.getAttribute('src'),
-          type: source.getAttribute('type'),
-          media: source.getAttribute('media'),
-          /* What the ENGINE makes of that query at this viewport, which is
-             the only thing that decides whether the rung is a candidate. */
-          eligible: source.media === '' || window.matchMedia(source.media).matches,
-        })),
-      },
+      thumbs: [...film.querySelectorAll('img')].map((image) => ({
+        src: image.getAttribute('src'),
+        thumb: image.classList.contains('gallery-thumb'),
+        loading: image.getAttribute('loading'),
+      })),
+      /* Nothing a reader can reach sits inside the tile: the tile IS the
+         target, all of it, which is the whole of the user's report. */
+      reachable: film.querySelectorAll('button, a, video, [tabindex]').length,
+      stillMarks: still.querySelectorAll('.gallery-play-disc').length,
+      mark:
+        mark === null
+          ? null
+          : {
+              hidden: mark.getAttribute('aria-hidden'),
+              dx: Math.abs(centre(markBox).x - centre(filmBox).x),
+              dy: Math.abs(centre(markBox).y - centre(filmBox).y),
+              width: markBox.width,
+            },
     };
   });
 
-  /* THE PLAYER IS REAL, INLINE, AND IN ITS OWN TILE — not in the dialog, and
-     not one of eight: exactly one <video> exists on the whole page. */
-  expect(shape.stillTag, 'a still’s tile stopped being the button that opens the stage').toBe('BUTTON');
-  expect(shape.filmTag, 'a film’s tile is a button, so a press on the film would open a stage it never reaches').toBe('DIV');
-  expect(shape.opens, 'a film’s tile carries the enlarge press that would eat its play control').toBe(false);
-  expect(shape.videos, 'the row mounts a number of players other than exactly one').toBe(1);
-  expect(shape.dialogVideos, 'the stage mounts a player again').toBe(0);
-  expect(shape.inTile, 'the player is not inside the tile it is supposed to fill').toBe(true);
-  expect(shape.plays, 'a film carries a number of controls other than the one play control').toBe(1);
-
-  /* NOTHING EVER AUTOPLAYS, measured rather than read off the source: the
-     element declares no autoplay AND has not started itself. */
-  expect(shape.player.autoplay, 'the player declares autoplay').toBe(false);
-  expect(shape.player.paused, 'the player started without the reader pressing anything').toBe(true);
-  expect(shape.player.currentTime, 'the player advanced without being asked').toBe(0);
-  expect(shape.player.controls, 'a film shows native controls before the reader asked for them').toBe(false);
+  /* ONE TILE SHAPE: the film's tile is the button the still's is, the same
+     box in one layout, over the film's own preview. */
+  expect(tiles.stillTag, 'a still’s tile stopped being the button that opens the stage').toBe('BUTTON');
+  expect(tiles.filmTag, 'a film’s tile is not a button, so a press on its picture does nothing').toBe('BUTTON');
+  expect(tiles.label, 'a film’s tile does not say what pressing it will open').toBe(
+    'Open film: A film, served by the lane'
+  );
   expect(
-    shape.player.playsinline,
-    'the player would go fullscreen on a phone instead of playing in place'
-  ).toBe(true);
-  expect(shape.player.preload).toBe('metadata');
+    tiles.film,
+    `a film’s tile is ${tiles.film.width}x${tiles.film.height} against a still’s ${tiles.still.width}x${tiles.still.height}; the block changes size with the media`
+  ).toEqual(tiles.still);
+  expect(tiles.thumbs, 'a film’s tile does not show the film’s own lazy preview').toEqual([
+    {
+      src: expect.stringContaining(`/media/immutable/${'d'.repeat(64)}/gallery/film-preview.webp`),
+      thumb: true,
+      loading: 'lazy',
+    },
+  ]);
+  expect(tiles.reachable, 'a film’s tile holds a control of its own again').toBe(0);
+  expect(tiles.videos, 'the row mounts a player before anybody pressed anything').toBe(0);
+  expect(tiles.stillMarks, 'a still’s tile carries the film’s play mark').toBe(0);
+  expect(tiles.mark, 'a film’s tile carries no play mark').not.toBeNull();
+  expect(tiles.mark.hidden, 'the play mark is a second thing an assistive reader is told about').toBe('true');
+  expect(tiles.mark.width, 'the play mark paints nothing').toBeGreaterThan(0);
+  expect(Math.max(tiles.mark.dx, tiles.mark.dy), 'the play mark is not centred over the picture').toBeLessThanOrEqual(1);
+  expect(await onPage(description), 'the film’s description is on the page before the film was opened').toBe(false);
+  expect(await plays(), 'something started a film before anybody pressed one').toEqual([]);
+
+  /* THE PRESS ON THE FILM'S PICTURE opens the stage, with exactly one player
+     in it, and that press is the one start. */
+  await filmTile.click();
+  await expect(dialog).toHaveJSProperty('open', true);
+  await expect(counter).toHaveText('Film 2 of 2');
+  await expect
+    .poll(plays, { message: 'pressing the film’s tile did not start it', timeout: 5_000 })
+    .toEqual(['stage']);
+
+  const staged = await page.evaluate(() => {
+    const dialogNode = window.document.querySelector('dialog.gallery-lightbox');
+    const video = dialogNode.querySelector('video');
+    const box = video.getBoundingClientRect();
+    const style = getComputedStyle(video);
+    return {
+      videos: window.document.querySelectorAll('video').length,
+      inDialog: dialogNode.querySelectorAll('video').length,
+      controls: video.controls,
+      autoplay: video.hasAttribute('autoplay') || video.autoplay,
+      /* The ATTRIBUTE, not the IDL mirror. Gecko implements the attribute's
+         behaviour but exposes no `playsInline` property, so reading the
+         property here reported `undefined` on Firefox (MEASURED) — and the
+         stage-1 floor is about the declaration anyway, which is what every
+         engine agrees on. */
+      playsinline: video.hasAttribute('playsinline'),
+      preload: video.preload,
+      poster: video.getAttribute('poster'),
+      label: video.getAttribute('aria-label'),
+      fit: style.objectFit,
+      declared: { width: Number(video.getAttribute('width')), height: Number(video.getAttribute('height')) },
+      box: { width: box.width, height: box.height },
+      stageCap: Number.parseFloat(getComputedStyle(dialogNode).maxWidth),
+      blockCap: Number.parseFloat(style.maxHeight),
+      sources: [...video.querySelectorAll('source')].map((source) => ({
+        src: source.getAttribute('src'),
+        type: source.getAttribute('type'),
+        media: source.getAttribute('media'),
+        /* What the ENGINE makes of that query at this viewport, which is
+           the only thing that decides whether the rung is a candidate. */
+        eligible: source.media === '' || window.matchMedia(source.media).matches,
+      })),
+      close: dialogNode.querySelector('.gallery-lightbox-close').getAttribute('aria-label'),
+    };
+  });
+  expect(staged.videos, 'the page holds a number of players other than the one on the stage').toBe(1);
+  expect(staged.inDialog, 'the film’s player is not on the stage').toBe(1);
+  expect(staged.controls, 'the staged film offers the reader no controls').toBe(true);
+  expect(staged.autoplay, 'the staged film declares autoplay').toBe(false);
+  expect(staged.playsinline, 'the film would go fullscreen on a phone instead of playing on the stage').toBe(true);
+  expect(staged.preload).toBe('metadata');
+  expect(staged.label).toBe('A film, served by the lane');
+  expect(staged.close, 'the close mark calls a film a photograph').toBe('Close enlarged film');
+  await expect(page.locator('.gallery-meta-title')).toHaveText('A film with a title');
+  await expect(page.locator('.gallery-meta-text'), 'the staged film does not say what it is').toHaveText(
+    description
+  );
 
   /* THE LADDER IS THE MANIFEST'S OWN, in its own order, with the poster the
      manifest published rather than the item's large still. */
-  expect(shape.player.sources.map((source) => source.type)).toEqual([
+  expect(staged.sources.map((source) => source.type)).toEqual([
     'video/mp4; codecs="hvc1"',
     'video/mp4',
     'video/mp4',
   ]);
-  expect(shape.player.sources[0].src).toContain(`/media/immutable/${'f'.repeat(64)}/gallery/film-2160.mp4`);
-  expect(shape.player.sources[1].src).toContain(`/media/immutable/${'0'.repeat(64)}/gallery/film-1080.mp4`);
-  expect(shape.player.sources[2].src).toContain(`/media/immutable/${'1'.repeat(64)}/gallery/film-720.mp4`);
-  expect(shape.player.poster).toContain(`/media/immutable/${'e'.repeat(64)}/gallery/film-poster.webp`);
+  expect(staged.sources[0].src).toContain(`/media/immutable/${'f'.repeat(64)}/gallery/film-2160.mp4`);
+  expect(staged.sources[1].src).toContain(`/media/immutable/${'0'.repeat(64)}/gallery/film-1080.mp4`);
+  expect(staged.sources[2].src).toContain(`/media/immutable/${'1'.repeat(64)}/gallery/film-720.mp4`);
+  expect(staged.poster).toContain(`/media/immutable/${'e'.repeat(64)}/gallery/film-poster.webp`);
 
   /* THE LADDER ALSO STATES A SIZE (issue 241), and the engine agrees with the
      arithmetic. The queries are the manifest's own numbers through the item's
      declared aspect; the floor carries none, so some rung always matches. */
-  expect(shape.player.sources.map((source) => source.media)).toEqual([
-    '(min-width: 1920px)',
-    '(min-width: 1280px)',
-    null,
-  ]);
+  expect(staged.sources.map((source) => source.media)).toEqual(['(min-width: 1920px)', '(min-width: 1280px)', null]);
   expect(
-    shape.player.sources.filter((source) => source.eligible).length,
+    staged.sources.filter((source) => source.eligible).length,
     'no rung is eligible at this viewport; the film is unplayable'
   ).toBeGreaterThan(0);
   expect(
-    shape.player.sources.at(-1).eligible,
+    staged.sources.at(-1).eligible,
     'the smallest rung is gated behind a query, so a narrow viewport can be offered nothing'
   ).toBe(true);
 
-  /* ONE BLOCK, and the strongest form of it: the two tiles are on screen
-     together, so the comparison is between two boxes of ONE layout rather
-     than between two states of a navigation. The film reduces inside its
-     square by `contain`, which is the owner's "reduce based on the media". */
-  expect(
-    shape.film,
-    `a film’s tile is ${shape.film.width}x${shape.film.height} against a still’s ${shape.still.width}x${shape.still.height}; the block changes size with the media`
-  ).toEqual(shape.still);
-  expect(shape.player.box, 'the player does not fill the tile it was given').toEqual(shape.film);
-  expect(
-    shape.player.fit,
-    'the film fills its tile by being cropped rather than by being reduced'
-  ).toBe('contain');
-
-  /* THE PRESS IS THE ONE SENSITIVE AREA, and it is the whole handover the
-     owner reported: pressing the play control declares the native controls,
-     retires the control that was pressed, and changes nothing about the box.
-     The film itself may or may not decode — the origin serves no media volume
-     and the sources 404 — so what is measured is the handover, which is the
-     part this component owns. */
-  const play = page.locator('.gallery-play');
-  const playBox = await play.boundingBox();
-  expect(playBox.width + subPixel, 'the play control is under the touch floor').toBeGreaterThanOrEqual(
-    touchFloorPx
-  );
-  expect(playBox.height + subPixel, 'the play control is under the touch floor').toBeGreaterThanOrEqual(
-    touchFloorPx
-  );
-  await expect(play).toHaveAttribute('aria-label', 'Play A film, served by the lane');
-  await play.click();
-  await expect
-    .poll(async () => page.locator('video').evaluate((node) => node.controls), {
-      message: 'the play press never handed the player its controls',
-      timeout: 5_000,
-    })
-    .toBe(true);
-  await expect(
-    play,
-    'the play control still sits over a player that is now the reader’s to drive'
-  ).toHaveCount(0);
-  /* AND IT PLAYED WHERE IT SITS: no dialog opened behind the press, and the
-     tile is the box it always was. */
-  await expect(page.locator('dialog.gallery-lightbox')).not.toBeVisible();
-  const afterPress = await page.evaluate(() => {
-    const film = window.document.querySelector('.gallery-tile[data-gallery-kind="video"]');
-    const box = film.getBoundingClientRect();
-    return { width: Math.round(box.width * 10) / 10, height: Math.round(box.height * 10) / 10 };
+  /* THE BOX IS RESERVED, with not one byte of the film or its poster served:
+     the stage's own inline cap, a block size from the size the item declares,
+     the block cap over that, and the film reduced inside it. */
+  expect(staged.fit, 'the staged film is cropped to its box rather than reduced inside it').toBe('contain');
+  expect(staged.declared, 'the staged film declares no size of its own, so its box waits for bytes').toEqual({
+    width: galleryManifestFixture.items[1].full.width,
+    height: galleryManifestFixture.items[1].full.height,
   });
-  expect(afterPress, 'handing the film its controls resized the tile it plays in').toEqual(shape.film);
+  expect(
+    Math.abs(staged.box.width - staged.stageCap),
+    `the staged film is ${staged.box.width}px across a ${staged.stageCap}px stage`
+  ).toBeLessThanOrEqual(1);
+  const reserved = Math.min(
+    (staged.box.width * staged.declared.height) / staged.declared.width,
+    staged.blockCap
+  );
+  expect(
+    Math.abs(staged.box.height - reserved),
+    `the staged film is ${staged.box.height}px tall with nothing loaded, not the ${reserved}px its declared size reserves`
+  ).toBeLessThanOrEqual(1);
+
+  /* A DRAG ACROSS THE FILM IS THE SCRUBBER'S, never a turn of the page: the
+     same deliberate leftward swipe that turns a still's stage, dispatched as
+     real touch PointerEvents on the film's stage, changes nothing. */
+  const stageBox = await page.locator('.gallery-stage').boundingBox();
+  await page.evaluate(
+    ([xs, y]) => {
+      const stageNode = window.document.querySelector('.gallery-stage');
+      const send = (type, x) =>
+        stageNode.dispatchEvent(
+          new PointerEvent(type, { pointerId: 31, pointerType: 'touch', clientX: x, clientY: y, bubbles: true })
+        );
+      send('pointerdown', xs[0]);
+      for (const x of xs.slice(1)) send('pointermove', x);
+      send('pointerup', xs.at(-1));
+    },
+    [[0.8, 0.7, 0.55, 0.4, 0.25].map((at) => stageBox.x + stageBox.width * at), stageBox.y + stageBox.height / 2]
+  );
+  await page.waitForTimeout(320);
+  await expect(counter, 'a horizontal drag across the film turned the page').toHaveText('Film 2 of 2');
+
+  /* PAGING NEVER STARTS A FILM. Onto the still by the pair, back onto the
+     film by the pair, and the same round again by the keyboard: the film
+     arrives on its poster each time and play() is never called again. */
+  const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
+  const previous = page.locator('.gallery-nav[data-gallery-nav="previous"]');
+  await next.click();
+  await expect(counter).toHaveText('Photograph 1 of 2');
+  await expect(page.locator('video'), 'the film’s player outlived its page').toHaveCount(0);
+  await expect(page.locator('.gallery-meta-text'), 'the film’s description stayed on the still').toHaveCount(0);
+  expect(await onPage(description), 'the film’s description is on the page with the still staged').toBe(false);
+  await previous.click();
+  await expect(counter).toHaveText('Film 2 of 2');
+  await expect(page.locator('dialog video')).toHaveCount(1);
+
+  /* THE KEYBOARD KEEPS ITS PLACE ACROSS A KIND. A turn between a film and a
+     still swaps the stage the pair sits in, so the control a reader pressed
+     is replaced by its twin: a real Enter on the focused control, and the
+     arrow keys after it, must each land with focus on the pair rather than
+     on the document, where the next key would reach nothing. */
+  const onPair = (side) =>
+    page.evaluate(
+      (which) => window.document.activeElement?.matches?.(`.gallery-nav[data-gallery-nav="${which}"]`) === true,
+      side
+    );
+  await next.focus();
+  await page.keyboard.press('Enter');
+  await expect(counter).toHaveText('Photograph 1 of 2');
+  await expect
+    .poll(() => onPair('next'), { message: 'a turn from the film onto the still dropped the keyboard' })
+    .toBe(true);
+  await page.keyboard.press('ArrowRight');
+  await expect(counter, 'an arrow key on the still’s pair did not turn the stage').toHaveText('Film 2 of 2');
+  await expect
+    .poll(() => onPair('next'), { message: 'a turn from the still onto the film dropped the keyboard' })
+    .toBe(true);
+  await page.keyboard.press('ArrowLeft');
+  await expect(counter).toHaveText('Photograph 1 of 2');
+  await page.keyboard.press('ArrowLeft');
+  await expect(counter).toHaveText('Film 2 of 2');
+  await expect(page.locator('dialog video')).toHaveCount(1);
+  /* An arrow pressed ON the film's player is the player's — it seeks — and
+     the stage stays where it is. */
+  await page.locator('dialog video').dispatchEvent('keydown', { key: 'ArrowRight' });
+  await painted();
+  await expect(counter, 'an arrow on the film’s own player turned the stage').toHaveText('Film 2 of 2');
+  expect(await plays(), 'paging onto a film started it').toEqual(['stage']);
+
+  /* CLOSING ends it: no player anywhere, focus on the film's own tile, the
+     description gone with the stage, and the row behind the scrim unmoved. */
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveJSProperty('open', false);
+  await expect(page.locator('video'), 'closing the stage left a player on the page').toHaveCount(0);
+  const focused = await page.evaluate(() => {
+    const active = window.document.activeElement;
+    return {
+      same: active === window.document.querySelector('.gallery-tile[data-gallery-kind="video"]'),
+      where: active?.getAttribute?.('aria-label') ?? active?.tagName ?? 'none',
+    };
+  });
+  expect(focused.same, `closing the film left focus on "${focused.where}" rather than on its tile`).toBe(true);
+  expect(await onPage(description), 'the film’s description outlived the stage').toBe(false);
+  expect(await galleryRowShape(page), 'opening and paging the film reshaped the row behind it').toEqual(rowBefore);
+  expect(await plays(), 'closing the stage started a film').toEqual(['stage']);
 
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -6792,10 +6986,11 @@ test('a film is a tile of its own square, plays inline behind one control, and n
  * volume), which is exactly right here: this measures resource SELECTION, and
  * selection happens before a single byte of the file is read.
  *
- * The walk onto the film is gone with the strip (owner directive, 2026-09-03,
- * issue 287): the film has its own tile and `preload="metadata"` sends the
- * element after a rendition the moment the row mounts, so the selection this
- * lane is about happens without anybody navigating anywhere. */
+ * The player lives on the stage now (issue 384): the row mounts no <video>
+ * and so asks for no rendition at all — asserted here before the press — and
+ * the press on the film's tile mounts the one player, whose
+ * `preload="metadata"` and start send it after a rendition at once, so the
+ * selection this lane is about happens on that press. */
 test('a phone never pulls the 4K rung, and the smallest rung is reachable at all (issue 241)', async ({
   page,
 }) => {
@@ -6806,7 +7001,12 @@ test('a phone never pulls the 4K rung, and the smallest rung is reachable at all
   });
   await serveGalleryManifest(page);
   await visit(page);
-  await page.locator('.gallery-tile[data-gallery-kind="video"]').scrollIntoViewIfNeeded();
+  const filmTile = page.locator('.gallery-tile[data-gallery-kind="video"]');
+  await filmTile.scrollIntoViewIfNeeded();
+  await settled(page);
+  expect(requested, 'the row asked for a rendition before anybody opened the film').toEqual([]);
+  await filmTile.click();
+  await expect(page.locator('dialog.gallery-lightbox')).toHaveJSProperty('open', true);
 
   // preload="metadata" means the element goes and gets one, so this waits for
   // the selection to have happened rather than for a fixed time.
@@ -6922,7 +7122,9 @@ test('the gallery grid fills the reading column edge to edge, in five equal cell
  * and neither replaces the other. The claim it was protecting is not dropped,
  * it is made stronger and measured elsewhere: the film lane above compares
  * a film's tile against the still's tile in ONE layout, which no reservation
- * bug can satisfy by moving both boxes together. */
+ * bug can satisfy by moving both boxes together. The stage does page from a
+ * still onto a film again (issue 384), and that lane holds the row behind the
+ * scrim to its exact shape across the whole round. */
 
 /* THE PAGE DOES NOT SCROLL BEHIND THE LIGHTBOX (issue 241).
  *
@@ -10572,12 +10774,13 @@ test('the stage advances on a swipe and stays put on a fidget (issue 219; owner 
  *
  * THE FILM-SWIPE LANE IS DELETED with it. "A film swipes like a still until
  * the reader presses play" (issue 243) was about a film sharing the strip's
- * one stage behind a veil that carried the gesture: no stage is shared now, a
- * film sits in its own tile, and .gallery-film-veil does not exist. The two
- * claims inside it that were about the READER are both kept — a press is the
- * only thing that starts a film, and the press is what hands over the native
- * controls — and both are measured in the film-tile lane earlier in this file,
- * on the surface that actually has them.
+ * one stage behind a veil that carried the gesture, and .gallery-film-veil
+ * does not exist. A film shares the dialog with the stills again since issue
+ * 384, but its stage carries no swipe at all — a horizontal drag across a
+ * film is the native scrubber's — and the claims that were about the READER
+ * are all measured in the film lane earlier in this file: a drag across the
+ * film never turns the page, the press on the film's tile is the one start,
+ * and that press hands over the native controls.
  *
  * THE OFFSET-WRITE LANE IS DELETED with both. "A dragged gallery writes its
  * offset once a frame, not once an event" (issue 243) counted --gallery-drag
