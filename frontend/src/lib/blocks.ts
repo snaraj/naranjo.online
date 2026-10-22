@@ -603,13 +603,16 @@ export type ChronicleSeries = {
  * contributions). `tone` is the ink slot the line is drawn in — 'grid' for
  * the calendar's own green, or a source's slot ('0', '1', …) — a style slot,
  * never a name. `readings` is each day in words ("12 contributions"), parallel
- * to `days`, the page's dash where the day was not measured. */
+ * to `days`, the page's dash where the day was not measured. `headlines` are
+ * the figures its seal reads beside the graph (owner, 2026-10-21: the figures
+ * follow the picked seal); every layer carries the same number of them. */
 export type ChronicleLayer = {
   readonly key: string;
   readonly label: string;
   readonly tone: string;
   readonly series: ChronicleSeries;
   readonly readings: readonly string[];
+  readonly headlines: readonly ChronicleHeadline[];
 };
 
 /* One of the large figures beside the graph. At rest it reads its own figure
@@ -619,7 +622,7 @@ export type ChronicleHeadline = {
   readonly key: string;
   readonly label: string;
   readonly figure: string;
-  /* "all time", "past year", "+114B past year". */
+  /* "all time", "past year", "overall", or the latest measured day. */
   readonly caption: string;
   readonly daily?: ChronicleSeries;
 };
@@ -650,7 +653,6 @@ export type ChronicleProps = {
   readonly weeks: number;
   /* The diagram's layers; the first is the one it opens on. */
   readonly layers: readonly ChronicleLayer[];
-  readonly headlines: readonly ChronicleHeadline[];
   readonly accounts: readonly ChronicleAccount[];
   readonly months: readonly ChronicleMonth[];
   /* The room every account holds for its facts and its models, filled or
@@ -658,6 +660,8 @@ export type ChronicleProps = {
      label is one whose payload is still in flight). */
   readonly factSlots: number;
   readonly modelSlots: number;
+  /* The figures every layer carries, held empty while no layer has landed. */
+  readonly figureSlots: number;
   /* The last day the window covers (today), an index into `days`. */
   readonly lastDay: number;
   readonly emptyNote: string;
@@ -726,8 +730,8 @@ export type MediaGallerySource = {
  * themselves. */
 export type MediaGalleryVideo = {
   /* The frame shown before play. Distinct from fullSrc so the operator can
-   * publish a dedicated poster, and defaulted to fullSrc by the adapter when
-   * they have not. */
+   * publish a dedicated poster, and defaulted to the preview by the adapter
+   * when they have not (galleryPosterAsset, issue 239). */
   readonly posterSrc: string;
   /* One to three renditions, best first. */
   readonly sources: readonly MediaGallerySource[];
@@ -735,13 +739,13 @@ export type MediaGalleryVideo = {
 
 export type MediaGalleryItem = {
   readonly key: string;
-  /* The small derivative the feed frame shows; loaded eagerly-lazy like any
-   * other card. A STILL's stage shows it. A moving item's stage mounts its
-   * player instead (issue 233), so for a film this is the small derivative
-   * the manifest published and the strip does not render it. */
+  /* The small derivative every tile shows, still or film (issue 384); loaded
+   * lazily like any other card. A still's stage paints it while the full
+   * derivative loads; a film's stage mounts its player instead. */
   readonly previewSrc: string;
-  /* The full-resolution derivative, loaded for the first time only when a
-   * reader enlarges the frame — which only a still can be. */
+  /* The full-resolution derivative, loaded only when a reader opens a still
+   * on the stage. A film's stage plays its sources, so a film's is never
+   * shown. */
   readonly fullSrc: string;
   readonly alt: string;
   /* Optional per-item metadata (owner directive 2026-08-25, issue 202).

@@ -1865,9 +1865,9 @@ h1 {
   --gallery-nav-ink: white;
   --gallery-nav-rest-opacity: 0.7;
   --gallery-nav-inset: 0.375rem;
-  /* The film's play control (issue 243): the painted disc inside the 44px
-     target, the ink on it, and how far the triangle is nudged off centre so a
-     right-pointing glyph reads centred in a circle. */
+  /* A film tile's play mark (issue 384; issue 243's control before it): the
+     painted disc, the ink on it, and how far the triangle is nudged off centre
+     so a right-pointing glyph reads centred in a circle. */
   --gallery-play-button-size: 3rem;
   --gallery-play-button-surface: rgba(0, 0, 0, 0.55);
   --gallery-play-button-ink: white;

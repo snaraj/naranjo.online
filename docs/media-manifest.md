@@ -113,10 +113,10 @@ row costs one row.
 - `kind: video` must carry `sources`: one to three entries of `path`,
   `sha256`, `type` and `height`, in the operator's own preference order.
   `poster` is optional; without one the PREVIEW derivative stands in, not the
-  large still. A poster is painted into a stage a few hundred CSS pixels wide,
-  and enlarging is stills-only — so a film's full-size still is shown to nobody
-  at any size, and using it as a poster paid several times over for a rendition
-  nothing else on the page uses.
+  large still. A poster is painted at no more than the stage's width, and a
+  film's stage plays its sources rather than showing its still — so a film's
+  full-size still is shown to nobody at any size, and using it as a poster paid
+  several times over for a frame the film replaces when it starts.
 - A source `type` must be `video/mp4` or `video/webm`, optionally with a
   single `codecs="…"` parameter over a narrow character set. Those two are
   the video rows of the origin's own reviewed media types — offering the

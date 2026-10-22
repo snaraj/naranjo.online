@@ -2641,7 +2641,7 @@ test('the source ladder renders in the manifest’s own order, never re-ranked (
   // The browser takes the first source it can decode, so ORDER is the
   // preference. A sort, filter or reverse here would silently hand a reader
   // different bytes than the operator published.
-  assert.match(mediaGallery, /\{#each tile\.video\.sources as source \(source\.src\)\}/);
+  assert.match(mediaGallery, /\{#each item\.video\.sources as source \(source\.src\)\}/);
   /* The rung now also declares WHICH VIEWPORT may ask for it (issue 241), and
      that is an addition to the ladder rather than a re-ranking of it: the
      attribute is bound straight from the source the adapter built, so the
@@ -2822,21 +2822,36 @@ test('the coding-projects block declares no heading of its own (owner ruling, 20
 /* THE GALLERY IS A ROW OF TILES (owner directive, 2026-09-03, issue 287). The
  * single visible frame of issues 176/202/219/243/265 is superseded by a grid of
  * reserved square tiles, with the native dialog as the stage. These pins keep
- * what those rulings were FOR — one full-size picture at a time, bytes only on
- * demand, films inline and never autoplaying, reserved boxes, 44px controls,
- * sets as data, tokens for every dimension — and pin the behaviour rather than
- * the markup wherever the source lets them. The control tile beside the row is
- * gone (owner, 2026-10-17: "gallery should not have a right most box with
+ * what those rulings were FOR — one full-size item at a time, bytes only on
+ * demand, nothing autoplaying, reserved boxes, 44px controls, sets as data,
+ * tokens for every dimension — and pin the behaviour rather than the markup
+ * wherever the source lets them. The control tile beside the row is gone
+ * (owner, 2026-10-17: "gallery should not have a right most box with
  * information and dead content, instead the images should span across the
  * space, so we should show 5 images not 4 … make the design intuitive enough
- * to where you don't need to explain what to do"). */
+ * to where you don't need to explain what to do").
+ *
+ * A FILM IS NO LONGER PLAYED IN ITS TILE (issue 384). The user, on an iPhone,
+ * 2026-10-22: "the videos are not responsive to the touch, I should be able to
+ * click the video to expand it just as the pictures in the gallery". That
+ * supersedes issue 233's inline film and the play control's "the sensitive
+ * area should only be the button and not the entire video", so a film's tile
+ * is the same button a still's is and the stage pages the whole set. */
 const galleryStyle = styleBlock(mediaGallery);
 
 test('the gallery is a row of five reserved square tiles that is the column, with nothing beside it and no instructions (owner directive, 2026-09-03, issue 287; 2026-10-17)', () => {
   assert.match(mediaGallery, /tiles = 5 \}: MediaGalleryProps = \$props\(\)/, 'five pictures span the column; the count is a prop with that default');
   assert.match(mediaGallery, /visible\.slice\(0, Math\.max\(1, tiles\)\)/);
   assert.match(mediaGallery, /<div class="gallery-grid" data-gallery-tiles=\{shownTiles\.length\}>/);
-  assert.match(mediaGallery, /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind="image"/);
+  /* ONE TILE SHAPE (issue 384): a still's tile and a film's are the same
+     button with the same press and the same name pattern, the kind a data
+     attribute rather than a second branch of markup. */
+  assert.match(
+    mediaGallery,
+    /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind=\{tile\.video \? 'video' : 'image'\}\s+onclick=\{\(event\) => open\(tile, event\.currentTarget\)\}\s+aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}\s*>/,
+    'every tile, still or film, is the one button that opens the stage'
+  );
+  assert.equal((mediaGallery.match(/class="gallery-tile"/g) ?? []).length, 1, 'a second tile shape is back beside the button');
   assert.match(mediaGallery, /class="gallery-thumb"\s+src=\{tile\.previewSrc\}\s+alt=""[\s\S]*?loading="lazy"\s+decoding="async"/, 'a thumbnail is decoration inside a labelled button, lazy and async');
   assert.match(mediaGallery, /aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}/);
   assert.match(galleryStyle, /\.gallery-grid \{[^}]*grid-template-columns: repeat\(var\(--gallery-columns\), minmax\(0, 1fr\)\)/, 'the row fills the column; no gutter is dead');
@@ -2866,18 +2881,47 @@ test('opening a tile is the only way onto the stage, a native <dialog> that load
   assert.match(stage, /src=\{item\.fullSrc\}/, 'the full derivative loads inside the stage branch');
   assert.doesNotMatch(mediaGallery.replace(stage, ''), /fullSrc/, 'and nowhere else');
   assert.match(stage, /<source media=\{`\(max-width: \$\{item\.previewWidth\}px\)`\} srcset=\{item\.previewSrc\} \/>/, 'a phone gets the preview rung the manifest measured (issue 241)');
-  assert.match(mediaGallery, /aria-label="Close enlarged photograph"/);
+  /* The close mark names what is staged (issue 384): a film is not a
+     photograph, so the label is the staged item's noun rather than a literal. */
+  assert.match(mediaGallery, /aria-label=\{item === undefined \? 'Close' : `Close enlarged \$\{itemNoun\(item\)\}`\}/);
+  assert.doesNotMatch(mediaGallery, /Close enlarged photograph/, 'the close mark calls every staged item a photograph again');
   assert.match(mediaGallery, /async function onDialogClose\(\): Promise<void> \{\s*enlarged = false;\s*await tick\(\);\s*openerEl\?\.focus\(\);/, 'closing hands focus back to the tile that opened the stage');
   assert.match(mediaGallery, /if \(event\.key === 'ArrowRight'\) next\(\);\s*else if \(event\.key === 'ArrowLeft'\) previous\(\);/);
   assert.match(mediaGallery, /if \(event\.target === dialogEl\) dialogEl\?\.close\(\);/, 'the backdrop closes it');
 });
 
-test('the stage pages the stills with prev/next, the arrow keys and a swipe — all inside 44px targets — and wraps at both ends', () => {
-  assert.match(mediaGallery, /const stills = \$derived\(visible\.filter\(\(candidate\) => candidate\.video === undefined\)\);/, 'a film is played where it sits, never paged onto the stage');
+test('the stage pages the whole set, stills and films alike, with prev/next, the arrow keys and a swipe — all inside 44px targets — and wraps at both ends (issue 384)', () => {
+  /* The WHOLE chosen set, unfiltered: the count, the item and the opener all
+     read `visible`, so a film is a stop on the walk like any still. */
+  assert.match(mediaGallery, /const total = \$derived\(visible\.length\);/, 'the stage counts a subset of the set again');
+  assert.match(mediaGallery, /const item = \$derived\(visible\[shown\]\);/, 'the stage shows a subset of the set again');
+  assert.match(mediaGallery, /index = Math\.max\(0, visible\.indexOf\(chosen\)\);/, 'a tile opens the stage at a place in some other list');
+  assert.doesNotMatch(
+    withoutHtmlComments(mediaGallery).replace(/\/\*[\s\S]*?\*\//g, ''),
+    /\bstills\b|visible\.filter\(/,
+    'the stage pages a filtered subset again'
+  );
   assert.match(mediaGallery, /index = \(shown \+ 1\) % total;/);
   assert.match(mediaGallery, /index = \(shown - 1 \+ total\) % total;/);
-  assert.match(mediaGallery, /data-gallery-nav="previous"/);
-  assert.match(mediaGallery, /data-gallery-nav="next"/);
+  /* ONE PAIR, drawn by both kinds of stage from one snippet rather than two
+     copies that could drift apart, its names the neighbours' own nouns. */
+  assert.equal((mediaGallery.match(/data-gallery-nav="previous"/g) ?? []).length, 1, 'the previous control is written twice');
+  assert.equal((mediaGallery.match(/data-gallery-nav="next"/g) ?? []).length, 1, 'the next control is written twice');
+  assert.equal((mediaGallery.match(/\{@render pager\(\)\}/g) ?? []).length, 2, 'a kind of stage lost its pair');
+  assert.match(mediaGallery, /aria-label=\{`Previous \$\{itemNoun\(visible\[\(shown - 1 \+ total\) % total\]\)\}`\}/);
+  assert.match(mediaGallery, /aria-label=\{`Next \$\{itemNoun\(visible\[\(shown \+ 1\) % total\]\)\}`\}/);
+  /* A turn between a still and a film swaps the stage the pair sits in, so
+     focus is read off the pressed control BEFORE the swap and handed to its
+     twin after it; both turns do it. */
+  assert.match(mediaGallery, /index = \(shown \+ 1\) % total;\s*void keepPairFocus\(\);/, 'a forward turn strands a keyboard reader on the document');
+  assert.match(mediaGallery, /index = \(shown - 1 \+ total\) % total;\s*void keepPairFocus\(\);/, 'a backward turn strands a keyboard reader on the document');
+  assert.match(
+    mediaGallery,
+    /async function keepPairFocus\(\): Promise<void> \{\s*const side = document\.activeElement\?\.getAttribute\('data-gallery-nav'\);\s*if \(!side\) return;\s*await tick\(\);\s*dialogEl\?\.querySelector<HTMLElement>\(`\.gallery-nav\[data-gallery-nav="\$\{side\}"\]`\)\?\.focus\(\);\s*\}/,
+    'the pair’s focus is not read before the swap and handed to the twin after it'
+  );
+  /* An arrow pressed on a film's own player seeks it rather than turning. */
+  assert.match(mediaGallery, /if \(event\.target instanceof HTMLMediaElement\) return;\s*if \(event\.key === 'ArrowRight'\) next\(\);/, 'an arrow on the player turns the stage instead of seeking');
   assert.match(galleryStyle, /\.gallery-nav \{[^}]*inline-size: var\(--control-target\);\s*block-size: var\(--control-target\);/);
   assert.match(mediaGallery, /<div class="gallery-stage" use:swipeHorizontal=\{swipe\}>/);
   assert.match(galleryStyle, /\.gallery-stage \{[^}]*touch-action: pan-y;/, 'the swipe never contests the page’s vertical scroll');
@@ -2886,19 +2930,77 @@ test('the stage pages the stills with prev/next, the arrow keys and a swipe — 
   assert.match(mediaGallery, /aria-live="polite"/, 'every move is announced as a sentence');
 });
 
-test('a film plays inline in its own tile behind one play control — one at a time, never in the dialog, and nothing autoplays (issues 233, 243, 207)', () => {
-  const filmTile = /<div class="gallery-tile" data-gallery-kind="video">([\s\S]*?)<\/div>\s*\{:else\}/.exec(mediaGallery)?.[1] ?? '';
-  assert.ok(filmTile.length > 0, 'the film tile is not where this pin expects it');
-  assert.match(filmTile, /<video\s+class="gallery-player"\s+controls=\{playingKey === tile\.key\}\s+playsinline\s+preload="metadata"\s+poster=\{tile\.video\.posterSrc\}/);
+test('a film is a tile that opens the stage, where it is one native player started only by the press that opened it — and nothing autoplays (issue 384, superseding issues 233 and 243; issue 207)', () => {
+  /* THE GRID HOLDS NO PLAYER. A film's tile is the still's button over the
+     film's own preview, with a play mark that is decoration only. */
+  const grid = /<div class="gallery-grid" data-gallery-tiles=\{shownTiles\.length\}>([\s\S]*?)\n {6}<\/div>\n {4}\{\/snippet\}/.exec(mediaGallery)?.[1] ?? '';
+  assert.ok(grid.length > 0, 'the grid is not where this pin expects it');
+  assert.doesNotMatch(grid, /<video|<source/, 'the grid mounts a player again');
+  assert.match(
+    grid,
+    /\{#if tile\.video\}\s*<span class="gallery-play-disc" aria-hidden="true">\s*<Icon name="play" slot="chrome" \/>\s*<\/span>\s*\{\/if\}\s*<\/button>/,
+    'a film’s tile lost its play mark, or the mark became something a reader can reach'
+  );
+  assert.doesNotMatch(mediaGallery, /gallery-player|class="gallery-play"|startFilm|playingKey|\bplayers\b/, 'the inline player and its control are back');
+  assert.match(galleryStyle, /\.gallery-play-disc \{\s*position: absolute;\s*inset: 0;\s*margin: auto;/, 'the play mark is not centred over the picture');
+  assert.match(galleryStyle, /\.gallery-tile:hover \.gallery-play-disc,\s*\.gallery-tile:focus-visible \.gallery-play-disc \{\s*opacity: 1;/, 'the mark no longer answers the tile it sits on');
+
+  /* THE STAGE HOLDS EXACTLY ONE PLAYER, in the film's own branch, the player
+     keyed by the item so paging builds a fresh one. A still is NOT keyed: a
+     rebuilt <img> has no size until its bytes arrive, so a keyed still
+     collapses the stage between turns. */
+  const stage = /\{#if enlarged && item !== undefined\}([\s\S]*)\{\/if\}\s*<\/dialog>/.exec(mediaGallery)?.[1] ?? '';
+  assert.ok(stage.length > 0, 'the stage branch is not where this pin expects it');
+  const film = /\{#if item\.video\}([\s\S]*?)\{:else\}/.exec(stage)?.[1] ?? '';
+  const still = /\{#if item\.video\}[\s\S]*?\{:else\}([\s\S]*?)<div class="gallery-lightbox-meta">/.exec(stage)?.[1] ?? '';
+  assert.ok(film.length > 0 && still.length > 0, 'the stage is no longer one choice between a film and a still');
+  assert.equal((mediaGallery.match(/<video\b/g) ?? []).length, 1, 'the component mounts a number of players other than one');
+  assert.match(
+    film,
+    /\{#key item\.key\}\s*<video\s+class="gallery-lightbox-film"\s+controls\s+playsinline\s+preload="metadata"\s+poster=\{item\.video\.posterSrc\}\s+aria-label=\{item\.alt\}\s+width=\{item\.width \?\? width\}\s+height=\{item\.height \?\? height\}\s+use:startIfPressed=\{item\.key\}\s*>[\s\S]*?<\/video>\s*\{\/key\}/,
+    'the stage player is not one keyed native player with controls, inline, metadata-only and on the manifest’s poster'
+  );
+  assert.doesNotMatch(still, /\{#key/, 'a still is rebuilt on every turn, so the stage collapses until its bytes arrive');
+  assert.match(
+    film,
+    /\{#each item\.video\.sources as source \(source\.src\)\}\s*<source src=\{source\.src\} type=\{source\.type\} media=\{source\.media\} \/>\s*\{\/each\}\s*<\/video>/,
+    'the stage player does not carry the manifest’s ladder as written'
+  );
+  /* A horizontal drag across a film is the native scrubber's, never a turn. */
+  assert.match(film, /<div class="gallery-stage">/);
+  assert.doesNotMatch(film, /swipeHorizontal/, 'a drag across a film pages the stage');
+  assert.match(still, /<div class="gallery-stage" use:swipeHorizontal=\{swipe\}>/, 'a still lost its swipe');
+  assert.equal((mediaGallery.match(/use:swipeHorizontal/g) ?? []).length, 1, 'a second surface swipes the stage');
+
+  /* NOTHING AUTOPLAYS, and the one start is the press that opened the film. */
   assert.doesNotMatch(mediaGallery, /\bautoplay\b/, 'no element ever carries the attribute');
   assert.equal((mediaGallery.match(/\.play\(/g) ?? []).length, 1, 'exactly one call ever starts a film');
-  assert.match(mediaGallery, /function startFilm\(key: string\): void \{\s*playingKey = key;\s*void players\[key\]\?\.play\(\)\.catch\(\(\) => \{\}\);/);
-  assert.match(filmTile, /onclick=\{\(\) => startFilm\(tile\.key\)\}/, 'and it is the press on the control');
-  assert.match(filmTile, /onended=\{\(\) => \(playingKey = undefined\)\}/, 'a finished film hands its tile back');
-  const stage = /\{#if enlarged && item !== undefined\}([\s\S]*)\{\/if\}\s*<\/dialog>/.exec(mediaGallery)?.[1] ?? '';
-  assert.doesNotMatch(stage, /<video/, 'the dialog never holds a player');
-  assert.match(galleryStyle, /\.gallery-tile \{[^}]*background: var\(--gallery-stage-ground\);/, 'a poster in flight sits on a ground, not a hole (issue 239)');
-  assert.match(galleryStyle, /\.gallery-player \{[^}]*object-fit: contain;/, 'the film reduces inside the square rather than the square growing (issue 243)');
+  assert.match(
+    mediaGallery,
+    /function startIfPressed\(node: HTMLVideoElement, key: string\): void \{\s*if \(key === pressedKey\) \{\s*pressedKey = undefined;\s*void node\.play\(\)\.catch\(\(\) => \{\}\);\s*\}\s*\}/,
+    'the one start is not the pressed-key rule'
+  );
+  assert.match(mediaGallery, /let pressedKey: string \| undefined;/, 'the pending press became state something renders from');
+  assert.match(
+    mediaGallery,
+    /function open\(chosen: MediaGalleryItem, from: EventTarget \| null\): void \{[^}]*pressedKey = chosen\.video === undefined \? undefined : chosen\.key;/,
+    'opening a film from its tile no longer asks for it to start'
+  );
+  assert.equal(
+    [...mediaGallery.matchAll(/pressedKey = (?!undefined;)/g)].length,
+    1,
+    'something other than a tile press asks for a film to start'
+  );
+  assert.match(mediaGallery, /function next\(\): void \{\s*pressedKey = undefined;/, 'paging forward onto a film starts it');
+  assert.match(mediaGallery, /function previous\(\): void \{\s*pressedKey = undefined;/, 'paging back onto a film starts it');
+
+  /* The film's box on the stage, all of it tokens and its own attributes. */
+  assert.match(
+    galleryStyle,
+    /\.gallery-lightbox-film \{\s*display: block;\s*inline-size: var\(--gallery-lightbox-max-inline\);\s*block-size: auto;\s*max-block-size: var\(--gallery-image-max-block\);\s*object-fit: contain;\s*background: var\(--gallery-stage-ground\);\s*\}/,
+    'the stage film does not reserve the stage’s box, or crops instead of reducing'
+  );
+  assert.match(galleryStyle, /\.gallery-tile \{[^}]*background: var\(--gallery-stage-ground\);/, 'a preview in flight sits on a ground, not a hole (issue 239)');
 });
 
 test('the media sets are data: kind-derived by default, named by the manifest, chrome only when there is a choice (issue 275)', () => {
@@ -2918,7 +3020,7 @@ test('the media sets are data: kind-derived by default, named by the manifest, c
     /return members\.every\(\(candidate\) => candidate\.video !== undefined\) \? 'film' : 'photo';/,
     'a set reads as film only when every member is one; a mixed set is pictures'
   );
-  assert.match(mediaGallery, /chosenSet = name;\s*playingKey = undefined;\s*index = 0;/, 'a set change hands every film back and returns the stage to the start');
+  assert.match(mediaGallery, /chosenSet = name;\s*pressedKey = undefined;\s*index = 0;/, 'a set change forgets a pending press and returns the stage to the start');
   assert.match(galleryStyle, /\.gallery-set \{[^}]*min-inline-size: var\(--control-target\);\s*min-block-size: var\(--control-target\);/);
 });
 
@@ -2932,9 +3034,15 @@ test('the gallery states no colour or length of its own — every dimension is a
   for (const px of rules.match(/-?\d+px/g) ?? []) {
     assert.ok(['2px', '-2px', '-4px', '999px'].includes(px), `the only px literals are the focus ring and the pill radius, not ${px}`);
   }
+  /* Twice, and both inside the one guard: the still's cap and the film's
+     (issue 384), each over its own token base outside it. */
   const svh = rules.match(/80svh/g) ?? [];
-  assert.equal(svh.length, 1);
-  assert.match(rules, /@supports \(max-block-size: 1svh\) \{\s*\.gallery-lightbox-image \{\s*max-block-size: 80svh;/, 'the dynamic unit is guarded, over a token base');
+  assert.equal(svh.length, 2, 'the dynamic cap is stated somewhere other than once for each stage element');
+  assert.match(
+    rules,
+    /@supports \(max-block-size: 1svh\) \{\s*\.gallery-lightbox-image \{\s*max-block-size: 80svh;\s*\}\s*\.gallery-lightbox-film \{\s*max-block-size: 80svh;\s*\}\s*\}/,
+    'the dynamic unit is guarded, over a token base'
+  );
 });
 
 test('the close mark is small, off the artwork and a 44px target; the scrim and the stage caps are tokens (issue 202)', () => {
