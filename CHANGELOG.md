@@ -7,6 +7,28 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.98] - 2026-10-22
+
+### Changed
+
+- A film in the gallery opens on the stage the way a picture does: every
+  tile is one button over the same preview, a film's marked with a play sign,
+  and the stage pages through pictures and films alike. The film plays in
+  the browser's own player, started by the press that opened it; its arrow
+  keys and its scrubber stay its own (#384).
+- The trackers' roll opens on Codex, then Claude Code, then the
+  contributions, in the order the source vocabulary lists them rather than
+  whichever source was busiest. Each seal carries its own figures: a source
+  reads its tokens over its whole life, followed day by day as the graph is
+  read, and its latest measured day; the contributions read pull requests
+  closed and commits pushed (#385).
+
+### Fixed
+
+- While the trackers' data is on its way the roll holds the figures it will
+  fill, instead of saying no data was captured and growing when it lands;
+  with nothing to draw, the accounts that reported read alone (#385).
+
 ## [0.1.97] - 2026-10-21
 
 ### Security
