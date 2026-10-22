@@ -80,6 +80,10 @@ const accountRecords: readonly { key: string; term: string }[] = [
 const reportedWindows = 2;
 export const accountFactSlots = tomeClasses.length + reportedWindows + accountRecords.length;
 export const accountModelSlots = maxDrawnModels;
+/* Every seal's figures: a source's lifetime and latest day, the
+ * contributions' pull requests and commits. The roll holds this many while
+ * its payloads are in flight, so their landing moves nothing. */
+export const chronicleFigureSlots = 2;
 
 export const chronicleEmptyNote = 'no tracker data captured yet';
 export const contributionsKey = 'contributions';
@@ -284,8 +288,9 @@ export function chronicleProps(
      source's seal reads that source's tokens over its whole life, followed
      day by day as the reader scrubs, and its latest measured day; the
      contributions' seal reads what the contributions are made of. Every seal
-     carries the same number of figures, so a change of seal moves nothing.
-     The token seals keep the calendar's order, which is the vocabulary's. */
+     carries the same number of figures (chronicleFigureSlots), so a change
+     of seal moves nothing. The token seals keep the calendar's order, which
+     is the vocabulary's (commits.ts). */
   const layers: ChronicleLayer[] = tokenSets.map((set, index) =>
     layerOf(set, lines[index], String(index), tokenHeadlines(lines[index], lifetimeOf(sourceLabelOf(set)), days, last))
   );
@@ -369,6 +374,7 @@ export function chronicleProps(
     months,
     factSlots: accountFactSlots,
     modelSlots: accountModelSlots,
+    figureSlots: chronicleFigureSlots,
     lastDay: last,
     emptyNote: chronicleEmptyNote,
     ariaLabel: 'Trackers over the past year'

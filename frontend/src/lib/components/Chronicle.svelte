@@ -46,6 +46,7 @@
     months,
     factSlots,
     modelSlots,
+    figureSlots,
     lastDay,
     emptyNote,
     ariaLabel
@@ -81,7 +82,20 @@
 
   const layer = $derived(layers.find((candidate) => candidate.key === layerKey) ?? layers[0]);
   /* The figures beside the graph are the picked seal's own (owner, 2026-10-21). */
-  const headlines = $derived(layer?.headlines ?? []);
+  /* While no layer has landed the figures' room is held: each slot sets one
+     no-break space in every line, so it takes a landed figure's lines and
+     baselines exactly and shows nothing. */
+  const held = '\u00a0';
+  const headlines = $derived(
+    layer?.headlines ??
+      Array.from({ length: figureSlots }, (_, index) => ({
+        key: `held-${index}`,
+        label: held,
+        figure: held,
+        caption: held,
+        daily: undefined
+      }))
+  );
   const firstPresent = $derived(days.findIndex((day) => !day.absent));
 
   /* --- The calendar's weeks --------------------------------------------- */
@@ -429,8 +443,14 @@
 <PanelShell {status} {generatedAt}>
   <FeedCard variant="board">
     <div class="chronicle" data-shown={shown ? 'true' : 'false'}>
-      {#if days.length === 0 && layers.length === 0}
-        <p class="chronicle-note">{emptyNote}</p>
+      {#if days.length === 0 && weeks === 0}
+        <!-- Nothing is drawn and nothing is on its way: the accounts that
+          reported read alone, and with none the roll says so. -->
+        {#if accounts.length > 0}
+          <Tome {accounts} {factSlots} {modelSlots} />
+        {:else}
+          <p class="chronicle-note">{emptyNote}</p>
+        {/if}
       {:else}
         <!-- THE ROLL: a cord between two pegs, two upright rollers, and the
           parchment between them; all but the parchment is drawn, and none of
@@ -449,7 +469,7 @@
                 {#each headlines as headline, index (headline.key)}
                   <div class="chronicle-headline" data-opening={index === 0 ? 'true' : 'false'}>
                     <dt class="chronicle-label">
-                      {#if index === 0}<span class="chronicle-initial">{headline.label.charAt(0)}</span>{headline.label.slice(1)}{:else}{headline.label}{/if}
+                      {#if index === 0 && headline.label.trim() !== ''}<span class="chronicle-initial">{headline.label.charAt(0)}</span>{headline.label.slice(1)}{:else}{headline.label}{/if}
                     </dt>
                     <dd class="chronicle-figure">{headlineFigure(headline.figure, headline.daily)}</dd>
                     <dd class="chronicle-caption">{headlineCaption(headline.caption, headline.daily)}</dd>

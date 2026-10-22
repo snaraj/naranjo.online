@@ -37,11 +37,14 @@
  * (owner ruling, 2026-08-24). A third reporting source would add a fourth
  * segment with no edit anywhere.
  *
- * THE CALENDAR OPENS ON THE BUSIEST SERIES (owner directive, 2026-09-04,
- * issue 294: "Codex has the most activity"). The lead source is named once
- * below; its set goes first, the other token sets follow in payload order,
- * and the contributions calendar closes the row. The component draws sets[0]
- * until a reader presses a segment, so the order IS the default.
+ * THE TOKEN SETS TAKE THE VOCABULARY'S ORDER (owner, 2026-10-21, issue 385:
+ * "the order should be codex, then claude then contributions"), which
+ * replaces opening on the busiest series (2026-09-04, issue 294): a source
+ * that overtakes another no longer reorders the page. The order is the
+ * source file's, so no key is spelled here; a source the file does not name
+ * follows the named ones in payload order, and the contributions calendar
+ * closes the row. The component draws sets[0] until a reader presses a
+ * segment, so the order IS the default.
  *
  * NO PANEL LABEL (same directive). The activity envelope's title names the
  * version-control host, and a calendar that opens on a token series cannot
@@ -73,13 +76,12 @@ import {
 import { panelAge, panelKinds } from './panels.ts';
 import type {
   PanelEnvelope,
-  TokenUsageSource,
   VCSActivityData,
   VCSCommit,
   VCSPrivateDay
 } from './panels';
 import { codingProjectsPanelId, projectTableProps } from './projects.ts';
-import { sourceName, tokenUsagePanelId, tokenUsageSources } from './token-usage.ts';
+import { knownSourceKeys, sourceName, tokenUsagePanelId, tokenUsageSources } from './token-usage.ts';
 
 /* The panels each block binds, in the order its adapter reads them. The block
  * modules name them once, from here, so the order a binding declares and the
@@ -148,35 +150,11 @@ const noMark = '—';
  * anywhere. */
 export const contributionsSetLabel = 'Contributions';
 
-/* The activity a series carries: the sum over every day it reports. */
-function seriesSum(totals: readonly number[]): number {
-  return totals.reduce((running, value) => running + value, 0);
-}
-
-/* The source whose calendar the section opens on: the one that reported the
- * MOST activity, measured as the sum over the days its series carries, with
- * payload order breaking a tie. The owner's directive (2026-09-04, issue 294)
- * named the lead for exactly that reason — "has the most activity" — so the
- * rule keeps the reason and drops the name: a source that overtakes another
- * opens the section without an edit here, a payload that stops reporting the
- * lead opens on whichever set remains, and no wire key is spelled in this
- * file (the vocabulary sweep, issue #267). A source with no days carries no
- * activity and cannot lead, exactly as it is offered no segment below. */
-export function leadTokenSource(sources: readonly TokenUsageSource[]): string | undefined {
-  let lead: string | undefined;
-  let most = -1;
-  for (const source of sources) {
-    const series = source.series;
-    if (series === undefined || series.totals.length === 0) {
-      continue;
-    }
-    const activity = seriesSum(series.totals);
-    if (activity > most) {
-      most = activity;
-      lead = source.label;
-    }
-  }
-  return lead;
+/* A source's place in the vocabulary's order: its index in the source file,
+ * or after every named source when the file does not name it. */
+function vocabularyRank(key: string): number {
+  const index = knownSourceKeys.indexOf(key);
+  return index === -1 ? knownSourceKeys.length : index;
 }
 
 /* A token set is named for the source that reported it, through the ONE
@@ -371,13 +349,11 @@ export function contributionCalendarProps(
       format: formatMagnitude
     });
   }
-  /* Lead source first, the rest in payload order, contributions last. A
-     stable partition rather than a sort comparator, so two payload orders
-     that agree about the lead agree about everything. */
-  const lead = leadTokenSource(sources);
+  /* The vocabulary's order, contributions last. The sort is stable, so the
+     sources the file does not name keep the payload's order after the ones
+     it does. */
   const sets: CalendarSet[] = [
-    ...tokenSets.filter((set) => set.key === lead),
-    ...tokenSets.filter((set) => set.key !== lead),
+    ...tokenSets.sort((first, second) => vocabularyRank(first.key) - vocabularyRank(second.key)),
     contributions
   ];
 

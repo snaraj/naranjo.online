@@ -660,6 +660,8 @@ export type ChronicleProps = {
      label is one whose payload is still in flight). */
   readonly factSlots: number;
   readonly modelSlots: number;
+  /* The figures every layer carries, held empty while no layer has landed. */
+  readonly figureSlots: number;
   /* The last day the window covers (today), an index into `days`. */
   readonly lastDay: number;
   readonly emptyNote: string;

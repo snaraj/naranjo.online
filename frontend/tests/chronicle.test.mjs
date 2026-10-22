@@ -18,6 +18,7 @@ import {
   tokensWord,
   overallCaption,
   latestLabel,
+  chronicleFigureSlots,
   contributionsKey,
   gridTone,
   noReading,
@@ -137,13 +138,14 @@ test('each layer plots its own series, in its own ink, and words each day', () =
   assert.equal(props.layers.at(-1)?.key, contributionsKey, 'the contributions are not the last seal');
   assert.equal(contributions.tone, gridTone);
   assert.equal(tokens.tone, '0');
-  // Every seal reads as many figures as every other, so a change of seal
-  // moves nothing on the page.
+  // Every seal reads exactly the figures the roll holds room for, so a change
+  // of seal, or the first seal landing, moves nothing on the page.
   assert.deepEqual(
     props.layers.map((layer) => layer.headlines.length),
-    props.layers.map(() => tokens.headlines.length),
-    'two seals read a different number of figures'
+    props.layers.map(() => chronicleFigureSlots),
+    'a seal reads a different number of figures from the room the roll holds'
   );
+  assert.equal(props.figureSlots, chronicleFigureSlots);
   assert.notDeepEqual(contributions.series.values, tokens.series.values, 'two layers plot the same line');
 
   const at = (date) => props.days.findIndex((day) => day.date === date);
@@ -412,6 +414,10 @@ test('payloads still in flight hold the room they will fill, and an empty answer
   }
   assert.equal(waiting.factSlots, accountFactSlots);
   assert.equal(waiting.modelSlots, accountModelSlots);
+  // No seal has landed, and the roll still holds its figures' room.
+  assert.equal(waiting.layers.length, 0);
+  assert.equal(waiting.figureSlots, chronicleFigureSlots);
+  assert.equal(chronicleFigureSlots, 2, "a source's lifetime and latest day; the contributions' two counts");
   assert.equal(accountFactSlots, 7, 'two cache classes, two windows and three records');
   assert.equal(accountModelSlots, 5);
 

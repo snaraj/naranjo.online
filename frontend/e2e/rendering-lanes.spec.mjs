@@ -2645,6 +2645,13 @@ test('the diagram fills its board, and its accounts are the leaves of a tome cen
  * reading outright instead of re-implementing the formatter and then proving
  * nothing when both copies drift together.
  *
+ * THE FIGURE IS THE PICKED SOURCE'S OWN (owner, 2026-10-21, issue 385: the
+ * figures "follow the picked seal"). A second source reports a quiet week of
+ * its own beside the staged one, so a token figure that summed the sources
+ * — the retired "Total Tokens Used" — reads one more than the staged day
+ * and fails, where with one source alone a sum and a source are the same
+ * number and the lane could not tell them apart.
+ *
  * ZERO CLS IS MEASURED RATHER THAN DECLARED, and it is measured where a shift
  * would land: every figure beside the graph changes its text while a day is
  * read, so the graph, the calendar, the controls, the accounts, every headline
@@ -2663,17 +2670,30 @@ const scrubbedDays = [
   [1, '7'],
 ];
 
+/* The week a second source reports beside the staged one: one token a day,
+ * every day of the staged week. Where either seal falls in the roll's order
+ * is the vocabulary's to say, so the lanes press the staged one by its name
+ * (pickTokenLayer) and switch to another by what it is, never by position. */
+const besideWeek = stagedWeek.map(() => 1);
+
 /* One source, one week ending today: the diagram's daily token figure is then
- * exactly this series. */
-async function stageChronicleWeek(page, totals = stagedWeek) {
+ * exactly this series. With `beside`, the origin's second source stays too,
+ * reporting that week over the same days. Returns the staged source's key,
+ * filled in once the payload is served. */
+async function stageChronicleWeek(page, totals = stagedWeek, beside = null) {
+  const staged = { label: null };
   await stageUsagePayload(page, (envelope) => {
     const sources = envelope?.data?.sources ?? [];
-    expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(0);
-    envelope.data.sources = [sources[0]];
+    expect(sources.length, 'the origin serves no usage source to restage').toBeGreaterThan(beside === null ? 0 : 1);
     const start = new Date();
     start.setUTCDate(start.getUTCDate() - (totals.length - 1));
-    sources[0].series = { startDate: start.toISOString().slice(0, 10), totals, recorded: true };
+    const series = (values) => ({ startDate: start.toISOString().slice(0, 10), totals: values, recorded: true });
+    envelope.data.sources = beside === null ? [sources[0]] : [sources[0], sources[1]];
+    sources[0].series = series(totals);
+    if (beside !== null) sources[1].series = series(beside);
+    staged.label = sources[0].label;
   });
+  return staged;
 }
 
 /* Wait until the diagram has finished arriving: its graph writes itself and
@@ -2710,9 +2730,14 @@ async function diagramAtRest(page) {
 }
 
 /* The headline that reads the token series, found by its own words rather
- * than by its place in the row. */
+ * than by its place in the row. Since the figures follow the picked seal
+ * (owner, 2026-10-21, issue 385) it is a token seal's first figure, its
+ * source's tokens; the contributions' seal carries none. */
 const tokenHeadline = (page) =>
   page.locator('.chronicle-headline').filter({ has: page.locator('.chronicle-label', { hasText: /token/i }) });
+
+/* A string matched as itself inside a pattern. */
+const literally = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /* Everything on the diagram whose position a reading could move, plus the
  * page's own height, to a hundredth of a pixel. */
@@ -2785,15 +2810,23 @@ async function watchShift(page) {
   });
 }
 
-/* Press the first token layer — the busiest source, second in the switch after
- * the contributions — so the graph plots the series a lane staged. The graph
- * follows the layer (owner direction, 2026-10-16), and a lane that reads a
- * token figure off the line has to be looking at the token line. */
-async function pickTokenLayer(page) {
-  const layers = page.locator('.chronicle-layers button');
-  await expect(layers.nth(1), 'the diagram offers no token layer to pick').toBeAttached();
-  await layers.nth(1).click();
-  await expect(layers.nth(1)).toHaveAttribute('aria-pressed', 'true');
+/* Press the staged source's seal, found by its written name, so the graph
+ * plots the series a lane staged and the figures beside it are that source's.
+ * The graph follows the layer (owner direction, 2026-10-16), the figures
+ * follow the seal (owner, 2026-10-21, issue 385), and a lane that reads a
+ * token figure off the line has to be looking at its own source's line. The
+ * roll opens on the vocabulary's first source, which the staged one need not
+ * be, so the press is made and checked rather than trusted to the order. */
+async function pickTokenLayer(page, label) {
+  const name = sourceName(label);
+  const seal = page.locator('.chronicle-layers button').filter({ hasText: new RegExp(`^\\s*${literally(name)}\\s*$`) });
+  await expect(seal, `the diagram offers no "${name}" seal to pick`).toHaveCount(1);
+  await seal.click();
+  await expect(seal).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    tokenHeadline(page).locator('.chronicle-label'),
+    `the token figure beside the "${name}" seal is not "${name}"'s own`
+  ).toHaveText(new RegExp(`^\\s*${literally(name)} `));
 }
 
 /* Put the pointer on one day of the graph. The day a viewport x names is the
@@ -2833,7 +2866,10 @@ async function scrubTo(page, day) {
 test('the graph scrubs to a day and every figure reads it, moving nothing (owner 2026-09-11, issue 316; 2026-10-16)', async ({
   page,
 }) => {
-  await stageChronicleWeek(page);
+  /* Two sources, the staged one leading: the figure each scrubbed day reads
+     below is the staged source's own day, and a sum of the two would read one
+     more (owner, 2026-10-21, issue 385). */
+  const staged = await stageChronicleWeek(page, stagedWeek, besideWeek);
   await visit(page);
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
@@ -2846,7 +2882,7 @@ test('the graph scrubs to a day and every figure reads it, moving nothing (owner
        coordinates, and the diagram sits below the fold at both widths. */
     await chart.scrollIntoViewIfNeeded();
     await diagramAtRest(page);
-    await pickTokenLayer(page);
+    await pickTokenLayer(page, staged.label);
     await page.mouse.move(0, 0);
     const last = Number(await chart.getAttribute('aria-valuemax'));
     const rest = (await figure.textContent()).trim();
@@ -2907,11 +2943,33 @@ test('the graph scrubs to a day and every figure reads it, moving nothing (owner
 test('the graph walks its days from the keyboard, clamped at both ends, and Escape gives the figures back (owner 2026-09-11, issue 316; 2026-10-16)', async ({
   page,
 }) => {
-  await stageChronicleWeek(page);
+  /* Two sources, the staged one leading: each day the keys reach reads the
+     staged source's own figure, never the two summed (owner, 2026-10-21,
+     issue 385: the figures follow the picked seal). */
+  const staged = await stageChronicleWeek(page, stagedWeek, besideWeek);
   await visit(page);
   const chart = page.locator('.chronicle-chart');
   const figure = tokenHeadline(page).locator('.chronicle-figure');
+  const seals = page.locator('.chronicle-layers button');
+  /* Every figure beside the graph, with its label and caption, as read. */
+  const figures = () =>
+    page
+      .locator('.chronicle-headline')
+      .evaluateAll((nodes) => nodes.map((node) => node.textContent.replace(/\s+/g, ' ').trim()));
   await chart.scrollIntoViewIfNeeded();
+  await diagramAtRest(page);
+  /* A seal that is not the staged source's, and its own figures, read at rest
+     before any day is: the switch at the end of this lane must give back
+     exactly these. Pressed the way that switch is, by a script that moves no
+     focus. Found by its name, which a press never changes. */
+  const other = seals
+    .filter({ hasNotText: new RegExp(`^\\s*${literally(sourceName(staged.label))}\\s*$`) })
+    .first();
+  await other.evaluate((button) => button.click());
+  await expect(other).toHaveAttribute('aria-pressed', 'true');
+  const switchedRest = await figures();
+  expect(switchedRest, 'the other seal carries no figures of its own to give back').not.toEqual([]);
+  await pickTokenLayer(page, staged.label);
   await diagramAtRest(page);
   const first = Number(await chart.getAttribute('aria-valuemin'));
   const last = Number(await chart.getAttribute('aria-valuemax'));
@@ -2959,14 +3017,19 @@ test('the graph walks its days from the keyboard, clamped at both ends, and Esca
      pass for a switch that kept the reading. */
   await chart.press('ArrowLeft');
   await expect(chart).toHaveAttribute('data-scrubbing', 'true');
-  await page.locator('.chronicle-layers button').nth(1).evaluate((button) => button.click());
-  await expect(page.locator('.chronicle-layers button').nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await other.evaluate((button) => button.click());
+  await expect(other).toHaveAttribute('aria-pressed', 'true');
   expect(
     await chart.evaluate((node) => window.document.activeElement === node),
     'the switch took focus off the graph; the clear below would prove nothing'
   ).toBe(true);
   await expect(chart).toHaveAttribute('data-scrubbing', 'false');
-  await expect(figure).toHaveText(rest);
+  /* The figures are the new seal's own now (owner, 2026-10-21), and every one
+     of them reads at rest: a reading carried over would put the day just read
+     on the new seal's line into its first figure and caption. */
+  await expect
+    .poll(figures, { message: 'a layer switch carried the reading onto the new seal\u2019s figures' })
+    .toEqual(switchedRest);
   await expect(page.locator('.chronicle-stamp')).toHaveCount(0);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -2982,9 +3045,11 @@ test('a refresh drops the reading rather than re-pointing it at a different day 
      and the graph back to reporting its newest day. The catch-up is driven
      rather than waited for. */
   let days = 7;
+  let stagedLabel = null;
   await stageUsagePayload(page, (envelope) => {
     const sources = envelope?.data?.sources ?? [];
     envelope.data.sources = [sources[0]];
+    stagedLabel = sources[0].label;
     const start = new Date();
     start.setUTCDate(start.getUTCDate() - (days - 1));
     sources[0].series = {
@@ -2998,8 +3063,9 @@ test('a refresh drops the reading rather than re-pointing it at a different day 
   const figure = tokenHeadline(page).locator('.chronicle-figure');
   await chart.scrollIntoViewIfNeeded();
   await diagramAtRest(page);
-  /* The token line is the one the shorter series redraws. */
-  await pickTokenLayer(page);
+  /* The token line is the one the shorter series redraws, and the token
+     figure the one it reads: the staged source's own (owner, 2026-10-21). */
+  await pickTokenLayer(page, stagedLabel);
   const rest = (await figure.textContent()).trim();
   const last = Number(await chart.getAttribute('aria-valuemax'));
   await scrubTo(page, last - 1);
@@ -3119,7 +3185,14 @@ test('the diagram runs no animation for a reader who asked for less motion, and 
       await expect
         .poll(plotting, { message: 'the plot never came to rest after it arrived', timeout: 10_000 })
         .toBe(0);
-      await pickTokenLayer(page);
+      /* A real switch: a seal that is not the one down, whichever place in
+         the roll's order it holds. */
+      const seals = page.locator('.chronicle-layers button');
+      const up = await seals.evaluateAll((nodes) => nodes.findIndex((node) => node.getAttribute('aria-pressed') !== 'true'));
+      expect(up, 'every seal is down, so there is nothing to switch to').toBeGreaterThanOrEqual(0);
+      const other = seals.nth(up);
+      await other.click();
+      await expect(other).toHaveAttribute('aria-pressed', 'true');
       await expect
         .poll(plotting, { message: 'a layer switch drew the new line with no write-on where motion is welcome' })
         .toBeGreaterThan(0);
@@ -4208,7 +4281,10 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
      the chained tome (owner, 2026-10-20) the head is two: the account's totals
      leaf and its models leaf, each titled with an illuminated initial — the
      label's first letter in a span of the component's own, the rest in
-     another. A string that became markup in any of them is caught. */
+     another. Since the figures follow the picked seal (owner, 2026-10-21,
+     issue 385) the label reaches one more: the seal's first figure is that
+     source's tokens, named for it under the roll's illuminated initial. A
+     string that became markup in any of them is caught. */
   const hostileLayer = page.locator('.chronicle-layers button', { hasText: 'onerror' });
   await expect(hostileLayer, 'the hostile source was offered no layer').toHaveCount(1);
   await hostileLayer.click();
@@ -4224,16 +4300,24 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
         children: [...node.children].reduce((count, child) => count + child.children.length, 0),
       }));
       const value = diagram.querySelector('.chronicle-chart')?.getAttribute('aria-valuetext') ?? '';
+      const opening = diagram.querySelector('.chronicle-headline[data-opening="true"] .chronicle-label');
+      const figure = {
+        text: opening?.textContent.trim() ?? '',
+        parts: [...(opening?.children ?? [])].map((child) => child.classList[0]),
+        children: [...(opening?.children ?? [])].reduce((count, child) => count + child.children.length, 0),
+      };
       return {
         pwned: window.__pwned === undefined ? 'clean' : 'executed',
         injected: diagram.querySelectorAll('img, script, iframe, object, embed').length,
         layers,
         heads,
+        figure,
         matches: {
           layer: layers.some((node) => node.text === label),
           value: value.endsWith(`: ${label}`),
           head: heads.some((node) => node.text === label),
           models: heads.some((node) => node.text === `Models of ${label}`),
+          figure: figure.text.startsWith(`${label} `),
         },
         /* THE ACCOUNT IS NOT A RENDERED SURFACE. It is still admitted into the
            model (lib/token-usage.ts) and no component draws it, so the honest
@@ -4253,6 +4337,11 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
   expect(observed.matches.value, 'the hostile label did not reach the graph’s accessible value as its own literal text').toBe(true);
   expect(observed.matches.head, 'the hostile label did not reach its account as its own literal text').toBe(true);
   expect(observed.matches.models, 'the hostile label did not reach its models leaf as its own literal text').toBe(true);
+  expect(observed.matches.figure, `the hostile label did not reach its seal's token figure as its own literal text: "${observed.figure.text}"`).toBe(true);
+  /* The figure's label is drawn from the component's one initial and the
+     label's own text, never from an element the label brought. */
+  expect(observed.figure.parts, 'the token figure\u2019s label is drawn from elements the component never wrote').toEqual(['chronicle-initial']);
+  expect(observed.figure.children, 'the token figure\u2019s label grew element children from its payload string').toBe(0);
   expect(
     observed.accountAnywhere,
     'the account reached the document; no component draws it, so a string that arrives there is a surface nobody reviewed'
@@ -4271,7 +4360,10 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
      does day arithmetic on that string, so admission refuses the WHOLE payload
      rather than rendering the parts of it that happened to parse — and the
      diagram says so honestly: no source is offered a layer, a line or an
-     account, and the token figure is the dash rather than a number. The
+     account, and no figure on the roll claims a token count at all. (It was
+     the shared total's dash until the figures came to follow the picked seal,
+     owner 2026-10-21, issue 385: with no source there is no token seal, so
+     the roll reads the contributions' own figures and nothing else.) The
      version-control calendar comes from a DIFFERENT panel and keeps drawing,
      which is what keeps this from asserting that the wrong panel went blank. */
   await page.unrouteAll({ behavior: 'ignoreErrors' });
@@ -4294,6 +4386,8 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
       accounts: diagram.querySelectorAll('.chronicle-account').length,
       tokenLayers: diagram.querySelectorAll('.chronicle-layers button').length,
       tokenFigure: token?.querySelector('.chronicle-figure')?.textContent.trim() ?? null,
+      figures: diagram.querySelectorAll('.chronicle-headline').length,
+      tone: diagram.querySelector('.chronicle-plot')?.getAttribute('data-tone') ?? null,
       cells: diagram.querySelectorAll('.chronicle-cell').length,
     };
   });
@@ -4302,7 +4396,9 @@ test('a hostile label reaches the page as text and never as markup', async ({ pa
   expect(refused.lines, 'a refused payload still drew a token line').toBe(0);
   expect(refused.accounts, 'a refused payload still printed an account').toBe(0);
   expect(refused.tokenLayers, 'a refused payload still offered a token layer').toBe(0);
-  expect(refused.tokenFigure, 'a refused payload prints a token figure rather than the honest dash').toBe('—');
+  expect(refused.tone, 'the roll does not read the contributions once the token payload is refused').toBe('grid');
+  expect(refused.figures, 'the contributions\u2019 seal prints no figures of its own; the next line would pass on an empty roll').toBeGreaterThan(0);
+  expect(refused.tokenFigure, `a refused payload still prints a token figure: ${refused.tokenFigure}`).toBeNull();
   expect(refused.cells, 'the version-control calendar went blank with the token payload').toBeGreaterThan(0);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -5076,6 +5172,9 @@ test('a diagram whose data is still on its way holds exactly the box that data w
         ticker: window.document.querySelector('.ticker-strip') !== null,
         chart: window.document.querySelector('.chronicle-chart') !== null,
         days: window.document.querySelectorAll('.chronicle-cell').length,
+        note: window.document.querySelector('.chronicle-note') !== null,
+        figures: window.document.querySelectorAll('.chronicle-headline').length,
+        initials: window.document.querySelectorAll('.chronicle-initial').length,
         height: Math.round(box.height * 100) / 100,
         width: Math.round(box.width * 100) / 100,
         below: Math.round((gallery.getBoundingClientRect().top + window.scrollY) * 100) / 100,
@@ -5107,6 +5206,14 @@ test('a diagram whose data is still on its way holds exactly the box that data w
 
   expect(waiting.days, 'the waiting state drew days it was never given').toBe(0);
   expect(arrived.chart, 'the diagram arrived with no graph; this lane proves nothing').toBe(true);
+  /* WHAT IS COMING IS NOT NOTHING (issue 385): the roll holds the figures its
+     first seal will fill, says nothing was captured only when nothing is on
+     its way, and draws no illuminated initial before there is a letter. */
+  expect(waiting.note, 'the roll said nothing was captured while its data was on its way').toBe(false);
+  expect(waiting.figures, 'the roll held a different number of figures from the ones that landed').toBe(arrived.figures);
+  expect(arrived.figures, 'the landed roll carries no figures; this lane proves nothing').toBeGreaterThan(0);
+  expect(waiting.initials, 'the waiting roll drew an illuminated initial with no letter').toBe(0);
+  expect(arrived.initials, 'the landed roll opens without its initial').toBe(1);
   expect(
     arrived.height,
     `the trackers' board was ${waiting.height}px while its data was on its way and ${arrived.height}px once it landed`
@@ -5123,6 +5230,45 @@ test('a diagram whose data is still on its way holds exactly the box that data w
       `the trackers' board accounted for ${shifts.board} of layout shift on arrival (page total across the load: ${shifts.page})`
     ).toBe(0);
   }
+});
+
+/* NOTHING DRAWN IS NOT NOTHING REPORTED (AGENTS.md "Honest states"; issue 385).
+ * With the calendar refused and no source sending a series there is nothing
+ * to draw and nothing on its way, so the roll is not drawn at all; the
+ * accounts the sources DID send read alone rather than under a note saying
+ * nothing was captured. With the usage refused as well, the note is the
+ * whole truth, and it says so. */
+test('with nothing to draw the accounts read alone, and with nothing at all the roll says so', async ({ page }) => {
+  await page.route('**/api/panels/vcs-activity', (route) => route.abort());
+  await stageUsagePayload(page, (envelope) => {
+    const sources = envelope?.data?.sources ?? [];
+    expect(sources.length, 'the origin serves no usage source to strip').toBeGreaterThan(0);
+    for (const source of sources) delete source.series;
+  });
+  await visit(page);
+  const read = () =>
+    page.evaluate(() => {
+      const diagram = window.document.querySelector('.chronicle');
+      return {
+        roll: diagram.querySelectorAll('.chronicle-scroll').length,
+        note: diagram.querySelectorAll('.chronicle-note').length,
+        accounts: [...diagram.querySelectorAll('.chronicle-account-name')].map((node) => node.textContent.trim()),
+      };
+    });
+  const alone = await read();
+  expect(alone.accounts.length, 'the sources sent their figures and no account reads them').toBeGreaterThan(0);
+  expect(alone.accounts.every((name) => name !== ''), 'an account reads with no name').toBe(true);
+  expect(alone.note, 'the roll says nothing was captured over accounts that were').toBe(0);
+  expect(alone.roll, 'an empty roll is drawn with nothing to draw and nothing on its way').toBe(0);
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await page.route('**/api/panels/vcs-activity', (route) => route.abort());
+  await page.route('**/api/panels/token-usage', (route) => route.abort());
+  await visit(page);
+  const none = await read();
+  expect(none.accounts, 'an account reads with nothing reported').toEqual([]);
+  expect(none.roll, 'a roll is drawn with nothing reported').toBe(0);
+  expect(none.note, 'with nothing reported the roll does not say so').toBe(1);
 });
 
 /* Outbound navigation for the recent-commits rows (issue 157), measured
@@ -5221,13 +5367,16 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
   });
   await visit(page);
 
-  /* The calendar drew REAL DAYS: the diagram opens on the contributions
-     layer (owner direction, 2026-10-16), and a measured day there is proof the
-     payload was admitted. */
-  await expect(
-    page.locator('.chronicle-layers button').first(),
-    'the diagram does not open on the contributions layer'
-  ).toHaveAttribute('aria-pressed', 'true');
+  /* The calendar drew REAL DAYS: a measured day on the contributions' own
+     layer is proof the payload was admitted. That layer is the roll's LAST
+     seal since it opens on the first token source (owner, 2026-10-21, issue
+     385), so it is pressed first — a measured day on the token layer the roll
+     opens on would be the OTHER panel's, and would pass with this payload
+     refused. The seal is told by the calendar's own green ink. */
+  const contributions = page.locator('.chronicle-layers button').last();
+  await expect(contributions, 'the old-shape payload was offered no contributions seal').toHaveAttribute('data-tone', 'grid');
+  await contributions.click();
+  await expect(contributions).toHaveAttribute('aria-pressed', 'true');
   await expect(
     page.locator('.chronicle-cell[data-measured="true"]').first(),
     'the calendar drew no measured day from an old-shape payload'
@@ -7932,15 +8081,22 @@ test('a panel head with no title keeps the reserved row, and no head draws a fre
  *    now"; and the rule drawn under the name, until THE KEEP set the name as
  *    a centred plaque with no rule under it the same day — their subjects are
  *    gone, so they are);
- *  - the calendar opens on the contributions layer, with the token layers
- *    after it and the busiest source first among them, and the diagram wears
- *    no panel label (owner direction, 2026-10-16: the contributions are the
- *    layer the diagram opens on; the token series lead the graph above it);
+ *  - the roll opens on its first token source, in the source vocabulary's
+ *    order, with any source the vocabulary does not name after those in the
+ *    payload's order and the contributions last (owner, 2026-10-21, issue
+ *    385: "put Codex tokens the first thing that renders on the website, the
+ *    order should be codex, then claude then contributions"; this replaces
+ *    both the 2026-10-16 direction that the contributions open it and the
+ *    2026-09-04 rule that the busiest source does), each seal carries its own figures — the same
+ *    number of them on every seal, so a change of seal moves nothing, and a
+ *    token count only on a token seal, named for its own source (the
+ *    owner's answer the same day: the figures "follow the picked seal") —
+ *    and the diagram wears no panel label;
  *  - the browser's chrome is told the sheet's colour, once, at hydration (it
  *    was told again whenever the scene turned, while a control could turn it);
  *  - the document root no longer refuses the native overscroll (the pull
  *    gesture that needed that refusal is gone, owner ruling, same issue). */
-test('the name is two lines, the calendar opens on the contributions layer, and the toolbars wear the sheet (issue 294; 2026-10-16)', async ({
+test('the name is two lines, the roll opens on its first token source with the contributions last, and the toolbars wear the sheet (issue 294; 2026-10-16; issue 385, 2026-10-21)', async ({
   page,
 }) => {
   /* The rows the name's own text is drawn on, J's picture aside. */
@@ -7971,13 +8127,12 @@ test('the name is two lines, the calendar opens on the contributions layer, and 
       text: node.textContent.trim(),
       pressed: node.getAttribute('aria-pressed') === 'true',
     }));
-    /* The busiest source, read from the payload the diagram reads: the one
-       whose series carries the most activity. */
+    /* Every source with a series, in the payload's order, read from the
+       payload the diagram reads. */
     const envelope = await (await fetch('/api/panels/token-usage')).json();
-    const busiest = (envelope?.data?.sources ?? [])
+    const reporting = (envelope?.data?.sources ?? [])
       .filter((source) => Array.isArray(source?.series?.totals) && source.series.totals.length > 0)
-      .map((source) => ({ label: source.label, sum: source.series.totals.reduce((a, b) => a + b, 0) }))
-      .sort((a, b) => b.sum - a.sum)[0]?.label ?? null;
+      .map((source) => source.label);
     const surface = getComputedStyle(window.document.documentElement).getPropertyValue('--color-surface').trim();
     return {
       heading: heading.textContent.trim(),
@@ -7985,7 +8140,7 @@ test('the name is two lines, the calendar opens on the contributions layer, and 
       headingWidth: heading.getBoundingClientRect().width,
       mainWidth: main.width,
       layers,
-      busiest,
+      reporting,
       diagramLabel: diagram.querySelector('.panel-title')?.textContent ?? null,
       surface,
       themeColor: window.document.head.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? null,
@@ -8012,14 +8167,53 @@ test('the name is two lines, the calendar opens on the contributions layer, and 
   expect(await linesAt(390, 844), 'on a phone the name is not two lines').toBe(2);
   await page.setViewportSize(before);
   expect(observed.layers.length, 'fewer than two calendar layers to order').toBeGreaterThan(1);
-  expect(observed.layers[0].text, 'the first layer is not the contributions').toBe('Contributions');
-  expect(observed.layers[0].pressed, 'the calendar does not open on its first layer').toBe(true);
+  /* The order the seals must run in: the sources the vocabulary names, in its
+     order, then any other in the payload's, then the contributions. */
+  const named = sourceVocabulary.sources.map((entry) => entry.key);
+  const order = [
+    ...named.filter((key) => observed.reporting.includes(key)),
+    ...observed.reporting.filter((label) => !named.includes(label)),
+  ];
+  expect(order.length, 'no source reports a series to lead the token layers').toBeGreaterThan(0);
+  expect(observed.layers[0].text, "the roll does not open on the vocabulary's first reporting source").toBe(sourceName(order[0]));
+  expect(observed.layers[0].pressed, 'the roll does not open on its first seal').toBe(true);
   expect(
     observed.layers.slice(1).every((layer) => !layer.pressed),
     'more than one layer is pressed at once'
   ).toBe(true);
-  expect(observed.busiest, 'no source reports a series to lead the token layers').not.toBeNull();
-  expect(observed.layers[1].text, 'the busiest source does not lead the token layers').toBe(sourceName(observed.busiest));
+  expect(observed.layers.at(-1).text, 'the contributions are not the last seal').toBe('Contributions');
+  expect(
+    observed.layers.map((layer) => layer.text),
+    'the seals do not run the vocabulary\u2019s order, then any other source, then the contributions'
+  ).toEqual([...order.map(sourceName), 'Contributions']);
+
+  /* THE FIGURES FOLLOW THE PICKED SEAL. Each seal is pressed in turn, by a
+     script that moves nothing, and read: every seal carries as many figures
+     as the one the roll opens on, a token seal's first is its own source's
+     tokens, and the contributions' seal claims no token count at all. */
+  const seals = page.locator('.chronicle-layers button');
+  const carried = [];
+  for (let index = 0; index < observed.layers.length; index += 1) {
+    await seals.nth(index).evaluate((button) => button.click());
+    await expect(seals.nth(index)).toHaveAttribute('aria-pressed', 'true');
+    carried.push({
+      seal: observed.layers[index].text,
+      labels: (await page.locator('.chronicle-headline .chronicle-label').allTextContents()).map((text) => text.trim()),
+    });
+  }
+  expect(carried[0].labels.length, 'the seal the roll opens on carries no figures').toBeGreaterThan(0);
+  for (const { seal, labels } of carried) {
+    expect(labels.length, `the "${seal}" seal carries ${labels.length} figures and the first carries ${carried[0].labels.length}`).toBe(
+      carried[0].labels.length
+    );
+    const tokens = labels.filter((label) => /token/i.test(label));
+    if (seal === 'Contributions') {
+      expect(tokens, 'the contributions\u2019 seal claims a token count').toEqual([]);
+    } else {
+      expect(tokens, `the "${seal}" seal does not carry exactly one token figure, its own source's`).toHaveLength(1);
+      expect(tokens[0].startsWith(`${seal} `), `the "${seal}" seal's token figure is "${tokens[0]}"`).toBe(true);
+    }
+  }
   expect(observed.diagramLabel, 'the diagram wears a panel label').toBeNull();
   expect(observed.overscroll.html, 'the root still refuses the native overscroll').toBe('auto');
   expect(observed.overscroll.body, 'the body still refuses the native overscroll').toBe('auto');
@@ -11182,8 +11376,20 @@ test('the contributions calendar trails today past a stalled payload, and says s
      direction, 2026-10-16. Every OTHER panel's reserve is measured by "a panel
      head with no title keeps the reserved row".) */
 
-  /* The contributions layer is the one the diagram opens on. */
-  await expect(panel.locator('.chronicle-layers button').first()).toHaveAttribute('aria-pressed', 'true');
+  /* The contributions are the roll's LAST seal now — it opens on the first
+     token source (owner, 2026-10-21, issue 385) — so the lane presses it
+     before it reads their days. The seal is told by the calendar's own green
+     ink, not by its place alone: a token seal in that place reads a series
+     that stopped elsewhere, and a lane reading it would be measuring the
+     wrong payload. */
+  const contributions = panel.locator('.chronicle-layers button').last();
+  await expect(contributions, 'the last seal is not the contributions').toHaveAttribute('data-tone', 'grid');
+  await contributions.click();
+  await expect(contributions).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    panel.locator('.chronicle-plot'),
+    'the graph does not draw the contributions once their seal is pressed'
+  ).toHaveAttribute('data-tone', 'grid');
   const observed = await page.evaluate(() => {
     const cells = [...window.document.querySelectorAll('.chronicle-cell')];
     let trailing = 0;

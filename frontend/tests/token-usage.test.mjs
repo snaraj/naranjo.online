@@ -1642,16 +1642,20 @@ describe('the models card is one card per source', () => {
 
   it('heads each card with its source\u2019s written name, one card per source', () => {
     const [first, second] = vocabulary.groups;
+    /* Each group's members ride the source its vendor belongs to (issue
+       #369), whichever place either holds in its own file. */
+    const sourceFor = (group) => sourceVocabulary.sources.find((entry) => entry.key === groupSource(group.key));
+    const [own, other] = [sourceFor(first), sourceFor(second)];
     const cards = modelCards(
       carrying([
-        { label: firstSource.key, keys: keysOf(first) },
-        { label: secondSource.key, keys: keysOf(second) }
+        { label: own.key, keys: keysOf(first) },
+        { label: other.key, keys: keysOf(second) }
       ])
     );
     assert.equal(cards.length, 2, 'each source that has a split gets its own card');
-    assert.equal(cards[0].label, `Models · ${firstSource.name}`);
-    assert.equal(cards[1].label, `Models · ${secondSource.name}`);
-    assert.equal(cards[0].ariaLabel, `Model split for ${firstSource.name}`);
+    assert.equal(cards[0].label, `Models · ${own.name}`);
+    assert.equal(cards[1].label, `Models · ${other.name}`);
+    assert.equal(cards[0].ariaLabel, `Model split for ${own.name}`);
     /* Neither the wire key nor the vendor group reaches the heading. */
     for (const heading of cards.map((card) => card.label)) {
       assert.doesNotMatch(heading, new RegExp(first.label));
