@@ -107,7 +107,7 @@ either way.
 The full local gate — frontend, backend, chart, container, and both secret
 scans — is canonical in `AGENTS.md` ("Quality gates — exact commands and
 patterns"); run it exactly as written there before every push. Toolchain
-pins live in CI (`node 24.19.0`, `npm 11.17.0`, `go 1.26.10`); newer local
+pins live in CI (`node 24.22.1`, `npm 11.19.1`, `go 1.26.10`); newer local
 versions generally work, CI is authoritative.
 
 The rendering-lane smoke matrix (also in that AGENTS.md section) is
