@@ -209,7 +209,7 @@ const monthNames = [
  * label the grid without a date on every cell. Columns whose cells carry no
  * date (a source that cannot date its series) simply produce no ticks.
  *
- * A column's month is read off ANY dated cell in it, absent or not (issue
+ * A column's month is read from its latest visible dated cell (issue
  * 189): calendarColumns dates its padding — a day before the series existed
  * still has a real calendar date, it just has no count — and the axis has to
  * span that padding exactly like the reference designs do, dotted region and
@@ -221,11 +221,16 @@ const monthNames = [
  * collides with the label right beside it. Every other tick keeps its own
  * dedicated column — only the window's own left edge produces a fragment
  * short enough to collide. */
-export function monthTicks(columns: GridCell[][]): MonthTick[] {
+export function monthTicks(columns: GridCell[][], lastDay?: string): MonthTick[] {
   const ticks: MonthTick[] = [];
   let previous = '';
   columns.forEach((column, index) => {
-    const dated = column.find((cell) => cell.date.length >= 7);
+    // A stale source's absent cells can still be visible days. Use the
+    // caller's window end when supplied; otherwise prefer represented days.
+    // Neither path lets future padding introduce a month before it begins.
+    const datedCell = (cell: GridCell): boolean => cell.date.length >= 7 && (lastDay === undefined || cell.date <= lastDay);
+    const dated = column.findLast((cell) => datedCell(cell) && (lastDay !== undefined || !cell.absent))
+      ?? column.find(datedCell);
     if (!dated) {
       return;
     }
@@ -244,6 +249,35 @@ export function monthTicks(columns: GridCell[][]): MonthTick[] {
     ticks.shift();
   }
   return ticks;
+}
+
+/* Lay out month names without crossing the calendar edge. The existing display
+ * face uses a conservative width estimate; the latest month is the reader's
+ * orientation when a short final week leaves room for only one nearby label. */
+export function visibleMonths(
+  months: readonly { column: number; label: string }[],
+  firstColumn: number,
+  pitch: number,
+  width: number,
+  size: number
+): { column: number; label: string; x: number; anchor: 'start' | 'end' }[] {
+  const fits = 2.4 * size;
+  const wide = 2.1 * size;
+  const inset = size / 4;
+  const out: { column: number; label: string; x: number; anchor: 'start' | 'end' }[] = [];
+  for (const month of months) {
+    if (month.column < firstColumn) continue;
+    const x = (month.column - firstColumn) * pitch + inset;
+    if (x + fits <= width - inset) {
+      out.push({ ...month, x, anchor: 'start' });
+      continue;
+    }
+    while (out.length > 0 && out[out.length - 1].x + wide + 0.3 * size > width - inset - wide) {
+      out.pop();
+    }
+    out.push({ ...month, x: width - inset, anchor: 'end' });
+  }
+  return out;
 }
 
 /* formatCalendarDate renders a plain ISO date as "Aug 12" (or, with a year,

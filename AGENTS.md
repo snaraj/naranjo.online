@@ -18,8 +18,8 @@ the owner. In order:
    verify remote facts directly (`gh pr view`, `git ls-remote`).
 3. Verify identity and tooling: `gh auth status` shows the owner's
    account; commits carry the noreply identity per "Commit identity
-   mechanics"; know CI's pinned toolchain (Go 1.26.10, Node 24.19.0,
-   npm 11.17.0 — the gate verifies these exactly).
+   mechanics"; know CI's pinned toolchain (Go 1.26.10, Node 24.22.1,
+   npm 11.19.1 — the gate verifies these exactly).
 4. Survey the live state yourself: `gh issue list`, `gh pr list` —
    including the open-agent-PR count against the PR budget below.
 5. Claim work through an issue, branch from `origin/main`, and follow
@@ -814,7 +814,7 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   scripts/ci`, the same command the local gate above lists (issue #296) —
   `gitleaks git` over full history, `gitleaks dir`),
   `dependency-review` (PRs only; fails on high severity), `application`
-  (toolchain pinned AND verified — Node 24.19.0, npm 11.17.0,
+  (toolchain pinned AND verified — Node 24.22.1, npm 11.19.1,
   Go 1.26.10; frontend check/test/build; gofmt/vet/tests/race; the
   coverage floor; on main pushes, the measured totals handed over as the
   `coverage-totals` artifact), `chart` (the four chart pin scripts; helm lint + render

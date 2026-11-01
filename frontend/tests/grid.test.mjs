@@ -17,6 +17,7 @@ import {
   gridRows,
   magnitudeFloor,
   monthTicks,
+  visibleMonths,
   pendingWeeks,
   seriesCells,
   toColumns,
@@ -376,4 +377,23 @@ test('a cell label carries a payload string verbatim, never sanitised', () => {
     'the cell label must carry the payload string verbatim'
   );
   assert.ok(cellLabel({ value: 1, date: hostile }, 'token').includes(hostile));
+});
+
+
+test('the current month remains visible at the mobile right edge without overlapping the preceding label', () => {
+  const labels = visibleMonths([{ column: 44, label: 'Sep' }, { column: 48, label: 'Oct' }, { column: 52, label: 'Nov' }], 30, 16, 23 * 16, 16);
+  assert.equal(labels.at(-1).label, 'Nov');
+  assert.equal(labels.at(-1).anchor, 'end');
+  assert.ok(labels.at(-2).x + 2.1 * 16 + 0.3 * 16 <= labels.at(-1).x - 2.1 * 16);
+  assert.ok(labels.every((label) => label.x >= 0 && label.x <= 23 * 16));
+  const desktop = visibleMonths([{ column: 44, label: 'Sep' }, { column: 48, label: 'Oct' }, { column: 52, label: 'Nov' }], 0, 16, 53 * 16, 9);
+  assert.deepEqual(desktop.map((label) => label.label), ['Sep', 'Oct', 'Nov']);
+});
+
+test('a month beginning midweek is labelled on its first represented day, never from future padding', () => {
+  const throughNovember = calendarColumns(seriesCells('2026-10-01', new Array(61).fill(1)), 12, '2026-11-30');
+  const throughDecember = calendarColumns(seriesCells('2026-10-01', new Array(62).fill(1)), 12, '2026-12-01');
+  assert.equal(monthTicks(throughNovember).at(-1).abbrev, 'Nov');
+  assert.equal(monthTicks(throughDecember).at(-1).abbrev, 'Dec');
+  assert.equal(monthTicks(throughDecember).at(-1).column, 11);
 });

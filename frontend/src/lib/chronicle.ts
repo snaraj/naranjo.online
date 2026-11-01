@@ -357,7 +357,7 @@ export function chronicleProps(
     .filter((account) => account.facts.length + account.lines.length + account.models.length > 0)
     .concat(pendingAccounts);
 
-  const months = reference === undefined ? [] : monthTicks(reference.columns).map((tick) => ({ column: tick.column, label: tick.abbrev }));
+  const months = reference === undefined ? [] : monthTicks(reference.columns, anchor).map((tick) => ({ column: tick.column, label: tick.abbrev }));
 
   return {
     status: activityEnvelope?.status ?? usageEnvelope?.status ?? 'unavailable',

@@ -461,3 +461,14 @@ test('each account opens on its lifetime and itemises only its cache', () => {
   assert.deepEqual(facts(whole), { 'cache read': '60.0M', 'cache write': '10.0M' });
   assert.deepEqual(facts(partial), { 'cache read': '20.0M', 'cache write': '0' });
 });
+
+
+test('a stale calendar labels the last visible month across Sunday and midweek boundaries without naming future padding', () => {
+  const activity = { schema: 'panel/v1', id: 'vcs-activity', kind: 'vcs-activity/v1', title: 'GitHub', status: 'stale', generatedAt: '2026-10-01T00:00:00Z', data: { totalContributions: 3, weeks: [[0, 1, 0, 2, 0, 0, 0]], endDate: '2026-10-01', streak: 1, recentCommits: [], coverage: 'complete' } };
+  for (const [date, month] of [['2026-11-01', 'Nov'], ['2026-11-30', 'Nov'], ['2026-12-01', 'Dec']]) {
+    const props = chronicleProps([activity, null], new Date(date + 'T12:00:00Z'));
+    assert.equal(props.days[props.lastDay].date, date);
+    assert.equal(props.months.at(-1).label, month);
+    assert.ok(props.days.slice(props.lastDay + 1).every((day) => day.absent));
+  }
+});
