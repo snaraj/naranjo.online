@@ -13,6 +13,10 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 - Update the Node build runtime to 24.22.1 and npm to 11.19.1, with DNS NUL and TLS identity refusal regression checks (#392).
 
+### Fixed
+
+- Keep the current calendar month visible on narrow screens and when it begins midweek; this repairs the existing browser-gate failure exposed while validating the security release (#392).
+
 ## [0.1.98] - 2026-10-22
 
 ### Changed

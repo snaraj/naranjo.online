@@ -30,7 +30,7 @@
   import { untrack } from 'svelte';
   import type { ChronicleProps, ChronicleSeries } from '../blocks.ts';
   import { scrubAlong } from '../gesture.ts';
-  import { measuredCell } from '../grid.ts';
+  import { measuredCell, visibleMonths } from '../grid.ts';
   import { isChord } from '../keys.ts';
   import FeedCard from './FeedCard.svelte';
   import PanelShell from './PanelShell.svelte';
@@ -224,36 +224,8 @@
     return out;
   });
 
-  /* The month names under the weeks. A name that would run past the
-     calendar's right edge is set flush against that edge instead — unless
-     that would crowd the name before it, in which case it is left out. Only
-     the choice rests on a width estimate (a three-letter name in the display
-     face measures about 1.9 of its size; "fits" is judged at 2.4, generously,
-     "crowds" at 2.1 plus a gap); a name set flush ends a quarter of its size
-     inside the edge whatever its real width, and one set from its column
-     starts a quarter in — clear of the side bearings, which Gecko counts
-     about a pixel and a half wider than Blink does. */
-  const shownMonths = $derived.by(() => {
-    const fits = 2.4 * monthSize;
-    const wide = 2.1 * monthSize;
-    const inset = monthSize / 4;
-    const out: { column: number; label: string; x: number; anchor: 'start' | 'end' }[] = [];
-    for (const month of months) {
-      if (month.column < firstColumn) {
-        continue;
-      }
-      const x = (month.column - firstColumn) * PITCH + inset;
-      if (x + fits <= calWidth - inset) {
-        out.push({ column: month.column, label: month.label, x, anchor: 'start' });
-        continue;
-      }
-      const previous = out[out.length - 1];
-      if (previous === undefined || previous.x + wide + 0.3 * monthSize <= calWidth - inset - wide) {
-        out.push({ column: month.column, label: month.label, x: calWidth - inset, anchor: 'end' });
-      }
-    }
-    return out;
-  });
+  /* Keep the newest month visible when a flush label would crowd its predecessor. */
+  const shownMonths = $derived(visibleMonths(months, firstColumn, PITCH, calWidth, monthSize));
 
   /* --- Reading a day ---------------------------------------------------- */
 

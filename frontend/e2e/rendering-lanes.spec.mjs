@@ -11413,7 +11413,7 @@ test('the contributions calendar trails today past a stalled payload, and says s
     observed.trailing,
     `${observed.trailing} hollow days drawn after a payload ending ${endDate}; the calendar should run ${expectedTrailing} days past it`
   ).toBe(expectedTrailing);
-  expect(observed.months, 'the calendar does not name the month the reader is in').toContain(
+  expect(observed.months.at(-1), 'the calendar does not end with the month the reader is in').toBe(
     now.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })
   );
 });
