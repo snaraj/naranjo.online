@@ -24,9 +24,15 @@
   --muted: #a0a0a0;
 }
 
+html {
+  height: 100%;
+}
+
+/* Every progressive value sits on a plain base (AGENTS, frontend floors): a
+   browser without dvh or env() keeps the base instead of losing the line. */
 body {
   margin: 0;
-  min-height: 100dvh;
+  min-height: 100%;
   background: var(--ground);
   color: var(--text);
   font-family: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
@@ -35,12 +41,24 @@ body {
   font-synthesis: none;
 }
 
+@supports (min-height: 100dvh) {
+  body {
+    min-height: 100dvh;
+  }
+}
+
+/* The text fills the page between even gutters that widen with the screen
+   (issue 212: no block stops short of its container). */
 main {
   box-sizing: border-box;
-  max-width: 36rem;
-  margin-inline: auto;
-  padding: max(3rem, env(safe-area-inset-top)) max(1.25rem, env(safe-area-inset-right))
-    max(3rem, env(safe-area-inset-bottom)) max(1.25rem, env(safe-area-inset-left));
+  padding: 3rem clamp(1.25rem, 6vw, 6rem);
+}
+
+@supports (padding: env(safe-area-inset-top)) {
+  main {
+    padding: max(3rem, env(safe-area-inset-top)) max(clamp(1.25rem, 6vw, 6rem), env(safe-area-inset-right))
+      max(3rem, env(safe-area-inset-bottom)) max(clamp(1.25rem, 6vw, 6rem), env(safe-area-inset-left));
+  }
 }
 
 h1,
@@ -74,14 +92,25 @@ a:focus-visible {
   outline-offset: 3px;
 }
 
+/* The one link outside the prose takes the 44px touch floor (issue 26). */
 .back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  min-block-size: 2.75rem;
+  min-inline-size: 2.75rem;
   color: var(--muted);
   font-size: 0.875rem;
   text-decoration: none;
 }
 
+.back:hover,
+.back:focus-visible {
+  text-decoration: underline;
+}
+
 .back::before {
-  content: '← ';
+  content: '←';
 }
 
 code {
