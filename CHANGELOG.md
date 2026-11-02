@@ -7,6 +7,35 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.100] - 2026-11-02
+
+### Security
+
+- Update the frontend toolchain to Vite 8.3.5, Svelte 5.57.3 and svelte-check
+  4.7.7, and the CodeQL actions to 4.39.1, folding the open Dependabot
+  proposals (#390, #391, #395).
+
+### Fixed
+
+- The usage exporter keeps its own copy of the second tool's accounting. That
+  tool prunes its session journals, and the exporter rebuilt the series from
+  whatever survived, so evidence it had read many times could vanish: on
+  2026-10-22 only 163 of 1,957 threads still had a journal. Each run now keeps
+  every journal's accounting projection beside the history stores, under
+  `retained/<source>/`, and walks it once the journal is gone, so a pruned
+  thread keeps counting, opening balance and all. Only the fields the walk reads
+  are kept, each as the walk reads it (an identifier, an instant, a count), so
+  no prompt, reply, title, path, branch or identifier can be kept. A kept
+  journal is only ever extended, never rewritten, renamed or removed. It is
+  refused when it is a link or a second name, compared line by line, and
+  written by one run at a time, beneath the one root that run opened (#382).
+
+### Changed
+
+- Remove 377 comment lines that recorded process history, retired code or
+  restated the line below them; the change is proven comment-only and the
+  built site is byte-identical (#396).
+
 ## [0.1.99] - 2026-11-01
 
 ### Security
