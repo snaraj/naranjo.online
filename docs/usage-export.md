@@ -858,6 +858,80 @@ its next run says `SERVED`. Then the release with the snapshot deploys. In
 the other order, every push is refused until the exporter catches up, and
 the panel reads `stale` meanwhile.
 
+## The walk keeps its own copy of the journals (issue #382)
+
+The tool that writes the running-totals journals prunes them. On 2026-10-22 its
+own state database listed 1,957 threads while 163 journal files remained, and a
+hand correction proven on 2026-10-16 from pruned files' opening balances could
+no longer be proven by anything. The exporter had read every one of those files
+many times and kept none of it. It no longer depends on the tool to keep them.
+
+**What is kept.** Every run, the recapture of a running-totals source keeps
+each journal's ACCOUNTING PROJECTION under `HISTORY_DIR/retained/<key>/`, at the
+journal's own path below the tree root. The projection keeps only the records
+the reader acts on, and only the fields it reads:
+- the session declaration, holding whether a parent thread is named and never
+  the identifier;
+- each model declaration's identifier;
+- each running-totals reading's timestamp and cumulative token fields;
+- the turn figure that proves an opening balance.
+
+Each value is kept as the reader reads it, never as the record's bytes:
+- the model as its raw identity, which is an identifier or the bucket;
+- the timestamp as the same instant in canonical UTC;
+- each count as a non-negative integer, with a zero left out;
+- the turn figure only when it is a count.
+
+A value that is not accounting, such as an object, a sentence or a path, has no
+way into the kept tree, and a value the reader would ignore is simply absent.
+
+No prompt, reply, title, working directory, branch or identifier is kept.
+
+**How it is used.** The projection is a journal of the same shape, so the same
+admission and reader walk it: a kept journal whose live file is gone is walked
+in its place (`retained=` on the capture's summary line), and counts exactly as
+the live file did, opening balance included. Measured on the user's tree on
+2026-10-22, the projection of 181 journals (746 MB) is 6.4 MB, and the kept
+journals reproduce the live walk's 21,796 rows and 178 session entries exactly.
+The same day, 33 of the journals first kept that morning had already been
+pruned by the tool, and the kept tree was the only record of them.
+
+**Only ever extended.**
+- **Where.** A kept journal is created at mode 0600, in directories made at
+  0700, entered through directory descriptors with no-follow at every
+  component. It must be a regular file with one link: a symbolic link, a
+  second name for another file, or a FIFO in its place is refused and written
+  nowhere.
+- **Line by line.** While the live file is read, each projected record is
+  compared with the kept journal's next line, so keeping a journal costs one
+  line of memory, never a file. A kept line is read only up to a bound no
+  projected line reaches.
+- **The tail only.** Nothing is written until every kept line has matched.
+  From there, only the new tail is appended, through the very file the
+  comparison read (`kept=`).
+- **Conflicts.** A projection that would shorten or contradict what is kept is
+  written nowhere and counted (`retain_conflicts=`).
+- **Never rewritten.** Nothing in the kept tree is ever renamed, truncated or
+  removed. A write killed midway leaves a prefix, which the next run completes.
+
+**One run at a time.** A run holds an exclusive lock on the kept tree
+(`.retain.lock` in its root) from start to finish. A second run waits for the
+first, then compares against what the first wrote. This applies even to a
+capture started by hand while the scheduled one runs. Without the lock, two
+runs could append the same tail, and the doubled readings would replay as a
+restart. The lock belongs to the one open file that took it (`flock`), so no
+other name for the lock file, opened and closed by the walk, can release it.
+
+**One root per run.** The kept root is opened once, without following a link,
+and the run keeps that directory open until it ends. Every write descends from
+it, never from the path, and the kept tree is read only while the path still
+names it, so a root renamed aside and replaced mid-run redirects nothing: a
+replacement found before the walk stops the run, and one made during the walk
+is neither read nor written.
+
+`retain_conflicts` above zero means a journal the tool rewrote rather than
+extended. It is worth a look; nothing is lost either way.
+
 ## The lifelong ledger's material (issue #267)
 
 The panel serves a windowed, sealed, byte-bounded document. The workstation's
