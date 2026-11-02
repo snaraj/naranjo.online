@@ -1,4 +1,5 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 import { validatedDevApiPort } from './src/lib/devApiPort.ts';
@@ -24,6 +25,14 @@ const buildConfig = {
     assetsInlineLimit: 0,
     emptyOutDir: true,
     outDir: '../internal/web/dist',
+    // The privacy notice (issue 355) is a second, script-free page beside the
+    // site; listing it here gives its stylesheet and fonts hashed names too.
+    rollupOptions: {
+      input: {
+        index: fileURLToPath(new URL('./index.html', import.meta.url)),
+        privacy: fileURLToPath(new URL('./privacy.html', import.meta.url)),
+      },
+    },
     sourcemap: false,
   },
 };

@@ -21,8 +21,8 @@
   "legalPages": [
     {
       "id": "privacy",
-      "status": "pending",
-      "decision": "https://github.com/snaraj/naranjo.online/issues/355"
+      "status": "published",
+      "path": "/privacy.html"
     }
   ],
   "edgeObservations": [
@@ -35,7 +35,7 @@
     {
       "kind": "reporting-endpoint",
       "origin": "https://a.nel.cloudflare.com",
-      "reason": "The edge adds NEL and Report-To headers, so browsers send network-error reports to the edge provider. Naming it in a privacy notice or disabling it is an owner decision.",
+      "reason": "The edge adds NEL and Report-To headers, so browsers send network-error reports to the edge provider. The privacy notice names this; turning it off is tracked on the platform issue.",
       "issue": "https://github.com/snaraj/platform/issues/407"
     }
   ]

@@ -1,0 +1,96 @@
+/* The privacy notice (issue 355): one quiet page in the site's night, set in
+ * the faces the site already ships. Vite gives these the same content-hashed
+ * files styles.css uses, so the page adds no font bytes. */
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url('./assets/fonts/Archivo-Variable-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Instrument Serif';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/InstrumentSerif-Regular-latin.woff2') format('woff2');
+}
+
+:root {
+  color-scheme: dark;
+  --ground: #060606;
+  --text: #e0e0e0;
+  --muted: #a0a0a0;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: var(--ground);
+  color: var(--text);
+  font-family: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 1rem;
+  line-height: 1.6;
+  font-synthesis: none;
+}
+
+main {
+  box-sizing: border-box;
+  max-width: 36rem;
+  margin-inline: auto;
+  padding: max(3rem, env(safe-area-inset-top)) max(1.25rem, env(safe-area-inset-right))
+    max(3rem, env(safe-area-inset-bottom)) max(1.25rem, env(safe-area-inset-left));
+}
+
+h1,
+h2 {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-weight: 400;
+  line-height: 1.1;
+}
+
+h1 {
+  font-size: 3rem;
+  margin: 1.5rem 0 1.5rem;
+}
+
+h2 {
+  font-size: 1.5rem;
+  margin: 2rem 0 0.5rem;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+a {
+  color: inherit;
+  text-underline-offset: 0.2em;
+}
+
+a:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+}
+
+.back {
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.back::before {
+  content: '← ';
+}
+
+code {
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.updated {
+  margin-top: 2.5rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}

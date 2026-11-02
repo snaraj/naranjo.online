@@ -156,6 +156,10 @@
     Scenery, out of flow, clipped to the sheet. -->
   <Torches lit={phase === 'night'} />
 </main>
+<!-- The privacy notice's one link (issue 355; owner, 2026-11-02: "as small
+  and non consequential as possible all the way at the bottom"). It sits under
+  the frame, on the sky, in the site's smallest type and its muted ink. -->
+<a class="page-privacy" href="/privacy.html">privacy</a>
 
 <style>
   /* From there he is carried back over the j's stem and lifted so his feet
@@ -173,5 +177,27 @@
     font-size: var(--keep-name-size);
     line-height: 0;
     pointer-events: none;
+  }
+
+  /* A table box shrinks to the word without a width, and its 44px height is
+     the touch floor (issue 26): the type stays small, the target does not. */
+  .page-privacy {
+    display: table;
+    block-size: 2.75rem;
+    min-inline-size: 2.75rem;
+    margin: 0 auto;
+    padding-inline: 0.5rem;
+    line-height: 2.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    letter-spacing: 0.2em;
+    color: var(--color-accent);
+    text-decoration: none;
+  }
+
+  .page-privacy:hover,
+  .page-privacy:focus-visible {
+    text-decoration: underline;
+    text-underline-offset: 0.3em;
   }
 </style>
