@@ -9,12 +9,6 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [0.1.100] - 2026-11-02
 
-### Security
-
-- Update the frontend toolchain to Vite 8.3.5, Svelte 5.57.3 and svelte-check
-  4.7.7, and the CodeQL actions to 4.39.1, folding the open Dependabot
-  proposals (#390, #391, #395).
-
 ### Fixed
 
 - The usage exporter keeps its own copy of the second tool's accounting. That
@@ -32,6 +26,9 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ### Changed
 
+- Update the frontend toolchain to Vite 8.3.5, Svelte 5.57.3 and svelte-check
+  4.7.7, and the CodeQL actions to 4.39.1, folding the open Dependabot
+  proposals (#390, #391, #395).
 - Remove 377 comment lines that recorded process history, retired code or
   restated the line below them; the change is proven comment-only and the
   built site is byte-identical (#396).
