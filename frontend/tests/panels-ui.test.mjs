@@ -325,13 +325,6 @@ test('no card announces its own age, and none keeps a control', () => {
   // "refresh" to be one. The delta review showed a panel could reintroduce
   // the control under any name so long as it reached a watcher's refresh(),
   // so the call itself is pinned rather than one identifier.
-  //
-  // A blanket ban on <button> inside a panel was tried here and is wrong:
-  // UsageTracker legitimately owns a daily/weekly/cumulative radiogroup,
-  // which is a view control, not a refresher.
-  //
-  // What this comment used to say next — "reaching a watcher is what makes a
-  // control a refresher, whatever it is named" — is FALSE and was retracted.
   // A card needs no watcher handle at all: refreshPanels() used to be
   // module-level. It is gone now too (owner directive, issue 179), along with
   // the page-header control that was its only caller — so this loop still
@@ -1206,20 +1199,6 @@ test('every calendar shares one window, and no display control survives', () => 
   );
 });
 
-// INVERTED by the owner's ruling of 2026-08-24. This pin used to REQUIRE the
-// empty grid: pendingColumns rendered, the placeholder span exact, more than
-// three hundred cells of chrome under the note "series pending". Every one of
-// those cells was honest about itself — absent, valueless, undated — and the
-// arrangement was still false, because "pending" claimed something was on its
-// way. For the source this was built for, nothing is: it publishes no daily
-// record, so the panel was holding a graph-shaped box open forever.
-//
-// The opposite guarantee, and it has to be exactly as strong as the one it
-// replaces, so BOTH halves are here. A source with nothing to draw renders no
-// graph region at all — not the grid, not the heading, not the lens toggle
-// that would have no series to re-read. A source WITH something to draw
-// renders the whole region, unchanged. Half of this alone is not a guard: a
-// panel that dropped every graph would satisfy the first half perfectly.
 /* A SOURCE WITH NO SERIES IS OFFERED NO SEGMENT (owner ruling 2026-08-24,
  * carried into the ledger on 2026-09-03, issue 287).
  *
@@ -1351,14 +1330,6 @@ test('a tile label carries the whole row, including its nulls', () => {
   assert.equal(cellLabel({ name: 'Sol Heredit', kc: 2, rank: null, score: null }), 'Sol Heredit: 2 KC, rank Unranked');
 });
 
-/* The skill-label pin retired with the grid it described (owner directive,
- * 2026-09-03, issue 287). What it proved — an accessible label carries the
- * WHOLE row, nulls included, so a figure never depends on reading one number
- * out of a dense table — is unchanged and still proven, on the collection that
- * survives: `cellLabel` is executed against a full row, an unranked row and a
- * no-figure row in the tests directly above and below this line, and the
- * ticker renders it as every item's accessible name. */
-
 // The panel used to open with a subtitle naming the account. The RSN is
 // personal information and the owner does not want it displayed (issue 127),
 // so it is gone from the rendering entirely — from the visible line AND from
@@ -1375,9 +1346,6 @@ test('the boss panel displays no account name anywhere', () => {
     'the account name reaches a rendering again; a label read aloud is still displayed'
   );
   assert.doesNotMatch(ticker, /account|panelSummary/, 'the account subtitle came back');
-  // The grids keep accessible names — losing the account must not cost a
-  // screen reader the ability to tell the two tables apart. The names are
-  // adapter data on the one grid template.
   /* The collection keeps its accessible name — losing the account must not
      cost a screen reader the ability to say what the strip is. The name is
      adapter data, and the strip IS a focus stop now, deliberately: under
@@ -1397,20 +1365,6 @@ test('the boss panel displays no account name anywhere', () => {
   // name is origin-served data rather than a string in this tree.
   assert.equal(bossTickerFixture().title, 'Old School RuneScape');
 });
-
-/* The two skills-grid pins retired with the grid (owner directive,
- * 2026-09-03, issue 287: the owner cut the skills grid).
- *
- * They proved two things and both survive elsewhere rather than being lost.
- * The FIRST — a total the upstream does not report renders as the same marker
- * every other cell uses, never as a zero and never as an empty tile — is the
- * honest-states floor, and it is executed on the surviving collection by the
- * null-tally and unranked pins above (`tally(null)` is `--`, `rankLabel(null)`
- * is "Unranked", and the strip renders both). The SECOND — that blank tiles
- * are a COUNTING property, so an upstream shipping a twenty-sixth skill fails
- * loudly rather than shipping a hole — has no counting property left to guard:
- * the strip is a single row of exactly the rows the payload carries, so there
- * is no grid for a remainder to fall out of. */
 
 // One numeric contract, three languages (2026-08-24 round-3 review finding
 // 9). A token count is produced by a Python capture tool, summed and served

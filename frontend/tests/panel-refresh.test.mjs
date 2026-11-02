@@ -383,12 +383,6 @@ test("the exported cadence is the owner's thirty-second freshness floor, exactly
   assert.equal(panelRefreshIntervalMs, 30_000, 'the visible panel poll is exactly 30s');
 });
 
-// refreshPanels and the liveWatchers set that backed it were the page-level
-// "refresh all trackers" button's own mechanism and left with it (owner
-// directive, issue 179): watchPanel's per-panel refresh() above is what
-// survives, and it is already fully exercised on its own. A page-wide fan-out
-// has no caller left to test.
-
 
 /* THE PAGE SAYS WHETHER IT IS STILL WAITING (issue 210).
  *

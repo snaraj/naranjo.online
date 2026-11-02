@@ -3,10 +3,6 @@
 # quota's real budget (pods: 2, limits.memory 256Mi = 2x128Mi), not rigidity —
 # raising it starts with the quota, not this schema.
 #
-# The default MOVED from 2 to 1 in the 2026-08-24 round-3 review (finding 3),
-# and the tradeoff is stated here rather than buried, because it is the
-# owner's call and not the chart's:
-#
 #   WHAT IS GIVEN UP. At 1 replica a pod restart is a brief outage instead of
 #   a hidden one. In practice the difference is small and was already small:
 #   this is one personal site on a ONE-NODE cluster, so both replicas always

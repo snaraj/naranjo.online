@@ -1116,16 +1116,6 @@ describe('category lens helpers', () => {
     assert.equal(categoryLabel('input'), 'input');
   });
 
-  /* Lens RESOLUTION used to be a helper here (`lensValues`), and its unit test
-     sat in this spot. Both are gone: main's block architecture moved lens
-     resolution into the component, and the owner's 2026-08-28 reversal then
-     removed the lens itself along with the whole display menu. What the
-     categories are FOR did not go with it — the owner's directive of
-     2026-09-03 (issue 287) put the per-day breakdown on the back of each
-     source's square, where it is delivered data a reader reads rather than a
-     question they answer. So the vocabulary the adapter delivers is pinned
-     here against that surface, and the four behaviours the retired resolver's
-     tests described are asserted against the path that ships. */
   it('keeps the breakdown a delivered reading, with nothing to resolve it with', () => {
     /* The categories are the calendar's own breakdown now: the board's cards
        print the four accounting classes as LIFETIME stats (the source card)

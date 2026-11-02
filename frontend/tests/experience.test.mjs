@@ -1977,12 +1977,6 @@ test('the stylesheet no longer dresses the J it retired (owner direction, 2026-1
   }
 });
 
-/* RETIRED WITH THE NAV (owner direction, 2026-10-16: "do away with it for
- * now"): "the nav is centred on the chrome row whatever its two ends hold".
- * Its subject was the row's three-column grid and the nav's place in it; the
- * row, its two ends and the nav are all gone, so there is nothing left to
- * centre. */
-
 test('the document declares both marks a browser looks for, and nothing inlines them (owner 2026-09-11, issue 314)', () => {
   /* The tab mark keeps its name and its type (issue 239): the runtime image
      carries no MIME registry beyond Go's built-in table, so the extension is

@@ -71,28 +71,6 @@ const textEntryFloorPx = 16;
 // The comfortable minimum for a finger, in CSS pixels.
 const touchFloorPx = 44;
 
-/* THE 448px STAGE CAP IS GONE (owner directive, 2026-09-03, issue 287).
- * galleryStageCapPx pinned --gallery-stage-size, the 28rem ceiling the single
- * visible frame was sized by, and it was written here as a literal rather
- * than read back off the page because Daybreak Blue's review of PR #161
- * proved the self-referential shape lets a 28rem -> 280rem mutation survive:
- * expectation and behaviour move together when both derive from the one
- * mutated token.
- *
- * The frame it capped is retired. The gallery is a GRID of square tiles that
- * spans the reading column, and a cap on that grid would put back the dead
- * gutter the owner's no-dead-space rule forbids — the grid filling its column
- * is the point of the redesign, not an accident of it. What replaces the cap
- * is the opposite measurement, and it is still independent of every token:
- * the grid's own right edge against the COLUMN's, and the cells' widths
- * against each other, in the fill lane below.
- *
- * The film's box went the same way. A film is a tile like any other now, so
- * the three constants that once described its widescreen stage — and then the
- * shared square cap that replaced them (issue 243) — are answered by
- * comparing a film's tile against the still's tile beside it, two boxes of
- * one page rather than any number this file states. */
-
 /* One gallery/v1 manifest carrying a still and a film, served from the media
  * volume's own mutable path so the page takes the route it takes in
  * production: lib/galleryManifest.ts reads it once, admits it, and the Media
@@ -336,16 +314,6 @@ async function visit(page) {
   await settled(page);
 }
 
-/* finePointer is GONE (owner directive, 2026-09-03, issue 287), and it is
- * removed rather than kept warm for the same reason alphaOf was: a helper
- * nothing calls is a helper nobody maintains. It answered "is this project's
- * emulated device one the gallery's stage pair is SHOWN on", which was a real
- * question only while the pair was gated behind a fine pointer — the
- * 2026-08-31 sketch retired that gate (issue 275) and the tile grid has no
- * capability-gated control at all, so its last caller went with the strip.
- * The pointer capability IS still asked, by followsPointer further down this
- * file, which is the detail-tip battery's own question and has callers. */
-
 /* Moves the OPEN STAGE to the still whose count line reads `label`, through
  * the dialog's own next control (owner directive, 2026-09-03, issue 287: the
  * strip and its position row are gone, and paging is something only the
@@ -400,17 +368,6 @@ function contrastRatio(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/* alphaOf is GONE (owner directive, 2026-09-03, issue 287). It read the alpha
- * channel out of whatever spelling of a colour an engine computed, and it had
- * exactly one consumer: the pin on the fixed reading-mode control's backdrop
- * plate. The ledger's masthead is an in-flow row, nothing scrolls beneath it,
- * and that lane now asserts the structural fact that makes a backdrop
- * unnecessary instead of the backdrop's own opacity — so the helper has no
- * caller left. It is removed rather than kept warm: a helper nothing calls is
- * a helper nobody maintains, and the contrast readers above (channels,
- * relativeLuminance, contrastRatio) are the colour machinery this file
- * actually uses. */
-
 /* THE NIGHT, AND THE DAY KEPT AS LOGIC (owner, 2026-10-19: "always set it to
  * night by default", then, of the control that turned it to day, "do away
  * with this all together but keep the logic"). Every visit opens on the night
@@ -461,15 +418,6 @@ const readFrom = async (page, selector) => {
   }, selector);
   await settled(page);
 };
-
-/* The token panel's display controls are GONE (owner directive, 2026-08-28,
- * reversing the 0.1.52 decision after seeing it live: "remove this entire
- * menu. it doesnt look good and it doesn't provide any value"). The helper
- * that opened the per-source popover, pressed a radio and closed it again
- * went with them; every lane below now measures the ONE graph each source
- * draws, and the lane at the end of this file's token-panel group is the one
- * that proves no control is left to press.
- */
 
 test('the page fits every phone width instead of scrolling sideways', async ({ page }) => {
   await visit(page);
@@ -1647,12 +1595,6 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
   }
 });
 
-/* RETIRED WITH THE NAV (owner direction, 2026-10-16: "do away with it for
- * now"): "the section links are centred on the chrome row, not on what its two
- * ends leave over". Its subject was the row's three-column grid and the links
- * in its middle; the row, its two ends and the links are all gone, so there is
- * nothing left to centre. */
-
 test('a phone still renders the single full-width column it always did', async ({ page }) => {
   await visit(page);
   for (const width of phoneWidths) {
@@ -1726,10 +1668,6 @@ test('a phone still renders the single full-width column it always did', async (
         0
       );
     }
-    /* The footer control's own check stood here — inside the column, and
-       carried by the document rather than the viewport — and it went with the
-       footer (owner, 2026-10-19): there is no control left for a corner or a
-       scroll to cover. */
   }
 });
 
@@ -2011,16 +1949,6 @@ test('the calendar fills its column with whole, square days at every width (owne
   }
 });
 
-/* RETIRED 2026-10-16 WITH THE STRIPS IT MEASURED: "every strip still holds all
- * of its own rows once the engine has taken its scrollbar" (issue 130). Its
- * subject was a heatmap strip that clipped a year behind its own horizontal
- * scrollbar inside a fixed box, and the measured gutter main.ts published for
- * it. The trackers' calendar is drawn to fit its box and never scrolls (owner
- * direction, 2026-10-16), so no box on the page reserves a scrollbar any more
- * and the gutter measurement left with it; the calendar's own fit — whole,
- * square days inside its drawing at every width — is measured by "the calendar
- * fills its column with whole, square days at every width". */
-
 /* Re-serves the origin's own token-usage envelope with one source's series
  * replaced, so a lane can put a series of any length on the real page without
  * inventing a payload shape. `edit` receives the decoded envelope and mutates
@@ -2271,24 +2199,6 @@ test('every layer paints ONE calendar, and coverage moves the data rather than t
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-/* AN UNMEASURED SHARE DRAWS NOTHING, MEASURED (issue 246, finding 1).
- *
- * The insight rows carry a proportion each, and a source may report one it
- * never measured. The honest-states floor says such a figure serves null and
- * renders as a dash rather than as a zero — and the row must draw NO FILL AT
- * ALL, not a zero-width one, because a zero-width fill is pixel-identical to
- * a measured 0% and the row would look like a measurement while the reading
- * beside it says otherwise.
- *
- * The component states that in a guard (`{#if insight.fillPct !== null}`) and
- * the data half is pinned in tests/token-usage.test.mjs — an unmeasured share
- * becomes a null fillPct and a "--" reading. The RENDER half was pinned at no
- * layer at all, which is the review finding: removing that guard and
- * rendering the fill unconditionally left every suite green.
- *
- * So this lane asks a real engine what it actually painted. Both directions,
- * because "no fill" alone is satisfied by a component that draws no bars for
- * anybody. */
 /* A MEMBER THAT CARRIED NOTHING IS NOT A ROW (owner directive, 2026-09-11).
  *
  * This lane used to measure the opposite half of the same rule: a share the
@@ -2301,9 +2211,6 @@ test('every layer paints ONE calendar, and coverage moves the data rather than t
  * half of THAT: what the engine actually drew for the rows that survived.
  */
 test('every model row an account draws is a real member with a real rule', async ({ page }) => {
-  /* RE-AIMED 2026-10-16: the board's cards became the diagram's accounts
-     (owner direction), and each source's model rows moved with them — the
-     same rows, built by the same adapter, drawn as `.chronicle-model`. */
   /* The rows are staged on the first served source, so they are members of
      that source's own vendor group (issue #369). */
   let group = null;
@@ -3801,10 +3708,6 @@ test('the torches burn on both sides of the frame at night and hold still for le
     const later = (await read()).torches[0];
     expect(later.hash, 'the flame moved for a reader who asked for less motion').toBe(still.hash);
     expect(later.light, 'the torchlight moved for a reader who asked for less motion').toBe(still.light);
-    /* "Out by day" is retired with the toggle that brought the day (owner,
-       2026-10-19: "do away with this all together but keep the logic"): the
-       torches take their lit state from the app's constant phase, which is
-       always the night, so the page has no day for them to be out in. */
   }
   await page.emulateMedia({ reducedMotion: null });
   expect(errors, 'the page threw while the torches stood').toEqual([]);
@@ -4795,13 +4698,6 @@ test('the trackers open their roll with the figures and fill the rest of it with
   }
 });
 
-/* The detail this table used to draw itself is now the page's one hover-detail
-   primitive, anchored to the VIEWPORT rather than to a grid cell, and it has
-   its own battery at the end of this file — including the containment floor
-   this test used to carry: nothing the detail does may make the page scroll
-   sideways at 320px. That floor did not move, it got stronger; it is now
-   measured at every viewport edge rather than only the inline ones. */
-
 test('the page names its owner, carries no badges, and wears no button chrome', async ({ page }) => {
   await visit(page);
   const observed = await page.evaluate(() => {
@@ -5772,16 +5668,6 @@ test('the commit log reads as ruled two-line entries at the touch pitch, not tex
   }
 });
 
-/* RETIRED 2026-10-16: "the shortest admitted repo slug still clears the touch
- * floor on both axes" (issue 157). Its subject was the commit row's own
- * repository LINK, which a one-character slug shrank to a 6.6px anchor. The
- * repository is text on an entry's supporting line now (owner direction,
- * 2026-10-16: the entry is one link, and the repository stays one press away
- * on the commit's own page and in the column beside it), so there is no
- * repository link in the log to shrink. The entry link that replaced it is
- * held to the floor on both axes by "every control clears the touch floor on
- * both axes" and by the ruled-entries lane above. */
-
 /* ===========================================================================
  * The stacked page (issue 134)
  *
@@ -5830,14 +5716,6 @@ test('every section the page draws is an address that lands on it, and #commits 
     expect(landed.top, `#${id} scrolled its section past the top`).toBeGreaterThanOrEqual(-1);
   }
 });
-
-/* RETIRED WITH THE NAV (owner direction, 2026-10-16): "the nav link is quiet
- * at rest and marks itself the moment intent shows (issue 157)". Its subject
- * was the nav link — its idle and hover decoration, its focus ring, and Enter
- * reaching its section — and no nav link is left to press. The site-wide link
- * doctrine it applied is still measured on every rendered link by "every
- * rendered link is unmarked at rest and marks itself on hover", and its
- * engine-capability probe lives on in engineTabsToPlainLinks above. */
 
 /* The section that used to be "Work" (owner directive, 2026-08-25): the real
  * history replaced two lorem-ipsum records, so what this measures is that the
@@ -7263,18 +7141,6 @@ test('the gallery grid fills the reading column edge to edge, in five equal cell
   }
 });
 
-/* THE STILL-ONTO-FILM ZERO-SHIFT LANE IS DELETED (owner directive,
- * 2026-09-03, issue 287: the strip is gone). It measured the document, the
- * reserved frame, the caption lane and the section below the gallery across a
- * navigation from a still to a film and back — a navigation the tile grid
- * does not have, because a still and a film are on screen at the same time
- * and neither replaces the other. The claim it was protecting is not dropped,
- * it is made stronger and measured elsewhere: the film lane above compares
- * a film's tile against the still's tile in ONE layout, which no reservation
- * bug can satisfy by moving both boxes together. The stage does page from a
- * still onto a film again (issue 384), and that lane holds the row behind the
- * scrim to its exact shape across the whole round. */
-
 /* THE PAGE DOES NOT SCROLL BEHIND THE LIGHTBOX (issue 241).
  *
  * showModal() makes the document inert to POINTER interaction and nothing
@@ -8368,13 +8234,6 @@ test('the repositories are one ruled entry each, aligned across entries, and the
   }
 });
 
-/* RETIRED 2026-10-16 WITH THE STRIP: "the weekday gutter stays visually
- * stationary while the strip scrolls under it" (issue 189). Its subject was a
- * Mon/Wed/Fri gutter beside a heatmap strip that scrolled sideways under it.
- * The trackers' calendar draws as many whole weeks as its box holds and never
- * scrolls (owner direction, 2026-10-16), and it prints no weekday gutter, so
- * there is nothing left to scroll and nothing beside it to hold still. */
-
 /* A DAY IS NAMED IN WORDS, NEVER IN THE MACHINE'S DATE (issue 189's period
  * phrase, issue 178's format floor; re-aimed 2026-10-16 from the token
  * calendar's detail card to the trackers' one diagram, whose figures name the
@@ -9097,26 +8956,6 @@ test('keyboard focus opens the detail', async ({ page }) => {
   expect(shown.scrollWidth, 'the keyboard detail grew the document').toBe(shown.clientWidth);
 });
 
-/* ===========================================================================
- * The token-activity heatmap (issue 178) — RETIRED 2026-10-16 with the
- * heatmap: the token series and the contribution calendar are one diagram now
- * (owner direction, 2026-10-16), and what these lanes measured moved with it:
- *
- *   - "the calendar fills its card, and its day bound still stops and squares
- *     a day" became "the calendar fills its column with whole, square days at
- *     every width". The caller-set day bound it drove from outside (the
- *     retired token card's --grid-day-max/--grid-day-size) left with the
- *     heatmap component that read it; the diagram's calendar sizes its own
- *     days to its box, and squareness is asserted at every width instead;
- *   - "a token-activity cell card is titled 'Tokens used' and reads a human
- *     period phrase" and "a tap opens the token-activity card, and a second
- *     tap closes it" had a subject in the heatmap's per-cell detail. The
- *     diagram has no per-cell detail: pointing at a day — on the graph or on
- *     the calendar — names it in the diagram's own figures, which "a day the
- *     reader points at is named in words" and "a finger taps a day and the
- *     answer stays" measure in every engine.
- * ======================================================================== */
-
 /* THE DIAGRAM OFFERS ITS LAYERS AND NOTHING ELSE (owner directive,
  * 2026-08-28, reversing the 0.1.52 decision after seeing it live: "remove this
  * entire menu. it doesnt look good and it doesn't provide any value";
@@ -9756,9 +9595,6 @@ test('a real pointer drag moves the edge exactly as far as the pointer', async (
   expect(after.width - before.width, 'a centred column must shrink from both sides').toBeCloseTo(-320, 0);
   expect(after.left - before.left).toBeCloseTo(160, 0);
   expect(after.scrollWidth).toBe(after.clientWidth);
-  /* The reading-mode control this lane also held to the dragged sheet (owner
-     directive, 2026-09-03, issue 287) went with the footer (owner,
-     2026-10-19): the sheet carries no chrome control for a drag to move. */
 
   /* The start handle mirrors it, and undoes it: pulled 160px outward, it
      gives the column back the 320px the end handle took. */
@@ -10830,24 +10666,6 @@ test('the diagram answers a tap with a real reading on both of its surfaces, on 
   expect(onGraph.now, 'the graph named the same day the calendar did; the two taps were one').not.toBe(onCalendar.now);
 });
 
-/* RETIRED 2026-10-16 WITH THE GRID LISTBOX (issue 219's keyboard half). Six
- * lanes measured the heatmap strips' own keyboard cursor — a listbox whose
- * cells took no tab stop and whose arrows moved a cursor through a strip that
- * scrolled: "the keyboard cursor survives a scroll, and every arrow opens a
- * cold strip", "the keyboard cursor is scrolled into its own strip, and a
- * readout panned out of it closes", "bringing the cursor into view is instant,
- * whatever motion the reader asked for", "a refresh keeps the keyboard cursor
- * on the day it named", "the grid listbox owns its options directly", and "a
- * wide grid still pans natively, and never takes the page sideways". Every
- * subject they had — the listbox, its options, its scrollport, its native pan
- * — left with the strips. The diagram that replaced them is ONE slider whose
- * day is read in its own figures and which never scrolls; its keyboard walk,
- * its clamping, its Escape, its refresh and its chords are measured by "the
- * graph walks its days from the keyboard", "a refresh drops the reading rather
- * than re-pointing it at a different day" and "a widget’s arrows do not
- * swallow the browser’s own chords"; its fit by "the calendar fills its column
- * with whole, square days at every width". */
-
 /* DEFECT 2. Nothing was swipeable. The gallery showed one photograph and had
  * only two arrow buttons to move between them.
  *
@@ -10954,35 +10772,6 @@ test('the stage advances on a swipe and stays put on a fidget (issue 219; owner 
     ).toBeLessThan(1);
   }
 });
-
-/* THE ARRIVAL-DIRECTION LANE IS DELETED (owner directive, 2026-09-03, issue
- * 287: the strip is gone). "A committed swipe brings the new item in from its
- * own side" (issue 265, defect 5) measured the frames an engine painted after
- * a release, because the strip mounted the incoming item at the old drag
- * offset and eased it home from the wrong direction — 120-202px of backwards
- * travel per swipe on 0.1.65. The stage has no drag offset to mount anything
- * at and no settle to ease: `move` and `settle` are empty and a turn is a
- * state change, so there is no travel to have a direction. The arithmetic
- * that produced the defect (entryOffset, boundedDrag) is still owned by
- * tests/gesture.test.mjs, which is where it belongs while nothing paints it.
- *
- * THE FILM-SWIPE LANE IS DELETED with it. "A film swipes like a still until
- * the reader presses play" (issue 243) was about a film sharing the strip's
- * one stage behind a veil that carried the gesture, and .gallery-film-veil
- * does not exist. A film shares the dialog with the stills again since issue
- * 384, but its stage carries no swipe at all — a horizontal drag across a
- * film is the native scrubber's — and the claims that were about the READER
- * are all measured in the film lane earlier in this file: a drag across the
- * film never turns the page, the press on the film's tile is the one start,
- * and that press hands over the native controls.
- *
- * THE OFFSET-WRITE LANE IS DELETED with both. "A dragged gallery writes its
- * offset once a frame, not once an event" (issue 243) counted --gallery-drag
- * writes against painted frames, and the owner's "swiping is NOT very smooth
- * on the phone" was a style invalidation per pointermove. A binding whose
- * `move` is empty writes nothing at all, per frame or per event, which is the
- * limit that lane was pushing toward; frameCoalescer itself is still exercised
- * exhaustively, and deterministically, by tests/gesture.test.mjs. */
 
 test('the gallery is reachable without a gesture, and says where it is (issue 219; issue 275; owner 2026-09-03, issue 287)', async ({
   page,
@@ -11319,24 +11108,6 @@ function straightLine(x, y, dx, dy, steps) {
   }));
 }
 
-/* THE NEIGHBOUR-WARMING LANE IS DELETED (owner directive, 2026-09-03, issue
- * 287: the strip is gone). "A real gallery swipe finds its incoming picture
- * already decoded, even on a slow network" (issue 285) drove a real Chromium
- * touch across the strip on a throttled 3G and required zero blank frames
- * after the commit, because the strip warmed its neighbours and the lane
- * proved the warming reached a real engine.
- *
- * There are no neighbours to warm. The stage pages between pictures whose
- * previews the reader has ALREADY loaded — the tile row IS the preview set —
- * and the enlarged <img> carries its own preview as a CSS background, so what
- * paints while the master decodes is the picture the reader was just looking
- * at, at every network speed rather than only the ones a warm cache happened
- * to cover. A lane asserting "never blank" against a background-image would
- * be measuring the engine's compositing rather than this build, and the
- * question it was really asking — does a reader pay for a master they never
- * open — is measured directly by the master-on-demand lane earlier in this
- * file. */
-
 /* THE CALENDAR SHOWS THE DAYS SINCE ITS DATA STOPPED (issue 285; re-aimed
  * 2026-10-16 at the trackers' one diagram, owner direction: "github heatmap is
  * not updating properly, and not catching it means a fault in testing
@@ -11370,11 +11141,6 @@ test('the contributions calendar trails today past a stalled payload, and says s
   await expect(panel).toHaveAttribute('data-panel-status', 'stale');
   const generatedAt = await panel.getAttribute('data-panel-generated-at');
   expect(generatedAt, 'the panel stopped publishing when it was generated').toMatch(/^\d{4}-\d{2}-\d{2}T/);
-  /* (The reserved head row this lane also measured is retired for the
-     trackers: THE KEEP frames the diagram and the ticker as one board whose
-     panels carry no title, and hides their head rows outright — owner
-     direction, 2026-10-16. Every OTHER panel's reserve is measured by "a panel
-     head with no title keeps the reserved row".) */
 
   /* The contributions are the roll's LAST seal now — it opens on the first
      token source (owner, 2026-10-21, issue 385) — so the lane presses it
@@ -11840,13 +11606,6 @@ for (const viewport of markViewports) {
       new Set(observed.names).size,
       `the employer names start at ${new Set(observed.names).size} different offsets; the mark column varies per row`
     ).toBe(1);
-    /* THE NAV'S HALF OF THIS LANE IS RETIRED WITH THE NAV (owner direction,
-       2026-10-16: "do away with it for now"). It measured the four section
-       words as one scrolling line in the chrome row — one top edge, a
-       carousel on a phone, each link a 44px target, no aria-label beside the
-       word. The words are still printed, on the section heads, where the
-       experience lane asks the accessibility tree for them; the strip they
-       ran in is gone. */
 
     expect(
       observed.documentWidth,

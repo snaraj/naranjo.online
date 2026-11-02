@@ -742,9 +742,6 @@ describe('the page cannot be broken by a width, whichever half is looking', () =
     // Belt AND braces, and the point of pinning both is that losing ONE is
     // silent: a page with only the script clamp still renders correctly today
     // and fails open the moment a value reaches the token by any other route.
-    /* The chrome row shared this rule from issue 287 until it was removed
-       (owner direction, 2026-10-16: "do away with it for now"); the clamp this
-       test measures is unchanged and governs the column alone again. */
     const rule = /#app > main\s*\{([^}]*)\}/.exec(styles);
     assert.ok(rule, 'the page column rule has moved; the clamp pins below no longer measure it');
     assert.match(rule[1], /inline-size:\s*min\(var\(--page-column-width\), 100%\);/);
