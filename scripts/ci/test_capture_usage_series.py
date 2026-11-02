@@ -27,7 +27,9 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import tracemalloc
 import unittest
 
 
@@ -3163,6 +3165,10 @@ class ImportSurfaceTest(unittest.TestCase):
             # entry, and a bare `except OSError` cannot. It is a table of
             # integers with no callables at all.
             "errno",
+            # `fcntl` joined with issue #382's second review round: `flock`
+            # holds the kept tree for one run at a time. Its other members
+            # (`fcntl`, `ioctl`) stay out by the exact attribute pin below.
+            "fcntl",
             "json",
             "os",
             "pathlib",
@@ -3172,8 +3178,8 @@ class ImportSurfaceTest(unittest.TestCase):
     )
 
     # Every `os.` attribute the module is allowed to name. Descriptor-rooted
-    # reading and nothing else: no process, no network, no filesystem
-    # mutation.
+    # reading, and descriptor-rooted writing into the walk's own kept tree:
+    # no process, no network.
     ALLOWED_OS_ATTRIBUTES = frozenset(
         {
             "O_CLOEXEC",
@@ -3193,6 +3199,25 @@ class ImportSurfaceTest(unittest.TestCase):
             "listdir",
             "lstat",
             "open",
+            # These joined with issue #382: the walk keeps each journal's
+            # accounting projection (`RetainedJournals`) so the tool that
+            # writes the journals can no longer erase what the series is built
+            # from. They are the EXTEND-ONLY write half of the descriptor-rooted
+            # discipline the read half follows: a directory made and then
+            # entered through `dir_fd` with O_NOFOLLOW (mkdir), and a kept
+            # journal opened ONCE — created at 0600 when absent — to be
+            # compared and have only its new tail appended (O_RDWR, O_CREAT,
+            # O_APPEND). The run lock is `fcntl.flock`, pinned below, and
+            # not `lockf`: a record lock is released when the process closes
+            # ANY descriptor for the file (2026-10-22 review of 9aad77b,
+            # finding 1). Nothing is renamed, truncated or removed — the forbidden set below still
+            # refuses every call that would — and none of these creates a
+            # process or opens a socket, which is what this pin exists to
+            # keep out.
+            "O_APPEND",
+            "O_CREAT",
+            "O_RDWR",
+            "mkdir",
         }
     )
 
@@ -3282,6 +3307,20 @@ class ImportSurfaceTest(unittest.TestCase):
             and node.value.id == "os"
         }
         self.assertEqual(named, set(self.ALLOWED_OS_ATTRIBUTES))
+
+    # Every `fcntl.` attribute the module may name: the run lock and nothing
+    # else, so `fcntl.fcntl` and `fcntl.ioctl` arrive only by a widening here.
+    ALLOWED_FCNTL_ATTRIBUTES = frozenset({"LOCK_EX", "flock"})
+
+    def test_the_fcntl_surface_is_exactly_the_run_lock(self):
+        named = {
+            node.attr
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "fcntl"
+        }
+        self.assertEqual(named, set(self.ALLOWED_FCNTL_ATTRIBUTES))
 
     def test_the_enumerated_os_attributes_cannot_spawn_or_connect(self):
         # Guards the attribute allowlist against itself, the way the module
@@ -6651,6 +6690,563 @@ class CorrectedDayTest(unittest.TestCase):
         )
         self.assertEqual(merged[0]["totals"], [120])
         self.assertEqual(merged[5], set())
+
+
+class RetainedJournalsTest(unittest.TestCase):
+    """The walk keeps its own copy of every journal's accounting (issue #382).
+
+    The tool that writes running-totals journals prunes them, and on
+    2026-10-22 a correction proven from pruned files' opening balances could
+    no longer be proven by anything. These pin the four promises the kept
+    tree makes: a kept journal replays EXACTLY as its live file did, a pruned
+    file keeps counting, nothing but accounting is kept, and a kept journal
+    is only ever extended, through no link.
+    """
+
+    MEMBER = EXACT_MEMBERS[0]
+    OTHER = EXACT_MEMBERS[1]
+    PRIVATE = (
+        "a sentence nobody outside this machine may read",
+        "/home/someone/work/a-private-project",
+        "someone/secret-feature",
+        "a-private-tool",
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "the-parent-thread-identifier",
+    )
+
+    def tree(self):
+        """Journals covering every case the reader distinguishes."""
+        balance = OpeningBalanceTest()
+        prompt = json.dumps(
+            {"type": "response_item", "payload": {"type": "message", "content": [{"text": self.PRIVATE[0]}]}}
+        )
+        return {
+            # A spawned thread whose first reading is an opening balance.
+            "2026/08/20/review.jsonl": [
+                declaration_line(parent=self.PRIVATE[5]),
+                prompt,
+                counted_line("2026-08-20T09:00:01.000Z", balance.CARRIED, balance.TURN),
+                turn_model_line(exact_identifier(self.MEMBER), stamp="2026-08-20T09:00:02.000Z"),
+                counted_line("2026-08-20T10:00:00.000Z", balance.LATER),
+            ],
+            # A top-level session that switches model, repeats a reading and restarts lower.
+            "2026/08/21/session.jsonl": [
+                declaration_line(stamp="2026-08-21T08:00:00.000Z"),
+                session_meta_line(),
+                turn_model_line(exact_identifier(self.MEMBER), stamp="2026-08-21T08:00:01.000Z"),
+                counted_line("2026-08-21T08:01:00.000Z", five_way(100, 40, 0, 20, 5)),
+                counted_line("2026-08-21T08:02:00.000Z", five_way(100, 40, 0, 20, 5)),
+                prompt,
+                turn_model_line(exact_identifier(self.OTHER), stamp="2026-08-21T08:03:00.000Z"),
+                counted_line("2026-08-21T08:04:00.000Z", five_way(300, 90, 10, 60, 15)),
+                counted_line("2026-08-21T08:05:00.000Z", five_way(50, 0, 0, 10, 0)),
+            ],
+            # Readings before any model is declared fold to the residual.
+            "2026/08/22/undeclared.jsonl": [
+                running_line(500, stamp="2026-08-22T07:00:00.000Z"),
+                running_line(800, stamp="2026-08-22T07:30:00.000Z", last=300),
+            ],
+        }
+
+    def write(self, root, files):
+        for name, lines in files.items():
+            path = pathlib.Path(root) / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def walk(self, root, retain=None):
+        """One run: the walk, then the kept tree released, as the command line does."""
+        counters, sessions, carried = _RT.new_counters(), [], {}
+        try:
+            rows = list(
+                _RT.read_running_totals(
+                    str(root), counters, sessions, scope=RUNNING_SCOPE, carried=carried, retain=retain
+                )
+            )
+        finally:
+            if retain is not None:
+                retain.close()
+        return rows, carried, sessions, counters
+
+    def token_counters(self, counters):
+        names = ("counted", "duplicates", "restarts", "opened", "unattributed", "cross_group", "unpartitioned")
+        return {name: counters[name] for name in names}
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.live = pathlib.Path(scratch.name) / "live"
+        self.kept = pathlib.Path(scratch.name) / "kept"
+        self.live.mkdir()
+        self.write(self.live, self.tree())
+
+    def test_a_kept_journal_replays_exactly_as_its_live_file(self):
+        live = self.walk(self.live, _RT.open_retained(self.kept))
+        kept = self.walk(self.kept)
+        self.assertEqual(live[3]["kept"], 3)
+        self.assertEqual(kept[0], live[0], "the kept journals bill different rows than the live files")
+        self.assertEqual(kept[1], live[1], "the kept journals carry different opening balances")
+        self.assertEqual(kept[2], live[2], "the kept journals describe different sessions")
+        self.assertEqual(self.token_counters(kept[3]), self.token_counters(live[3]))
+        # The fixture exercises what it claims to: a balance, a restart, a duplicate.
+        self.assertEqual(live[1], {"2026-08-20": 1000})
+        self.assertEqual(live[3]["restarts"], 1)
+        self.assertEqual(live[3]["duplicates"], 1)
+
+    def test_a_pruned_journal_still_counts(self):
+        first = self.walk(self.live, _RT.open_retained(self.kept))
+        (self.live / "2026/08/20/review.jsonl").unlink()
+        after = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(after[3]["retained"], 1)
+        self.assertEqual(after[0], first[0], "a pruned journal stopped counting")
+        self.assertEqual(after[1], first[1], "a pruned journal lost its opening balance")
+        self.assertEqual(after[2], first[2])
+
+    def test_a_live_journal_is_walked_once_beside_its_kept_copy(self):
+        self.walk(self.live, _RT.open_retained(self.kept))
+        again = self.walk(self.live, _RT.open_retained(self.kept))
+        alone = self.walk(self.live)
+        self.assertEqual(again[3]["retained"], 0)
+        self.assertEqual(again[3]["kept"], 0, "an unchanged journal was written again")
+        self.assertEqual(again[0], alone[0], "a journal kept AND live was walked twice")
+
+    def test_nothing_but_accounting_is_kept(self):
+        self.walk(self.live, _RT.open_retained(self.kept))
+        kept = "".join(path.read_text() for path in sorted(self.kept.rglob("*.jsonl")))
+        for private in self.PRIVATE:
+            self.assertNotIn(private, kept, "the kept tree holds a private value")
+        self.assertIn('"%s":"%s"' % (_RT.RUNNING_PARENT_FIELD, _RT.RETAINED_PARENT_MARK), kept)
+        for line in kept.splitlines():
+            record = json.loads(line)
+            self.assertLessEqual(set(record), {"type", "timestamp", "payload"})
+            self.assertLessEqual(set(record["payload"]), {_RT.RUNNING_PARENT_FIELD, _RT.MESSAGE_MODEL_FIELD, "info"})
+
+    def test_a_kept_journal_is_only_ever_extended(self):
+        name = "2026/08/21/session.jsonl"
+        self.walk(self.live, _RT.open_retained(self.kept))
+        before = (self.kept / name).read_bytes()
+        # The live file grows: only the tail is appended.
+        with open(self.live / name, "a", encoding="utf-8") as handle:
+            handle.write(counted_line("2026-08-21T09:00:00.000Z", five_way(90, 0, 0, 20, 0)) + "\n")
+        grown = self.walk(self.live, _RT.open_retained(self.kept))
+        after = (self.kept / name).read_bytes()
+        self.assertEqual(grown[3]["kept"], 1)
+        self.assertTrue(after.startswith(before) and len(after) > len(before))
+        # The live file shrinks: the kept journal is not shortened.
+        lines = (self.live / name).read_text().splitlines()
+        (self.live / name).write_text("\n".join(lines[:4]) + "\n")
+        shrunk = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(shrunk[3]["retain_conflicts"], 1)
+        self.assertEqual((self.kept / name).read_bytes(), after, "a kept journal was shortened")
+        # A kept journal that disagrees with its live file is not overwritten.
+        tampered = b'{"payload":{"model":"something-else"}}\n'
+        (self.kept / name).write_bytes(tampered)
+        disagreed = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(disagreed[3]["retain_conflicts"], 1)
+        self.assertEqual((self.kept / name).read_bytes(), tampered, "a disagreeing kept journal was overwritten")
+
+    def test_a_write_cut_short_is_completed_by_the_next_run(self):
+        name = "2026/08/21/session.jsonl"
+        self.walk(self.live, _RT.open_retained(self.kept))
+        whole = (self.kept / name).read_bytes()
+        (self.kept / name).write_bytes(whole[: len(whole) // 2])
+        resumed = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(resumed[3]["kept"], 1)
+        self.assertEqual((self.kept / name).read_bytes(), whole)
+
+    def test_the_kept_tree_is_private(self):
+        self.walk(self.live, _RT.open_retained(self.kept))
+        for path in [self.kept, *self.kept.rglob("*")]:
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode & 0o077, 0, "a kept entry is readable by others: %o" % mode)
+
+    def test_no_link_in_the_kept_tree_is_written_through(self):
+        outside = self.kept.parent / "outside"
+        outside.mkdir()
+        self.kept.mkdir(mode=0o700)
+        # A directory component that is a link, and a leaf that is a link.
+        (self.kept / "2026").symlink_to(outside, target_is_directory=True)
+        retain = _RT.open_retained(self.kept)
+        result = self.walk(self.live, retain)
+        self.assertEqual(list(outside.iterdir()), [], "a kept journal was written through a linked directory")
+        self.assertGreaterEqual(result[3]["symlinks"], 1)
+        (self.kept / "2026").unlink()
+        # The victim is EMPTY: an empty file is a prefix of every projection,
+        # so only the no-follow open stands between it and an append.
+        target = outside / "victim.jsonl"
+        target.write_text("")
+        (self.kept / "2026" / "08" / "21").mkdir(parents=True)
+        (self.kept / "2026" / "08" / "21" / "session.jsonl").symlink_to(target)
+        linked = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(target.read_text(), "", "a kept journal was written through a linked leaf")
+        self.assertGreaterEqual(linked[3]["retain_conflicts"], 1)
+
+    def test_the_kept_root_must_be_a_directory(self):
+        self.kept.symlink_to(self.live, target_is_directory=True)
+        with self.assertRaises(_RT.CaptureError):
+            _RT.open_retained(self.kept)
+
+    def test_a_message_tree_refuses_retention(self):
+        # A message tree has no running-totals projection, and keeping nothing
+        # in silence would read as protection that is not there. The control
+        # proves the tree itself captures, so only the refusal can raise.
+        messages = self.kept.parent / "messages"
+        self.write(messages, {"2026/08/10/session.jsonl": [transcript_line()]})
+        _RT.capture(messages, _RT.FORMAT_MESSAGES, source=MESSAGES_SOURCE)
+        with self.assertRaises(_RT.CaptureError):
+            _RT.capture(messages, _RT.FORMAT_MESSAGES, source=MESSAGES_SOURCE, retain=_RT.open_retained(self.kept))
+
+    def test_the_command_line_keeps_and_refuses_a_missing_parent(self):
+        self.assertEqual(
+            _RT.main(["--transcripts", str(self.live), "--source", RUNNING_SOURCE, "--format",
+                      _RT.FORMAT_RUNNING_TOTALS, "--retain-dir", str(self.kept / "missing" / "codex")]),
+            2,
+        )
+
+    # --- 2026-10-22 review of e63bd72 -------------------------------------
+
+    SENTINEL = "SYNTHETIC_PRIVATE_SENTINEL"
+
+    def hostile(self):
+        """A journal whose accounting slots hold values that are not accounting."""
+        sentinel = self.SENTINEL
+
+        def reading(stamp, usage, turn=None):
+            info = {_RT.RUNNING_USAGE_KEY: usage}
+            if turn is not None:
+                info[_RT.RUNNING_TURN_KEY] = turn
+            return json.dumps(
+                {"timestamp": stamp, "type": "event_msg", "payload": {"type": "token_count", "info": info}}
+            )
+
+        return {
+            "2026/08/23/hostile.jsonl": [
+                # An object, a string, a flag and a negative where counts
+                # belong, and an object where the turn figure belongs.
+                reading(
+                    "2026-08-23T09:00:00.000Z",
+                    {
+                        _RT.RUNNING_TOTAL_FIELD: {"text": sentinel},
+                        _RT.RUNNING_INPUT_FIELD: sentinel,
+                        _RT.RUNNING_OUTPUT_FIELD: True,
+                        _RT.RUNNING_CACHE_READ_FIELD: -5,
+                    },
+                    turn={_RT.RUNNING_TOTAL_FIELD: {"text": sentinel}},
+                ),
+                # A sentence, then a path, where a model belongs: the bucket.
+                turn_model_line("a sentence %s with spaces" % sentinel, stamp="2026-08-23T09:01:00.000Z"),
+                reading("2026-08-23T09:02:00.000Z", five_way(100, 0, 0, 20, 0)),
+                turn_model_line("/home/%s/model" % sentinel, stamp="2026-08-23T09:03:00.000Z"),
+                # A timestamp that names no instant: the reading is skipped.
+                reading(sentinel, five_way(900, 0, 0, 90, 0)),
+                reading("2026-08-23T09:04:00.000Z", five_way(200, 0, 0, 40, 0)),
+                # A known identifier in another spelling, and an offset stamp.
+                turn_model_line("  %s  " % exact_identifier(self.MEMBER).upper(), stamp="2026-08-23T09:05:00.000Z"),
+                reading("2026-08-23T11:06:00.000+02:00", five_way(300, 0, 0, 60, 0)),
+            ]
+        }
+
+    def test_only_the_readers_own_reading_of_a_value_is_kept(self):
+        # Finding 1: a field name is not a privacy boundary. What is kept is
+        # each value as the reader reads it, so nothing but accounting can
+        # ride an accounting slot into the kept tree, and the replay still
+        # takes every branch the original took.
+        hostile = self.kept.parent / "hostile"
+        self.write(hostile, self.hostile())
+        live = self.walk(hostile, _RT.open_retained(self.kept))
+        kept = b"".join(path.read_bytes() for path in sorted(self.kept.rglob("*.jsonl")))
+        self.assertNotIn(self.SENTINEL.encode(), kept, "a value that is not accounting was kept")
+        replay = self.walk(self.kept)
+        self.assertEqual(replay[0], live[0], "the kept readings bill different rows")
+        self.assertEqual(replay[1], live[1])
+        self.assertEqual(replay[2], live[2])
+        self.assertEqual(self.token_counters(replay[3]), self.token_counters(live[3]))
+        self.assertEqual(replay[3]["unattributed_ids"], live[3]["unattributed_ids"])
+        # The fixture exercises what it claims: three readings billed, the
+        # malformed first one a repeat, two models the bucket, one a member.
+        self.assertEqual(live[3]["counted"], 3)
+        self.assertEqual(live[3]["duplicates"], 1)
+        self.assertEqual(live[3]["unattributed_ids"], {_RT.UNIDENTIFIED_MODEL: 2})
+        self.assertIn(self.MEMBER, {row[3] for row in live[0]})
+
+    def test_a_kept_journal_with_a_second_name_is_not_written_through(self):
+        # Finding 2: O_NOFOLLOW cannot see a hard link. The victim is EMPTY,
+        # a prefix of every projection, so only the link count refuses it.
+        outside = self.kept.parent / "outside"
+        outside.mkdir()
+        victim = outside / "victim.jsonl"
+        victim.write_bytes(b"")
+        leaf = self.kept / "2026" / "08" / "21" / "session.jsonl"
+        leaf.parent.mkdir(parents=True)
+        os.link(victim, leaf)
+        result = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(victim.read_bytes(), b"", "a kept journal was appended through its second name")
+        self.assertEqual(result[3]["retain_conflicts"], 1)
+
+    HOLDER = (
+        "import fcntl, os, sys\n"
+        "lock = os.open(sys.argv[1], os.O_RDWR)\n"
+        "try:\n"
+        "    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "except OSError:\n"
+        "    print('busy', flush=True)\n"
+        "    sys.exit(1)\n"
+        "print('held', flush=True)\n"
+        "sys.stdin.readline()\n"
+    )
+
+    def probe(self):
+        """What another process finds the run lock to be: 'held' or 'busy'."""
+        with subprocess.Popen(
+            [sys.executable, "-I", "-c", self.HOLDER, str(self.kept / _RT.RETAIN_LOCK_NAME)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        ) as other:
+            assert other.stdout is not None
+            return other.stdout.readline().strip()
+
+    def test_no_second_name_for_the_run_lock_can_release_it(self):
+        # 2026-10-22 review of 9aad77b, finding 1, reproduced as written: the
+        # lock file has a second name in the kept tree, the live tree holds a
+        # journal under that name, and the walk opens it, refuses it for its
+        # second name and closes it. A record lock was released by that close
+        # and another run could take it. A second name planted before the run
+        # and one planted once the lock is held are both covered: no refusal
+        # at open could see the second, so ownership itself must survive.
+        (self.live / "alias.jsonl").write_text(
+            "\n".join([declaration_line(), turn_model_line(exact_identifier(self.MEMBER)), running_line(100)]) + "\n",
+            encoding="utf-8",
+        )
+        for planted in ("before", "after"):
+            with self.subTest(planted=planted):
+                shutil.rmtree(self.kept, ignore_errors=True)
+                self.kept.mkdir(mode=0o700)
+                lock = self.kept / _RT.RETAIN_LOCK_NAME
+                if planted == "before":
+                    lock.write_bytes(b"")
+                    os.link(lock, self.kept / "alias.jsonl")
+                retain = _RT.open_retained(self.kept)
+                try:
+                    if planted == "after":
+                        os.link(lock, self.kept / "alias.jsonl")
+                    self.assertEqual(self.probe(), "busy")
+                    counters = _RT.new_counters()
+                    rows = _RT.read_running_totals(
+                        str(self.live), counters, [], scope=RUNNING_SCOPE, carried={}, retain=retain
+                    )
+                    for _ in rows:
+                        pass
+                    self.assertEqual(counters["retain_conflicts"], 1, "the aliased journal was not the one refused")
+                    self.assertEqual(self.probe(), "busy", "the walk released the run lock to another process")
+                finally:
+                    retain.close()
+                self.assertEqual(self.probe(), "held")
+
+    def test_a_run_releases_the_root_and_lock_it_holds(self):
+        retain = _RT.open_retained(self.kept)
+        held = (retain.lock, retain.directory)
+        self.walk(self.live, retain)
+        for descriptor in held:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def replace_root(self):
+        """Rename the kept root aside and put a link to an empty directory in its place."""
+        aside = self.kept.parent / "aside"
+        outside = self.kept.parent / "outside"
+        outside.mkdir()
+        self.kept.rename(aside)
+        self.kept.symlink_to(outside, target_is_directory=True)
+        return aside, outside
+
+    def test_a_kept_root_replaced_before_the_walk_is_refused(self):
+        # 2026-10-22 review of 9aad77b, finding 2: the run locked one
+        # directory and the path now names another. Nothing in the
+        # replacement may be read or written, and the run says so.
+        self.walk(self.live, _RT.open_retained(self.kept))
+        retain = _RT.open_retained(self.kept)
+        aside, outside = self.replace_root()
+        (outside / "2026" / "08" / "21").mkdir(parents=True)
+        planted = outside / "2026" / "08" / "21" / "pruned.jsonl"
+        planted.write_text(running_line(999_999) + "\n", encoding="utf-8")
+        with self.assertRaises(_RT.CaptureError):
+            self.walk(self.live, retain)
+        self.assertEqual(sorted(p.name for p in outside.rglob("*")), ["08", "2026", "21", "pruned.jsonl"])
+        self.assertEqual(planted.read_text(encoding="utf-8"), running_line(999_999) + "\n")
+
+    class RootSwappedOnOpen:
+        """`os` as the capture sees it, except that opening the kept root
+        renames it aside and makes a fresh directory in its place: the window
+        between holding the root and opening the lock beneath it, which no
+        ordinary schedule reaches on its own."""
+
+        def __init__(self, root, aside):
+            self.root, self.aside, self.swapped = os.fspath(root), os.fspath(aside), False
+
+        def __getattr__(self, name):
+            return getattr(os, name)
+
+        def open(self, target, *args, **kwargs):
+            descriptor = os.open(target, *args, **kwargs)
+            if not self.swapped and "dir_fd" not in kwargs and os.fspath(target) == self.root:
+                self.swapped = True
+                os.rename(self.root, self.aside)
+                os.mkdir(self.root, 0o700)
+            return descriptor
+
+    def test_the_run_lock_is_taken_in_the_root_the_run_holds(self):
+        # Finding 2's other half: the lock and the writes must name ONE
+        # directory, so the lock is opened beneath the held root, never by
+        # its path beside it.
+        self.kept.mkdir(mode=0o700)
+        aside = self.kept.parent / "aside"
+        fake = self.RootSwappedOnOpen(self.kept, aside)
+        _RT.os = fake
+        try:
+            retain = _RT.open_retained(self.kept)
+        finally:
+            _RT.os = os
+        retain.close()
+        self.assertTrue(fake.swapped, "the root was never opened by its path")
+        self.assertEqual([p.name for p in aside.iterdir()], [_RT.RETAIN_LOCK_NAME])
+        self.assertEqual(list(self.kept.iterdir()), [], "the lock was taken in a directory the run does not hold")
+
+    def test_a_kept_root_replaced_during_the_walk_keeps_writing_where_it_was_locked(self):
+        # Finding 2 again, once the walk is under way: every journal opened
+        # after the swap is still written beneath the directory the run
+        # locked, reached by the descriptor it holds, never by its path.
+        reference = self.kept.parent / "reference"
+        self.walk(self.live, _RT.open_retained(reference))
+        expected = sorted(str(p.relative_to(reference)) for p in reference.rglob("*.jsonl"))
+        retain = _RT.open_retained(self.kept)
+        counters = _RT.new_counters()
+        try:
+            rows = _RT.read_running_totals(str(self.live), counters, [], scope=RUNNING_SCOPE, carried={}, retain=retain)
+            next(rows)
+            aside, outside = self.replace_root()
+            for _ in rows:
+                pass
+        finally:
+            retain.close()
+        self.assertEqual(list(outside.iterdir()), [], "a kept journal was written beneath the replacement")
+        self.assertEqual(sorted(str(p.relative_to(aside)) for p in aside.rglob("*.jsonl")), expected)
+        self.assertEqual(counters["kept"], len(expected))
+        for name in expected:
+            self.assertEqual((aside / name).read_bytes(), (reference / name).read_bytes())
+
+    def test_a_second_run_waits_for_the_first_and_keeps_nothing_twice(self):
+        # Finding 3: two runs that both compared before either appended would
+        # both append the same tail. Another PROCESS holds the kept tree here,
+        # as a capture started by hand would while the scheduled one runs.
+        name = "2026/08/21/session.jsonl"
+        self.walk(self.live, _RT.open_retained(self.kept))
+        with open(self.live / name, "a", encoding="utf-8") as handle:
+            handle.write(counted_line("2026-08-21T09:00:00.000Z", five_way(90, 0, 0, 20, 0)) + "\n")
+        # What the kept journal holds once any ONE run has kept the new reading.
+        reference = self.kept.parent / "reference"
+        self.walk(self.live, _RT.open_retained(reference))
+        expected = (reference / name).read_bytes()
+        # Leaving the block closes the holder's stdin, which ends it, so a
+        # failure anywhere below still releases the lock and reaps the child.
+        with subprocess.Popen(
+            [sys.executable, "-I", "-c", self.HOLDER, str(self.kept / _RT.RETAIN_LOCK_NAME)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        ) as holder:
+            assert holder.stdin is not None and holder.stdout is not None
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            outcome = {}
+            second = threading.Thread(
+                target=lambda: outcome.update(result=self.walk(self.live, _RT.open_retained(self.kept)))
+            )
+            second.start()
+            second.join(1.0)
+            self.assertTrue(second.is_alive(), "a second run read the kept tree while another run held it")
+            # The holding run keeps the new reading, then lets go.
+            (self.kept / name).write_bytes(expected)
+            holder.stdin.write("release\n")
+            holder.stdin.flush()
+        second.join(60)
+        self.assertFalse(second.is_alive())
+        self.assertEqual((self.kept / name).read_bytes(), expected, "two runs appended the same tail")
+        self.assertEqual(outcome["result"][3]["kept"], 0)
+        self.assertEqual(outcome["result"][3]["retain_conflicts"], 0)
+
+    def drain(self, root, retain=None):
+        """The peak traced allocation of one walk whose rows are not collected."""
+        counters, sessions = _RT.new_counters(), []
+        tracemalloc.start()
+        try:
+            for _ in _RT.read_running_totals(str(root), counters, sessions, scope=RUNNING_SCOPE, retain=retain):
+                pass
+            return tracemalloc.get_traced_memory()[1], counters
+        finally:
+            tracemalloc.stop()
+            if retain is not None:
+                retain.close()
+
+    def test_keeping_a_journal_costs_a_line_of_memory_not_a_file(self):
+        # Finding 4: the walk streams, and keeping must too. The journal is
+        # several megabytes; creating its kept copy and comparing against it
+        # may each cost the walk no more than a small fixed margin.
+        big = self.kept.parent / "big" / "2026" / "08" / "24"
+        big.mkdir(parents=True)
+        with open(big / "long.jsonl", "w", encoding="utf-8") as handle:
+            handle.write(declaration_line() + "\n")
+            handle.write(turn_model_line(exact_identifier(self.MEMBER)) + "\n")
+            for step in range(1, 25_001):
+                stamp = "2026-08-24T%02d:%02d:%02d.000Z" % (step // 3600, step // 60 % 60, step % 60)
+                handle.write(counted_line(stamp, five_way(1000 * step, 400 * step, 7 * step, 300 * step, 9 * step)) + "\n")
+        root = self.kept.parent / "big"
+        plain, _ = self.drain(root)
+        created, first = self.drain(root, _RT.open_retained(self.kept))
+        compared, second = self.drain(root, _RT.open_retained(self.kept))
+        size = (self.kept / "2026" / "08" / "24" / "long.jsonl").stat().st_size
+        self.assertGreater(size, 4 << 20, "the fixture is too small to tell a stream from a file")
+        self.assertEqual((first["kept"], second["kept"], second["retain_conflicts"]), (1, 0, 0))
+        for label, peak in (("creating", created), ("comparing", compared)):
+            self.assertLess(peak - plain, 1 << 20, "%s a kept journal held %d bytes more than the walk" % (label, peak - plain))
+
+    def test_an_overlong_kept_line_is_refused_after_a_bounded_read(self):
+        # Finding 5, the read bound: no projection writes a line this long,
+        # so it is refused — and refused having read at most the bound.
+        leaf = self.kept / "2026" / "08" / "21" / "session.jsonl"
+        leaf.parent.mkdir(parents=True)
+        planted = b"x" * (16 << 20)
+        leaf.write_bytes(planted)
+        peak, counters = self.drain(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(counters["retain_conflicts"], 1)
+        self.assertEqual(leaf.read_bytes(), planted, "an overlong kept journal was written to")
+        self.assertLess(peak, 4 << 20, "the overlong line was read whole: %d bytes traced" % peak)
+
+    def test_a_kept_journal_that_is_not_a_regular_file_is_refused(self):
+        # Finding 5, the type check: a FIFO opens for reading and writing like
+        # a file, so only the descriptor's type refuses it. A reader is held
+        # open across the walk, so anything written would still be there.
+        leaf = self.kept / "2026" / "08" / "21" / "session.jsonl"
+        leaf.parent.mkdir(parents=True)
+        os.mkfifo(leaf, 0o600)
+        reader = os.open(leaf, os.O_RDONLY | os.O_NONBLOCK)
+        self.addCleanup(os.close, reader)
+        result = self.walk(self.live, _RT.open_retained(self.kept))
+        self.assertEqual(result[3]["retain_conflicts"], 1)
+        self.assertEqual(result[3]["kept"], 2, "only the two regular journals were kept")
+        try:
+            written = os.read(reader, 1 << 16)
+        except BlockingIOError:
+            written = b""
+        self.assertEqual(written, b"", "a projection was written into a FIFO")
+
+    def test_a_linked_run_lock_is_refused(self):
+        # The lock is tree content too, reached without following a link.
+        self.kept.mkdir(mode=0o700)
+        outside = self.kept.parent / "elsewhere"
+        outside.write_bytes(b"")
+        (self.kept / _RT.RETAIN_LOCK_NAME).symlink_to(outside)
+        with self.assertRaises(_RT.CaptureError):
+            _RT.open_retained(self.kept)
 
 
 if __name__ == "__main__":

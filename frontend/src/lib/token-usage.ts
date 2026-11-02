@@ -1086,7 +1086,6 @@ export const sessionsCardLabel = 'Sessions';
 /* What heads a models card, in front of the source's written name. */
 const modelsLabelPrefix = 'Models ·';
 
-/* One stat by key, or undefined. */
 function statOf(source: TokenUsageSource, key: string): TokenUsageStat | undefined {
   return source.stats?.find((stat) => stat.key === key);
 }

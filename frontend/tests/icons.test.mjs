@@ -483,13 +483,6 @@ test('the words the marks replaced are still on the page or in its accessibility
      allowed to replace a word when the word survives somewhere a reader can
      still reach it, and this is the walk that proves it for every surface the
      map names. */
-  /* THE PLACE LEFT WITH THE CHROME ROW (owner direction, 2026-10-16: "do away
-     with it for now"). The pin and "California" beside it were this map's
-     first row, and the row they sat in is gone — so they are not a word a mark
-     replaced any more, they are simply not on the page, and the `location`
-     glyph left the family with them (the reverse-coverage walk above is what
-     holds that). The role rows keep their own "Irvine, CA", a different fact
-     in a different place (lib/work.ts). */
 
   // The owner removed the footer credits in issue 345, and then the footer
   // itself — its build version and its reading mode with it (owner,

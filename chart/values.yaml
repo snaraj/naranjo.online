@@ -3,10 +3,6 @@
 # quota's real budget (pods: 2, limits.memory 256Mi = 2x128Mi), not rigidity —
 # raising it starts with the quota, not this schema.
 #
-# The default MOVED from 2 to 1 in the 2026-08-24 round-3 review (finding 3),
-# and the tradeoff is stated here rather than buried, because it is the
-# owner's call and not the chart's:
-#
 #   WHAT IS GIVEN UP. At 1 replica a pod restart is a brief outage instead of
 #   a hidden one. In practice the difference is small and was already small:
 #   this is one personal site on a ONE-NODE cluster, so both replicas always
@@ -60,7 +56,7 @@ image:
   # It is locked to this chart's appVersion by the release gate's four-way
   # lock (numeric VERSION/chart version/appVersion <-> plain-v image tag), so a chart
   # claiming one release can never ship the tag of another.
-  tag: v0.1.99
+  tag: v0.1.100
   digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   pullPolicy: IfNotPresent
 

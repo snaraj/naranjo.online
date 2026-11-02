@@ -7496,13 +7496,6 @@ class GovernanceParityTests(unittest.TestCase):
         ready_word = re.compile(r"\bready\b", re.IGNORECASE)
         ready_block_pins = {
             "AGENTS.md": (
-                # Re-pinned at 0.1.49: the block now states that successful main
-                # CI creates NO tag and that the PUBLISHER creates it from
-                # inside the privileged job, grounded in the `actions: write` /
-                # `contents: write` permission split. Its Ready sentences —
-                # "The receipt is a required Ready gate" and "A failed or
-                # unknown preflight leaves the PR Draft" — are unchanged; only
-                # the tag-creation mechanism above them was corrected.
                 ("Releases: every artifact-classified PR advances numeric",
                  "19224d76b42c32987e399a04dcaba7752415e187c641b30d8992d6c155348ed5"),
                 ("**Verdict format** — posted as a normal PR comment",
@@ -7515,31 +7508,8 @@ class GovernanceParityTests(unittest.TestCase):
                  "132d86d25ffe1a7cfb0d16c26c17c2768b417ab8e5bb5c2bc4bdd5d41a43306e"),
                 ("- **`requires-review` — the review-readiness signal.**",
                  "340084c93dd72dbd2f93440ccc1f68955f3ad911ff08cf2904be70e0ff5d5694"),
-                # Re-pinned for issue #343: the bullet no longer names the
-                # owner User's PR-only update exception, because the ruleset
-                # that carried it was retired on 2026-09-22. The Ready rule
-                # itself is unchanged — the owner's bypass check must still
-                # report no core bypass actor, and only the coordinator flips
-                # Ready.
                 ("- **Merge readiness.** Draft remains Draft until",
                  "729925b29ad4bda67fd507faa56f18ca334ae437469bb785a91e7e612f7cfd9e"),
-                # Re-pinned for issue #285: step 2 of the list admits the
-                # `xhigh` effort to the branch grammar (owner ruling,
-                # 2026-09-03). The block's Ready sentences — step 1's "Never
-                # apply or interpret `requires-review` on the issue" and the
-                # later Ready/merge steps — are unchanged; only the effort set
-                # in the branch grammar grew by one word.
-                # Re-pinned for issue #294: step 2's registered label set
-                # gained `fable5.1` (owner directive, 2026-09-04, PR #295)
-                # and names the longest-match rule that lets `fable5.1-high/`
-                # and `fable5-high/` coexist. The block's Ready sentences —
-                # step 1's "Never apply or interpret `requires-review` on
-                # the issue" and the later Ready/merge steps — are unchanged.
-                # Re-pinned for issue #343: step 7 drops the retired
-                # `Owner-PR-Updates` sentence and states instead that
-                # `Protect-Main` is the only active repository-owned branch
-                # ruleset. The step's Ready condition — exact immutable and
-                # strict-check state, empty core bypass list — is unchanged.
                 ("1. **Claim the work.** (the delivery-loop numbered list)",
                  "e076d6ee1dbde6f37bb75f1975b5642aa8d8a637ad4cb61d5a846684954bb71e"),
                 ("Comments the owner leaves on PRs ARE code reviews",
@@ -7552,13 +7522,6 @@ class GovernanceParityTests(unittest.TestCase):
                  "91e45327a9619c731f57835fd77dfc1b35d39acce828080020756a2602fcd42e"),
             ),
             "release runbook": (
-                # Re-pinned for issue #221: the closing clause of this block
-                # called the two `platform-release` frozen names unprovisioned
-                # and treated that as an outstanding external blocker, which
-                # the App-backed publication evidence above it in the same file
-                # had already superseded. PR #217 left it standing verbatim
-                # rather than weaken a guard to reach it; this recomputes the
-                # digest instead, which is the only correct way past a pin.
                 ("That same 2026-08-14 transaction recorded the `Protect-M",
                  "216e95db87e1095c8a1ff3f31e174377ec0bb314d14b19d24709dc915868ea90"),
                 ("Missing, extra, duplicated, name-only, foreign-integration",

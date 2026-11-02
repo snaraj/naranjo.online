@@ -381,14 +381,6 @@ test('every section the manifest names renders at its own id, numbered by its po
   }
 });
 
-/* RETIRED WITH THE NAV (owner direction, 2026-10-16: "do away with it for
- * now"): "a nav tap drops the fragment from the URL instead of the href (issue
- * 171)". Its subject was the nav link's click handler — scroll in script, then
- * replace the URL with the fragment-free path — and no link on the page
- * carries a section fragment any more. A shared .../#trackers still deep-links
- * on arrival (the rendering lane of that name), and the other half of issue
- * 171 survives below, on the page itself. */
-
 // A live probe (see App.svelte's own comment) showed the fragment was only
 // half of issue 171: the browser remembers a scroll offset per history entry
 // independent of the URL, so a refresh restored the reader's old position even
@@ -465,13 +457,6 @@ test('the page opens on the name, then the sections, in one column (owner direct
   // The one control token the page's 44px targets read is still the floor.
   assert.match(styles, /--control-target:\s*2\.75rem;/);
 });
-
-/* RETIRED WITH THE NAV (owner direction, 2026-10-16): "the nav link carries no
- * idle underline, but hover and focus still mark it as a link (issue 157)".
- * The .section-link class has no element left; the site-wide link doctrine it
- * applied to the nav is still held over EVERY link class the markup declares,
- * by "no link wears a resting underline, and every one marks itself on intent"
- * in tests/experience.test.mjs. */
 
 // ---------------------------------------------------------------------------
 // The feed card primitive
@@ -1456,7 +1441,6 @@ test('the experience section carries four complete real entries, newest first', 
   }
   // The block declares no section note at all now: staticBlock's presentation
   // argument is where one would go, and there is nothing left to disclaim.
-  // It binds the ledger log (owner directive of 2026-09-03, issue 287).
   assert.match(
     workBinding,
     /staticBlock\(\s*'work-history',\s*LedgerLog,\s*roleLedgerProps\(markUrl\)\s*\)/,

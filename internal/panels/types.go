@@ -572,14 +572,6 @@ type CodingProject struct {
 	// render as the owner's dash, and that is deliberate: "no release" and
 	// "not read" are both "no version to show", and neither is a number this
 	// panel may invent.
-	//
-	// ClosedPulls and Release arrived with coding-projects/v2 (issue #317).
-	// The pair they replaced — openIssues and openPulls — left with the
-	// columns that drew them and the second search document that produced
-	// them, and a field that leaves the wire is a breaking payload change, so
-	// the kind moved from v1 to v2 rather than growing in place (the envelope
-	// doctrine). Both new fields are optional inside v2 for the reason above:
-	// "no release" and "not read" are both the owner's dash.
 	Release string `json:"release,omitempty"`
 	// Recorded marks a row served from the shipped snapshot rather than read
 	// live — the same provenance meaning it carries on a token-usage stat
@@ -1935,7 +1927,6 @@ type repositoryListingOwner struct {
 
 // listedProject is one admitted listing row on its way to being served.
 type listedProject struct {
-	// row is the served row.
 	row CodingProject
 	// at is the parsed push instant, kept so the recency ordering never
 	// re-parses or trusts string order.

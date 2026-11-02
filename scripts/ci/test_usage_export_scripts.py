@@ -201,6 +201,20 @@ def transcript_fixture(root: pathlib.Path) -> None:
     (tree / "session.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
 
 
+def running_fixture(root: pathlib.Path) -> pathlib.Path:
+    """One minimal running-totals journal; returns its path."""
+    journal = root / "2026" / "08" / "10" / "rollout.jsonl"
+    journal.parent.mkdir(parents=True)
+    usage = {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12}
+    record = {
+        "timestamp": TRANSCRIPT_FIXTURE_DAY + "T12:00:00Z",
+        "type": "event_msg",
+        "payload": {"type": "token_count", "info": {"total_token_usage": usage, "last_token_usage": usage}},
+    }
+    journal.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    return journal
+
+
 def write_executable(path: pathlib.Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -579,6 +593,31 @@ class PushTransportHardeningTest(PushFixture, unittest.TestCase):
         self.assertEqual(beta_days[earlier], {"total": 7})
         dataset = json.loads((history / "dataset.json").read_text(encoding="utf-8"))
         self.assertEqual(dataset["sources"]["beta"]["days"][0], {"date": earlier, "total": 7, "verified": True})
+
+    def test_a_running_totals_source_keeps_its_journals_and_survives_their_pruning(self):
+        # Issue #382: the tool that writes running-totals journals prunes them.
+        # Pinned by the RESULT, end to end: a run keeps the journal's
+        # accounting beside the stores, and once the live journal is gone the
+        # next run still captures from what was kept. Without the kept copy
+        # that second run finds an empty tree and refuses the whole push.
+        history = self.scratch / "history"
+        rollouts = self.scratch / "rollouts"
+        journal = running_fixture(rollouts)
+        self.write_config(MERGE_CAPTURES="beta=running-totals=%s" % rollouts, HISTORY_DIR=str(history))
+        first = run_script(PUSH, env=self.env)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        kept = history / "retained" / "beta"
+        self.assertEqual(
+            [path.relative_to(kept) for path in sorted(kept.rglob("*.jsonl"))],
+            [journal.relative_to(rollouts)],
+        )
+        self.assertEqual((history / "retained").stat().st_mode & 0o777, 0o700)
+        journal.unlink()
+        pruned = run_script(PUSH, env=self.env)
+        self.assertEqual(pruned.returncode, 0, pruned.stderr)
+        self.assertNotIn("could not be recaptured", pruned.stderr)
+        day = json.loads((history / "beta.json").read_text(encoding="utf-8"))["days"][TRANSCRIPT_FIXTURE_DAY]
+        self.assertEqual((day["total"], day["categories"]), (12, {"input": 5, "output": 7}))
 
     def test_a_configured_history_directory_records_the_run_in_the_ledger(self):
         # Issue #267: the record defaults to living beside the stores, and it

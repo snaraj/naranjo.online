@@ -1517,9 +1517,6 @@ func TestTheMaximalDocumentFitsTheRaisedBudget(t *testing.T) {
 		len(sealed), served, MaxPanelResponseBytes)
 }
 
-// TestTheServedEnvelopeExceedsTheFileItCameFrom pins the fact that killed the
-// old framing of the two ceilings (2026-08-25 round-4 review, finding 7).
-//
 // MaxPanelResponseBytes and seal.MaxSealedBytes hold the same value, and the
 // comments here and in types.go used to read that as "a document the pipeline
 // can transport is a document the origin can serve". That implication is
@@ -1959,9 +1956,6 @@ func TestDataRootMarksStaleWhenAnAcceptedFileDisappears(t *testing.T) {
 	})
 }
 
-// TestDataRootReportsProvenanceLossOnTheFirstTickAfterRestart is the
-// 2026-08-24 round-3 finding 6 regression test.
-//
 // The delete-after-serve repair above bound its truthfulness to
 // acceptedInProcess — this process published something, then lost the file.
 // A RESTART resets that flag while the evidence of publication survives in
@@ -2121,9 +2115,6 @@ func TestDataRootFloorMarkerFailsClosed(t *testing.T) {
 	})
 }
 
-// TestDataRootNeverPublishesAheadOfThePersistedFloor is the 2026-08-24
-// review finding 2 regression test, staged as the reviewer staged it.
-//
 // Before the fix, refreshFromDataRoot published the candidate and only then
 // tried to persist the new floor, discarding the error. The reviewer's
 // reproduction: floor persisted at 00:02, the loop accepts and SERVES 00:04

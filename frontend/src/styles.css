@@ -1537,10 +1537,6 @@ html[data-column-resizing] {
   }
 }
 
-/* THE CHROME ROW IS GONE (owner direction, 2026-10-16: "do away with it for
-   now"): the home link, the section nav, the place and J's two seats with
-   it. The page opens on the name, and J flies at its side (App.svelte). */
-
 /* THE SCROLL PADDING IS GONE WITH THE FIXED CONTROL (owner directive,
    2026-09-03, issue 287). It reserved the top of the viewport so a fragment
    link or a focus move could not park its target under the reading-mode
