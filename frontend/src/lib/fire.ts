@@ -297,6 +297,13 @@ export const steadyTemper: Temper = {
   still: stillGlow.light
 };
 
+/* The slowest a torch steps: the least share of the loop's frames any temper
+   steps on. Stated once, because the browser lanes read it to know how long a
+   flame can stand still: at this pace a torch changes once in 1/0.62 loop
+   frames, so at the loop's slowest interval it can hold one picture for that
+   many intervals. */
+export const slowestTemperPace = 0.62;
+
 export function torchTemper(seed: number): Temper {
   const random = fireRandom((seed ^ 0x9e3779b9) >>> 0);
   const between = (low: number, high: number): number => low + (high - low) * random();
@@ -304,7 +311,7 @@ export function torchTemper(seed: number): Temper {
     breath: between(6, 14),
     cooling: between(2.0, 2.9),
     taper: between(0.6, 0.9),
-    pace: between(0.62, 1),
+    pace: between(slowestTemperPace, 1),
     ease: between(0.3, 0.65),
     gustLow: between(0.6, 0.82),
     gustStep: between(0.03, 0.1),

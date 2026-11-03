@@ -43,12 +43,14 @@ import {
   steadyTemper,
   stepFire,
   stepMotes,
+  slowestTemperPace,
   stillGlow,
   torchTemper
 } from '../src/lib/fire.ts';
 import { skySlowestInterval } from '../src/lib/sky.ts';
 
 const component = await readFile(new URL('../src/lib/components/Torches.svelte', import.meta.url), 'utf8');
+const fireSource = await readFile(new URL('../src/lib/fire.ts', import.meta.url), 'utf8');
 const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
 const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
 
@@ -304,6 +306,12 @@ test('a torch’s temper is its own, the same on every load, inside its ranges, 
     assert.ok(least >= low && most <= high, `a torch’s ${field} left ${low}..${high} (${least} to ${most})`);
     assert.ok(least <= low + (high - low) * 0.05 && most >= high - (high - low) * 0.05, `the torches’ ${field} uses only ${least} to ${most} of ${low}..${high}`);
   }
+  // THE SLOWEST PACE IS STATED ONCE (issue 399 review, 2026-11-03): the
+  // browser lanes read slowestTemperPace to know how long a flame may stand
+  // still, so it must be the pace range's own lower bound — the number the
+  // thousand tempers above reach down to — and the one torchTemper draws from.
+  assert.equal(slowestTemperPace, ranges.pace[0], 'slowestTemperPace is not the slowest pace a torch can take');
+  assert.match(fireSource, /pace: between\(slowestTemperPace, 1\),/, 'a torch’s pace is drawn from a lower bound other than slowestTemperPace');
   // The two ceilings that carry a promise: a torch steps at most once a frame
   // (the loop has one beat a frame to give), and its light reaches no further
   // than the steady light, which is what keeps it off the words.

@@ -37,7 +37,20 @@ const sourceName = (key) =>
    ten times what its last drawing cost the page, down to this floor. A lane
    that waits for them to move waits the floor and a drawing more, read from
    the rule rather than typed here, so the window follows the rule; a loop
-   that never moves still fails. */
+   that never moves still fails. That is the window for anything the loop
+   moves on every one of its frames: the sky, and a torch's light.
+
+   A FLAME WAITS LONGER (issue 399 review, 2026-11-03). The loop steps a
+   torch's flame only on the torch's own beat: each loop frame adds the
+   temper's pace to the beat, and the flame steps when the beat reaches one
+   (Torches.svelte). A torch at the slowest pace any temper takes
+   (slowestTemperPace, lib/fire.ts) needs ceil(1 / pace) loop frames for one
+   step — two, at 0.62 — and a poll may begin just after a step, so at the
+   floor its flame can hold still for that many floors. The flame's window is
+   as many loop frames at the floor as the slowest temper needs for one step,
+   and a drawing more (2 × 30s + 5s), every number read from its rule. The window it
+   replaced was one floor and a drawing (35s), which a hosted iOS Safari run
+   overran at 38.1s; a passing run had already taken 37.7s. */
 const loopFloor = Number(
   /export const skySlowestInterval = ([\d_]+);/
     .exec(readFileSync(new URL('../src/lib/sky.ts', import.meta.url), 'utf8'))?.[1]
@@ -47,6 +60,13 @@ if (!(loopFloor > 0)) {
   throw new Error('lib/sky.ts states no skySlowestInterval this spec can read');
 }
 const motionWindow = loopFloor + 5_000;
+const slowestTemperPace = Number(
+  /export const slowestTemperPace = ([\d.]+);/.exec(readFileSync(new URL('../src/lib/fire.ts', import.meta.url), 'utf8'))?.[1]
+);
+if (!(slowestTemperPace > 0 && slowestTemperPace <= 1)) {
+  throw new Error('lib/fire.ts states no slowestTemperPace this spec can read');
+}
+const flameWindow = Math.ceil(1 / slowestTemperPace) * loopFloor + 5_000;
 
 /* The model group a served source belongs to (issue #369). A source may carry
    only its own vendor's models plus the residual, so a lane that stages model
@@ -209,7 +229,13 @@ const subPixel = 0.01;
  * Height stability is kept alongside both rather than replaced: arrival is not
  * the only thing that grows a page (a font, an image, a late layout pass),
  * and the conditions are cheap to hold together — this costs three property
- * reads per poll and no extra round trip. */
+ * reads per poll and no extra round trip.
+ *
+ * The poll's own window is named, because a lane that settles many times
+ * owes Playwright's per-test budget room for that many windows (the J lane
+ * below counts its fourteen). */
+const settleWindow = 15_000;
+
 async function settled(page) {
   let previous = -1;
   /* The last read, named in the failure: which of the conditions below never
@@ -284,7 +310,7 @@ async function settled(page) {
         {
           message:
             'the page never stopped growing, rendered no frame, never hydrated, still has a panel waiting for its first envelope, or has a stack short of the blocks it declares',
-          timeout: 15_000,
+          timeout: settleWindow,
         }
       )
       .toBe(true);
@@ -1122,6 +1148,15 @@ const jPictureBox = (node, degrees) => {
 test('J flies off the name from one picture, covering no letter of it, with a gentle rock where motion is welcome and still where it is not (owner 2026-09-11 issue 314, 2026-10-16)', async ({
   browser,
 }) => {
+  /* THE BUDGET THIS LANE'S OWN WAITS NEED (issue 399 review, 2026-11-03).
+     It settles the page sixteen times: in each of its two contexts once on
+     arrival (visit), once at each of six widths, and once more back at 1440.
+     Each settle may take settleWindow, so the lane gets that much room on top
+     of the per-test budget, as the torch lane does for its polls. A passing
+     iOS Safari run spent 23.1s of the default 30s here; a hosted runner
+     window about 1.5× slower (median test 4.0s against 2.7s, p90 13.0s
+     against 7.8s) cut it at 29.8s mid-settle. Nothing it asserts changes. */
+  test.setTimeout(test.info().timeout + 16 * settleWindow);
   const pictures = {};
   for (const motion of ['no-preference', 'reduce']) {
     const context = await browser.newContext({
@@ -3571,10 +3606,10 @@ test('the sky ignores the reader’s hour and opens on the night (owner 2026-10-
 test('the torches burn on both sides of the frame at night and hold still for less motion (owner 2026-10-19)', async ({
   page,
 }) => {
-  /* Room for a wait of the fire's pace at each of the four polls below (the
-     flame, then its light, at each of two widths) on top of the lane's own
-     budget. */
-  test.setTimeout(test.info().timeout + 4 * motionWindow);
+  /* Room for each of the four polls below at its own window — the flame's
+     (flameWindow), then its light's (motionWindow), at each of two widths —
+     on top of the lane's own budget. */
+  test.setTimeout(test.info().timeout + 2 * flameWindow + 2 * motionWindow);
   /* No page error while they burn: the torches' effects once wrote state they
      also read, and Svelte stopped the loop with effect_update_depth_exceeded
      while the page went on looking right. */
@@ -3681,10 +3716,16 @@ test('the torches burn on both sides of the frame at night and hold still for le
     const first = night.torches[0];
     expect(first.lit, `the first torch drew no flame at night (${viewport.width}px)`).toBeGreaterThan(0);
     expect(first.glow, 'a burning torch throws no light').toBeGreaterThan(0);
+    /* The flame's own window (flameWindow, above), read at a slower cadence:
+       every read takes the flame's pixels back with getImageData, which the
+       page pays for, and the fire's pacer counts what the page pays
+       (nextFireInterval, lib/fire.ts) — a lane polling every few hundred
+       milliseconds would itself slow the flame it waits on. */
     await expect
       .poll(async () => (await read()).torches[0].hash, {
         message: 'the flame never moved with motion welcome',
-        timeout: motionWindow,
+        timeout: flameWindow,
+        intervals: [2_000, 5_000],
       })
       .not.toBe(first.hash);
     /* The light on the stone moves with the fire: it brightens and dims. */
