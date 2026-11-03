@@ -6349,13 +6349,13 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
         gridHeight: round(grid.getBoundingClientRect().height),
         pagerTop: round(pager.getBoundingClientRect().top + window.scrollY),
         count: pager.querySelector('.pager-count').textContent.trim(),
-        disabled: [...pager.querySelectorAll('.pager-step')].map((step) => step.disabled),
+        disabled: [...pager.querySelectorAll('.pager-step')].map((step) => step.getAttribute('aria-disabled')),
       };
     });
   const first = await shape();
   expect(first.tiles, 'the first page is not a full page of five').toBe(5);
   expect(first.count).toBe('1 / 2');
-  expect(first.disabled).toEqual([true, false]);
+  expect(first.disabled).toEqual(['true', 'false']);
 
   const watching = await page.evaluate(() => {
     const types = PerformanceObserver.supportedEntryTypes ?? [];
@@ -6380,7 +6380,17 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
   expect(second.count, 'Enter on the focused step did not turn the page').toBe('2 / 2');
   expect(second.tiles, 'the short page does not hold the three pictures left').toBe(3);
   expect(second.first, 'the second page shows the first page’s pictures').not.toBe(first.first);
-  expect(second.disabled).toEqual([false, true]);
+  expect(second.disabled).toEqual(['false', 'true']);
+  /* THE STEP KEEPS THE READER'S FOCUS though it has nowhere left to go
+     (review, 2026-11-02): it is quiet, not disabled, so a reader turning by
+     key is still standing on it, and a second Enter there changes nothing. */
+  expect(
+    await later.evaluate((node) => node === window.document.activeElement),
+    'the last turn dropped keyboard focus off the step that made it'
+  ).toBe(true);
+  await page.keyboard.press('Enter');
+  await settled(page);
+  expect((await shape()).count, 'a press on a quiet step turned past the last page').toBe('2 / 2');
 
   await page.locator('#gallery .pager .pager-step[data-step="previous"]').click();
   await settled(page);
@@ -11581,7 +11591,7 @@ for (const width of [1440, 390]) {
           pagerTop: top(pager),
           count: count.textContent.trim(),
           steps: steps.map((step) => ({
-            disabled: step.disabled,
+            disabled: step.getAttribute('aria-disabled'),
             width: round(step.getBoundingClientRect().width),
             height: round(step.getBoundingClientRect().height),
             label: step.getAttribute('aria-label'),
@@ -11604,7 +11614,7 @@ for (const width of [1440, 390]) {
     /* The pager's steps are real buttons at the touch floor, named, the first
        one disabled because there is nothing newer. */
     expect(first.steps.map((step) => step.label)).toEqual(['Newer entries', 'Older entries']);
-    expect(first.steps.map((step) => step.disabled)).toEqual([true, false]);
+    expect(first.steps.map((step) => step.disabled)).toEqual(['true', 'false']);
     for (const step of first.steps) {
       expect(step.width, 'a pager step is under the touch floor').toBeGreaterThanOrEqual(touchFloorPx - subPixel);
       expect(step.height, 'a pager step is under the touch floor').toBeGreaterThanOrEqual(touchFloorPx - subPixel);
@@ -11636,7 +11646,7 @@ for (const width of [1440, 390]) {
     expect(second.count).toBe(`2 / ${Math.ceil(served / 5)}`);
     expect(second.rows, 'the second page does not show five entries').toBe(5);
     expect(second.first, 'the second page shows the first page’s entries').not.toBe(first.first);
-    expect(second.steps.map((step) => step.disabled)).toEqual([false, false]);
+    expect(second.steps.map((step) => step.disabled)).toEqual(['false', 'false']);
 
     /* A filter starts its list at its first page; "Releases" with no release
        on the wire is an empty list in the SAME reserve, with nothing moved. */
@@ -11646,11 +11656,39 @@ for (const width of [1440, 390]) {
     expect(commits.pressed).toEqual(['false', 'true', 'false']);
     expect(commits.count, 'a filter left the reader on a later page').toBe(`1 / ${Math.ceil(served / 5)}`);
 
-    for (const [name, after] of [['the page turn', second], ['the filter', commits]]) {
+    /* And the filter that keeps NOTHING — Releases, since the lane's origin
+       serves no release commit — says so in the same reserve (review,
+       2026-11-02: it was a blank page), with the pager where it was. */
+    await page.locator('#projects .stream-filter[aria-label="Releases"]').click();
+    await settled(page);
+    const releases = await page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
+      const stream = window.document.querySelector('#projects .stream');
+      const note = stream.querySelector('.stream-note');
+      return {
+        entries: stream.querySelectorAll('.stream-entry').length,
+        note: note?.textContent.trim() ?? null,
+        noteHeight: note === null ? null : round(note.getBoundingClientRect().height),
+        streamTop: round(stream.getBoundingClientRect().top + window.scrollY),
+        streamHeight: round(stream.getBoundingClientRect().height),
+        pagerTop: round(stream.querySelector('.pager').getBoundingClientRect().top + window.scrollY),
+        count: stream.querySelector('.pager-count').textContent.trim(),
+        documentWidth: window.document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+      };
+    });
+    expect(releases.entries, 'the lane’s origin served a release commit; this case needs none').toBe(0);
+    expect(releases.note, 'an empty Releases filter leaves the reserve blank').toBe('no release among the recent commits');
+    expect(releases.noteHeight, 'the note does not hold the room five entries hold').toBeCloseTo(first.listHeight, 0);
+    expect(releases.count, 'an empty filter is not one page').toBe('1 / 1');
+
+    for (const [name, after] of [['the page turn', second], ['the filter', commits], ['the empty filter', releases]]) {
       expect(after.streamTop, `${name} moved the stream`).toBeCloseTo(first.streamTop, 1);
       expect(after.streamHeight, `${name} changed the stream’s height`).toBeCloseTo(first.streamHeight, 1);
       expect(after.pagerTop, `${name} moved the pager`).toBeCloseTo(first.pagerTop, 1);
-      expect(after.scrollHeight, `${name} made the list scroll inside itself`).toBe(after.clientHeight);
+      if (after.scrollHeight !== undefined) {
+        expect(after.scrollHeight, `${name} made the list scroll inside itself`).toBe(after.clientHeight);
+      }
       expect(after.documentWidth, `${name} took the document sideways`).toBeLessThanOrEqual(after.viewportWidth + subPixel);
     }
     const shifts = await page.evaluate(() => window.__streamShift ?? null);

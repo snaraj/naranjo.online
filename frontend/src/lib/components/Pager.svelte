@@ -4,12 +4,15 @@
   mosaic — so a page turns the same way wherever it turns.
 
   IT IS ALWAYS THERE. A list of one page still draws the pager, both steps
-  disabled, because its row is part of the height the list reserves: a pager
+  quiet, because its row is part of the height the list reserves: a pager
   that appeared when a second page did would move everything under it.
 
   The steps are real buttons at the touch floor, named by the words the
-  caller hands it; where the reader is, is said politely when it changes.
-  Nothing here knows what is being paged. -->
+  caller hands it; where the reader is, is said politely when it changes. A
+  step with nowhere to go says so with aria-disabled and ignores the press,
+  but stays a focus stop: a disabled button drops keyboard focus to the page
+  the moment the last page is reached, which is exactly where a reader
+  turning by key is standing. Nothing here knows what is being paged. -->
 <script lang="ts">
   import Icon from './Icon.svelte';
 
@@ -26,6 +29,11 @@
     nextLabel: string;
     onturn: (next: number) => void;
   } = $props();
+
+  function step(next: number): void {
+    if (next < 1 || next > pages) return;
+    onturn(next);
+  }
 </script>
 
 <div class="pager">
@@ -35,8 +43,7 @@
     data-step="previous"
     aria-label={previousLabel}
     aria-disabled={page <= 1}
-    disabled={page <= 1}
-    onclick={() => onturn(page - 1)}><Icon name="chevron-left" slot="row" /></button>
+    onclick={() => step(page - 1)}><Icon name="chevron-left" slot="row" /></button>
   <span class="pager-count" role="status" aria-live="polite" aria-label={`page ${page} of ${pages}`}
     >{page} / {pages}</span>
   <button
@@ -45,8 +52,7 @@
     data-step="next"
     aria-label={nextLabel}
     aria-disabled={page >= pages}
-    disabled={page >= pages}
-    onclick={() => onturn(page + 1)}><Icon name="chevron-right" slot="row" /></button>
+    onclick={() => step(page + 1)}><Icon name="chevron-right" slot="row" /></button>
 </div>
 
 <style>
@@ -70,13 +76,13 @@
     cursor: pointer;
   }
 
-  .pager-step:not(:disabled):hover {
+  .pager-step:not([aria-disabled='true']):hover {
     color: var(--ledger-ink);
   }
 
   /* A step with nowhere to go is the same mark, quieter: no colour of its
      own and no border, so the pager does not change shape at either end. */
-  .pager-step:disabled {
+  .pager-step[aria-disabled='true'] {
     opacity: var(--pager-rest-dim);
     cursor: default;
   }

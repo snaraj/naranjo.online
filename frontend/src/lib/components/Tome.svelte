@@ -583,8 +583,11 @@
      which overhangs it, leaves the trackers' box. */
   .tome {
     --tome-book: min(46rem, calc(100% / 1.05));
-    /* One leaf's edge in the stacks along the open leaf: the keep's own pixel. */
-    --tome-edge-pitch: var(--keep-prop);
+    /* One leaf's edge in the stacks along the open leaf: two of the keep's
+       pixels, one of vellum and one of its deeper shade. One pixel a leaf drew
+       two or three leaves as a 4–6px hairline nobody could read (the
+       preview of 2026-11-02, cropped). */
+    --tome-edge-pitch: calc(2 * var(--keep-prop));
     /* The dog-ear's square, which the recto's folio stands clear of. */
     --tome-corner-size: 2.875rem;
     position: relative;
@@ -699,8 +702,11 @@
   }
 
   /* THE STACKED EDGES: a strip along each side of the open leaves, as wide as
-     the leaves it stands for, every leaf one line of vellum and one of its
-     deeper shade. A count of nought is no strip at all. */
+     the leaves it stands for, every leaf a band of vellum and one of its
+     deeper shade. A count of nought is no strip at all. The stack stands in
+     the leaf's own side padding and never reaches its text: lib/tome.ts caps
+     it at three leaves, which the narrowest padding (a phone's 0.9375rem end
+     edge) holds, and tests/token-usage.test.mjs does that sum. */
   .tome-edges {
     position: absolute;
     inset: 0;
@@ -714,8 +720,8 @@
     inline-size: calc(var(--tome-edge-count) * var(--tome-edge-pitch));
     background: repeating-linear-gradient(
       to right,
-      var(--palette-keep-vellum) 0 1px,
-      var(--palette-keep-vellum-deep) 1px 2px
+      var(--palette-keep-vellum) 0 var(--keep-prop),
+      var(--palette-keep-vellum-deep) var(--keep-prop) var(--tome-edge-pitch)
     );
   }
 

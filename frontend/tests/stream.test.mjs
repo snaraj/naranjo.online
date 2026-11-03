@@ -147,6 +147,28 @@ describe('the filters keep what they name', () => {
       ['1.1.12']
     );
   });
+
+  it('says what an empty filter means, each in its own words', () => {
+    /* Today's state until a capture names a release: commits arrive, none of
+       them is a repository's latest release, and the Releases filter keeps
+       nothing. The component prints the chosen filter's own note in the
+       reserve; the adapter writes one for every filter. */
+    const props = projectsCommitsProps(
+      [projectsEnvelope([repo('obsync', { release: '1.1.12' })]), activityEnvelope([{ repo: 'obsync', sha: otherSha, message: 'a commit', at: '2026-11-01T12:00:00Z' }])],
+      now
+    );
+    const empty = Object.fromEntries(props.filters.map((filter) => [filter.key, filter.empty]));
+    assert.deepEqual(empty, {
+      all: props.emptyNote,
+      commit: props.emptyNote,
+      release: 'no release among the recent commits'
+    });
+    assert.equal(filterRows(props.rows, 'release').length, 0, 'the fixture this case is about keeps a release after all');
+    assert.ok(filterRows(props.rows, 'all').length > 0);
+    for (const filter of props.filters) {
+      assert.ok(filter.empty.trim().length > 0, `the ${filter.key} filter has nothing to say when it keeps nothing`);
+    }
+  });
 });
 
 describe('the page math holds at the edges a page has', () => {

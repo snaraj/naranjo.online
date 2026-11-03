@@ -43,13 +43,16 @@ export function openingLeaves(opening: number, single: boolean): number[] {
  * stacked leaves: those ahead under the open leaf's outer edge, those behind
  * under its other edge. Counted in LEAVES on a spread as on a phone, so a pair
  * turned is two edges, and capped, because past a handful of leaves a stack
- * says "more" and not how many. */
+ * says "more" and not how many. The cap is three because the stack stands in
+ * the leaf's side padding: at two of the keep's pixels a leaf, three leaves
+ * are 12px, inside the narrowest padding (a phone leaf's 0.9375rem end edge),
+ * and a fourth would reach the text. */
 export function edgeStrips(
   opening: number,
   openings: number,
   single: boolean,
   leaves: number,
-  cap = 8
+  cap = 3
 ): { ahead: number; behind: number } {
   const at = Math.min(Math.max(0, opening), Math.max(0, openings - 1));
   const shown = openingLeaves(at, single);

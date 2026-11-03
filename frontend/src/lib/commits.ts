@@ -112,11 +112,17 @@ export const commitLogListId = 'commits-log';
 export const streamPageRows = 5;
 
 /* The stream's three filters (issue #399): marks the eye reads, the words a
- * screen reader hears in their place. Their order is the order they sit in. */
+ * screen reader hears in their place. Their order is the order they sit in.
+ * Each says what its empty list means, in the reserve the entries would have
+ * filled, so a filter that keeps nothing is never a blank page. Releases is
+ * the one that is empty for a reason of its own: no recent commit is a
+ * repository's latest release. */
+export const streamReleasesEmptyNote = 'no release among the recent commits';
+
 export const streamFilters: readonly StreamFilter[] = [
-  { key: 'all', glyph: 'list', label: 'Everything' },
-  { key: 'commit', glyph: 'pull', label: 'Commits' },
-  { key: 'release', glyph: 'tag', label: 'Releases' }
+  { key: 'all', glyph: 'list', label: 'Everything', empty: activityEntriesNote },
+  { key: 'commit', glyph: 'pull', label: 'Commits', empty: activityEntriesNote },
+  { key: 'release', glyph: 'tag', label: 'Releases', empty: streamReleasesEmptyNote }
 ];
 
 /* How many characters of a commit identity the log prints. Seven is the

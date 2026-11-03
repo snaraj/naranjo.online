@@ -141,7 +141,9 @@ test('the links alternate face-on and edge-on at an even pitch, each turned to p
  * than the cap however long the book. */
 test('the stacked edges count the leaves ahead and behind, on a phone and on a spread', () => {
   const leaves = 6;
-  const edges = (opening, single) => edgeStrips(opening, tomeOpenings(leaves, single), single, leaves);
+  // Counted with the cap out of the way (as many as the book has), so the
+  // count is under test here and the cap below.
+  const edges = (opening, single) => edgeStrips(opening, tomeOpenings(leaves, single), single, leaves, leaves);
   // A phone turns one leaf at a time: five ahead of the first, five behind the last.
   assert.deepEqual(edges(0, true), { ahead: 5, behind: 0 });
   assert.deepEqual(edges(2, true), { ahead: 3, behind: 2 });
@@ -153,11 +155,14 @@ test('the stacked edges count the leaves ahead and behind, on a phone and on a s
   // An odd count leaves the last spread one page short, and nothing is ahead of it.
   assert.deepEqual(edgeStrips(1, tomeOpenings(3, false), false, 3), { ahead: 0, behind: 2 });
   // An opening past either end is read as the nearest real one.
-  assert.deepEqual(edgeStrips(9, tomeOpenings(leaves, true), true, leaves), { ahead: 0, behind: 5 });
-  assert.deepEqual(edgeStrips(-1, tomeOpenings(leaves, true), true, leaves), { ahead: 5, behind: 0 });
-  // A long book says "more", not how many: both stacks stop at the cap.
-  assert.deepEqual(edgeStrips(10, tomeOpenings(30, true), true, 30), { ahead: 8, behind: 8 });
-  assert.deepEqual(edgeStrips(10, tomeOpenings(30, true), true, 30, 3), { ahead: 3, behind: 3 });
+  assert.deepEqual(edgeStrips(9, tomeOpenings(leaves, true), true, leaves, leaves), { ahead: 0, behind: 5 });
+  assert.deepEqual(edgeStrips(-1, tomeOpenings(leaves, true), true, leaves, leaves), { ahead: 5, behind: 0 });
+  // A long book says "more", not how many: both stacks stop at the cap, three
+  // by default — what the narrowest leaf padding holds, a sum
+  // token-usage.test.mjs does against the stylesheet.
+  assert.deepEqual(edgeStrips(10, tomeOpenings(30, true), true, 30), { ahead: 3, behind: 3 });
+  assert.deepEqual(edgeStrips(0, tomeOpenings(leaves, true), true, leaves), { ahead: 3, behind: 0 });
+  assert.deepEqual(edgeStrips(10, tomeOpenings(30, true), true, 30, 5), { ahead: 5, behind: 5 });
   // A book with no leaves, or one, has no stack at all.
   assert.deepEqual(edgeStrips(0, tomeOpenings(0, true), true, 0), { ahead: 0, behind: 0 });
   assert.deepEqual(edgeStrips(0, tomeOpenings(1, false), false, 1), { ahead: 0, behind: 0 });

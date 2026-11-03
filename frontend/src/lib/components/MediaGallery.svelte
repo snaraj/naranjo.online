@@ -218,7 +218,7 @@
 
 {#if items.length > 0}
   <FeedCard variant="flat">
-      {#snippet media()}
+    {#snippet media()}
       <div class="gallery-mosaic">
         <div class="gallery-grid" data-gallery-tiles={pageTiles.length} data-columns={columns}>
           {#each pageTiles as tile, place (tile.key)}

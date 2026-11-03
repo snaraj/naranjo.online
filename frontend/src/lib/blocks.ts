@@ -326,6 +326,8 @@ export type StreamFilter = {
   readonly key: 'all' | 'commit' | 'release';
   readonly glyph: IconName;
   readonly label: string;
+  /* What the reserve says when this filter keeps nothing. */
+  readonly empty: string;
 };
 
 export type StreamProps = {

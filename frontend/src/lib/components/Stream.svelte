@@ -19,7 +19,8 @@
   family's shapes, written with the same weight Icon writes.
 
   ZERO CLS. The list reserves a whole page of entries before a payload lands,
-  the empty note sits in the same reserve, and the pager is always drawn, so a
+  the empty note sits in the same reserve (and so does a filter's own note
+  when it keeps nothing), and the pager is always drawn, so a
   page turn, a filter or an arriving payload lands in a box that was already
   its size.
 
@@ -57,6 +58,9 @@
      real page rather than past it. */
   const at = $derived(Math.min(page, pages));
   const shown = $derived(pageRows(filtered, at, pageSize));
+  /* What a filter that keeps nothing says, in the reserve its entries would
+     have filled; the adapter writes one for every filter. */
+  const filteredEmpty = $derived(filters.find((filter) => filter.key === active)?.empty ?? emptyNote);
 
   function choose(key: StreamFilter['key']): void {
     active = key;
@@ -139,6 +143,8 @@
       </div>
       {#if rows.length === 0}
         <p class="stream-note">{emptyNote}</p>
+      {:else if filtered.length === 0}
+        <p class="stream-note">{filteredEmpty}</p>
       {:else}
         <ol class="stream-list" id={listId}>
           {#each shown as row, index (row.key)}
@@ -197,8 +203,11 @@
 
   /* --- The filters ----------------------------------------------------------- */
 
+  /* The filters sit at the stream's inline end, under the vine's end, as the
+     approved mock drew them, over the pager at the same end on a desk. */
   .stream-head {
     display: flex;
+    justify-content: flex-end;
   }
 
   .stream-filters {

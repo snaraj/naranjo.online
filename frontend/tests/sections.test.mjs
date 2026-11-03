@@ -1961,12 +1961,34 @@ test('the stream’s filters are three marks in brand ink, never underlined, tha
   assert.deepEqual(
     projectsCommitsProps([null, null]).filters,
     [
-      { key: 'all', glyph: 'list', label: 'Everything' },
-      { key: 'commit', glyph: 'pull', label: 'Commits' },
-      { key: 'release', glyph: 'tag', label: 'Releases' }
+      { key: 'all', glyph: 'list', label: 'Everything', empty: 'no recent commits reported' },
+      { key: 'commit', glyph: 'pull', label: 'Commits', empty: 'no recent commits reported' },
+      { key: 'release', glyph: 'tag', label: 'Releases', empty: 'no release among the recent commits' }
     ]
   );
   assert.match(stream, /<div class="stream-filters" role="group" aria-label="Show">\s*\{#each filters as filter \(filter\.key\)\}/);
+  /* AT THE STREAM'S INLINE END, under the vine's end, as the approved mock
+     drew them (review, 2026-11-02), at both widths: the head rule is the
+     only one that places them, and no phone block moves them back. */
+  const headRules = [...styleBlock(stream).replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/\.stream-head \{([^}]*)\}/g)].map(([, body]) => body);
+  assert.equal(headRules.length, 1, 'a second rule places the stream head');
+  assert.match(headRules[0], /display: flex;\s*justify-content: flex-end;/, 'the filters do not sit at the stream’s inline end');
+  /* A FILTER THAT KEEPS NOTHING SAYS SO, in the reserve its entries would
+     have filled (review, 2026-11-02: Releases, until a capture names a
+     release, was a blank page). The whole list's own note comes first, the
+     chosen filter's after it, and both are the one note shape — the shape
+     the reserve rule gives the list's height. */
+  assert.match(
+    stream,
+    /\{#if rows\.length === 0\}\s*<p class="stream-note">\{emptyNote\}<\/p>\s*\{:else if filtered\.length === 0\}\s*<p class="stream-note">\{filteredEmpty\}<\/p>\s*\{:else\}\s*<ol class="stream-list"/,
+    'a filter that keeps nothing leaves the reserve blank'
+  );
+  assert.match(stream, /const filteredEmpty = \$derived\(filters\.find\(\(filter\) => filter\.key === active\)\?\.empty \?\? emptyNote\);/);
+  assert.match(
+    styleBlock(stream).replace(/\/\*[\s\S]*?\*\//g, ''),
+    /\.stream-list,\s*\.stream-note \{\s*min-block-size: calc\(var\(--stream-page-rows\) \* var\(--stream-pitch\)\);\s*\}/,
+    'the note does not hold the room a page of entries holds'
+  );
   assert.match(
     stream,
     /<button\s+class="stream-filter"\s+type="button"\s+aria-pressed=\{filter\.key === active\}\s+aria-label=\{filter\.label\}/,
@@ -2022,17 +2044,24 @@ test('one pager turns the stream and the mosaic, always drawn, at the touch floo
     assert.equal((source.match(/<Pager\b/g) ?? []).length, 1, `${name} mounts the pager a number of times other than once`);
     assert.doesNotMatch(source, /\{#if[^}]*\}\s*<Pager\b/, `${name} draws the pager only sometimes, so a second page moves the list`);
   }
-  /* Two real steps, named by the caller's words and disabled at either end,
-     and where the reader is, said politely when it changes. */
-  assert.match(pager, /data-step="previous"\s+aria-label=\{previousLabel\}\s+aria-disabled=\{page <= 1\}\s+disabled=\{page <= 1\}/);
-  assert.match(pager, /data-step="next"\s+aria-label=\{nextLabel\}\s+aria-disabled=\{page >= pages\}\s+disabled=\{page >= pages\}/);
+  /* Two real steps, named by the caller's words and quiet at either end, and
+     where the reader is, said politely when it changes. A step with nowhere
+     to go is aria-disabled and ignores the press, but is never `disabled`: a
+     disabled button drops keyboard focus to the page the moment the last page
+     is reached, under a reader turning by key (review, 2026-11-02, issue
+     399). */
+  assert.match(pager, /data-step="previous"\s+aria-label=\{previousLabel\}\s+aria-disabled=\{page <= 1\}\s+onclick=\{\(\) => step\(page - 1\)\}/);
+  assert.match(pager, /data-step="next"\s+aria-label=\{nextLabel\}\s+aria-disabled=\{page >= pages\}\s+onclick=\{\(\) => step\(page \+ 1\)\}/);
+  assert.doesNotMatch(pager, /\sdisabled=/, 'a pager step is disabled outright, so focus drops off it at the last page');
+  assert.match(pager, /function step\(next: number\): void \{\s*if \(next < 1 \|\| next > pages\) return;\s*onturn\(next\);\s*\}/, 'a press on a quiet step is not ignored');
   assert.match(pager, /<span class="pager-count" role="status" aria-live="polite" aria-label=\{`page \$\{page\} of \$\{pages\}`\}\s*>\{page\} \/ \{pages\}<\/span>/);
   const code = styleBlock(pager).replace(/\/\*[\s\S]*?\*\//g, '');
   assert.match(code, /\.pager-step \{[^}]*inline-size: var\(--control-target\);\s*block-size: var\(--control-target\);/);
   assert.match(code, /\.pager-count \{[^}]*font-variant-numeric: tabular-nums;/);
   /* A step with nowhere to go dims by opacity alone: no colour of its own, no
      border, so the pager keeps its shape at both ends. */
-  const disabled = /\.pager-step:disabled \{([^}]*)\}/.exec(code)?.[1] ?? '';
+  assert.doesNotMatch(code, /:disabled/, 'the quiet state is styled on a state the steps no longer have');
+  const disabled = /\.pager-step\[aria-disabled='true'\] \{([^}]*)\}/.exec(code)?.[1] ?? '';
   assert.match(disabled, /opacity: var\(--pager-rest-dim\);/);
   assert.doesNotMatch(disabled, /color|border|background/);
   assert.match(styles, /--pager-rest-dim: [\d.]+;/);
