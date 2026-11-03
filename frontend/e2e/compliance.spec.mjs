@@ -75,7 +75,7 @@ function focusStop() {
  * script and stylesheet body, and every CSP violation. The violation listener
  * is installed by the driver before any page script runs, so the CSP cannot
  * block it. */
-async function firstVisit(page) {
+async function firstVisit(page, path = '/') {
   const requests = [];
   const violations = [];
   const shipped = [];
@@ -93,7 +93,7 @@ async function firstVisit(page) {
       window.__compliance.push(`${event.violatedDirective} ${event.blockedURI}`);
     });
   });
-  await page.goto('/');
+  await page.goto(path);
   await page.waitForLoadState('networkidle');
   await page.evaluate(async () => {
     for (let y = 0; y < document.documentElement.scrollHeight; y += window.innerHeight) {
@@ -106,87 +106,98 @@ async function firstVisit(page) {
   return { requests, violations, shipped };
 }
 
-test('a first visit contacts no undeclared origin, breaks no CSP rule and stores nothing', async ({ page, context }) => {
-  const { requests, violations } = await firstVisit(page);
-  const own = new URL(page.url()).origin;
+/* The home page and every published legal page are held to the same visit and
+ * floor checks; the home page's test titles are unchanged. */
+const visitedPages = [
+  ['/', 'a first visit', 'the rendered page'],
+  ...publishedPages.map((entry) => [entry.path, `a visit to ${entry.path}`, entry.path]),
+];
 
-  const foreign = [...new Set(requests)]
-    .filter((url) => /^https?:/.test(url))
-    .map((url) => new URL(url).origin)
-    .filter((origin) => origin !== own && !declaredOrigins.has(origin));
-  expect(
-    [...new Set(foreign)],
-    'every request stays on this origin unless compliance.json declares it — lift: add ' +
-      '{"origin": "<origin>", "purpose": "...", "consent": "not-required", "reason": "..."} to thirdParties',
-  ).toEqual([]);
+for (const [path, visit] of visitedPages) {
+  test(`${visit} contacts no undeclared origin, breaks no CSP rule and stores nothing`, async ({ page, context }) => {
+    const { requests, violations } = await firstVisit(page, path);
+    const own = new URL(page.url()).origin;
 
-  expect(violations, 'the page asked for nothing its own CSP refuses').toEqual([]);
+    const foreign = [...new Set(requests)]
+      .filter((url) => /^https?:/.test(url))
+      .map((url) => new URL(url).origin)
+      .filter((origin) => origin !== own && !declaredOrigins.has(origin));
+    expect(
+      [...new Set(foreign)],
+      'every request stays on this origin unless compliance.json declares it — lift: add ' +
+        '{"origin": "<origin>", "purpose": "...", "consent": "not-required", "reason": "..."} to thirdParties',
+    ).toEqual([]);
 
-  const cookies = (await context.cookies()).map((cookie) => cookie.name);
-  const stored = await page.evaluate(async () => ({
-    local: Object.keys(window.localStorage),
-    session: Object.keys(window.sessionStorage),
-    databases:
-      typeof indexedDB.databases === 'function' ? (await indexedDB.databases()).map((db) => db.name) : [],
-  }));
-  expect(
-    { cookies, ...stored },
-    'nothing is written to the visitor’s device before they act; storage[] admits only visitor-action writes',
-  ).toEqual({ cookies: [], local: [], session: [], databases: [] });
-});
+    expect(violations, 'the page asked for nothing its own CSP refuses').toEqual([]);
 
-test('the rendered page meets the WCAG 2.1 floors a browser can measure', async ({ page, browserName }) => {
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
+    const cookies = (await context.cookies()).map((cookie) => cookie.name);
+    const stored = await page.evaluate(async () => ({
+      local: Object.keys(window.localStorage),
+      session: Object.keys(window.sessionStorage),
+      databases:
+        typeof indexedDB.databases === 'function' ? (await indexedDB.databases()).map((db) => db.name) : [],
+    }));
+    expect(
+      { cookies, ...stored },
+      'nothing is written to the visitor’s device before they act; storage[] admits only visitor-action writes',
+    ).toEqual({ cookies: [], local: [], session: [], databases: [] });
+  });
+}
 
-  // 3.1.1 Language of Page.
-  expect(await page.locator('html').getAttribute('lang'), 'the document declares its language').toMatch(/\S/);
+for (const [path, , subject] of visitedPages) {
+  test(`${subject} meets the WCAG 2.1 floors a browser can measure`, async ({ page, browserName }) => {
+    await page.goto(path);
+    await page.waitForLoadState('networkidle');
 
-  // 1.1.1 Non-text Content: every image says what it is, or says it is decoration (alt="").
-  const unlabelledImages = await page.locator('img:not([alt])').evaluateAll((images) =>
-    images.map((image) => image.currentSrc || image.getAttribute('src')),
-  );
-  expect(unlabelledImages, 'every <img> carries an alt attribute').toEqual([]);
+    // 3.1.1 Language of Page.
+    expect(await page.locator('html').getAttribute('lang'), 'the document declares its language').toMatch(/\S/);
 
-  // 2.4.3 Focus Order: no positive tabindex reorders the page.
-  const reordered = await page
-    .locator('[tabindex]')
-    .evaluateAll((elements) => elements.filter((element) => element.tabIndex > 0).map((element) => element.outerHTML.slice(0, 80)));
-  expect(reordered, 'no element takes a positive tabindex').toEqual([]);
+    // 1.1.1 Non-text Content: every image says what it is, or says it is decoration (alt="").
+    const unlabelledImages = await page.locator('img:not([alt])').evaluateAll((images) =>
+      images.map((image) => image.currentSrc || image.getAttribute('src')),
+    );
+    expect(unlabelledImages, 'every <img> carries an alt attribute').toEqual([]);
 
-  // 4.1.2 Name, Role, Value and 1.3.1/3.3.2 labels: every control a visitor can see has a name.
-  const controls = page.locator(
-    'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], ' +
-      '[role="checkbox"], [role="switch"], [role="tab"], [role="menuitem"], [role="menuitemradio"], [role="slider"]',
-  );
-  let named = 0;
-  for (const control of await controls.all()) {
-    if (!(await control.isVisible())) continue;
-    const shape = await control.evaluate((element) => element.outerHTML.slice(0, 80));
-    await expect(control, `${shape} has an accessible name`).toHaveAccessibleName(/\S/);
-    named += 1;
-  }
-  expect(named, 'the page offers at least one control, so the sweep above measured something').toBeGreaterThan(0);
+    // 2.4.3 Focus Order: no positive tabindex reorders the page.
+    const reordered = await page
+      .locator('[tabindex]')
+      .evaluateAll((elements) => elements.filter((element) => element.tabIndex > 0).map((element) => element.outerHTML.slice(0, 80)));
+    expect(reordered, 'no element takes a positive tabindex').toEqual([]);
 
-  // 2.4.7 Focus Visible: whatever the keyboard reaches paints where it is.
-  const stops = [];
-  for (let step = 0; step < 40; step += 1) {
-    await page.keyboard.press('Tab');
-    const stop = await page.evaluate(focusStop);
-    if (stop === null || stops.some((seen) => seen.key === stop.key)) break;
-    stops.push(stop);
-  }
-  // WebKit keeps Safari's default tab order, which skips links and buttons, so
-  // only the engines that tab to every control are asked to reach one; what
-  // WebKit does reach is still held to the ring below.
-  if (browserName !== 'webkit') {
-    expect(stops.length, 'the keyboard reaches at least one control').toBeGreaterThan(0);
-  }
-  expect(
-    stops.filter((stop) => !stop.visible).map((stop) => stop.shape),
-    'every keyboard stop paints a focus outline or ring that is not transparent',
-  ).toEqual([]);
-});
+    // 4.1.2 Name, Role, Value and 1.3.1/3.3.2 labels: every control a visitor can see has a name.
+    const controls = page.locator(
+      'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], ' +
+        '[role="checkbox"], [role="switch"], [role="tab"], [role="menuitem"], [role="menuitemradio"], [role="slider"]',
+    );
+    let named = 0;
+    for (const control of await controls.all()) {
+      if (!(await control.isVisible())) continue;
+      const shape = await control.evaluate((element) => element.outerHTML.slice(0, 80));
+      await expect(control, `${shape} has an accessible name`).toHaveAccessibleName(/\S/);
+      named += 1;
+    }
+    expect(named, 'the page offers at least one control, so the sweep above measured something').toBeGreaterThan(0);
+
+    // 2.4.7 Focus Visible: whatever the keyboard reaches paints where it is.
+    const stops = [];
+    for (let step = 0; step < 40; step += 1) {
+      await page.keyboard.press('Tab');
+      const stop = await page.evaluate(focusStop);
+      if (stop === null || stops.some((seen) => seen.key === stop.key)) break;
+      stops.push(stop);
+    }
+    // WebKit keeps Safari's default tab order, which skips links and buttons, so
+    // only the engines that tab to every control are asked to reach one; what
+    // WebKit does reach is still held to the ring below.
+    if (browserName !== 'webkit') {
+      expect(stops.length, 'the keyboard reaches at least one control').toBeGreaterThan(0);
+    }
+    expect(
+      stops.filter((stop) => !stop.visible).map((stop) => stop.shape),
+      'every keyboard stop paints a focus outline or ring that is not transparent',
+    ).toEqual([]);
+  });
+}
 
 /* The focus floor above can only fail if focusStop can say "not visible", so
  * the indicators that paint nothing are proven refused in every engine, beside
@@ -241,5 +252,17 @@ test('every published legal page is linked from the page and served', async ({ p
     const answer = await request.get(entry.path);
     expect(answer.status(), `${entry.path} is served`).toBe(200);
     expect(answer.headers()['content-type'] ?? '', `${entry.path} is a page`).toMatch(/^text\/html/);
+  }
+  // A link outside the page's prose is a control, so it takes the 44px touch floor (issue 26).
+  for (const entry of publishedPages) {
+    await page.goto(entry.path);
+    const small = await page.locator('a[href]').evaluateAll((links) =>
+      links
+        .filter((link) => !link.closest('p'))
+        .map((link) => [link.outerHTML.slice(0, 60), link.getBoundingClientRect()])
+        .filter(([, box]) => box.width < 44 || box.height < 44)
+        .map(([shape, box]) => `${shape} is ${Math.round(box.width)}x${Math.round(box.height)}`),
+    );
+    expect(small, `${entry.path}: every link outside its prose is at least 44px each way`).toEqual([]);
   }
 });

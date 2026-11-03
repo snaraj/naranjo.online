@@ -42,6 +42,12 @@ const componentStyles = Object.fromEntries(
   })
 );
 
+/* The privacy notice (issue 355) is a second page outside the component tree,
+ * with its own markup and sheet. Both join the sweep here, so every floor
+ * below holds for that page too. */
+componentSources['privacy.html'] = await readFile(new URL('../privacy.html', import.meta.url), 'utf8');
+componentStyles['privacy.css'] = await readFile(new URL('../src/privacy.css', import.meta.url), 'utf8');
+
 /* What assistive technology reads from a stretch of markup: its text, with
  * every aria-hidden subtree taken out and every component it draws expanded
  * to the markup that component renders. A heading may carry decoration (J

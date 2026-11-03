@@ -7,6 +7,18 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.101] - 2026-11-02
+
+### Added
+
+- A privacy notice at `/privacy.html`, linked by one small word under the
+  frame. It covers four things: what the site keeps on a device (one setting,
+  written only when a visitor drags the reading column), what the server logs
+  (no address, no query string), what the network in front of the server sees,
+  and GitHub as the contact (#355).
+- `/.well-known/security.txt` (RFC 9116), pointing at the repository's private
+  vulnerability form. A test fails once its expiry is under 30 days away (#355).
+
 ## [0.1.100] - 2026-11-02
 
 ### Fixed
