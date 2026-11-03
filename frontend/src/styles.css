@@ -1157,11 +1157,19 @@
      edges drawn out, nothing pixelated — at 1.5x its display size for a
      retina screen, and toned twice: dark stone for the dark modes, pale
      limestone for light, each held to a narrow band of brightness so every
-     text colour keeps its contrast on any stone of it. Drawn at 1440x960 a
-     tile, so the repeat is as wide as a wide sheet. */
+     text colour keeps its contrast on any stone of it. Drawn 1440px wide a
+     tile, so the repeat is as wide as a wide sheet.
+     THE WALL REPEATS DOWN THE PAGE WITHOUT A LINE (owner, 2026-11-02: "I
+     don't like this hard background cutoff where you can see the image just
+     copy/pasted with a hard edge"). Each tile's last row differed from its
+     first by 29.4 a pixel at night (16.4 by day) against 2.3 (1.1) between
+     neighbouring rows, so every 960px drew a hard course line. Each tile is
+     now the photograph over its own vertical mirror, 2160x2880, drawn
+     1440x1920: its last row is its first, every repeat is a fold rather than
+     a cut (2.6 and 1.4 a pixel now, against 2.0 and 0.9 between neighbours). */
   --keep-texture-wall-night: url('./assets/images/keep/wall-night.webp');
   --keep-texture-wall-day: url('./assets/images/keep/wall-day.webp');
-  --keep-wall-tile: 1440px 960px;
+  --keep-wall-tile: 1440px 1920px;
   /* The colour under the night wall, its own mean, for the moment before the
      picture arrives. */
   --palette-keep-wall-night: #1e1e1d;

@@ -901,8 +901,12 @@ test('the sheet is an opaque wall in every reading mode and filters nothing behi
   // Sharp, not pixelated (owner, 2026-10-19: "less pixelated and more sharp").
   assert.doesNotMatch(sheet, /image-rendering: pixelated;/, 'the wall is drawn in square pixels again');
   /* The wall's own ceiling, as every asset class carries one: exactly the
-     two tiles, WebP, each within 192 KiB (113,926 and 60,650 bytes as
-     drawn), so a sharper or larger wall is a decision rather than drift. */
+     two tiles, WebP, each within 192 KiB (193,088 and 100,012 bytes as
+     drawn since each is its photograph over its own mirror, 2026-11-02), so
+     a sharper or larger wall is a decision rather than drift. The tile is
+     drawn at the mirrored file's own proportion, 1440x1920, so the fold
+     lands on the repeat; the browser lanes measure the seam itself. */
+  assert.match(styles, /--keep-wall-tile: 1440px 1920px;/, 'the wall is not drawn at its mirrored tile’s size, so the repeat cuts it');
   const wallDir = new URL('../src/assets/images/keep/', import.meta.url);
   assert.deepEqual((await readdir(wallDir)).sort(), ['wall-day.webp', 'wall-night.webp']);
   for (const name of ['wall-day.webp', 'wall-night.webp']) {

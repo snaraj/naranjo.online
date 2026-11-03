@@ -12245,3 +12245,67 @@ for (const width of [1440, 390]) {
     expect(after.pagerTop, 'the pager moved when the entries arrived').toBeCloseTo(before.pagerTop, 1);
   });
 }
+
+/* THE WALL REPEATS DOWN THE PAGE WITHOUT A LINE (owner, 2026-11-02: "I don't
+ * like this hard background cutoff where you can see the image just
+ * copy/pasted with a hard edge"). Each wall tile was cut where it repeats: its
+ * last row differed from its first by 29.4 a pixel at night and 16.4 by day,
+ * against 2.3 and 1.1 between neighbouring rows, so a hard course line ran
+ * across the sheet every 960px. Each tile is now its photograph over its own
+ * vertical mirror, so the row the next tile starts on is the row this one
+ * ended on. Measured here on the files the page actually serves (both
+ * walls, read from the tokens as the engine resolved them), decoded by the
+ * engine: the step across the repeat is no bigger than a few of the steps
+ * between neighbouring rows inside the tile — the old files fail it by a
+ * factor of four — and the tile is drawn at the file's own proportion, so
+ * the fold lands exactly on the repeat. */
+test('the wall repeats down the page as a fold, with no line where a tile meets the next (owner 2026-11-02)', async ({ page }) => {
+  await visit(page);
+  const walls = await page.evaluate(async () => {
+    const style = getComputedStyle(window.document.documentElement);
+    const tile = style.getPropertyValue('--keep-wall-tile').trim().split(/\s+/).map(Number.parseFloat);
+    const measure = async (token) => {
+      const src = /url\(\s*["']?([^"')]+)["']?\s*\)/.exec(style.getPropertyValue(token))?.[1] ?? null;
+      if (src === null) return { token, src };
+      const image = new Image();
+      image.src = new URL(src, window.location.href).href;
+      await image.decode();
+      const canvas = window.document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext('2d');
+      context.drawImage(image, 0, 0);
+      const row = (y) => context.getImageData(0, y, canvas.width, 1).data;
+      const step = (a, b) => {
+        let sum = 0;
+        for (let index = 0; index < a.length; index += 4) {
+          sum += Math.abs(a[index] - b[index]) + Math.abs(a[index + 1] - b[index + 1]) + Math.abs(a[index + 2] - b[index + 2]);
+        }
+        return sum / (a.length / 4);
+      };
+      let inside = 0;
+      for (let y = 1; y < 200; y += 1) inside += step(row(y), row(y - 1));
+      return {
+        token,
+        src,
+        width: canvas.width,
+        height: canvas.height,
+        repeat: step(row(canvas.height - 1), row(0)),
+        neighbours: inside / 199,
+      };
+    };
+    return { tile, walls: [await measure('--keep-texture-wall-night'), await measure('--keep-texture-wall-day')] };
+  });
+  expect(walls.tile, 'the wall tile is not two lengths').toHaveLength(2);
+  for (const wall of walls.walls) {
+    expect(wall.src, `${wall.token} names no picture the page can serve`).not.toBeNull();
+    expect(wall.height * walls.tile[0], `${wall.token} is drawn at a proportion other than its own, so the fold misses the repeat`).toBeCloseTo(
+      wall.width * walls.tile[1],
+      0
+    );
+    expect(
+      wall.repeat,
+      `${wall.token} steps ${wall.repeat.toFixed(1)} a pixel where it repeats against ${wall.neighbours.toFixed(1)} between neighbouring rows: a hard line runs across the sheet`
+    ).toBeLessThanOrEqual(3 * wall.neighbours);
+  }
+});

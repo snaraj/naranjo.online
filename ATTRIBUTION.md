@@ -78,10 +78,11 @@ on Unsplash (published 2026-05-24), used under the
 [Unsplash License](https://unsplash.com/license), which permits free use,
 including modification, without permission. The photograph itself is not
 vendored: `frontend/src/assets/images/keep/wall-night.webp` and
-`wall-day.webp` are 2160x1440 derivatives of the wall above the grass, made
+`wall-day.webp` are 2160x2880 derivatives of the wall above the grass, made
 seamless, sharpened by local contrast and toned to two narrow bands of
-brightness so the page's text keeps its contrast on them. Thanks to the
-photographer.
+brightness so the page's text keeps its contrast on them; each is the
+2160x1440 derivative over its own vertical mirror, so the wall repeats down
+the page without a seam (2026-11-02). Thanks to the photographer.
 
 ## Old School RuneScape boss icons
 

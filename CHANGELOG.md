@@ -34,6 +34,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   stand taller than they are wide at any width, turned by the same pager; the
   switch between them is gone (#399).
 
+### Fixed
+
+- The castle wall no longer draws a hard line across the sheet every 960px
+  where its picture repeats: each wall is now its picture over its own mirror,
+  so one tile ends on the row the next begins with (#399).
+
 ## [0.1.101] - 2026-11-02
 
 ### Added
