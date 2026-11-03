@@ -235,6 +235,12 @@ Removing a file is the same operation in reverse: take it out of the manifest
 first, then delete it. Nothing here touches git, CI, or a release — that is
 the entire point of the design.
 
+The manifest's item order IS the gallery's feed order: the page lays every
+item where the manifest lists it, drawings and films alike, and sorts nothing.
+The mosaic's pattern is by position, not by kind — a film in a drawing's slot
+takes the same tile — so the operator interleaves the kinds when publishing,
+and no page is ever one kind alone (owner, 2026-11-03, issue #401).
+
 Everything about the volume's own provisioning — where it comes from, how it
 is backed up, how the operator reaches the host — is deliberately outside this
 repository (requirement 12). This document describes only what the origin

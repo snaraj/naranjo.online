@@ -113,15 +113,25 @@ export const streamPageRows = 5;
 
 /* The stream's three filters (issue #399): marks the eye reads, the words a
  * screen reader hears in their place. Their order is the order they sit in.
+ *
+ * WHAT EACH KEEPS (owner, 2026-11-03, issue #401). Everything keeps every
+ * entry, private days included. Plain commits keeps the public commits that
+ * carry no release. Releases keeps the commits that carry one. A release rides
+ * on the commit it was cut from, so the last two split the public commits
+ * between them and no entry is in both; a private day shows under everything
+ * alone (lib/stream.ts, filterRows).
+ *
  * Each says what its empty list means, in the reserve the entries would have
- * filled, so a filter that keeps nothing is never a blank page. Releases is
- * the one that is empty for a reason of its own: no recent commit is a
- * repository's latest release. */
+ * filled, so a filter that keeps nothing is never a blank page. Everything is
+ * empty only when the record is. The other two are empty for a reason of
+ * their own: plain commits when every recent commit is a release, releases
+ * when no recent commit is a repository's latest release. */
+export const streamCommitsEmptyNote = 'every recent commit is a release';
 export const streamReleasesEmptyNote = 'no release among the recent commits';
 
 export const streamFilters: readonly StreamFilter[] = [
   { key: 'all', glyph: 'list', label: 'Everything', empty: activityEntriesNote },
-  { key: 'commit', glyph: 'pull', label: 'Commits', empty: activityEntriesNote },
+  { key: 'commit', glyph: 'pull', label: 'Plain commits', empty: streamCommitsEmptyNote },
   { key: 'release', glyph: 'tag', label: 'Releases', empty: streamReleasesEmptyNote }
 ];
 

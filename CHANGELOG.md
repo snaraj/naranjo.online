@@ -7,6 +7,27 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.103] - 2026-11-03
+
+### Fixed
+
+- Ongoing Work's commit filter keeps something of its own. A release rides on
+  the commit it was cut from, so the filter that kept every public commit kept
+  the releases too, and pressing it changed nothing a reader could see: it
+  differed from everything only by the private days, which the first page
+  rarely holds. It now keeps the public commits that carry no release and is
+  named Plain commits, so the plain commits and the releases split the public
+  entries between them and a private day shows under everything alone. When
+  every recent commit is a release it says so in the reserve, in words of its
+  own (#401).
+
+### Changed
+
+- The gallery manifest's documentation states the publishing rule: the
+  manifest's item order is the feed order, the mosaic's pattern is by position
+  rather than by kind, and the operator interleaves drawings and films so no
+  page is one kind alone (#401).
+
 ## [0.1.102] - 2026-11-02
 
 ### Added

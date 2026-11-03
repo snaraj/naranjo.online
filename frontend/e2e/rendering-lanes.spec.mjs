@@ -11690,8 +11690,12 @@ for (const width of [1440, 390]) {
     expect(second.steps.map((step) => step.disabled)).toEqual(['false', 'false']);
 
     /* A filter starts its list at its first page; "Releases" with no release
-       on the wire is an empty list in the SAME reserve, with nothing moved. */
-    await page.locator('#projects .stream-filter[aria-label="Commits"]').click();
+       on the wire is an empty list in the SAME reserve, with nothing moved.
+       Plain commits keeps the public commits that carry NO release (issue
+       #401), so its pages are the served commits less the release ones — and
+       this origin serves none, which the Releases case below proves, so every
+       served commit is a plain one. */
+    await page.locator('#projects .stream-filter[aria-label="Plain commits"]').click();
     await settled(page);
     const commits = await shape();
     expect(commits.pressed).toEqual(['false', 'true', 'false']);

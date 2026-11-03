@@ -8,10 +8,16 @@
 import type { StreamFilter, StreamRow } from './blocks.ts';
 
 /* The rows a filter keeps, in the order they arrived: everything, the public
- * commits, or the entries that carry a release. */
+ * commits that carry no release, or the entries that carry one (owner,
+ * 2026-11-03, issue #401: pressing the first two marks changed nothing). A
+ * release rides on the commit it was cut from, so a commit filter that kept
+ * every public commit kept the releases too, and differed from everything only
+ * by the private days. The plain commits and the releases now split the
+ * public rows between them, each row in exactly one; a private day shows under
+ * everything alone. */
 export function filterRows(rows: readonly StreamRow[], key: StreamFilter['key']): readonly StreamRow[] {
   if (key === 'commit') {
-    return rows.filter((row) => row.kind === 'commit');
+    return rows.filter((row) => row.kind === 'commit' && row.release === undefined);
   }
   if (key === 'release') {
     return rows.filter((row) => row.release !== undefined);

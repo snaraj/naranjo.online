@@ -1960,13 +1960,14 @@ function motionIn(style) {
 }
 
 test('the stream’s filters are three marks in brand ink, never underlined, that shine only where motion is welcome (owner 2026-11-02, issue #399)', () => {
-  /* THREE ICON-ONLY FILTERS, the adapter's: everything, the commits, the
-     releases, each a real toggle button named by its word. */
+  /* THREE ICON-ONLY FILTERS, the adapter's: everything, the plain commits
+     (the public ones that carry no release, issue #401), the releases, each a
+     real toggle button named by its word. */
   assert.deepEqual(
     projectsCommitsProps([null, null]).filters,
     [
       { key: 'all', glyph: 'list', label: 'Everything', empty: 'no recent commits reported' },
-      { key: 'commit', glyph: 'pull', label: 'Commits', empty: 'no recent commits reported' },
+      { key: 'commit', glyph: 'pull', label: 'Plain commits', empty: 'every recent commit is a release' },
       { key: 'release', glyph: 'tag', label: 'Releases', empty: 'no release among the recent commits' }
     ]
   );
