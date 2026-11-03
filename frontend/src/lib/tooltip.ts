@@ -423,6 +423,41 @@ function bindDetail(
     return true;
   }
 
+  /* THE READOUT LANDS AFTER THE PLACEMENT. A region caller's select() writes
+     reactive state, and the framework renders the new readout into the box
+     only after this handler returns — so the size reveal() measures is the
+     PREVIOUS reading's. A short readout replaced by a long one near an edge
+     was placed for the short one and ran off the screen (hosted Android
+     lane, 2026-11-02: the band's box ended at 399.17px on a 393px
+     viewport). An animation frame runs after every microtask the handler
+     queued and before that frame paints, so the box is measured there once
+     more and, when its size moved, placed again from the same anchor or
+     pointer: the reader never sees the first placement. */
+  let settling = 0;
+
+  function resettle(pointer: TipPoint | null): void {
+    if (settling !== 0) {
+      view.cancelAnimationFrame(settling);
+    }
+    settling = view.requestAnimationFrame(() => {
+      settling = 0;
+      if (!shown) {
+        return;
+      }
+      const box = node.getBoundingClientRect();
+      if (Math.abs(box.width - size.width) < stillPx && Math.abs(box.height - size.height) < stillPx) {
+        return;
+      }
+      size = { width: box.width, height: box.height };
+      const at = follows ? (pending ?? pointer) : null;
+      place(
+        at === null
+          ? anchoredPlacement(anchor, size, viewport, metrics)
+          : pointerPlacement(at, size, viewport, metrics)
+      );
+    });
+  }
+
   function reveal(pointer: TipPoint | null, from: TipOrigin): void {
     anchor = measure();
     follows = pointer !== null;
@@ -431,6 +466,7 @@ function bindDetail(
         ? anchoredPlacement(anchor, size, viewport, metrics)
         : pointerPlacement(pointer, size, viewport, metrics)
     );
+    resettle(pointer);
     if (opened !== null && opened !== self) {
       opened.close();
     }
@@ -467,6 +503,10 @@ function bindDetail(
     if (frame !== 0) {
       view.cancelAnimationFrame(frame);
       frame = 0;
+    }
+    if (settling !== 0) {
+      view.cancelAnimationFrame(settling);
+      settling = 0;
     }
     pending = null;
     view.removeEventListener('scroll', onScrolled, true);

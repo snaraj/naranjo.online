@@ -8573,14 +8573,13 @@ test('the detail never grows the document at any viewport edge, and holds the ed
      this half measured a repository's figure — the per-element form, whose
      detail never changes content, so its box could be held to every edge.
      That host retired with the repositories' column, and the band is the
-     region form, which measures its box BEFORE the content for the
-     pointed-at item exists (lib/tooltip.ts's aim() places synchronously
-     while the caller's detail lands a microtask later — not this change's,
-     and stated rather than papered over), so the two flips cannot be held
-     here. What the region form CAN answer for is held: the start and top
-     edges, a box the pointer passes through, and — the floor this lane is
-     named for — a document that never grows, at the worst corner of the
-     narrowest screen. The band is stopped first (see the hosts above). */
+     region form, whose box is first placed BEFORE the readout for the
+     pointed-at item has rendered. lib/tooltip.ts measures it again once the
+     readout has landed, before the frame paints (2026-11-02), so the region
+     form is now held to every edge as the figure was: both flips, a box the
+     pointer passes through, and — the floor this lane is named for — a
+     document that never grows, at the worst corner of the narrowest screen.
+     The band is stopped first (see the hosts above). */
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: phoneWidths[0], height: 640 });
   await settled(page);
@@ -8607,10 +8606,21 @@ test('the detail never grows the document at any viewport edge, and holds the ed
   };
   await page.mouse.move(0, 0);
   await page.mouse.move(at.x, at.y);
+  /* The first frame a reader sees is the one painted after the move. */
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
   const edge = await detailBox(page, tickerItem, lastItem);
   expect(edge.open, 'the corner item did not open its detail').toBe('true');
   expect(edge.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
   expect(edge.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
+  /* Flipped, not merely clamped, on both axes: a clamped box near the end
+     edge sits ON the cursor and covers the item being pointed at; a flipped
+     one is on the other side of it. */
+  expect(edge.right, `the detail runs ${Math.round(edge.right - (edge.viewport.width - margin))}px past the end edge`).toBeLessThanOrEqual(
+    edge.viewport.width - margin + subPixel
+  );
+  expect(edge.bottom, `the detail runs ${Math.round(edge.bottom - (edge.viewport.height - margin))}px past the bottom edge`).toBeLessThanOrEqual(
+    edge.viewport.height - margin + subPixel
+  );
   expect(edge.catchesPointer, 'the detail can receive the pointer, so it will flicker').toBe(false);
   /* THE floor: a fixed box is outside the document's scrollable overflow, so
      this is structural rather than lucky — measured while the box is open at
@@ -8646,50 +8656,96 @@ test('the detail never grows the document at any viewport edge, and holds the ed
   await page.emulateMedia({ reducedMotion: null });
 });
 
-test('a tap opens the band’s detail on the screen, and a second tap closes it', async ({ page }) => {
+test('a tap opens the band’s detail inside the screen’s margins, a short readout and then a long one at the edge, and a second tap closes it', async ({
+  page,
+}) => {
+  /* No cursor, so nothing to follow: the box anchors to the item a finger is
+     on. RE-AIMED AT THE BAND (2026-11-02, issue 399): from 2026-10-16 this
+     lane measured a repository's figure, the per-element form, whose content
+     never changes. That host retired with the repositories' column. The band
+     is the region form, whose readout CHANGES with the item pressed, and the
+     framework renders the new readout only after the press has been handled
+     — so a box measured at the press is the previous readout's size. The
+     hosted Android lane measured what that costs, 2026-11-02: a readout
+     placed for a smaller one ended at 399.17px on a 393px viewport, off the
+     screen. lib/tooltip.ts now measures again once the readout has landed
+     and before the frame paints, and this lane holds it to every edge's
+     margin in the case that exposed it — a SHORT readout, then a tap on a
+     LONG one at the strip's far end, which moves the open readout from one
+     to the other — staged through the real envelope so the two lengths are
+     certain rather than whatever today's rows happen to be. A finger has no
+     "away", so a tap on the open item is a toggle: there is no state in
+     which a reader is stuck with a box they cannot dismiss. The band is
+     stopped first (see the hosts above). */
+  const long = 'A staged row whose name runs long enough to wrap the readout';
+  await page.route('**/api/panels/boss-log', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.bosses = envelope.data.bosses.map((boss, index) => ({
+      ...boss,
+      name: index === 0 ? 'Obor' : `${long} ${index}`,
+    }));
+    await route.fulfill({ response, json: envelope });
+  });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await visit(page);
   test.skip(await followsPointer(page), 'this engine reports a cursor; the following branch is measured above');
   const { margin } = await tipTokens(page);
 
-  /* No cursor, so nothing to follow: the box anchors to the item a finger
-     is on. RE-AIMED AT THE BAND (2026-11-02, issue 399): from 2026-10-16 this
-     lane measured a repository's figure, the per-element form, and held its
-     box one gap above its tile — which the region form cannot be held to,
-     for the reason the edge lane above records (its box is measured before
-     the tapped item's content exists, so it is placed as the short box it
-     was a moment ago and then renders full-size over the item it should sit
-     above; measured on a 393px phone: tile 388–398, box 362–425; on main
-     before this change, stated rather than papered over). That host retired
-     with the repositories' column. What a finger must still be able to count
-     on is held on the band: a tap opens a visible detail that stays on the
-     screen inside both edges without growing the document, and — a finger
-     has no "away" — the same item tapped again closes it, so there is no
-     state in which a reader is stuck with a box they cannot dismiss. The
-     band is stopped first (see the hosts above). */
-  const [selector, index] = detailHosts[0];
-  const item = page.locator(selector).nth(index);
-  await item.scrollIntoViewIfNeeded();
-  await item.tap();
-  const shown = await detailBox(page, selector, index);
-  expect(shown.open, 'a tap opened no detail').toBe('true');
-  expect(shown.visibility, 'a tap opened an invisible detail').toBe('visible');
-  expect(shown.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
-  expect(shown.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
-  /* ON THE SCREEN at the end edge, and not held to the edge margin there:
-     the full box runs into the margin (measured 2026-11-02: its end at
-     392.94 on a 393px Android phone and 389.81 on a 390px iPhone, against a
-     margin line at 389 and 386), which is what the ordering above predicts —
-     a box placed by the narrower content it held a moment ago. It is stated
-     here, not hidden, and the margin returns to this assertion when the
-     region form re-places after its content lands. */
-  expect(shown.right, 'the detail runs off the end of the screen').toBeLessThanOrEqual(shown.viewport.width + subPixel);
-  expect(shown.scrollWidth, 'the detail grew the document on a phone').toBe(shown.clientWidth);
+  const items = await page.evaluate((css) => {
+    const strip = window.document.querySelector('.ticker-strip').getBoundingClientRect();
+    const all = [...window.document.querySelectorAll(css)];
+    return {
+      short: all.findIndex((item) => item.getAttribute('aria-label')?.startsWith('Obor:')),
+      farEnd: all.findLastIndex((item) => item.getBoundingClientRect().right <= strip.right),
+    };
+  }, tickerItem);
+  expect(items.short, 'the staged short row is not in the band').toBeGreaterThanOrEqual(0);
+  expect(items.farEnd, 'no band item sits at the end of the strip; this lane proves nothing').toBeGreaterThan(items.short);
 
-  await item.tap();
-  const closed = await detailBox(page, selector, index);
+  /* What a reader sees is the first frame painted after the press, so every
+     reading waits for two frames to have run. */
+  const painted = () =>
+    page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  const onScreen = (shown, name) => {
+    expect(shown.open, `a tap opened no detail for ${name}`).toBe('true');
+    expect(shown.visibility, `a tap opened an invisible detail for ${name}`).toBe('visible');
+    expect(shown.top, `${name} reaches past the top edge`).toBeGreaterThanOrEqual(margin - subPixel);
+    expect(shown.left, `${name} reaches past the start edge`).toBeGreaterThanOrEqual(margin - subPixel);
+    expect(shown.right, `${name} ends at ${shown.right}px, past the end edge`).toBeLessThanOrEqual(
+      shown.viewport.width - margin + subPixel
+    );
+    expect(shown.bottom, `${name} reaches past the bottom edge`).toBeLessThanOrEqual(
+      shown.viewport.height - margin + subPixel
+    );
+    expect(shown.scrollWidth, `${name} grew the document on a phone`).toBe(shown.clientWidth);
+  };
+  const short = page.locator(tickerItem).nth(items.short);
+  const farEnd = page.locator(tickerItem).nth(items.farEnd);
+  await short.scrollIntoViewIfNeeded();
+
+  await short.tap();
+  await painted();
+  onScreen(await detailBox(page, tickerItem, items.short), 'the short readout');
+  await short.tap();
+  await painted();
+  const closed = await detailBox(page, tickerItem, items.short);
   expect(closed.open, 'a second tap left the detail open').toBe('false');
   expect(closed.visibility, 'a second tap left the detail visible').toBe('hidden');
+
+  /* Short, then long, with the readout open between them. */
+  await short.tap();
+  await painted();
+  onScreen(await detailBox(page, tickerItem, items.short), 'the short readout, reopened');
+  await farEnd.tap();
+  await painted();
+  const moved = await detailBox(page, tickerItem, items.farEnd);
+  expect(moved.text, 'the far end did not move the readout onto the staged long row').toContain(long);
+  onScreen(moved, 'the long readout at the far end');
+  await farEnd.tap();
+  await painted();
+  const gone = await detailBox(page, tickerItem, items.farEnd);
+  expect(gone.open, 'a second tap left the long readout open').toBe('false');
   await page.emulateMedia({ reducedMotion: null });
 });
 
