@@ -746,7 +746,11 @@ test('on a phone the subject takes two lines inside the taller pitch, at the she
   );
   const phoneStream = streamStyle.slice(streamStyle.indexOf('@media (max-width: 45rem) {'));
   const clamp = ruleIn(phoneStream, '.stream-title');
-  assert.match(clamp, /max-block-size: var\(--stream-pitch\);/, 'a subject can grow past the pitch that holds it');
+  /* The box ends at its second line, with no foot of padding a third line
+     could paint into: a box clips at its padding edge, and WebKit lays out
+     the lines past the clamp (preview, 2026-11-02). */
+  assert.match(clamp, /max-block-size: calc\(var\(--stream-pitch\) - var\(--stream-pad\)\);/, 'a subject can grow past the two lines the pitch holds');
+  assert.match(clamp, /padding-block-end: 0;/, 'the subject keeps a foot of padding a clamped line can paint into');
   assert.match(clamp, /-webkit-line-clamp: 2;/);
   assert.match(clamp, /line-clamp: 2;/);
   // The desktop subject is one line, ellipsized, so the one-line pitch is exact.

@@ -585,6 +585,8 @@
     --tome-book: min(46rem, calc(100% / 1.05));
     /* One leaf's edge in the stacks along the open leaf: the keep's own pixel. */
     --tome-edge-pitch: var(--keep-prop);
+    /* The dog-ear's square, which the recto's folio stands clear of. */
+    --tome-corner-size: 2.875rem;
     position: relative;
     display: grid;
     justify-items: center;
@@ -677,11 +679,13 @@
 
   /* THE FOLIO, in the foot's outer corner and inside the leaf's own bottom
      padding, so no leaf grows to hold it: right on a recto or a lone leaf,
-     left on a verso. */
+     left on a verso. On the right it stands just inside the dog-ear, which
+     owns the corner itself (the preview of 2026-11-02 showed a folio set
+     1rem in sitting under it). */
   .tome-folio {
     position: absolute;
     inset-block-end: 0.8rem;
-    inset-inline-end: 1rem;
+    inset-inline-end: calc(var(--tome-corner-size) + 0.75rem);
     font-family: var(--font-tome);
     font-size: 0.8em;
     font-variant-caps: small-caps;
@@ -1023,8 +1027,8 @@
     inset-inline-end: 0;
     inset-block-end: 0;
     z-index: 4;
-    inline-size: 2.875rem;
-    block-size: 2.875rem;
+    inline-size: var(--tome-corner-size);
+    block-size: var(--tome-corner-size);
     border-radius: 0 0 4px;
     outline: none;
     cursor: pointer;

@@ -440,10 +440,15 @@
   /* A PHONE'S SUBJECT TAKES TWO LINES before it ellipsizes, inside the taller
      pitch the phone block of styles.css restates. The plain block and its
      ceiling come first, so an engine without the line clamp still stops at
-     two lines and only loses the ellipsis. */
+     two lines and only loses the ellipsis. The box ends where its second line
+     does, with no padding under it: a box clips at its padding edge, and
+     WebKit still lays out the lines past the clamp, so a third line painted
+     into a foot of padding showed half of itself (preview, 2026-11-02). The
+     entry keeps its pitch; the foot is the entry's, not the link's. */
   @media (max-width: 45rem) {
     .stream-title {
-      max-block-size: var(--stream-pitch);
+      max-block-size: calc(var(--stream-pitch) - var(--stream-pad));
+      padding-block-end: 0;
       white-space: normal;
       overflow-wrap: anywhere;
       display: -webkit-box;

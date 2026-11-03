@@ -11946,8 +11946,12 @@ test('at 390 no stream entry spends a line it did not reserve (owner 2026-10-16;
        LINE BOXES its painted text actually occupies, merged into bands by
        whether they overlap vertically. A clamped subject is one leaf drawing
        two line boxes, which is why the line rects are read rather than the
-       leaves. Text the entry clips away is not a line a reader sees: only line
-       boxes inside the clamping ancestor's own content are counted. */
+       leaves. Text the entry clips away is not a line a reader sees, and what
+       a box clips away is what lies past its PADDING edge, so every line box
+       reaching into the clamping ancestor's padding box counts, even in part.
+       (Until 2026-11-02 this read the content box, and WebKit's third line,
+       laid out past the clamp and painted half into the subject's foot of
+       padding, was in the preview and not in this count.) */
     const lines = (row) => {
       const rects = [];
       const walker = window.document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
@@ -11957,8 +11961,8 @@ test('at 390 no stream entry spends a line it did not reserve (owner 2026-10-16;
         const clip = parent.closest('.stream-title') ?? parent;
         const clipBox = clip.getBoundingClientRect();
         const style = getComputedStyle(clip);
-        const top = clipBox.top + Number.parseFloat(style.paddingTop);
-        const bottom = clipBox.bottom - Number.parseFloat(style.paddingBottom);
+        const top = clipBox.top + Number.parseFloat(style.borderTopWidth);
+        const bottom = clipBox.bottom - Number.parseFloat(style.borderBottomWidth);
         const range = window.document.createRange();
         range.selectNodeContents(node);
         for (const rect of range.getClientRects()) {
