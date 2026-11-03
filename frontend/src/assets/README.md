@@ -13,11 +13,12 @@ read-only data volume described by ADR 0012.
 ## The Keep's surfaces
 
 The sheet is a castle wall (owner direction, 2026-10-19). Its two tiles,
-`images/keep/wall-night.webp` (113,926 bytes) and `images/keep/wall-day.webp`
-(60,650 bytes), are derived from ONE third-party photograph, credited with its
+`images/keep/wall-night.webp` (193,088 bytes) and `images/keep/wall-day.webp`
+(100,012 bytes), are derived from ONE third-party photograph, credited with its
 licence in the repository's `ATTRIBUTION.md`: cropped, made seamless, sharpened
-by local contrast, drawn at 2160x1440 for a 1440x960 tile and toned once dark
-and once pale. The frame,
+by local contrast, toned once dark and once pale, and each set over its own
+vertical mirror (2026-11-02) so it repeats down the page with no seam: drawn at
+2160x2880 for a 1440x1920 tile. The frame,
 `images/frame/castle.svg`, is castle stone drawn in pixels for this page, and
 so are the ivy and grass on it (`images/frame/ivy-*.svg`,
 `images/frame/grass-*.svg`) and the props on the sheet (`images/props/`: the

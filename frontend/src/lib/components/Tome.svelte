@@ -22,7 +22,16 @@
   the page is still. The book is flat; only a leaf in the air turns in depth. -->
 <script lang="ts">
   import type { ChronicleAccount } from '../blocks.ts';
-  import { baseBook, corbel, openingLeaves, tomeLeaves, tomeOpenings, type TomeLeaf } from '../tome.ts';
+  import {
+    baseBook,
+    corbel,
+    edgeStrips,
+    openingLeaves,
+    tomeLeaves,
+    tomeOpenings,
+    toRoman,
+    type TomeLeaf
+  } from '../tome.ts';
   import { chainReach, drawBase, drawChain, tomePaletteTokens, type TomePalette } from '../tomeDraw.ts';
 
   let {
@@ -45,6 +54,8 @@
   const leaves = $derived(tomeLeaves(accounts));
   const openings = $derived(tomeOpenings(leaves.length, single));
   const shown = $derived(showing ?? openingLeaves(Math.min(opening, openings - 1), single));
+  /* The stacked edges of the leaves ahead and behind (issue 399). */
+  const edges = $derived(edgeStrips(opening, openings, single, leaves.length));
 
   let root = $state<HTMLDivElement>();
   let pages = $state<HTMLDivElement>();
@@ -523,8 +534,21 @@
               {/each}
             </ul>
           {/if}
+          <!-- The leaf's folio, in the foot's outer corner. Decoration to
+            assistive technology: the leaf's own name already says where the
+            reader is. -->
+          <span class="tome-folio" aria-hidden="true">{toRoman(index + 1)}</span>
         </section>
       {/each}
+      <!-- THE BOOK SAYS IT HAS MORE LEAVES (owner, 2026-11-02, issue 399:
+        "this is a book, so use that"): the edges of the leaves still to turn
+        stand along the open leaf's outer edge, and those already turned along
+        its other edge, a leaf to a line. Out of flow, so a turn that changes
+        the count moves nothing else. -->
+      <div class="tome-edges" aria-hidden="true">
+        <span class="tome-edge" data-edge="ahead" style:--tome-edge-count={edges.ahead}></span>
+        <span class="tome-edge" data-edge="behind" style:--tome-edge-count={edges.behind}></span>
+      </div>
       <i class="tome-cast" data-side="right" aria-hidden="true"></i>
       <i class="tome-cast" data-side="left" aria-hidden="true"></i>
       <div class="tome-leaves" bind:this={leafLayer} aria-hidden="true"></div>
@@ -559,6 +583,13 @@
      which overhangs it, leaves the trackers' box. */
   .tome {
     --tome-book: min(46rem, calc(100% / 1.05));
+    /* One leaf's edge in the stacks along the open leaf: two of the keep's
+       pixels, one of vellum and one of its deeper shade. One pixel a leaf drew
+       two or three leaves as a 4–6px hairline nobody could read (the
+       preview of 2026-11-02, cropped). */
+    --tome-edge-pitch: calc(2 * var(--keep-prop));
+    /* The dog-ear's square, which the recto's folio stands clear of. */
+    --tome-corner-size: 2.875rem;
     position: relative;
     display: grid;
     justify-items: center;
@@ -600,6 +631,7 @@
   }
 
   .tome-page {
+    position: relative;
     grid-row: 1;
     display: flex;
     flex-direction: column;
@@ -646,6 +678,67 @@
 
   .tome-page[data-pending='true'] .tome-words {
     visibility: hidden;
+  }
+
+  /* THE FOLIO, in the foot's outer corner and inside the leaf's own bottom
+     padding, so no leaf grows to hold it: right on a recto or a lone leaf,
+     left on a verso. On the right it stands just inside the dog-ear, which
+     owns the corner itself (the preview of 2026-11-02 showed a folio set
+     1rem in sitting under it). */
+  .tome-folio {
+    position: absolute;
+    inset-block-end: 0.8rem;
+    inset-inline-end: calc(var(--tome-corner-size) + 0.75rem);
+    font-family: var(--font-tome);
+    font-size: 0.8em;
+    font-variant-caps: small-caps;
+    line-height: 1;
+    color: var(--palette-keep-ink-brown);
+  }
+
+  .tome-page[data-side='left'] .tome-folio {
+    inset-inline-end: auto;
+    inset-inline-start: 1rem;
+  }
+
+  /* THE STACKED EDGES: a strip along each side of the open leaves, as wide as
+     the leaves it stands for, every leaf a band of vellum and one of its
+     deeper shade. A count of nought is no strip at all. The stack stands in
+     the leaf's own side padding and never reaches its text: lib/tome.ts caps
+     it at three leaves, which the narrowest padding (a phone's 0.9375rem end
+     edge) holds, and tests/token-usage.test.mjs does that sum. */
+  .tome-edges {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  .tome-edge {
+    position: absolute;
+    inset-block: 0;
+    inline-size: calc(var(--tome-edge-count) * var(--tome-edge-pitch));
+    background: repeating-linear-gradient(
+      to right,
+      var(--palette-keep-vellum) 0 var(--keep-prop),
+      var(--palette-keep-vellum-deep) var(--keep-prop) var(--tome-edge-pitch)
+    );
+  }
+
+  .tome-edge[data-edge='ahead'] {
+    inset-inline-end: 0;
+  }
+
+  .tome-edge[data-edge='behind'] {
+    inset-inline-start: 0;
+  }
+
+  /* A turn changes the counts; where motion is welcome the stacks ease to
+     them, and otherwise they simply change. */
+  @media (prefers-reduced-motion: no-preference) {
+    .tome-edge {
+      transition: inline-size 300ms;
+    }
   }
 
   /* THE TITLE, with its initial: a blackletter capital in lapis on a square
@@ -940,8 +1033,8 @@
     inset-inline-end: 0;
     inset-block-end: 0;
     z-index: 4;
-    inline-size: 2.875rem;
-    block-size: 2.875rem;
+    inline-size: var(--tome-corner-size);
+    block-size: var(--tome-corner-size);
     border-radius: 0 0 4px;
     outline: none;
     cursor: pointer;

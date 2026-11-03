@@ -78,10 +78,11 @@ on Unsplash (published 2026-05-24), used under the
 [Unsplash License](https://unsplash.com/license), which permits free use,
 including modification, without permission. The photograph itself is not
 vendored: `frontend/src/assets/images/keep/wall-night.webp` and
-`wall-day.webp` are 2160x1440 derivatives of the wall above the grass, made
+`wall-day.webp` are 2160x2880 derivatives of the wall above the grass, made
 seamless, sharpened by local contrast and toned to two narrow bands of
-brightness so the page's text keeps its contrast on them. Thanks to the
-photographer.
+brightness so the page's text keeps its contrast on them; each is the
+2160x1440 derivative over its own vertical mirror, so the wall repeats down
+the page without a seam (2026-11-02). Thanks to the photographer.
 
 ## Old School RuneScape boss icons
 
@@ -107,10 +108,12 @@ the strip's lead, at the owner's word; it remains in the history.
 ### The reviewed batch (2026-08-20, issue #78)
 
 The panel serves every row the hiscores report, and the icon set covers all of
-them: **71 boss icons, 404,452 bytes in total**. Six were already vendored and
-are unchanged; that batch added the other 65 (369,141 bytes). Every file is the
-wiki's own thumbnail bytes, unmodified — nothing was re-encoded, recoloured, or
-cropped — so any reviewer can re-derive the exact bytes.
+them: **72 boss icons, 408,781 bytes in total**. Six were already vendored and
+are unchanged; that batch added the other 65 (369,141 bytes), and The Fractured
+Archive joined them on 2026-11-02 when the hiscores began reporting it (issue
+#399, 4,329 bytes). Every file is the wiki's own thumbnail bytes, unmodified —
+nothing was re-encoded, recoloured, or cropped — so any reviewer can re-derive
+the exact bytes.
 
 **The skills directory is retired (2026-09-03, issue #287.)** The batch also
 vendored 25 skill icons (5,673 bytes), for a levels grid the owner has since
@@ -126,7 +129,7 @@ wiki page named by the hiscores row, requested through the MediaWiki API at
 set to exactly the rows the origin serves — in both directions, so a missing
 icon and an orphaned one both fail.
 
-Twenty-three boss rows do not name their own wiki file, and each is recorded
+Twenty-four boss rows do not name their own wiki file, and each is recorded
 here rather than left to be rediscovered:
 
 | Hiscores row | Wiki file |
@@ -148,6 +151,7 @@ here rather than left to be rediscovered:
 | Shellbane Gryphon | `Shellbane_gryphon.png` |
 | The Gauntlet | `Crystalline Hunllef.png` |
 | The Corrupted Gauntlet | `Corrupted Hunllef.png` |
+| The Fractured Archive | `The_Fractured_Archive_logo.png` |
 | The Royal Titans | `Eldric_the_Ice_King.png` |
 | Theatre of Blood: Hard Mode | `Theatre of Blood logo.png` |
 | Thermonuclear Smoke Devil | `Thermonuclear_smoke_devil.png` |

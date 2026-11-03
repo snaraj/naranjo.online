@@ -37,6 +37,62 @@ export function openingLeaves(opening: number, single: boolean): number[] {
   return single ? [opening] : [opening * 2, opening * 2 + 1];
 }
 
+/* THE LEAVES STILL TO TURN, AND THE ONES TURNED (owner, 2026-11-02, issue
+ * #399: "on the phone it needs to be more readable that there are more pages;
+ * this is a book, so use that"). An open book shows them as the edges of its
+ * stacked leaves: those ahead under the open leaf's outer edge, those behind
+ * under its other edge. Counted in LEAVES on a spread as on a phone, so a pair
+ * turned is two edges, and capped, because past a handful of leaves a stack
+ * says "more" and not how many. The cap is three because the stack stands in
+ * the leaf's side padding: at two of the keep's pixels a leaf, three leaves
+ * are 12px, inside the narrowest padding (a phone leaf's 0.9375rem end edge),
+ * and a fourth would reach the text. */
+export function edgeStrips(
+  opening: number,
+  openings: number,
+  single: boolean,
+  leaves: number,
+  cap = 3
+): { ahead: number; behind: number } {
+  const at = Math.min(Math.max(0, opening), Math.max(0, openings - 1));
+  const shown = openingLeaves(at, single);
+  const first = shown[0];
+  const last = Math.min(shown[shown.length - 1], leaves - 1);
+  return {
+    ahead: Math.min(cap, Math.max(0, leaves - 1 - last)),
+    behind: Math.min(cap, Math.max(0, first))
+  };
+}
+
+/* A leaf's folio in roman numerals, written small: the book's own way of
+ * numbering its leaves, set in small capitals at the foot. */
+export function toRoman(value: number): string {
+  const numerals: readonly (readonly [number, string])[] = [
+    [1000, 'm'],
+    [900, 'cm'],
+    [500, 'd'],
+    [400, 'cd'],
+    [100, 'c'],
+    [90, 'xc'],
+    [50, 'l'],
+    [40, 'xl'],
+    [10, 'x'],
+    [9, 'ix'],
+    [5, 'v'],
+    [4, 'iv'],
+    [1, 'i']
+  ];
+  let rest = Math.floor(value);
+  let written = '';
+  for (const [worth, numeral] of numerals) {
+    while (rest >= worth) {
+      written += numeral;
+      rest -= worth;
+    }
+  }
+  return written;
+}
+
 /* The base is drawn in units in which the open tome is this wide, so it
  * scales with the tome and its stone and iron keep their proportions. */
 export const baseBook = { spread: 800, single: 520 } as const;

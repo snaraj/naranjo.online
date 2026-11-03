@@ -485,6 +485,32 @@ test('the detail follows a fine pointer and is anchored for everyone else', () =
   );
 });
 
+/* THE READOUT IS MEASURED AGAIN ONCE IT HAS LANDED (2026-11-02, issue 399).
+ * A region caller's select() writes reactive state and the framework renders
+ * the new readout after the handler returns, so the box reveal() places is
+ * the previous readout's size: the hosted Android lane measured a long one
+ * ending at 399.17px on a 393px viewport. Every opening schedules one frame
+ * that measures the box again and re-places it when its size moved — once,
+ * not per event (a pending one is cancelled first), and never after a close
+ * (hide() cancels it, and the callback asks whether the box is still shown).
+ * The browser lanes measure the result at the screen's edges; this pins the
+ * mechanism, so a refactor that drops it fails here as well as there. */
+test('an opening measures the readout again once it has rendered, before the frame paints', () => {
+  const reveal = /function reveal\([\s\S]*?\n  \}/.exec(tooltipSource);
+  assert.ok(reveal, 'reveal() is not where this pin expects it');
+  assert.match(reveal[0], /place\([\s\S]*?\);\s*resettle\(pointer\);/, 'an opening no longer measures its readout again after it lands');
+  const resettle = /function resettle\([\s\S]*?\n  \}/.exec(tooltipSource);
+  assert.ok(resettle, 'resettle() is not where this pin expects it');
+  assert.match(resettle[0], /if \(settling !== 0\) \{\s*view\.cancelAnimationFrame\(settling\);\s*\}\s*settling = view\.requestAnimationFrame\(/, 'a second opening schedules a second frame instead of replacing the first');
+  assert.match(resettle[0], /if \(!shown\) \{\s*return;\s*\}/, 'a closed readout is re-placed');
+  assert.match(resettle[0], /const box = node\.getBoundingClientRect\(\);/, 'the landed readout is not measured');
+  assert.match(resettle[0], /anchoredPlacement\(anchor, size, viewport, metrics\)/);
+  assert.match(resettle[0], /pointerPlacement\(at, size, viewport, metrics\)/);
+  const hide = /function hide\([\s\S]*?\n  \}/.exec(tooltipSource);
+  assert.ok(hide, 'hide() is not where this pin expects it');
+  assert.match(hide[0], /if \(settling !== 0\) \{\s*view\.cancelAnimationFrame\(settling\);\s*settling = 0;\s*\}/, 'a close leaves the re-measure scheduled');
+});
+
 test('a caller that resolves many subjects must also say which one a focus landed on', () => {
   /* The contract behind the driven path, executed rather than described.
      Without a refusal this is a comment, and the failure it prevents is a

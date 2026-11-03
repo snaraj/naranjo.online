@@ -100,18 +100,18 @@ const dataDrivenNames = {
      left the page with that head (owner, 2026-10-19: "remove this heading …
      remove the icons there as well"), so the family no longer carries it. */
   '../src/page.ts': ['work', 'folder', 'chip', 'photo'],
-  /* The repositories' figure glyphs (issue 317), chosen by the adapter. The
-     component's own row of head marks that spelled the same four left with
-     the spreadsheet look (owner direction, 2026-10-16): each figure carries
-     its mark beside its value now, so the four arrive as data only. */
-  '../src/lib/projects.ts': ['star', 'pull', 'tag', 'clock'],
+  /* The stream's three filters (owner, 2026-11-02, issue #399), chosen by the
+     adapter. The repositories' figure glyphs that drew the star and the clock
+     left with the repository column; `pull` and `tag` stayed, as the filters'
+     marks and as an entry's kind and release (below). */
+  '../src/lib/commits.ts': ['list', 'pull', 'tag'],
+  /* An entry's kind mark: a commit, or a day of private work. */
+  '../src/lib/components/Stream.svelte': ['pull', 'folder'],
   /* The records card's mark, decided by the adapter. The board's own title
      mark left with the title (owner directive, 2026-09-12, issue 323); `chip`
      itself did not leave the page — the Trackers section head draws it, one
      line above, which is where the page names the thing this board counts. */
   '../src/lib/token-usage.ts': ['sessions'],
-  /* The gallery segment's mark, derived from what the set holds. */
-  '../src/lib/components/MediaGallery.svelte': ['photo', 'film'],
   /* The disclosure chevron, which points at what pressing the row does. */
   '../src/lib/components/LedgerLog.svelte': ['chevron-down', 'chevron-up'],
 };
@@ -460,7 +460,7 @@ test('a link that is already words grows no trailing mark', () => {
      calendar block left this list with the block itself, 2026-10-16: the
      Chronicle that draws the calendar now carries no link.) */
   for (const file of [
-    'lib/components/LedgerSpread.svelte',
+    'lib/components/Stream.svelte',
   ]) {
     for (const control of controls(componentSources[file])) {
       if (control.tag !== 'a') continue;
@@ -505,10 +505,21 @@ test('the words the marks replaced are still on the page or in its accessibility
      user navigates a page by. */
   assert.match(head, /<span class="section-number" aria-hidden="true"\s*><Icon name=\{section\.mark\}/);
 
-  /* The gallery segment: the mark and the figure are what the eye gets, the
-     set's word and the same figure are what the ear gets. */
+  /* The gallery's set switch left with the mosaic (owner, 2026-11-02, issue
+     #399: drawings and films in one grid), and its words with it. A tile is a
+     picture with no word on it, so its own name says what it holds and what
+     pressing it does; a film's play mark is decoration beside that name. */
   const gallery = componentSources['lib/components/MediaGallery.svelte'];
-  assert.match(gallery, /aria-label=\{`\$\{name\} · \$\{countOf\(name\)\}`\}/);
+  assert.match(gallery, /aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}/);
+  assert.match(gallery, /<span class="gallery-play-disc" aria-hidden="true">/);
+  assert.doesNotMatch(markup(gallery), /gallery-set\b|aria-label="Media set"/, 'the gallery grew its set switch back');
+
+  /* THE STREAM'S FILTERS are marks with no word printed: each filter's word is
+     its accessible name, and its drawing is hidden from assistive technology,
+     so a screen reader hears "Releases" where the eye reads a tag. */
+  const stream = componentSources['lib/components/Stream.svelte'];
+  assert.match(stream, /aria-label=\{filter\.label\}/);
+  assert.match(stream, /<svg class="stream-glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">/);
 
   /* The organisation's mark is named for the organisation (issue 326: the
      tiles land "named"), with the same short name the heading prints, and the

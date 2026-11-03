@@ -36,6 +36,7 @@ import {
   windowTerm
 } from '../src/lib/token-usage.ts';
 import { contributionCalendarProps, tokenSetLabel } from '../src/lib/commits.ts';
+import { edgeStrips, tomeOpenings } from '../src/lib/tome.ts';
 import {
   formatMagnitude,
   formatMagnitudeFixed,
@@ -343,6 +344,55 @@ describe('the board of cards: source contract', () => {
     assert.match(tome, /const leaves = \$derived\(tomeLeaves\(accounts\)\);/);
     assert.match(tome, /\{#each leaves as leaf, index \(`\$\{leaf\.kind\}-\$\{leaf\.account\.key\}`\)\}/);
     assert.match(tome, /leaf\.account\.label/);
+    /* THE BOOK SAYS IT HAS MORE LEAVES (owner, 2026-11-02, issue 399: "this is
+       a book, so use that"): one stack of edges for the leaves still to turn
+       and one for those turned, counted by lib/tome.ts (executed in
+       tests/tome.test.mjs), and a folio in every leaf's foot — decoration to
+       assistive technology, out of the flow so no leaf grows. No dots, no
+       counter, no instruction. */
+    assert.equal((tome.match(/<div class="tome-edges" aria-hidden="true">/g) ?? []).length, 1, 'the tome draws a number of edge stacks other than one');
+    assert.match(
+      tome,
+      /<span class="tome-edge" data-edge="ahead" style:--tome-edge-count=\{edges\.ahead\}><\/span>\s*<span class="tome-edge" data-edge="behind" style:--tome-edge-count=\{edges\.behind\}><\/span>/,
+      'the tome lost one of its two stacks of edges'
+    );
+    assert.match(tome, /const edges = \$derived\(edgeStrips\(opening, openings, single, leaves\.length\)\);/);
+    const leafMarkup = /<section\s+class=\{leaf\.kind[\s\S]*?<\/section>/.exec(tome)?.[0] ?? '';
+    assert.match(leafMarkup, /<span class="tome-folio" aria-hidden="true">\{toRoman\(index \+ 1\)\}<\/span>/, 'a leaf no longer prints its folio');
+    const tomeStyle = /<style>([\s\S]*?)<\/style>/.exec(tome)?.[1] ?? '';
+    assert.match(tomeStyle, /\.tome-folio \{[^}]*position: absolute;[^}]*font-variant-caps: small-caps;/);
+    assert.match(tomeStyle, /\.tome-edge \{[^}]*position: absolute;[^}]*inline-size: calc\(var\(--tome-edge-count\) \* var\(--tome-edge-pitch\)\);/);
+    /* A LEAF'S EDGE IS READABLE, AND THE STACK NEVER REACHES THE TEXT (the
+       preview of 2026-11-02, cropped: at one pixel a leaf, two or three
+       leaves were a 4–6px hairline). A leaf is two of the keep's pixels, a
+       band of vellum and one of its deeper shade, and the default cap times
+       that pitch fits inside the narrowest side padding any leaf has, read
+       from every .tome-page rule — so a wider pitch, a higher cap or a
+       tighter padding that lets the stack touch the words fails here. */
+    assert.match(tomeStyle, /--tome-edge-pitch: calc\(2 \* var\(--keep-prop\)\);/, 'a leaf’s edge is no longer two of the keep’s pixels');
+    assert.match(
+      tomeStyle,
+      /var\(--palette-keep-vellum\) 0 var\(--keep-prop\),\s*var\(--palette-keep-vellum-deep\) var\(--keep-prop\) var\(--tome-edge-pitch\)/,
+      'a leaf’s edge is not a band of vellum and a band of its deeper shade'
+    );
+    const prop = Number(/--keep-prop: (\d+(?:\.\d+)?)px;/.exec(sheet)?.[1]);
+    assert.ok(prop > 0, 'the keep’s pixel is not read off the sheet');
+    const cap = edgeStrips(50, tomeOpenings(100, true), true, 100).ahead;
+    const sides = [...tomeStyle.matchAll(/\.tome-page \{[^}]*?padding: ([^;]+);/g)].flatMap(([, value]) => {
+      const parts = value.trim().split(/\s+/).map((part) => {
+        const rem = /^(\d+(?:\.\d+)?)rem$/.exec(part);
+        assert.ok(rem, `a leaf padding of "${part}" is not in rem, so this sum cannot read it`);
+        return Number(rem[1]) * 16;
+      });
+      const [, end = parts[0], , start = end] = parts;
+      return [end, start];
+    });
+    assert.ok(sides.length >= 4, 'the leaves’ paddings, on a spread and on a phone, are not where this pin reads them');
+    assert.ok(
+      cap * 2 * prop <= Math.min(...sides),
+      `a stack of ${cap} leaves is ${cap * 2 * prop}px, wider than the ${Math.min(...sides)}px side padding it stands in`
+    );
+    assert.doesNotMatch(tome, /tome-dot|tome-counter|of \{openings\}/, 'the tome counts its leaves in words or dots');
     const rendered = tokenBoardProps(envelopeFor(shippedPayload));
     const perSource = rendered.cards.filter((card) => card.key.startsWith('source-'));
     assert.deepEqual(

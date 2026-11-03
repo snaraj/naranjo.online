@@ -31,14 +31,14 @@ an obstacle.
 1. **Data + adapter** — put the data (or the panel parsing) in a module
    under `frontend/src/lib/`, and beside it a pure adapter that returns one
    of the props shapes in `frontend/src/lib/blocks.ts` (`LedgerLogProps`,
-   `LedgerSpreadProps`, `ContributionCalendarProps`, `LedgerBoardProps`,
+   `StreamProps`, `ContributionCalendarProps`, `LedgerBoardProps`,
    `TickerProps`, `MediaGalleryProps`). Pure means node can execute it: the
    unit suites drive adapters directly.
 2. **Binding** — add a module under `frontend/src/lib/blocks/` that calls
    `staticBlock(...)` (build-time data), `panelBlock(...)` (a live panel id
    plus the adapter), `panelsBlock(...)` (SEVERAL panel ids plus an adapter
-   that receives their envelopes in that order — the Projects · Commits
-   section reads two, and so does the contribution calendar), or
+   that receives their envelopes in that order — the Ongoing Work stream
+   reads two, and so does the contribution calendar), or
    `runtimeBlock(...)` (build-time props plus a one-shot runtime read). This
    is the one place the component, the data and the domain name meet.
 3. **Mount** — add the block to a section in `frontend/src/page.ts`.

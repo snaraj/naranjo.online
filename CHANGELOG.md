@@ -7,6 +7,39 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.102] - 2026-11-02
+
+### Added
+
+- The book of accounts shows it has more leaves: the edges of the leaves still
+  to turn stand along the open leaf's outer edge and those already turned along
+  its other edge, one line to a leaf, and every leaf prints its folio in small
+  roman numerals at its foot. No dots, no counter (#399).
+- The Fractured Archive's icon, the wiki's lead image at the set's thumbnail
+  size, so the boss strip no longer prints its initials for it (#399).
+
+### Changed
+
+- Ongoing Work is one stream. The repositories and the commits became one
+  dated list, newest first, five entries a page with a pager, and three marks
+  at its head filter it to everything, the commits or the releases; a pressed
+  mark shines and throws three sparks where motion is welcome. A commit that is
+  its repository's latest release carries the version. The repositories' own
+  cells (closed pull requests, stars, description) no longer render, and the
+  scroll box and the phone's "show all" control are gone. The repositories
+  query also reads each latest release's publication instant and the commit
+  its tag names, served as two optional fields of `coding-projects/v2` (#399).
+- The gallery is a mosaic. Drawings and films share one grid in manifest
+  order, five a page in squares and wide tiles that fill every row and never
+  stand taller than they are wide at any width, turned by the same pager; the
+  switch between them is gone (#399).
+
+### Fixed
+
+- The castle wall no longer draws a hard line across the sheet every 960px
+  where its picture repeats: each wall is now its picture over its own mirror,
+  so one tile ends on the row the next begins with (#399).
+
 ## [0.1.101] - 2026-11-02
 
 ### Added

@@ -6,7 +6,18 @@
  * straight line between them, its links alternating at an even pitch. */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { baseBook, catenary, chainLinks, cloth, corbel, openingLeaves, tomeLeaves, tomeOpenings } from '../src/lib/tome.ts';
+import {
+  baseBook,
+  catenary,
+  chainLinks,
+  cloth,
+  corbel,
+  edgeStrips,
+  openingLeaves,
+  tomeLeaves,
+  tomeOpenings,
+  toRoman
+} from '../src/lib/tome.ts';
 
 const account = (key) => ({ key, label: key, total: '1', facts: [], lines: [], models: [] });
 
@@ -121,4 +132,47 @@ test('the links alternate face-on and edge-on at an even pitch, each turned to p
     }
   }
   assert.equal(chainLinks(catenary([0, 0], [4, 0], 1.1), thickness).links.length, 3, 'a short chain has fewer than three links');
+});
+
+/* THE BOOK SAYS IT HAS MORE LEAVES (owner, 2026-11-02, issue 399: "this is a
+ * book, so use that"). The stacks along the open leaves count LEAVES — on a
+ * spread a turned pair is two edges, as it is two leaves — at the first, a
+ * middle and the last opening, on a phone and on a spread, and never more
+ * than the cap however long the book. */
+test('the stacked edges count the leaves ahead and behind, on a phone and on a spread', () => {
+  const leaves = 6;
+  // Counted with the cap out of the way (as many as the book has), so the
+  // count is under test here and the cap below.
+  const edges = (opening, single) => edgeStrips(opening, tomeOpenings(leaves, single), single, leaves, leaves);
+  // A phone turns one leaf at a time: five ahead of the first, five behind the last.
+  assert.deepEqual(edges(0, true), { ahead: 5, behind: 0 });
+  assert.deepEqual(edges(2, true), { ahead: 3, behind: 2 });
+  assert.deepEqual(edges(5, true), { ahead: 0, behind: 5 });
+  // A spread shows two: the pair it holds is neither ahead nor behind.
+  assert.deepEqual(edges(0, false), { ahead: 4, behind: 0 });
+  assert.deepEqual(edges(1, false), { ahead: 2, behind: 2 });
+  assert.deepEqual(edges(2, false), { ahead: 0, behind: 4 });
+  // An odd count leaves the last spread one page short, and nothing is ahead of it.
+  assert.deepEqual(edgeStrips(1, tomeOpenings(3, false), false, 3), { ahead: 0, behind: 2 });
+  // An opening past either end is read as the nearest real one.
+  assert.deepEqual(edgeStrips(9, tomeOpenings(leaves, true), true, leaves, leaves), { ahead: 0, behind: 5 });
+  assert.deepEqual(edgeStrips(-1, tomeOpenings(leaves, true), true, leaves, leaves), { ahead: 5, behind: 0 });
+  // A long book says "more", not how many: both stacks stop at the cap, three
+  // by default — what the narrowest leaf padding holds, a sum
+  // token-usage.test.mjs does against the stylesheet.
+  assert.deepEqual(edgeStrips(10, tomeOpenings(30, true), true, 30), { ahead: 3, behind: 3 });
+  assert.deepEqual(edgeStrips(0, tomeOpenings(leaves, true), true, leaves), { ahead: 3, behind: 0 });
+  assert.deepEqual(edgeStrips(10, tomeOpenings(30, true), true, 30, 5), { ahead: 5, behind: 5 });
+  // A book with no leaves, or one, has no stack at all.
+  assert.deepEqual(edgeStrips(0, tomeOpenings(0, true), true, 0), { ahead: 0, behind: 0 });
+  assert.deepEqual(edgeStrips(0, tomeOpenings(1, false), false, 1), { ahead: 0, behind: 0 });
+});
+
+test('a leaf’s folio is its number in roman numerals, written small', () => {
+  assert.deepEqual(
+    Array.from({ length: 12 }, (_, index) => toRoman(index + 1)),
+    ['i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x', 'xi', 'xii']
+  );
+  assert.equal(toRoman(40), 'xl');
+  assert.equal(toRoman(1994), 'mcmxciv');
 });

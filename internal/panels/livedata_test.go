@@ -841,6 +841,8 @@ type queriedRepo struct {
 	stars       int
 	pushedAt    string // "" serves JSON null: a repository never pushed
 	release     string // "" serves a null latestRelease: never released
+	releasedAt  string // "" serves a null publishedAt
+	releaseSHA  string // "" serves a null tagCommit
 	closedPulls int
 }
 
@@ -854,7 +856,14 @@ func repositoriesAnswer(rows ...queriedRepo) string {
 		}
 		release := "null"
 		if row.release != "" {
-			release = fmt.Sprintf(`{"tagName":%q}`, row.release)
+			published, commit := "null", "null"
+			if row.releasedAt != "" {
+				published = fmt.Sprintf("%q", row.releasedAt)
+			}
+			if row.releaseSHA != "" {
+				commit = fmt.Sprintf(`{"oid":%q}`, row.releaseSHA)
+			}
+			release = fmt.Sprintf(`{"tagName":%q,"publishedAt":%s,"tagCommit":%s}`, row.release, published, commit)
 		}
 		entries = append(entries, fmt.Sprintf(`{"name":%q,"description":%s,"isPrivate":%t,`+
 			`"stargazerCount":%d,"pushedAt":%s,"latestRelease":%s,"pullRequests":{"totalCount":%d}}`,
@@ -1352,6 +1361,74 @@ func TestTheServedRowsCarryTheReleaseAndClosedPullTally(t *testing.T) {
 	// the wire.
 	if total := doer.total(); total != 1 {
 		t.Errorf("the round made %d requests, want 1", total)
+	}
+}
+
+// TestTheServedRowsCarryTheReleaseCommit is issue #399's claim: a release's
+// publication instant and the commit its tag names ride the row beside the
+// tag, the instant served in UTC, and each one that is malformed is dropped
+// ON ITS OWN while the tag survives, because a version whose commit cannot be
+// vouched for is still a version; it just marks no commit on the page.
+func TestTheServedRowsCarryTheReleaseCommit(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	sha := strings.Repeat("b93ba24f", 5)
+	doer := newCapturingDoer(map[string]cannedAnswer{
+		"/graphql/repositories": {contentType: "application/json", body: repositoriesAnswer(
+			queriedRepo{name: "alpha", description: `"a"`, pushedAt: "2026-08-29T10:00:00Z", release: "v1.2.3", releasedAt: "2026-08-29T03:04:05-07:00", releaseSHA: sha},
+			queriedRepo{name: "beta", description: `"b"`, pushedAt: "2026-08-29T09:00:00Z", release: "v2", releasedAt: "yesterday", releaseSHA: strings.ToUpper(sha)},
+			queriedRepo{name: "gamma", description: `"c"`, pushedAt: "2026-08-29T08:00:00Z", release: "v3", releasedAt: "2026-08-28T10:00:00Z", releaseSHA: sha[:7]},
+			queriedRepo{name: "delta", description: `"d"`, pushedAt: "2026-08-29T07:00:00Z", release: "v4"},
+		)},
+	})
+	loaded, err := queryingProjectsSource(t).refreshProjects(t.Context(), doer, func(name string) string {
+		if name == "FIXTURE_PROJECTS_TOKEN" {
+			return "fixture-token-value"
+		}
+		return ""
+	}, now)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if loaded.status != StatusOK {
+		t.Errorf("status = %q, want ok: a dropped release field is not a refused row", loaded.status)
+	}
+	rows := decodeProjects(t, loaded).Repos
+	if len(rows) != 4 {
+		t.Fatalf("%d rows served, want all 4: a malformed release field must never cost the row", len(rows))
+	}
+	for _, testCase := range []struct {
+		row                      CodingProject
+		release, releasedAt, sha string
+	}{
+		{rows[0], "v1.2.3", "2026-08-29T10:04:05Z", sha},
+		{rows[1], "v2", "", ""},
+		{rows[2], "v3", "2026-08-28T10:00:00Z", ""},
+		{rows[3], "v4", "", ""},
+	} {
+		if testCase.row.Release != testCase.release {
+			t.Errorf("%s release = %q, want %q: the tag survives a bad instant or commit", testCase.row.Name, testCase.row.Release, testCase.release)
+		}
+		if testCase.row.ReleasedAt != testCase.releasedAt {
+			t.Errorf("%s releasedAt = %q, want %q", testCase.row.Name, testCase.row.ReleasedAt, testCase.releasedAt)
+		}
+		if testCase.row.ReleaseSHA != testCase.sha {
+			t.Errorf("%s releaseSha = %q, want %q", testCase.row.Name, testCase.row.ReleaseSHA, testCase.sha)
+		}
+	}
+	// Absent is absent on the wire, too: the row that carries neither field
+	// serializes no key for either, so a consumer written before them reads
+	// the document it always read.
+	var raw struct {
+		Repos []map[string]json.RawMessage `json:"repos"`
+	}
+	if err := json.Unmarshal(loaded.data, &raw); err != nil {
+		t.Fatalf("decode served payload: %v", err)
+	}
+	for _, key := range []string{"releasedAt", "releaseSha"} {
+		if _, present := raw.Repos[3][key]; present {
+			t.Errorf("delta serialized an absent %s as a key", key)
+		}
 	}
 }
 

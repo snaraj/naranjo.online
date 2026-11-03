@@ -22,10 +22,9 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import test from 'node:test';
 
-import { relativeAge } from '../src/lib/age.ts';
 import { section, sectionOrdinal, staticBlock } from '../src/lib/blocks.ts';
 import { spreadFromRem, spreadMediaQuery } from '../src/lib/columnWidth.ts';
-import { commitColumnHead, commitColumnId, projectsCommitsProps } from '../src/lib/commits.ts';
+import { commitColumnId, projectsCommitsProps } from '../src/lib/commits.ts';
 import { feedCardRegions, feedCardVariants, formatIsoDate } from '../src/lib/feed.ts';
 import {
   roleLedgerProps,
@@ -34,19 +33,7 @@ import {
   workEntries,
   workExpandLabel,
 } from '../src/lib/work.ts';
-import {
-  codingProjectsPanelId,
-  projectColumns,
-  projectHost,
-  projectLinkLabel,
-  projects,
-  projectsCapturedOn,
-  projectsEmptyNote,
-  projectColumnHead,
-  projectTableProps,
-  projectUrl,
-  shownProjectRows,
-} from '../src/lib/projects.ts';
+import { codingProjectsPanelId, parseCodingProjects, projectHost } from '../src/lib/projects.ts';
 import {
   galleryHeight,
   galleryLicenseNote,
@@ -106,7 +93,7 @@ const [
   pageSectionSource,
   blockHost,
   ledgerLog,
-  ledgerSpread,
+  stream,
   mediaGallery,
 ] = await Promise.all([
   read('../src/App.svelte'),
@@ -116,7 +103,7 @@ const [
   read('../src/lib/components/PageSection.svelte'),
   read('../src/lib/components/Block.svelte'),
   read('../src/lib/components/LedgerLog.svelte'),
-  read('../src/lib/components/LedgerSpread.svelte'),
+  read('../src/lib/components/Stream.svelte'),
   read('../src/lib/components/MediaGallery.svelte'),
 ]);
 
@@ -131,7 +118,8 @@ const [workBinding, mediaBinding, projectsBinding, galleryModule] = await Promis
      the block that mounts it is named for the media it carries. */
   read('../src/lib/blocks/mediaGallery.ts'),
   /* Renamed with ITS section too (owner design decision, 2026-09-11, issue
-     318): the repositories and the commit log are one two-column block now. */
+     318); one stream of entries since the owner's direction of 2026-11-02
+     (issue #399). */
   read('../src/lib/blocks/projectsCommits.ts'),
   /* The data module is executed above; its SOURCE is read too, because the
      optionality of a TypeScript field is erased before Node ever sees it —
@@ -154,10 +142,14 @@ const [chronicle, ticker, tome] = await Promise.all([
   read('../src/lib/components/Tome.svelte'),
 ]);
 
+/* The pager the stream and the mosaic share (issue #399). No block binds it,
+   so it is not a content component; it is swept with the chrome below. */
+const pager = await read('../src/lib/components/Pager.svelte');
+
 const contentComponents = {
   Chronicle: chronicle,
   LedgerLog: ledgerLog,
-  LedgerSpread: ledgerSpread,
+  Stream: stream,
   Ticker: ticker,
   MediaGallery: mediaGallery,
 };
@@ -171,6 +163,7 @@ const introduced = {
   FeedCard: feedCard,
   PageSection: pageSectionSource,
   Block: blockHost,
+  Pager: pager,
   ...contentComponents,
 };
 
@@ -317,9 +310,9 @@ test('the empty About Me section is gone, and nothing renders in its place', asy
 /* THE OLD ADDRESS KEEPS RESOLVING (issue 287's rule: never break a URL).
  * `#commits` named a section of its own until the owner's design decision of
  * 2026-09-11 (issue 318) paired it with Projects, and a reader who bookmarked
- * or shared that fragment must still land on the commits. So the COLUMN wears
- * the id: the adapter names it once, hands it through as data, and the
- * component renders it on the log's own wrapper.
+ * or shared that fragment must still land on the commits. So the STREAM wears
+ * the id (one stream since issue #399): the adapter names it once, hands it
+ * through as data, and the component renders it on the stream's own root.
  *
  * It is not a section, and that is the other half of the claim: the manifest
  * names four, none of them this one. (It used to be stated as "the nav never
@@ -329,8 +322,8 @@ test('the empty About Me section is gone, and nothing renders in its place', asy
 test('the retired commits address still lands on the commits, and is not a section of its own', () => {
   assert.equal(commitColumnId, 'commits');
   // The adapter hands it through; no component spells it.
-  assert.equal(projectsCommitsProps([null, null]).logAnchor, commitColumnId);
-  assert.match(ledgerSpread, /<div class="ongoing-column" id=\{logAnchor\}>/);
+  assert.equal(projectsCommitsProps([null, null]).anchor, commitColumnId);
+  assert.match(stream, /<div class="stream" id=\{anchor\} style:--stream-page-rows=\{pageSize\}>/);
   for (const [name, source] of Object.entries(componentSources)) {
     assert.doesNotMatch(source, /id="commits"/, `${name} spells a page address of its own`);
   }
@@ -908,8 +901,12 @@ test('the sheet is an opaque wall in every reading mode and filters nothing behi
   // Sharp, not pixelated (owner, 2026-10-19: "less pixelated and more sharp").
   assert.doesNotMatch(sheet, /image-rendering: pixelated;/, 'the wall is drawn in square pixels again');
   /* The wall's own ceiling, as every asset class carries one: exactly the
-     two tiles, WebP, each within 192 KiB (113,926 and 60,650 bytes as
-     drawn), so a sharper or larger wall is a decision rather than drift. */
+     two tiles, WebP, each within 192 KiB (193,088 and 100,012 bytes as
+     drawn since each is its photograph over its own mirror, 2026-11-02), so
+     a sharper or larger wall is a decision rather than drift. The tile is
+     drawn at the mirrored file's own proportion, 1440x1920, so the fold
+     lands on the repeat; the browser lanes measure the seam itself. */
+  assert.match(styles, /--keep-wall-tile: 1440px 1920px;/, 'the wall is not drawn at its mirrored tile’s size, so the repeat cuts it');
   const wallDir = new URL('../src/assets/images/keep/', import.meta.url);
   assert.deepEqual((await readdir(wallDir)).sort(), ['wall-day.webp', 'wall-night.webp']);
   for (const name of ['wall-day.webp', 'wall-night.webp']) {
@@ -1110,21 +1107,12 @@ test('the keep’s props are vendored drawings at their own grain, and the track
     assert.match(roller, pattern, message);
   }
 
-  // The sword is drawn one CSS pixel a pixel wherever it lies: whole under a
-  // picked layer or set, and in three parts as a model's share.
-  const sword = await viewBox('sword.svg');
-  assert.match(
-    sheet,
-    new RegExp(`--keep-sword-underline: var\\(--keep-sword\\) center bottom 0\\.25rem / ${sword.w}px ${sword.h}px no-repeat;`),
-    'the underline sword is not drawn at its own size'
-  );
-  /* The trackers' layers are wax seals now (owner, 2026-10-20), so the
-     sword lies under the gallery's picked set alone. */
-  for (const [name, source, selector] of [['MediaGallery', mediaGallery, /\.gallery-set\[aria-pressed='true'\] \{([^}]*)\}/]]) {
-    const picked = selector.exec(source)?.[1] ?? '';
-    assert.match(picked, /background: var\(--keep-sword-underline\);/, `${name}’s picked choice is not underlined by the sword`);
-    assert.doesNotMatch(picked, /border/, `${name}’s picked choice draws a coloured rule under it again`);
-  }
+  /* The WHOLE sword left with the last choice it lay under, the gallery's
+     picked set (issue #399: the mosaic has no sets), and its drawing with it;
+     a model's share still draws the sword in three parts. No chosen thing on
+     the sheet is underlined now — the stream's filters are brand ink alone
+     (owner, 2026-11-02: "don't underline it"). */
+  assert.ok(!sheet.includes('--keep-sword-underline') && !sheet.includes("sword.svg'"), 'the underline sword outlived the set it lay under');
 
   // THE TRACKERS' ROLL (owner, 2026-10-20: "The Rotulus") hangs between the
   // role scroll's own rollers stood upright: the upright roll and its two
@@ -1218,8 +1206,11 @@ test('the keep’s props are vendored drawings at their own grain, and the track
   // drawing's own width, and the track is the sword's own height; the blade
   // is the content box between them, and only it grows — by the unitless
   // share, from nothing (a hilt and its point) to the whole track.
+  /* The whole sword's drawing left with the underline it drew (issue 399), so
+     the hilt's height is the sword's own, and the point must match it. */
   const [hilt, tip] = await Promise.all(['sword-hilt.svg', 'sword-tip.svg'].map(viewBox));
-  assert.ok(hilt.h === sword.h && tip.h === sword.h, 'the sword’s parts are not one height');
+  const sword = { h: hilt.h };
+  assert.ok(tip.h === sword.h, 'the sword’s parts are not one height');
   // THE BLADE IS ITS ROWS OF STEEL, drawn once along it as bands (2026-10-20:
   // a one-pixel drawing repeated cost WebKit without a GPU one drawing per
   // pixel of blade). Each band is one pixel row inside the sword's height, in
@@ -1734,15 +1725,10 @@ test('the mark is named as a file, resolved by the bundler, and drawn by a compo
  * and drew each only when it held something, because a card that reserved an
  * empty <p> for content it did not have was the defect.
  *
- * The table's half of that claim moved TWICE and lapsed neither time. The
- * description cell it used to be about went with the owner's 2026-09-11
- * directive — the section holds half a sheet now — and the `latest` chip that
- * replaced it went with the ruling of 2026-09-12 that retired the row it
- * labelled. The table has no optional cell left at all, which is the strongest
- * form of the claim rather than its absence, and the SHEET's one remaining
- * conditional region is in the log beside it: the phone's disclosure control,
- * drawn only when there are rows it would reveal. So the claim is the same
- * claim, against the shape that still carries it. */
+ * The repositories' half of that claim left with the repositories column
+ * (owner, 2026-11-02, issue #399), and the stream that replaced it has one
+ * optional region: an entry's version, drawn only on the commit a release was
+ * cut from — never an empty chip held open on the others. */
 test('a row draws only the body it has, and every shipped row has one', () => {
   // The drawer is a region drawn from data, and the row's own points are what
   // fill it; an entry with none would open onto an empty box.
@@ -1750,128 +1736,21 @@ test('a row draws only the body it has, and every shipped row has one', () => {
   for (const row of roleLedger.rows) {
     assert.ok(row.points.length > 0, `the ledger ships "${row.key}" with an empty drawer`);
   }
-  /* THE RETIRED CELL STAYS RETIRED, in both places it could come back: the
-     markup draws no chip, and no row the adapter builds carries a field for one
-     — a live payload with an unpinned newest repository is exactly the shape
-     that used to produce one. */
-  assert.doesNotMatch(ledgerSpread, /table-chip/);
-  const live = projectTableProps(
-    projectsEnvelope([
-      { name: 'kept', description: 'x', stars: 1, pushedAt: '2026-09-01T09:00:00Z', pinned: true },
-      { name: 'newest', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' }
-    ])
+  assert.match(
+    stream,
+    /\{#if row\.release\}\s*<span class="stream-release"><Icon name="tag" slot="cell" \/><span class="stream-release-tag">\{row\.release\}<\/span><\/span>\s*\{\/if\}/,
+    'an entry draws its version whether or not it released one'
   );
-  assert.deepEqual(live.rows.map((row) => row.link.text), ['kept']);
-  for (const row of [...live.rows, ...projectTableProps(null).rows]) {
-    assert.ok(!('chip' in row), `the row "${row.key}" carries a chip field again`);
-  }
-  /* And the log's disclosure is conditional in BOTH directions: the markup
-     draws it only when the adapter built one, and the adapter builds one only
-     when there are rows the collapsed list does not show — never an empty
-     control held open for a list that has nothing behind it. */
-  assert.match(ledgerSpread, /\{#if logDisclosure !== undefined && !wide\}/);
-  assert.equal(
-    projectsCommitsProps([null, null]).logDisclosure,
-    undefined,
-    'an empty log built a control with nothing to reveal'
-  );
+  /* And the retired disclosure stays retired: the stream has no control that
+     would reveal rows a page does not show. */
+  assert.ok(!('logDisclosure' in projectsCommitsProps([null, null])), 'the stream carries a disclosure field again');
 });
 
 // ---------------------------------------------------------------------------
 // Projects: the coding half
 // ---------------------------------------------------------------------------
 
-test('the captured fallback is the snapshot\'s roster, at the addresses the owner gave', () => {
-  /* SEVEN, exactly, was the pin while this list was a curated set. It is not
-     one any more (issue 281, and the owner\'s dynamic-roster ruling behind it):
-     these rows are the cold-start FALLBACK face, a mirror of the embedded
-     snapshot, and the snapshot is whatever the account published when it was
-     last captured. The equality that replaced the count is the one that still
-     catches the failure the old pin was about — a repository appearing here
-     that the account does not publish — and it lives in
-     tests/panels-ui.test.mjs, where both files can be read at once.
-
-     What stays HERE is the derivation: every address is the one host constant
-     plus a name, so a row can never point at another host or an unparseable
-     path. */
-  assert.ok(projects.length > 0, 'the captured fallback set is empty');
-  for (const project of projects) {
-    assert.equal(projectUrl(project), `${projectHost}/${project.name}`);
-    assert.match(project.name, /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/);
-    assert.ok(project.description.trim().length > 0, `${project.name} has no description`);
-    assert.ok(
-      Number.isInteger(project.stars) && project.stars >= 0,
-      `${project.name} carries a star count that is not a whole number of things`
-    );
-    assert.match(project.pushedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
-  }
-});
-
-test('the feed leads with the repository pushed most recently (issue 252)', () => {
-  // The owner's report, reproduced: a push landed and the section still led
-  // with something else, because the order was the order this module's rows
-  // are WRITTEN in. Sorting must come from the data.
-  //
-  // The captured list's own order and its push order DISAGREE, which is what
-  // makes this fail when the sort is removed rather than pass by luck; the
-  // second assertion below refuses to let that stop being true silently.
-  const captured = projectTableProps(null).rows.map((row) => row.link.text);
-  const expected = projects
-    .toSorted((left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt))
-    .map((project) => project.name);
-  // The table shows the four most recent of that order (owner directive of
-  // 2026-09-03, issue 287); the ORDER it selects from is the whole roster's,
-  // which is what makes "leads with" a claim about the data rather than about
-  // the four rows that happen to be drawn.
-  assert.deepEqual(captured, expected.slice(0, shownProjectRows));
-  assert.notDeepEqual(
-    captured,
-    projects.slice(0, shownProjectRows).map((project) => project.name),
-    'the captured list happens to be in push order, so this test proves nothing; reorder the fixture'
-  );
-
-  // And with a panel: the LIVE instants win, so a repository the module list
-  // records as quiet leads the moment the host says it was pushed.
-  const envelope = {
-    schema: 'panel/v1',
-    id: codingProjectsPanelId,
-    kind: 'coding-projects/v2',
-    title: 'Coding Projects',
-    generatedAt: '2026-08-29T12:00:00Z',
-    status: 'ok',
-    data: {
-      repos: projects.map((project, index) => ({
-        name: project.name,
-        description: project.description,
-        stars: 1,
-        // Exactly reversed against the captured order.
-        pushedAt: new Date(Date.UTC(2026, 0, 1 + (projects.length - index))).toISOString()
-      }))
-    }
-  };
-  assert.deepEqual(
-    projectTableProps(envelope).rows.map((row) => row.link.text),
-    projects.slice(0, shownProjectRows).map((project) => project.name),
-    'the feed ordered by the captured instants while the panel carried newer ones'
-  );
-
-  // A row the origin fell back on serves its CAPTURED instant, and is ordered
-  // by that — a recorded row must not claim a live position any more than it
-  // claims a live description.
-  const stale = {
-    ...envelope,
-    data: {
-      repos: envelope.data.repos.map((row) => ({ ...row, recorded: true }))
-    }
-  };
-  assert.deepEqual(
-    projectTableProps(stale).rows.map((row) => row.link.text),
-    expected.slice(0, shownProjectRows),
-    'a recorded row was ordered by an instant it was not vouching for'
-  );
-});
-
-/* One admissible envelope, shared by the dynamic-roster tests below. */
+/* One admissible envelope, shared by the repository tests below. */
 function projectsEnvelope(repos, overrides = {}) {
   return {
     schema: 'panel/v1',
@@ -1885,59 +1764,18 @@ function projectsEnvelope(repos, overrides = {}) {
   };
 }
 
-test('the roster is the payload’s: a repository the module list has never heard of renders (issue 281)', () => {
-  // The defect, reproduced: the owner published a new repository and the site
-  // could not show it, because the module list fixed the roster. Now the
-  // payload does — the new row renders with its live figures, its identity
-  // derived from the one host constant plus its admitted name, and the one
-  // figure nobody captured for it is an honest dash, not a borrowed number.
-  const now = Date.parse('2026-09-01T12:30:00Z');
-  const fresh = {
-    name: 'born-this-morning',
-    description: 'a repository created after the last release',
-    stars: 1,
-    pushedAt: '2026-09-01T11:00:00Z',
-    closedPulls: 2,
-    release: 'v0.1.0',
-  };
-  const rendered = projectTableProps(projectsEnvelope([fresh]), now);
-  assert.equal(rendered.rows.length, 1, 'the payload decides the roster, not the module list');
-  const [entry] = rendered.rows;
-  assert.equal(entry.link.text, 'born-this-morning');
-  assert.equal(entry.link.href, `${projectHost}/born-this-morning`);
-  assert.equal(entry.link.label, 'born-this-morning on GitHub, opens in a new tab');
-  const byKey = new Map(entry.counts.map((count) => [count.key, count]));
-  assert.equal(byKey.get('stars').value, '1');
-  assert.equal(byKey.get('pulls').value, '2');
-  assert.equal(byKey.get('release').value, 'v0.1.0');
-  /* A repository the capture never saw still renders its live figures, and the
-     honest-dash rule is read on the two figures that CAN be absent from a live
-     row: a tally and a version the payload does not carry. */
-  const noTallies = projectTableProps(
-    projectsEnvelope([{ ...fresh, closedPulls: undefined, release: undefined }]),
-    now
-  );
-  const absent = noTallies.rows[0].counts.find((count) => count.key === 'pulls');
-  assert.equal(absent.value, '—');
-  assert.equal(absent.label, 'closed pull requests not reported');
-  assert.deepEqual(absent.detail.rows, [], 'a dash carries no provenance row');
-});
-
 test('a payload name outside the repository grammar refuses the whole payload', () => {
-  // The identity gate that lets the roster be dynamic: the href is the host
-  // constant plus the name, so the name must be a plain path segment. A
-  // payload carrying one hostile name is drift or hostility, and the refusal
-  // is wholesale — the captured face renders, never a half-parsed roster.
-  const good = { name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z' };
+  // The identity gate that lets the roster be dynamic: a repository's name is
+  // a plain path segment or the payload is drift or hostility, and the refusal
+  // is wholesale — the stream then marks no release at all, never a release
+  // read off a half-parsed roster.
+  const sha = 'b93ba24fd27c26e0edf52f21f903d3a4b9d4817a';
+  const good = { name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z', release: 'v1', releaseSha: sha };
+  assert.notEqual(parseCodingProjects({ repos: [good] }), null, 'the well-formed payload is refused, so this proves nothing');
   for (const name of ['evil name', 'a/../b', '..', '.', '', 'x'.repeat(101), 'sla/sh']) {
-    const rendered = projectTableProps(projectsEnvelope([good, { ...good, name }]));
-    assert.deepEqual(
-      rendered.rows.map((row) => row.link.text).toSorted(),
-      projects
-        .toSorted((left, right) => Date.parse(right.pushedAt) - Date.parse(left.pushedAt))
-        .slice(0, shownProjectRows)
-        .map((project) => project.name)
-        .toSorted(),
+    assert.equal(
+      parseCodingProjects({ repos: [good, { ...good, name }] }),
+      null,
       `a payload carrying the name ${JSON.stringify(name)} was not refused wholesale`
     );
   }
@@ -1945,48 +1783,32 @@ test('a payload name outside the repository grammar refuses the whole payload', 
 
 /* THE FRESHNESS LINE IS GONE FROM THIS SECTION (owner ruling, 2026-09-12, on
  * the live page: "DATA THROUGH SEP 12, 2026 · LAST CAPTURE JUST NOW" goes).
- *
- * Issue 281's defect 2 was the opposite failure — the envelope said stale while
- * the card LOOKED fresh — and the answer then was a line in the shell's head.
- * The owner has now read that line on the shipped page and struck it: the
- * figures in both columns are dated in their own rows, an unavailable panel
- * renders its honest empty note where its rows would be, and a caption dating
- * the whole sheet was a fourth statement of facts that already state
- * themselves. What REPLACES the old pin is this one — the three envelope
- * shapes that each used to produce a line, proved to produce none, and the
- * builder that composed them proved absent from the module rather than merely
- * unused, because an unused exported builder is one import away from coming
- * back. */
-test('the repositories table composes no freshness line, in any envelope state (owner 2026-09-12)', async () => {
-  const now = Date.parse('2026-09-01T12:30:00Z');
+ * The envelope shapes that each used to produce a line, proved to produce
+ * none through the stream's adapter, and the builder that composed them
+ * proved absent from the module rather than merely unused, because an unused
+ * exported builder is one import away from coming back. */
+test('the repositories panel composes no freshness line, in any envelope state (owner 2026-09-12)', async () => {
+  const now = new Date('2026-09-01T12:30:00Z');
   const repos = [
     { name: 'fine', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z', pinned: true }
   ];
   const states = [
     ['a fresh ok panel', projectsEnvelope(repos)],
-    ['the pre-envelope captured face', null],
+    ['no panel at all', null],
     ['the origin saying stale', projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T07:30:00Z' })],
-    /* The status half ALONE, unmasked by age: a refused-row round marks the
-       envelope stale while stamping a CURRENT generatedAt (defect 1's refusal
-       path), which is the input that used to prove the note came from the
-       status rather than from the clock. */
     ['a freshly-stamped stale panel', projectsEnvelope(repos, { status: 'stale', generatedAt: '2026-09-01T12:25:00Z' })],
     ['an unavailable panel', projectsEnvelope([], { status: 'unavailable', generatedAt: undefined, data: null })],
-    /* An ok envelope whose generatedAt stopped advancing — the wedged-loop
-       state a status alone cannot see, which is what the two-hour threshold was
-       for. Four hours past it here. */
     ['a wedged refresh loop', projectsEnvelope(repos, { generatedAt: '2026-09-01T06:30:00Z' })]
   ];
   for (const [name, envelope] of states) {
-    const props = projectTableProps(envelope, now);
-    assert.equal(props.staleNote, undefined, `${name} composed a stale note`);
+    const props = projectsCommitsProps([envelope, null], now);
     assert.ok(!('staleNote' in props), `${name} carries a staleNote field for one to come back on`);
+    const rendered = JSON.stringify(props).toLowerCase();
+    for (const phrase of ['data as of', 'showing captured figures', 'is not current']) {
+      assert.ok(!rendered.includes(phrase), `${name} put "${phrase}" into the stream's props`);
+    }
   }
-  // The captured face still renders, which is what makes "no note" a statement
-  // about the caption rather than about an empty table.
-  assert.equal(projectTableProps(projectsEnvelope([], { status: 'unavailable', data: null }), now).rows.length, shownProjectRows);
-  /* THE BUILDER IS GONE, not merely unread. It had one caller, and a module
-     that still exported it would be one import away from the line returning. */
+  /* THE BUILDER IS GONE, not merely unread. */
   const module = await read('../src/lib/projects.ts');
   assert.doesNotMatch(module, /projectsStaleNote|projectsStaleAfterMs/);
   for (const phrase of ['data as of', 'showing captured figures', 'is not current']) {
@@ -2014,11 +1836,11 @@ test('the panel head reserves its row and draws no freshness line', async () => 
   assert.ok(!shell.includes('note'), 'the shell takes a note prop again');
   assert.ok(!shell.includes('panel-note'), 'the shell draws a freshness line again');
   assert.ok(!shell.includes('data-panel-note'), 'the shell still marks a freshness line');
-  /* The repositories sheet hands the shell status and provenance and nothing
-     else (owner ruling, 2026-09-12), so the reserved head row is what keeps
-     its geometry with nothing in it. */
-  assert.match(ledgerSpread, /<PanelShell \{status\} \{generatedAt\}>/);
-  assert.doesNotMatch(ledgerSpread, /note=/, 'the sheet hands the shell a note again');
+  /* The stream hands the shell status and provenance and nothing else (owner
+     ruling, 2026-09-12), so the reserved head row is what keeps its geometry
+     with nothing in it. */
+  assert.match(stream, /<PanelShell \{status\} \{generatedAt\}>/);
+  assert.doesNotMatch(stream, /note=/, 'the stream hands the shell a note again');
   assert.ok(
     !(await read('../src/styles.css')).includes('--panel-note'),
     'the note token family outlived the note'
@@ -2031,12 +1853,12 @@ test('the panel head reserves its row and draws no freshness line', async () => 
   // The static work history has no envelope and no channel for a line at all.
   assert.equal(roleLedger.staleNote, undefined, 'the static work history grew a stale note');
   /* THE ROW IS THE RESERVE WITHOUT A TITLE (owner directive, 2026-09-04,
-     issue 292): the Projects table renders no panel label, so the head's
-     height can no longer come from its h2. Pinned where it is decided — the
-     row wears the title's face and size and declares one line of it as its
-     minimum, the `lh` line box with an em fallback under it — and the
-     rendering lane "a panel head with no title keeps the reserved row"
-     measures it in every engine. */
+     issue 292): Ongoing Work renders no panel label, so the head's height can
+     no longer come from its h2. Pinned where it is decided — the row wears the
+     title's face and size and declares one line of it as its minimum, the
+     `lh` line box with an em fallback under it — and the rendering lane "a
+     panel head with no title keeps the reserved row" measures it in every
+     engine. */
   const head = /\.panel-head \{([^}]*)\}/s.exec(styleBlock(shell));
   assert.ok(head, 'PanelShell no longer styles .panel-head');
   assert.match(head[1], /font-family: var\(--panel-title-family, inherit\);/, 'the head must wear the title face its lh is measured in');
@@ -2056,265 +1878,16 @@ test('the panel head reserves its row and draws no freshness line', async () => 
      the padding that made room for it are dead weight rather than a reserve. */
   assert.ok(!shell.includes('panel-mark'), 'the shell still draws a title mark');
   assert.ok(!shell.includes('Icon'), 'the shell still imports the icon it stopped drawing');
-  assert.equal(projectTableProps(null).title, undefined, 'the Projects table grew a panel label back');
-  assert.doesNotMatch(ledgerSpread, /\{title\}/, 'the sheet passes a panel label again');
+  assert.equal(projectsCommitsProps([null, null]).title, undefined, 'the stream grew a panel label back');
+  assert.doesNotMatch(stream, /\{title\}/, 'the stream passes a panel label again');
 });
 
-test('the closed-pull tally and the released version are told with a mark and a figure (issue #317)', () => {
-  const noon = Date.parse('2026-08-29T12:00:00Z');
-  const project = { name: 'x', description: 'x', stars: 1, pushedAt: '2026-08-29T09:00:00Z' };
-  const live = {
-    name: 'x',
-    description: 'x',
-    stars: 1,
-    pushedAt: '2026-08-29T09:00:00Z',
-    closedPulls: 4,
-    release: 'v0.1.82'
-  };
-  const [pulls, release] = projectColumns(project, live, noon).counts;
-  // The owner's instruction: the cell does not read "prs closed". The visible
-  // channel is the mark and the figure...
-  assert.equal(pulls.value, '4');
-  assert.equal(release.value, 'v0.1.82');
-  // ...and the words are in the accessible name, complete and plural-correct,
-  // so the mark is never the only thing carrying the meaning.
-  assert.equal(pulls.label, '4 closed pull requests');
-  assert.equal(release.label, 'version v0.1.82');
-  assert.equal(
-    projectColumns(project, { ...live, closedPulls: 1 }, noon).counts[0].label,
-    '1 closed pull request'
-  );
-
-  // A figure the payload does not carry is a DASH, never a zero: those are
-  // different claims and only one of them is supported.
-  const [unknownPulls, unknownRelease] = projectColumns(
-    project,
-    { ...live, closedPulls: undefined, release: undefined },
-    noon
-  ).counts;
-  assert.equal(unknownPulls.value, '—');
-  assert.equal(unknownPulls.label, 'closed pull requests not reported');
-  assert.equal(unknownRelease.value, '—');
-  assert.equal(unknownRelease.label, 'no released version');
-  // A REPORTED zero is a measurement and renders as one.
-  assert.equal(projectColumns(project, { ...live, closedPulls: 0 }, noon).counts[0].value, '0');
-  assert.equal(
-    projectColumns(project, { ...live, closedPulls: 0 }, noon).counts[0].label,
-    '0 closed pull requests'
-  );
-
-  /* THE MARKS COME FROM THE ONE FAMILY (issue 313), so the component draws no
-     <svg> of its own any more: there is exactly one place on the site that
-     writes the viewBox, the stroke attributes and the assistive posture, and a
-     second drawing of a star here would be a second weight to keep in step. */
-  assert.match(ledgerSpread, /import Icon from '\.\/Icon\.svelte';/);
-  assert.match(ledgerSpread, /<Icon name=\{count\.glyph\} slot="cell" \/>/);
-  assert.doesNotMatch(ledgerSpread, /<svg/, 'the table draws a glyph of its own again');
-  assert.doesNotMatch(ledgerSpread, /stroke-width=/, 'the family’s weight is restated in the table');
-  /* The words are hidden by CLIPPING, never by display:none or hidden, both of
-     which would take them out of the accessibility tree and leave the mark
-     carrying the figure alone. */
-  const spreadStyle = styleBlock(ledgerSpread);
-  assert.match(ledgerSpread, /<span class="ongoing-clipped">\{count\.label\}<\/span>/);
-  assert.match(spreadStyle, /\.ongoing-clipped \{[^}]*clip-path: inset\(50%\)/s);
-  assert.doesNotMatch(spreadStyle, /\.ongoing-clipped \{[^}]*display: none/s);
-  /* NO HEAD ROW OF MARKS ANY MORE (owner direction, 2026-10-16). It carried
-     each mark's word for a screen reader (issue #317) because a mark over a
-     column states nothing; every figure now carries its own mark beside its
-     value AND its own words, so a row of marks over them would be a second
-     statement of what each figure already says. The column wears one word. */
-  assert.doesNotMatch(ledgerSpread, /\{#each heads/, 'the head row of marks came back');
-  assert.equal(projectColumnHead, 'Repositories');
-  assert.equal(projectTableProps(null).head, projectColumnHead);
-  /* EACH COLUMN KEEPS ITS WORD, AND NOTHING IS DRAWN OVER IT (owner,
-     2026-10-19: "remove this heading … remove the icons there as well"). The
-     two ruled heads of issue 318 and their marks are gone from the page, but a
-     screen reader has no other name for either column, so each word is kept
-     in the tree by the same clipping the figures' words use — the log's still
-     naming the whole stream, in the adapter's words. */
-  assert.equal(commitColumnHead, 'Commits · every repository');
-  assert.equal(projectsCommitsProps([null, null]).logHead, commitColumnHead);
-  const spreadMarkup = withoutHtmlComments(ledgerSpread);
-  assert.match(spreadMarkup, /<div class="ongoing-column">\s*<span class="ongoing-clipped">\{head\}<\/span>/, 'the repositories column lost its word');
-  assert.match(
-    spreadMarkup,
-    /<div class="ongoing-column" id=\{logAnchor\}>\s*<span class="ongoing-clipped">\{logHead\}<\/span>/,
-    'the log column lost its word'
-  );
-  assert.doesNotMatch(spreadMarkup, /class="ongoing-head"/, 'a column draws its head again');
-  assert.doesNotMatch(spreadStyle, /\.ongoing-head\b/, 'a column head is styled again');
-  assert.doesNotMatch(spreadMarkup, /<Icon name="(?:folder|commit)"/, 'a column head’s mark came back');
-  /* A VERSION LONGER THAN ITS CELL ELLIPSIZES rather than wrapping the entry:
-     a wrapped figure is an entry taller than the reserve the column beside it
-     was built from, which is the zero-CLS pairing breaking on a tag nobody
-     chose the length of. The value is one unbreakable line that clips. */
-  const figure = /\.repo-value \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '';
-  assert.match(figure, /overflow: hidden/);
-  assert.match(figure, /white-space: nowrap/);
-  assert.match(figure, /text-overflow: ellipsis/);
-  /* And the tag reaches the cell VERBATIM however long it is — the adapter
-     prints what the host released and the cell decides how much of it is
-     drawn, so nothing truncates a version into a different version. */
-  // Long, and inside the release-tag grammar issue 317 admits: a `+` would be
-  // refused by the payload gate, which would prove the gate rather than this.
-  const longTag = 'v0.0.0-release-candidate.1.build.2026091100000000';
-  const tagged = projectTableProps(
-    projectsEnvelope([
-      { name: 'x', description: 'x', stars: 1, pushedAt: '2026-09-01T11:00:00Z', release: longTag }
-    ])
-  );
-  assert.equal(tagged.rows[0].counts.find((count) => count.key === 'release').value, longTag);
-});
-
-/* THE CLUSTER BECAME COLUMNS (owner directive of 2026-09-03, issue 287), the
- * columns became two-line entries (owner direction, 2026-10-16), and issue
- * 188's claim survives both moves in the form the new shape can carry it.
- *
- * What issue 188 was about: nothing in the card's head could be placed by its
- * CONTENT — a long repository name must not push the counters, and the head
- * must not switch to a second layout at some width. A grid whose tracks are
- * declared once answered both.
- *
- * The entries answer both the same way: every figure sits in a track the
- * COMPONENT declares, identical in every entry, so a figure cannot move
- * anything and there is nothing for a name's length to decide — on the wide
- * sheet the name's track ends exactly where the figure tracks begin, because
- * the link reserves their summed width. What DOES change with the width is
- * deliberate and is a width decision, not a content one: below the wide sheet
- * the figures take a line of their own (a column narrower than a name plus
- * four figures cannot hold both), and a phone stacks the two columns. Every
- * entry takes the same shape at the same width.
- *
- * The accessibility half is unchanged: each figure carries its detail AND the
- * same sentence unconditionally in the accessibility tree, clipped beside the
- * value, so the words are there whether or not anyone reaches for them. */
-test('every figure sits in a declared track, and no figure moves anything (issue 188; issue 287; owner 2026-10-16)', () => {
-  const noonPlacement = Date.parse('2026-08-27T12:00:00Z');
-  const spreadStyle = styleBlock(ledgerSpread);
-  const flat = spreadStyle.replace(/\s+/g, ' ');
-  /* THE WIDE SHEET: the four figure tracks are four named lengths, and the
-     link's own grid reserves exactly their sum plus their gaps beside the
-     name — so the name flexes up to the figures and never under them. */
-  assert.match(
-    flat,
-    /\.repo-figures \{ position: relative; z-index: 1; grid-area: 1 \/ 1; justify-self: end; align-self: start; grid-template-columns: var\(--repo-pull\) var\(--repo-tag\) var\(--repo-star\) var\(--repo-age\);/,
-    'the wide figure tracks are no longer the four declared lengths'
-  );
-  assert.match(
-    flat,
-    /grid-template-columns: minmax\(0, 1fr\) calc\(var\(--repo-pull\) \+ var\(--repo-tag\) \+ var\(--repo-star\) \+ var\(--repo-age\) \+ 3 \* var\(--repo-figures-gap\)\);/,
-    'the name track no longer stops where the figures begin'
-  );
-  /* BELOW IT, four tracks in the same proportion on a line of their own —
-     shares of the line rather than lengths, so they shrink with a phone
-     rather than pushing it sideways, and rather than four equal quarters,
-     which ellipsized a release tag. */
-  assert.match(
-    /\.repo-figures \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '',
-    /grid-template-columns:\s*minmax\(0, 3\.25fr\) minmax\(0, 4\.75fr\) minmax\(0, 2\.5fr\) minmax\(0, 3fr\);/
-  );
-  for (const [name, rem] of [['pull', 3.25], ['tag', 4.75], ['star', 2.5], ['age', 3]]) {
-    assert.match(spreadStyle, new RegExp(`--repo-${name}: ${rem}rem;`), `the ${name} track and its share disagree`);
-  }
-  /* And the LOG's supporting line flexes on the repository and holds the age
-     and the identity at the column's end. */
-  assert.match(
-    /\.log-meta \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '',
-    /grid-template-columns: minmax\(0, 1fr\) auto auto;/,
-    'the supporting line no longer flexes on the repository'
-  );
-  /* THE TWO COLUMNS ARE EQUAL HALVES that fill the sheet (the no-dead-space
-     ruling) and can be narrowed (the no-sideways-scroll floor). Both claims
-     are one declaration. */
-  const spreadRule = /\.ongoing \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '';
-  assert.match(spreadRule, /display:\s*grid/);
-  assert.match(spreadRule, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\);/);
-  assert.match(spreadRule, /gap:\s*0 var\(--ongoing-columns-gap\);/);
-  /* ONE PHONE WIDTH, however many blocks express it: a sheet with two
-     max-width breakpoints is a sheet whose parts disagree about where a phone
-     ends. The WIDTHS are compared, not the block count — the chrome row drops
-     its location label at the same width the columns stack at, and those are
-     two decisions about one boundary. The component states the SAME width. */
-  /* The BOUNDARY MOVED from 40rem to 45rem (owner directive of 2026-09-03,
-     issue 287), and it moved because it was measured rather than chosen: it is
-     the SAME boundary the two columns stack at (owner design decision,
-     2026-09-11, issue 318). */
-  const phoneWidths = new Set(
-    [...styles.matchAll(/@media \(max-width: ([^)]+)\)/g)].map(([, width]) => width.trim())
-  );
-  assert.equal(phoneWidths.size, 1, `the sheet disagrees about where a phone ends: ${[...phoneWidths].join(', ')}`);
-  const componentWidths = new Set(
-    [...spreadStyle.matchAll(/@media \(max-width: ([^)]+)\)/g)].map(([, width]) => width.trim())
-  );
-  assert.deepEqual([...componentWidths], [...phoneWidths], 'the component and the sheet disagree about where a phone ends');
-  assert.match(flat, /@media \(max-width: 45rem\) \{[^}]*?\.ongoing \{[^}]*grid-template-columns: minmax\(0, 1fr\);/);
-  /* THE SCRIPT ASKS THE SAME QUESTION THE STYLESHEET DOES, and a media query
-     cannot read a token — so the number is stated in lib/columnWidth.ts and
-     this holds the two equal. The phone's disclosure is rendered against it,
-     so a drift here is a control a desktop draws or a phone lacks. */
-  assert.equal(spreadFromRem, 45.0625);
-  assert.equal(spreadMediaQuery, '(min-width: 45.0625rem)');
-  assert.match(ledgerSpread, /browserMedia\(spreadMediaQuery\)\.matches/);
-  /* The count of figures is held at both ends: the adapter hands three
-     counters plus the age, and both layouts declare exactly four tracks. */
-  assert.equal(projectTableProps(null, noonPlacement).rows[0].counts.length, 3);
-  /* THE MARK SLOT IS A DECLARED TRACK TOO (issue #317). A figure that packed
-     its mark and its value inline put the mark wherever the value's own length
-     left it. Two tracks fix both edges at once — and the value starts right
-     after its mark (owner ruling, 2026-10-15). */
-  const figureRule = /\.repo-figure \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '';
-  assert.match(figureRule, /display:\s*grid/);
-  assert.match(figureRule, /grid-template-columns:\s*var\(--icon-cell\) minmax\(0, 1fr\)/);
-
-  /* A digit may not jitter the column it sits in: the figures read tabular
-     numerals. That is a LIVE requirement rather than a precaution — the
-     freshness figure is re-derived on every panel delivery, so "9m" becoming
-     "10m" would nudge its neighbours once a minute forever without it. */
-  assert.match(figureRule, /font-variant-numeric:\s*tabular-nums/);
-
-  /* And every figure's whole sentence is in the accessibility tree without
-     anyone reaching for it, CLIPPED rather than hidden: display:none or
-     [hidden] would take the words out of the tree and leave the glyph carrying
-     the figure alone, which is the dataviz floor breaking. */
-  const noon = Date.parse('2026-08-27T12:00:00Z');
-  const row = projectTableProps(null, noon).rows[0];
-  for (const count of [...row.counts, row.updated]) {
-    assert.ok(count.label.trim().length > 0, `${count.key} carries no sentence for the tree`);
-  }
-  assert.match(ledgerSpread, /<span class="ongoing-clipped">\{count\.label\}<\/span>/);
-  assert.match(ledgerSpread, /<span class="ongoing-clipped">\{row\.updated\.label\}<\/span>/);
-  /* Every figure is a focus stop (owner directive, 2026-09-03, issue 287):
-     each carries a detail, and a detail only a pointer can open is half the
-     feature — the same reason the retired stat tiles carried a tabindex. They
-     sit OUTSIDE the entry's link, because nothing interactive may sit inside
-     an anchor. */
-  assert.match(ledgerSpread, /<span class="repo-figure" tabindex="0" aria-label=\{row\.updated\.label\}>/);
-  assert.match(ledgerSpread, /<span class="repo-figure" tabindex="0" aria-label=\{count\.label\}>/);
-  assert.match(spreadStyle, /\.repo-figure:focus-visible \{[^}]*outline: 2px solid var\(--color-accent\)/);
-  for (const anchor of ledgerSpread.matchAll(/<a\b[\s\S]*?<\/a>/g)) {
-    assert.doesNotMatch(anchor[0], /tabindex|<DetailTip|<button/, 'a focus stop sits inside an entry’s link');
-  }
-  const clipped = /\.ongoing-clipped \{([^}]*)\}/.exec(spreadStyle)?.[1] ?? '';
-  assert.match(clipped, /clip-path:\s*inset\(50%\)/);
-  assert.doesNotMatch(clipped, /display:\s*none/);
-});
-
-/* The four columns as one flat list, in render order: the cluster then the
- * age, which is the order the table draws them in. */
-function columnLabels(columns) {
-  return [...columns.counts, columns.updated].map((count) => count.label);
-}
-
-test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every stated date honestly', () => {
-  // A pure test of the constant and the function (issue 167): the owner
-  // removed the visitor-facing caption that used to render both together
-  // ("Counts captured from … on …; this page fetches nothing" — capture
-  // provenance is a maintainer/reviewer fact, not something a visitor came
-  // here to read), but projectsCapturedOn remains the maintenance record for
-  // when the captured counts were read, and formatIsoDate is the same
-  // general date renderer the work/art feed cards use (feed.ts), so both
-  // still deserve direct coverage independent of any one caller.
-  assert.match(projectsCapturedOn, /^\d{4}-\d{2}-\d{2}$/);
+test('formatIsoDate renders every stated date honestly', () => {
+  // A pure test of the function (issue 167): the owner removed the
+  // visitor-facing caption that used to render a capture date with it, and
+  // formatIsoDate is the same general date renderer the work/art feed cards
+  // use (feed.ts), so it deserves direct coverage independent of any caller.
+  // (The capture date it rendered left with the captured rows, issue #399.)
   assert.equal(formatIsoDate('2026-08-23'), '23 August 2026');
   assert.equal(formatIsoDate('2026-01-01'), '1 January 2026');
   // An unparseable date returns unchanged rather than inventing a day.
@@ -2322,17 +1895,17 @@ test('projectsCapturedOn is a well-formed date, and formatIsoDate renders every 
   assert.equal(formatIsoDate('2026-13-01'), '2026-13-01');
 });
 
-test('the Coding Projects feed renders no capture-date or no-fetch caption (issue 167)', () => {
+test('Ongoing Work renders no capture-date or no-fetch caption (issue 167)', () => {
   // The owner: "why would a user care to know that this fetches nothing?
   // remove this." Both halves are gone — a regression back to either is what
   // this pins against, not merely an absence of a check that used to require
   // them. In this architecture the caption has exactly two channels back onto
   // the page, and both are checked: the EXECUTED props the adapter hands the
-  // log (data no source scan can be blinded to by indirection), and the
+  // stream (data no source scan can be blinded to by indirection), and the
   // binding's presentation, which must declare no note line at all. The
   // rendered-DOM guard lives in e2e/rendering-lanes.spec.mjs, against what a
   // visitor's browser actually painted.
-  const renderedData = JSON.stringify(projectTableProps(null));
+  const renderedData = JSON.stringify(projectsCommitsProps([null, null]));
   assert.doesNotMatch(
     renderedData,
     /Counts captured from/,
@@ -2354,6 +1927,168 @@ test('the Coding Projects feed renders no capture-date or no-fetch caption (issu
     'the coding-projects binding declares a section note again — the removed caption’s channel'
   );
   assert.doesNotMatch(projectsBinding, /projectsCapturedOn|Counts captured from|fetches nothing/);
+});
+
+/* Every motion a component states — an animation, a transition, a set of
+ * keyframes — with whether it sits inside the (prefers-reduced-motion:
+ * no-preference) guard: a brace walk over the style block, so a rule nested in
+ * another at-rule is still seen inside or outside the guard it really sits in. */
+function motionIn(style) {
+  const code = style.replace(/\/\*[\s\S]*?\*\//g, '');
+  const guard = /prefers-reduced-motion:\s*no-preference/;
+  const stack = [];
+  const found = [];
+  let text = '';
+  for (const char of code) {
+    if (char === '{') {
+      const header = text.trim();
+      if (header.startsWith('@keyframes')) found.push({ what: header, guarded: stack.some((at) => guard.test(at)) });
+      stack.push(header);
+      text = '';
+    } else if (char === '}' || char === ';') {
+      const declaration = text.trim();
+      if (/^(?:animation|transition)(?:-[a-z-]+)?\s*:/.test(declaration) && !stack.some((at) => at.startsWith('@keyframes'))) {
+        found.push({ what: declaration, guarded: stack.some((at) => guard.test(at)) });
+      }
+      if (char === '}') stack.pop();
+      text = '';
+    } else {
+      text += char;
+    }
+  }
+  return found;
+}
+
+test('the stream’s filters are three marks in brand ink, never underlined, that shine only where motion is welcome (owner 2026-11-02, issue #399)', () => {
+  /* THREE ICON-ONLY FILTERS, the adapter's: everything, the commits, the
+     releases, each a real toggle button named by its word. */
+  assert.deepEqual(
+    projectsCommitsProps([null, null]).filters,
+    [
+      { key: 'all', glyph: 'list', label: 'Everything', empty: 'no recent commits reported' },
+      { key: 'commit', glyph: 'pull', label: 'Commits', empty: 'no recent commits reported' },
+      { key: 'release', glyph: 'tag', label: 'Releases', empty: 'no release among the recent commits' }
+    ]
+  );
+  assert.match(stream, /<div class="stream-filters" role="group" aria-label="Show">\s*\{#each filters as filter \(filter\.key\)\}/);
+  /* AT THE STREAM'S INLINE END, under the vine's end, as the approved mock
+     drew them (review, 2026-11-02), at both widths: the head rule is the
+     only one that places them, and no phone block moves them back. */
+  const headRules = [...styleBlock(stream).replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/\.stream-head \{([^}]*)\}/g)].map(([, body]) => body);
+  assert.equal(headRules.length, 1, 'a second rule places the stream head');
+  assert.match(headRules[0], /display: flex;\s*justify-content: flex-end;/, 'the filters do not sit at the stream’s inline end');
+  /* A FILTER THAT KEEPS NOTHING SAYS SO, in the reserve its entries would
+     have filled (review, 2026-11-02: Releases, until a capture names a
+     release, was a blank page). The whole list's own note comes first, the
+     chosen filter's after it, and both are the one note shape — the shape
+     the reserve rule gives the list's height. */
+  assert.match(
+    stream,
+    /\{#if rows\.length === 0\}\s*<p class="stream-note">\{emptyNote\}<\/p>\s*\{:else if filtered\.length === 0\}\s*<p class="stream-note">\{filteredEmpty\}<\/p>\s*\{:else\}\s*<ol class="stream-list"/,
+    'a filter that keeps nothing leaves the reserve blank'
+  );
+  assert.match(stream, /const filteredEmpty = \$derived\(filters\.find\(\(filter\) => filter\.key === active\)\?\.empty \?\? emptyNote\);/);
+  assert.match(
+    styleBlock(stream).replace(/\/\*[\s\S]*?\*\//g, ''),
+    /\.stream-list,\s*\.stream-note \{\s*min-block-size: calc\(var\(--stream-page-rows\) \* var\(--stream-pitch\)\);\s*\}/,
+    'the note does not hold the room a page of entries holds'
+  );
+  assert.match(
+    stream,
+    /<button\s+class="stream-filter"\s+type="button"\s+aria-pressed=\{filter\.key === active\}\s+aria-label=\{filter\.label\}/,
+    'a filter is not a named toggle button'
+  );
+  assert.match(stream, /<svg class="stream-glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">/);
+  assert.equal((stream.match(/class="stream-filter"/g) ?? []).length, 1, 'a second filter shape is written beside the loop');
+  /* NO UNDERLINE, NO FILL, NO RULE (owner: "don't underline it"). Every rule
+     that names the filter is read, so a pressed, hovered or lit state cannot
+     bring one back by a selector of its own; the chosen filter is the brand's
+     ink and nothing else. */
+  const code = styleBlock(stream).replace(/\/\*[\s\S]*?\*\//g, '');
+  const filterRules = [...code.matchAll(/([^{}]*\.stream-filter[^{}]*)\{([^{}]*)\}/g)].map(([, selector, body]) => ({ selector: selector.trim(), body }));
+  assert.ok(filterRules.length >= 3, 'the filter rules are not where this pin reads them');
+  for (const { selector, body } of filterRules) {
+    assert.doesNotMatch(body, /text-decoration|border-(?:bottom|block-end)/, `${selector} underlines a filter`);
+    for (const [, value] of body.matchAll(/background(?:-color|-image)?:\s*([^;]+);/g)) {
+      assert.equal(value.trim(), 'none', `${selector} paints a ground under a filter`);
+    }
+  }
+  assert.match(code, /\.stream-filter\[aria-pressed='true'\] \{\s*color: var\(--color-brand\);\s*\}/);
+  /* THE SHINE AND THE SPARKS, at rest: the band off the mark's edge and the
+     sparks nothing at all, so a reader who asked for less motion sees the
+     mark and only the mark. */
+  assert.match(stream, /<rect class="stream-shine" x="-24"/);
+  assert.equal((stream.match(/<path class="stream-spark"/g) ?? []).length, 3, 'a press throws a number of sparks other than three');
+  assert.match(code, /\.stream-spark \{[^}]*opacity: 0;[^}]*transform: scale\(0\);/);
+  /* EVERY ANIMATION AND TRANSITION in the stream, the gallery and the pager
+     sits inside the no-preference guard — and the stream's are there to be
+     found, so this cannot pass by the motion having gone. */
+  const streamMotion = motionIn(styleBlock(stream));
+  assert.ok(streamMotion.some(({ what }) => what.startsWith('@keyframes')), 'the shine and the sparks have no keyframes');
+  assert.ok(streamMotion.filter(({ what }) => what.startsWith('animation')).length >= 2, 'the shine or the sparks no longer animate');
+  for (const [name, source] of Object.entries({ Stream: stream, MediaGallery: mediaGallery, Pager: pager })) {
+    for (const { what, guarded } of motionIn(styleBlock(source))) {
+      assert.ok(guarded, `${name}: "${what}" moves outside the (prefers-reduced-motion: no-preference) guard`);
+    }
+  }
+  /* Composited only: the shine and the sparks move by transform and opacity,
+     and nothing that animates re-lays out. */
+  for (const [, frames] of code.matchAll(/@keyframes [a-z-]+ \{([\s\S]*?)\n {4}\}/g)) {
+    for (const [, property] of frames.matchAll(/([a-z-]+):/g)) {
+      assert.ok(['transform', 'opacity'].includes(property), `a keyframe animates ${property}, which re-lays out or repaints`);
+    }
+  }
+});
+
+test('one pager turns the stream and the mosaic, always drawn, at the touch floor (issue #399)', () => {
+  /* SHARED, and mounted exactly once in each list — never behind a condition,
+     because its row is part of the height the list reserves. */
+  for (const [name, source] of Object.entries({ Stream: stream, MediaGallery: mediaGallery })) {
+    assert.match(source, /import Pager from '\.\/Pager\.svelte';/, `${name} pages with something other than the shared pager`);
+    assert.equal((source.match(/<Pager\b/g) ?? []).length, 1, `${name} mounts the pager a number of times other than once`);
+    assert.doesNotMatch(source, /\{#if[^}]*\}\s*<Pager\b/, `${name} draws the pager only sometimes, so a second page moves the list`);
+  }
+  /* Two real steps, named by the caller's words and quiet at either end, and
+     where the reader is, said politely when it changes. A step with nowhere
+     to go is aria-disabled and ignores the press, but is never `disabled`: a
+     disabled button drops keyboard focus to the page the moment the last page
+     is reached, under a reader turning by key (review, 2026-11-02, issue
+     399). */
+  assert.match(pager, /data-step="previous"\s+aria-label=\{previousLabel\}\s+aria-disabled=\{page <= 1\}\s+onclick=\{\(\) => step\(page - 1\)\}/);
+  assert.match(pager, /data-step="next"\s+aria-label=\{nextLabel\}\s+aria-disabled=\{page >= pages\}\s+onclick=\{\(\) => step\(page \+ 1\)\}/);
+  assert.doesNotMatch(pager, /\sdisabled=/, 'a pager step is disabled outright, so focus drops off it at the last page');
+  assert.match(pager, /function step\(next: number\): void \{\s*if \(next < 1 \|\| next > pages\) return;\s*onturn\(next\);\s*\}/, 'a press on a quiet step is not ignored');
+  assert.match(pager, /<span class="pager-count" role="status" aria-live="polite" aria-label=\{`page \$\{page\} of \$\{pages\}`\}\s*>\{page\} \/ \{pages\}<\/span>/);
+  const code = styleBlock(pager).replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(code, /\.pager-step \{[^}]*inline-size: var\(--control-target\);\s*block-size: var\(--control-target\);/);
+  assert.match(code, /\.pager-count \{[^}]*font-variant-numeric: tabular-nums;/);
+  /* A step with nowhere to go dims by opacity alone: no colour of its own, no
+     border, so the pager keeps its shape at both ends. */
+  assert.doesNotMatch(code, /:disabled/, 'the quiet state is styled on a state the steps no longer have');
+  const disabled = /\.pager-step\[aria-disabled='true'\] \{([^}]*)\}/.exec(code)?.[1] ?? '';
+  assert.match(disabled, /opacity: var\(--pager-rest-dim\);/);
+  assert.doesNotMatch(disabled, /color|border|background/);
+  assert.match(styles, /--pager-rest-dim: [\d.]+;/);
+});
+
+test('the sheet, the stream and the pager agree where a phone ends, and so does the script (issue #399)', () => {
+  /* ONE PHONE WIDTH, however many blocks express it: a sheet with two
+     max-width breakpoints is a sheet whose parts disagree about where a phone
+     ends. The WIDTHS are compared, not the block count. */
+  const widthsIn = (source) =>
+    new Set([...source.matchAll(/@media \(max-width: ([^)]+)\)/g)].map(([, width]) => width.trim()));
+  const sheetWidths = widthsIn(styles);
+  assert.equal(sheetWidths.size, 1, `the sheet disagrees about where a phone ends: ${[...sheetWidths].join(', ')}`);
+  for (const [name, source] of Object.entries({ Stream: stream, Pager: pager })) {
+    assert.deepEqual([...widthsIn(styleBlock(source))], [...sheetWidths], `${name} and the sheet disagree about where a phone ends`);
+  }
+  /* THE SCRIPT ASKS THE SAME QUESTION THE STYLESHEET DOES, and a media query
+     cannot read a token — so the number is stated in lib/columnWidth.ts and
+     this holds the two equal. The mosaic's shapes and grid are chosen
+     against it. */
+  assert.equal(`${spreadFromRem - 0.0625}rem`, [...sheetWidths][0]);
+  assert.equal(spreadMediaQuery, `(min-width: ${spreadFromRem}rem)`);
+  assert.match(mediaGallery, /browserMedia\(spreadMediaQuery\)\.matches/);
 });
 
 test('nothing in the work, projects, art, or trackers surfaces reaches the network', async () => {
@@ -2820,40 +2555,106 @@ test('the coding-projects block declares no heading of its own (owner ruling, 20
  * click the video to expand it just as the pictures in the gallery". That
  * supersedes issue 233's inline film and the play control's "the sensitive
  * area should only be the button and not the entire video", so a film's tile
- * is the same button a still's is and the stage pages the whole set. */
+ * is the same button a still's is and the stage pages the whole set.
+ *
+ * THE ROW BECAME A MOSAIC (owner, 2026-11-02, issue #399, mock 06: "let's
+ * combine videos and drawings"): every item in one grid in manifest order, a
+ * page of five at a time with the shared pager, the set switch gone. */
 const galleryStyle = styleBlock(mediaGallery);
 
-test('the gallery is a row of five reserved square tiles that is the column, with nothing beside it and no instructions (owner directive, 2026-09-03, issue 287; 2026-10-17)', () => {
-  assert.match(mediaGallery, /tiles = 5 \}: MediaGalleryProps = \$props\(\)/, 'five pictures span the column; the count is a prop with that default');
-  assert.match(mediaGallery, /visible\.slice\(0, Math\.max\(1, tiles\)\)/);
-  assert.match(mediaGallery, /<div class="gallery-grid" data-gallery-tiles=\{shownTiles\.length\}>/);
+/* The rules of the gallery's sheet, by selector, comments out and whitespace
+   normalised. */
+const galleryRule = (selector) =>
+  new RegExp(`(?:^|\\n)\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`)
+    .exec(galleryStyle.replace(/\/\*[\s\S]*?\*\//g, ''))?.[1]
+    ?.replace(/\s+/g, ' ')
+    .trim() ?? '';
+
+test('the gallery is a mosaic of every item, a page at a time, whose shapes and grid are read from one width (issue #399)', () => {
+  /* EVERY ITEM, in manifest order, five a page: the page is cut by the shared
+     pure paging function, and the count is a prop with that default. */
+  assert.match(mediaGallery, /pageSize = 5 \}: MediaGalleryProps = \$props\(\)/, 'five tiles a page; the count is a prop with that default');
+  assert.match(mediaGallery, /const pageTiles = \$derived\(pageRows\(items, at, pageSize\)\);/, 'a page is cut from a subset of the items again');
+  assert.match(mediaGallery, /const pages = \$derived\(pageCount\(items\.length, pageSize\)\);/);
+  /* THE SHAPES ARE lib/mosaic.ts's (executed by tests/mosaic.test.mjs), asked
+     for the page's own count and for the grid the width selects — and the
+     grid takes its columns from that SAME answer, through a data attribute,
+     so the pattern and the grid it fills cannot be read from two widths. */
+  assert.match(mediaGallery, /let wide = \$state\(browserMedia\(spreadMediaQuery\)\.matches\);/);
+  assert.match(mediaGallery, /\$effect\(\(\) => watchMedia\(browserMedia, spreadMediaQuery, \(matches\) => \(wide = matches\)\)\);/);
+  assert.match(mediaGallery, /const columns = \$derived\(wide \? 6 : 2\);/);
+  assert.match(mediaGallery, /const shapes = \$derived\(mosaicShapes\(pageTiles\.length, columns\)\);/);
+  assert.match(mediaGallery, /<div class="gallery-grid" data-gallery-tiles=\{pageTiles\.length\} data-columns=\{columns\}>/);
+  assert.match(mediaGallery, /data-shape=\{shapes\[place\]\}/);
+  assert.doesNotMatch(galleryStyle, /@media/, 'the grid asks a width of its own besides the one the shapes were chosen for');
   /* ONE TILE SHAPE (issue 384): a still's tile and a film's are the same
      button with the same press and the same name pattern, the kind a data
      attribute rather than a second branch of markup. */
   assert.match(
     mediaGallery,
-    /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind=\{tile\.video \? 'video' : 'image'\}\s+onclick=\{\(event\) => open\(tile, event\.currentTarget\)\}\s+aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}\s*>/,
+    /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind=\{tile\.video \? 'video' : 'image'\}\s+data-shape=\{shapes\[place\]\}\s+onclick=\{\(event\) => open\(tile, event\.currentTarget\)\}\s+aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}\s*>/,
     'every tile, still or film, is the one button that opens the stage'
   );
   assert.equal((mediaGallery.match(/class="gallery-tile"/g) ?? []).length, 1, 'a second tile shape is back beside the button');
   assert.match(mediaGallery, /class="gallery-thumb"\s+src=\{tile\.previewSrc\}\s+alt=""[\s\S]*?loading="lazy"\s+decoding="async"/, 'a thumbnail is decoration inside a labelled button, lazy and async');
-  assert.match(mediaGallery, /aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}/);
-  assert.match(galleryStyle, /\.gallery-grid \{[^}]*grid-template-columns: repeat\(var\(--gallery-columns\), minmax\(0, 1fr\)\)/, 'the row fills the column; no gutter is dead');
-  assert.match(galleryStyle, /\.gallery-tile \{[^}]*aspect-ratio: var\(--gallery-tile-aspect\)/, 'every tile reserves its square before a byte arrives');
-  assert.match(styles, /--gallery-columns: 5;/);
-  const phoneColumns = styles.indexOf('--gallery-columns: 2;');
-  assert.ok(phoneColumns > styles.indexOf('--gallery-columns: 5;'), 'a phone folds the same tiles to two across — declared AFTER the token block, or the cascade hands the phone five columns');
-  assert.match(styles.slice(styles.lastIndexOf('@media (max-width: 45rem)', phoneColumns), phoneColumns), /^@media \(max-width: 45rem\) \{[\s\S]*:root \{\s*$/m, 'and inside the phone block, on :root');
-  assert.doesNotMatch(mediaGallery, /gallery-control|gallery-set-name/, 'a box of information beside the row is back');
+  /* THE GRID: six columns, or two, every row one track — the token's height,
+     bounded by the width of the cell it heads so no row is taller than its
+     cell is wide — and every tile exactly the cells its shape spans. */
+  const grid = galleryRule('.gallery-grid');
+  assert.match(grid, /--gallery-track: var\(--gallery-row\);/);
+  assert.match(grid, /grid-template-columns: repeat\(6, minmax\(0, 1fr\)\);/);
+  assert.match(grid, /grid-auto-rows: var\(--gallery-track\);/);
+  assert.match(grid, /gap: var\(--gallery-mosaic-gap\);/);
+  const phone = galleryRule(".gallery-grid[data-columns='2']");
+  assert.match(phone, /--gallery-track: var\(--gallery-row-phone\);/);
+  assert.match(phone, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.doesNotMatch(phone, /grid-auto-rows/, 'the phone grid sizes its rows apart from the one track');
+  /* The cell bound reads the mosaic's own box, so the wrapper is the size
+     container and the bound sits behind the engine's own support test. */
+  assert.equal(galleryRule('.gallery-mosaic'), 'container-type: inline-size;');
+  assert.match(mediaGallery, /<div class="gallery-mosaic">\s*<div class="gallery-grid"/);
+  const bounded = /@supports \(width: 1cqi\) \{([\s\S]*?)\n {2}\}/.exec(galleryStyle)?.[1]?.replace(/\s+/g, ' ') ?? '';
+  assert.match(bounded, /\.gallery-grid \{ --gallery-track: min\(var\(--gallery-row\), \(100cqi - 5 \* var\(--gallery-mosaic-gap\)\) \/ 6\); \}/);
+  assert.match(bounded, /\.gallery-grid\[data-columns='2'\] \{ --gallery-track: min\(var\(--gallery-row-phone\), \(100cqi - var\(--gallery-mosaic-gap\)\) \/ 2\); \}/);
+  for (const [selector, span] of [
+    [".gallery-tile[data-shape='sq']", 'grid-column: span 2; grid-row: span 2;'],
+    [".gallery-tile[data-shape='wd']", 'grid-column: span 3; grid-row: span 2;'],
+    [".gallery-tile[data-shape='full']", 'grid-column: span 6; grid-row: span 2;'],
+    [".gallery-grid[data-columns='2'] .gallery-tile[data-shape='sq']", 'grid-column: span 1; grid-row: span 1;']
+  ]) {
+    assert.equal(galleryRule(selector), span, `${selector} spans the wrong cells`);
+  }
+  assert.match(
+    galleryStyle.replace(/\s+/g, ' '),
+    /\.gallery-grid\[data-columns='2'\] \.gallery-tile\[data-shape='wd'\], \.gallery-grid\[data-columns='2'\] \.gallery-tile\[data-shape='full'\] \{ grid-column: span 2; grid-row: span 1; \}/
+  );
+  /* ZERO CLS: the grid reserves its fullest page — four rows at the reading
+     width, three on a phone — so a shorter last page, a turn or a manifest
+     landing moves nothing under the reader, and the pager under it stays put. */
+  assert.match(grid, /min-block-size: calc\(4 \* var\(--gallery-track\) \+ 3 \* var\(--gallery-mosaic-gap\)\);/);
+  assert.match(phone, /min-block-size: calc\(3 \* var\(--gallery-track\) \+ 2 \* var\(--gallery-mosaic-gap\)\);/);
+  for (const token of ['--gallery-row: 9rem;', '--gallery-row-phone: 10rem;', '--gallery-mosaic-gap: 0.375rem;']) {
+    assert.ok(styles.includes(token), `${token} is not the sheet's`);
+  }
+  for (const retired of ['--gallery-columns', '--gallery-tile-aspect', '--gallery-sets-gap', '--gallery-tile-gap', 'nth-child(n + 5)']) {
+    assert.ok(!styles.includes(retired) && !galleryStyle.includes(retired), `${retired} outlived the grid it sized`);
+  }
+  /* A tile is the cells it spans: no radius, no border, no shadow (the page
+     frame is the sheet's only line), and the picture covers it. */
+  const tile = galleryRule('.gallery-tile');
+  assert.doesNotMatch(tile, /border-radius|box-shadow|aspect-ratio/);
+  assert.match(tile, /border: 0;/);
+  assert.match(galleryRule('.gallery-thumb'), /inline-size: 100%; block-size: 100%; object-fit: cover;/);
+  /* THE PAGER IS THE SHARED ONE, once, under the grid; nothing explains the
+     row in words, and the set switch is gone with its sets. */
+  assert.equal((mediaGallery.match(/<Pager\b/g) ?? []).length, 1);
+  assert.match(mediaGallery, /<Pager page=\{at\} \{pages\} previousLabel="Earlier pictures" nextLabel="Later pictures"/);
+  assert.doesNotMatch(mediaGallery, /gallery-control|gallery-set|setOf|setGlyph|activeSet/, 'the set switch or a box of information is back');
   assert.doesNotMatch(mediaGallery, /open one to|page through|shown ·/, 'the row explains itself in words again');
-  /* The grid is ONLY tiles: every child the row draws is a tile, so the five
-     tracks hold five pictures and nothing else. */
-  const grid = /<div class="gallery-grid" data-gallery-tiles=\{shownTiles\.length\}>([\s\S]*?)\n {6}<\/div>\n {4}\{\/snippet\}/.exec(mediaGallery)?.[1] ?? '';
-  assert.ok(grid.length > 0, 'the grid is not where this pin expects it');
-  assert.match(grid, /^\s*\{#each shownTiles as tile \(tile\.key\)\}[\s\S]*\{\/each\}\s*$/, 'the grid holds something besides its tiles');
-  /* A phone folds to two across and shows four, so no tile stands alone in a
-     row; the stage still pages through all of them. */
-  assert.match(styles.slice(phoneColumns), /^\s*\.gallery-grid > :nth-child\(n \+ 5\) \{\s*display: none;\s*\}/m, 'a phone shows a lone fifth tile');
+  /* The grid is ONLY tiles: every child the row draws is a tile. */
+  const tiles = /<div class="gallery-grid" data-gallery-tiles=\{pageTiles\.length\} data-columns=\{columns\}>([\s\S]*?)\n {8}<\/div>/.exec(mediaGallery)?.[1] ?? '';
+  assert.ok(tiles.length > 0, 'the grid is not where this pin expects it');
+  assert.match(tiles, /^\s*\{#each pageTiles as tile, place \(tile\.key\)\}[\s\S]*\{\/each\}\s*$/, 'the grid holds something besides its tiles');
 });
 
 test('opening a tile is the only way onto the stage, a native <dialog> that loads the full derivative only then', () => {
@@ -2875,14 +2676,15 @@ test('opening a tile is the only way onto the stage, a native <dialog> that load
 });
 
 test('the stage pages the whole set, stills and films alike, with prev/next, the arrow keys and a swipe — all inside 44px targets — and wraps at both ends (issue 384)', () => {
-  /* The WHOLE chosen set, unfiltered: the count, the item and the opener all
-     read `visible`, so a film is a stop on the walk like any still. */
-  assert.match(mediaGallery, /const total = \$derived\(visible\.length\);/, 'the stage counts a subset of the set again');
-  assert.match(mediaGallery, /const item = \$derived\(visible\[shown\]\);/, 'the stage shows a subset of the set again');
-  assert.match(mediaGallery, /index = Math\.max\(0, visible\.indexOf\(chosen\)\);/, 'a tile opens the stage at a place in some other list');
+  /* EVERY ITEM, unfiltered (one set since the mosaic, issue #399): the count,
+     the item and the opener all read `items`, so a film is a stop on the walk
+     like any still, and the stage pages past the mosaic's own page. */
+  assert.match(mediaGallery, /const total = \$derived\(items\.length\);/, 'the stage counts a subset of the items again');
+  assert.match(mediaGallery, /const item = \$derived\(items\[shown\]\);/, 'the stage shows a subset of the items again');
+  assert.match(mediaGallery, /index = Math\.max\(0, items\.indexOf\(chosen\)\);/, 'a tile opens the stage at a place in some other list');
   assert.doesNotMatch(
     withoutHtmlComments(mediaGallery).replace(/\/\*[\s\S]*?\*\//g, ''),
-    /\bstills\b|visible\.filter\(/,
+    /\bstills\b|items\.filter\(|(?<!-)\bvisible\b/,
     'the stage pages a filtered subset again'
   );
   assert.match(mediaGallery, /index = \(shown \+ 1\) % total;/);
@@ -2892,8 +2694,8 @@ test('the stage pages the whole set, stills and films alike, with prev/next, the
   assert.equal((mediaGallery.match(/data-gallery-nav="previous"/g) ?? []).length, 1, 'the previous control is written twice');
   assert.equal((mediaGallery.match(/data-gallery-nav="next"/g) ?? []).length, 1, 'the next control is written twice');
   assert.equal((mediaGallery.match(/\{@render pager\(\)\}/g) ?? []).length, 2, 'a kind of stage lost its pair');
-  assert.match(mediaGallery, /aria-label=\{`Previous \$\{itemNoun\(visible\[\(shown - 1 \+ total\) % total\]\)\}`\}/);
-  assert.match(mediaGallery, /aria-label=\{`Next \$\{itemNoun\(visible\[\(shown \+ 1\) % total\]\)\}`\}/);
+  assert.match(mediaGallery, /aria-label=\{`Previous \$\{itemNoun\(items\[\(shown - 1 \+ total\) % total\]\)\}`\}/);
+  assert.match(mediaGallery, /aria-label=\{`Next \$\{itemNoun\(items\[\(shown \+ 1\) % total\]\)\}`\}/);
   /* A turn between a still and a film swaps the stage the pair sits in, so
      focus is read off the pressed control BEFORE the swap and handed to its
      twin after it; both turns do it. */
@@ -2917,7 +2719,7 @@ test('the stage pages the whole set, stills and films alike, with prev/next, the
 test('a film is a tile that opens the stage, where it is one native player started only by the press that opened it — and nothing autoplays (issue 384, superseding issues 233 and 243; issue 207)', () => {
   /* THE GRID HOLDS NO PLAYER. A film's tile is the still's button over the
      film's own preview, with a play mark that is decoration only. */
-  const grid = /<div class="gallery-grid" data-gallery-tiles=\{shownTiles\.length\}>([\s\S]*?)\n {6}<\/div>\n {4}\{\/snippet\}/.exec(mediaGallery)?.[1] ?? '';
+  const grid = /<div class="gallery-grid" data-gallery-tiles=\{pageTiles\.length\} data-columns=\{columns\}>([\s\S]*?)\n {8}<\/div>/.exec(mediaGallery)?.[1] ?? '';
   assert.ok(grid.length > 0, 'the grid is not where this pin expects it');
   assert.doesNotMatch(grid, /<video|<source/, 'the grid mounts a player again');
   assert.match(
@@ -2985,27 +2787,6 @@ test('a film is a tile that opens the stage, where it is one native player start
     'the stage film does not reserve the stage’s box, or crops instead of reducing'
   );
   assert.match(galleryStyle, /\.gallery-tile \{[^}]*background: var\(--gallery-stage-ground\);/, 'a preview in flight sits on a ground, not a hole (issue 239)');
-});
-
-test('the media sets are data: kind-derived by default, named by the manifest, chrome only when there is a choice (issue 275)', () => {
-  assert.match(mediaGallery, /return candidate\.set \?\? \(candidate\.video === undefined \? 'Photographs' : 'Videos'\);/);
-  assert.match(mediaGallery, /const sets = \$derived\(\[\.\.\.new Set\(items\.map\(setOf\)\)\]\);/, 'a set exists exactly when something is in it');
-  assert.match(mediaGallery, /\{#if sets\.length > 1\}\s*<div class="gallery-sets" role="group" aria-label="Media set">/, 'one set draws no switch');
-  assert.match(mediaGallery, /aria-pressed=\{name === activeSet\}/);
-  /* THE SET'S WORD MOVED TO THE ACCESSIBLE NAME (owner design decision,
-     2026-09-11, issue 313) and the figure stayed visible, because a count is a
-     fact and "Photographs" was a label. The mark is decided by what the set
-     HOLDS, the same rule the default name already follows, so a manifest that
-     names its own set still gets the right drawing. */
-  assert.match(mediaGallery, /<Icon name=\{setGlyph\(name\)\} slot="row" \/> · \{countOf\(name\)\}/, 'each set states its own count');
-  assert.match(mediaGallery, /aria-label=\{`\$\{name\} · \$\{countOf\(name\)\}`\}/, 'a mark-only segment with no accessible name');
-  assert.match(
-    mediaGallery,
-    /return members\.every\(\(candidate\) => candidate\.video !== undefined\) \? 'film' : 'photo';/,
-    'a set reads as film only when every member is one; a mixed set is pictures'
-  );
-  assert.match(mediaGallery, /chosenSet = name;\s*pressedKey = undefined;\s*index = 0;/, 'a set change forgets a pending press and returns the stage to the start');
-  assert.match(galleryStyle, /\.gallery-set \{[^}]*min-inline-size: var\(--control-target\);\s*min-block-size: var\(--control-target\);/);
 });
 
 test('the gallery states no colour or length of its own — every dimension is a token', () => {

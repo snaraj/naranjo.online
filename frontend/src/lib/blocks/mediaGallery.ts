@@ -78,7 +78,6 @@ function toGalleryItem(item: GalleryItem): MediaGalleryItem {
     title?: string;
     description?: string;
     link?: { href: string; label: string };
-    set?: string;
     video?: { posterSrc: string; sources: readonly { src: string; type: string; media?: string }[] };
     previewWidth?: number;
   } = {
@@ -103,9 +102,8 @@ function toGalleryItem(item: GalleryItem): MediaGalleryItem {
   if (item.link !== undefined) {
     rendered.link = item.link;
   }
-  if (item.set !== undefined) {
-    rendered.set = item.set;
-  }
+  /* An item's `set` is admitted by the manifest and read by nothing since the
+     mosaic shows every item in one grid (issue #399), so it stops here. */
   if (item.kind === 'video' && item.sources !== undefined) {
     /* Positional, and zipped rather than recomputed: which viewport each rung
        is offered to is decided once, beside the ladder that declares them

@@ -573,6 +573,14 @@ type CodingProject struct {
 	// "not read" are both "no version to show", and neither is a number this
 	// panel may invent.
 	Release string `json:"release,omitempty"`
+	// ReleasedAt is the RFC 3339 instant the latest release was published,
+	// normalized to UTC, and ReleaseSHA the full lowercase-hex identity of the
+	// commit its tag names (issue #399): the page marks THAT commit in its
+	// stream with the version. Both ride only beside an admitted tag, and each
+	// is dropped on its own when malformed: a release whose instant or commit
+	// cannot be vouched for still has a version, it just marks no commit.
+	ReleasedAt string `json:"releasedAt,omitempty"`
+	ReleaseSHA string `json:"releaseSha,omitempty"`
 	// Recorded marks a row served from the shipped snapshot rather than read
 	// live — the same provenance meaning it carries on a token-usage stat
 	// tile. Since issue 281 only the cold-start snapshot produces such rows:
@@ -1717,10 +1725,18 @@ type repositoryNode struct {
 	PullRequests repositoryPullTally `json:"pullRequests"`
 }
 
-// repositoryRelease is the latest release, reduced to the one word a cell
-// prints: the tag exactly as the host names it.
+// repositoryRelease is the latest release: the tag exactly as the host names
+// it, when it was published, and the commit the tag names (issue #399).
 type repositoryRelease struct {
-	TagName string `json:"tagName"`
+	TagName     string                   `json:"tagName"`
+	PublishedAt string                   `json:"publishedAt"`
+	TagCommit   *repositoryReleaseCommit `json:"tagCommit"`
+}
+
+// repositoryReleaseCommit is the commit a release's tag names, null when the
+// host reports none.
+type repositoryReleaseCommit struct {
+	OID string `json:"oid"`
 }
 
 // repositoryPullTally is the counted pull-request connection.
