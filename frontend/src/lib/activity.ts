@@ -358,11 +358,9 @@ export function commitShaLinkLabel(message: string, sha: string): string {
  * and is imported from there.
  *
  * The reserve the log's box was computed from left this module entirely
- * (owner design decision, 2026-09-11, issue 318). The log is the right-hand
- * column of the sheet's paired section now and reserves exactly as many rows
- * as the table beside it shows, so the number is `shownProjectRows` in
- * lib/projects.ts — one constant for a height two columns share, rather than
- * a second one here free to disagree with it.
+ * (owner design decision, 2026-09-11, issue 318). The rows are Ongoing Work's
+ * stream now (issue #399), which reserves one page of entries, so the number
+ * is `streamPageRows` in lib/commits.ts beside the adapter that pages them.
  * ------------------------------------------------------------------------ */
 
 /* The two honest empty-state lines, verbatim from the retired component. The

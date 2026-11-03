@@ -704,16 +704,16 @@ type visitorActivityCommit struct {
 // non-negative daily counts, non-negative totals and streak, dated recent
 // commits, and a generatedAt instant the strip can anchor cell dates on.
 // TestVisitorReadsTheProjectFeed is the user story behind issue 242's second
-// half: a visitor scrolls to Coding Projects and reads what the owner's host
-// says about each repository, rather than what it said on the day the release
-// was cut.
+// half: a visitor scrolls to Ongoing Work and reads what the owner's host says
+// about each repository — since issue #399, the release each commit in the
+// stream may be — rather than what it said on the day this site was released.
 //
 // This boot enables no refresh, so what the scenario proves is the COLD half
 // of the contract — which is the half that has to be right for the change to
 // be safe to merge before any credential exists. The panel serves its shipped
-// snapshot, says stale, and marks every row recorded; the page renders it
-// without waiting, because the block's adapter answers a null envelope with
-// the captured rows instead of nothing.
+// snapshot, says stale, and marks every row recorded; the page renders the
+// stream without waiting, because the block's adapter answers an unreadable
+// repositories panel with no releases instead of nothing.
 func TestVisitorReadsTheProjectFeed(t *testing.T) {
 	requireBuiltFrontend(t)
 	base, runResult := bootServer(t, nil)
@@ -738,12 +738,13 @@ func TestVisitorReadsTheProjectFeed(t *testing.T) {
 			bundled = append(bundled, response.Body...)
 		}
 		// Structure and markers, never copy: the panel id the block subscribes
-		// to, the repo-figure class each repository's figures render in (the
-		// ledger table's table-count went with the table when Ongoing Work
-		// replaced it, owner direction 2026-10-16, as the card feed's
-		// entry-count went before it, issue 287), and the provenance mark a
-		// captured figure carries.
-		for _, marker := range []string{"coding-projects", "repo-figure", "recorded"} {
+		// to, the field the stream reads a release's commit from and the class
+		// it draws that release in (the repositories' own figures, repo-figure,
+		// left with their column when Ongoing Work became one stream, owner
+		// direction 2026-11-02, issue #399, as the ledger table's table-count
+		// and the card feed's entry-count went before them), and the
+		// provenance mark a captured row carries.
+		for _, marker := range []string{"coding-projects", "releaseSha", "stream-release", "recorded"} {
 			if !bytes.Contains(bundled, []byte(marker)) {
 				t.Errorf("built assets lack the project-feed marker %q", marker)
 			}

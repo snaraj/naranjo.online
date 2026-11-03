@@ -98,14 +98,10 @@ const touchFloorPx = 44;
  * The two are DELIBERATELY UNEQUAL and the taller one is deliberately SECOND,
  * as they were: a lane that only ever measured the first item's metadata is
  * one a mutation walks straight past. */
-/* BOTH ITEMS NAME ONE EXPLICIT SET (issue 275), which is what puts a still
- * and a film in the SAME tile row: an operator publishes a mixed set exactly
- * this way, and without the field the component's kind-derived default would
- * split the fixture into Photographs and Videos and every mixed-row
- * measurement below would silently be taken against a one-tile row.
- * The set control's own lane serves this fixture with the field STRIPPED, so
- * the two-set branch is exercised by the same data through the same admitted
- * path rather than by a second fixture nobody else uses. */
+/* BOTH ITEMS STILL NAME A SET (issue 275), the field an operator's manifest
+ * carries: the parser admits it, and since the mosaic (owner, 2026-11-02,
+ * issue 399) nothing splits on it — films and drawings share one page — so a
+ * still and a film are always one page of two tiles. */
 const galleryManifestFixture = {
   schema: 'gallery/v1',
   items: [
@@ -665,11 +661,11 @@ test('switching the reading mode repaints without moving anything', async ({ pag
          direction, 2026-10-16): he is sized in the name's own measure, so a
          mode that resized the name would move him too. The intro joins it
          (owner, 2026-10-19): the name and J are one centred group in it. */
-      /* The trackers' one diagram and the Ongoing Work columns join the list
+      /* The trackers' one diagram and the Ongoing Work stream join the list
          in place of the heatmap blocks they replaced (owner direction,
-         2026-10-16): the chart, the calendar under it and every column of the
-         paired section, each read by name. A reading mode may repaint all of
-         them and resize none. */
+         2026-10-16; one stream since 2026-11-02, issue 399): the chart, the
+         calendar under it, the stream and its list, each read by name. A
+         reading mode may repaint all of them and resize none. */
       for (const selector of [
         '#app',
         'main',
@@ -681,8 +677,8 @@ test('switching the reading mode repaints without moving anything', async ({ pag
         '.chronicle-chart',
         '.chronicle-calendar',
         '.chronicle-accounts',
-        '.ongoing',
-        '.log-box',
+        '.stream',
+        '.stream-list',
         '.ticker-strip',
       ]) {
         const node = window.document.querySelector(selector);
@@ -5193,24 +5189,27 @@ test('a hostile commit entry renders as text and never becomes a live link', asy
   });
   await visit(page);
 
-  /* THE ENTRY IS ONE LINK OR NONE (owner direction, 2026-10-16: an Ongoing
-     Work entry is a two-line block whose title is its one link, and the
-     repository is text on its supporting line). So each staged entry is read
-     whole — found by what it says rather than by its position, since the log
-     interleaves private days by date — and every one of them must be the
-     PLAIN form, its strings literal and inert. */
+  /* AN ENTRY'S LINKS ARE ITS TITLE AND ITS SOURCE, EACH OR NEITHER (owner
+     direction, 2026-10-16: an entry is a two-line block whose subject is its
+     link; one stream since 2026-11-02, issue 399, where the repository on the
+     byline links to the repository it names). So each staged entry is read
+     whole — found by what it says rather than by its position, since the
+     stream interleaves private days by date — and every one of them must keep
+     its subject PLAIN, its strings literal and inert, with the only link left
+     being a well-formed repository's own address. */
   const rendered = await page.evaluate(
     ([repo, message]) => {
-      const entries = [...window.document.querySelectorAll('#projects .log-entry')];
+      const entries = [...window.document.querySelectorAll('#projects .stream-entry')];
       const read = (entry) => ({
-        plain: entry.querySelector('.log-plain') !== null,
+        titleLinked: entry.querySelector('a.stream-title') !== null,
         anchors: entry.querySelectorAll('a').length,
-        source: entry.querySelector('.log-source')?.textContent ?? null,
-        message: entry.querySelector('.log-message')?.textContent ?? null,
+        sourceHref: entry.querySelector('a.stream-source')?.getAttribute('href') ?? null,
+        source: entry.querySelector('.stream-source')?.textContent ?? null,
+        message: entry.querySelector('.stream-title')?.textContent ?? null,
       });
       return {
-        hostileRepo: entries.filter((entry) => entry.querySelector('.log-source')?.textContent === repo).map(read),
-        unresolved: entries.filter((entry) => entry.querySelector('.log-message')?.textContent === message).map(read),
+        hostileRepo: entries.filter((entry) => entry.querySelector('.stream-source')?.textContent === repo).map(read),
+        unresolved: entries.filter((entry) => entry.querySelector('.stream-title')?.textContent === message).map(read),
         anchors: entries.flatMap((entry) => [...entry.querySelectorAll('a')].map((a) => a.getAttribute('href'))),
         escaped: window.__activityEscaped === true,
         shaEscaped: window.__activityShaEscaped === true,
@@ -5220,20 +5219,24 @@ test('a hostile commit entry renders as text and never becomes a live link', asy
   );
 
   /* The hostile repository reached the DOM as literal text, in an entry that
-     is no link at all, and the string it carries never executed. */
+     is no link at all — neither its subject nor the name that is no
+     repository's — and the string it carries never executed. */
   expect(rendered.hostileRepo, 'the hostile-repo entry disappeared; this lane proves nothing').toHaveLength(1);
-  expect(rendered.hostileRepo[0].plain, 'the hostile-repo entry became a link').toBe(true);
-  expect(rendered.hostileRepo[0].anchors).toBe(0);
+  expect(rendered.hostileRepo[0].titleLinked, 'the hostile-repo entry’s subject became a link').toBe(false);
+  expect(rendered.hostileRepo[0].anchors, 'the hostile repository name became a link').toBe(0);
   expect(rendered.escaped, 'the hostile repo string executed').toBe(false);
-  /* Both unresolved-reference entries are plain text: "(#12e3)" is no
+  /* Both unresolved-reference entries keep a plain subject: "(#12e3)" is no
      reference, the second has no identity at all, and the third's identity is
      not forty hex digits — so neither the reference nor the permalink
-     fallback may build a link out of either. */
+     fallback may build a link out of either. Their one link is the
+     repository on the byline, and it is that repository's address and
+     nothing built from the subject or the identity. */
   expect(rendered.unresolved, 'an unresolved-reference entry disappeared').toHaveLength(2);
   for (const entry of rendered.unresolved) {
-    expect(entry.plain, 'an unresolved-reference entry became a link').toBe(true);
-    expect(entry.anchors).toBe(0);
+    expect(entry.titleLinked, 'an unresolved-reference entry’s subject became a link').toBe(false);
+    expect(entry.anchors, 'an unresolved-reference entry carries a link besides its repository').toBe(1);
     expect(entry.source).toBe('naranjo.online');
+    expect(entry.sourceHref, 'the repository link is not the repository’s address').toMatch(/^https:\/\/[^\s"<>]+\/naranjo\.online$/);
   }
   expect(rendered.shaEscaped, 'the hostile SHA string executed').toBe(false);
   /* And no anchor ANYWHERE in the log carries a hostile payload. */
@@ -5278,7 +5281,7 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
     'the calendar drew no measured day from an old-shape payload'
   ).toBeAttached();
 
-  const entries = page.locator('#projects .log-entry');
+  const entries = page.locator('#projects .stream-entry');
   expect(
     await entries.count(),
     'no commit entries rendered from an old-shape payload — this is the outage Daybreak Blue proved'
@@ -5287,7 +5290,7 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
      reference link a subject still resolves, never the entry, never the rest
      of the payload. */
   expect(
-    await page.locator('#projects .log-link').count(),
+    await page.locator('#projects a.stream-title').count(),
     'every entry lost its link too, not just its sha capability'
   ).toBeGreaterThan(0);
 });
@@ -5327,48 +5330,50 @@ test('an old-shape vcs-activity/v1 payload with no sha key on any row still rend
  * "do away with it for now"): no nav link, and no page mark before one. It
  * measures from the LAST role row in Professional Experience instead — the
  * control immediately before the Ongoing Work section's first repository link,
- * the same walk the issue-157 nav lane already proved. The landing is named by
- * STRUCTURE rather than by class (that section is being rebuilt, and its link
- * class with it): an anchor inside #projects and outside the commit column
- * (#commits), so nothing the commit list does can move it. An anchor anywhere
- * else fails loudly rather than reading as "this engine does not tab to
- * links", so a reshuffle cannot hide inside a skip. */
+ * the same walk the issue-157 nav lane already proved.
+ *
+ * AND IT MOVED A THIRD TIME, because the repositories' column is gone (owner,
+ * 2026-11-02, issue 399: Ongoing Work is one stream, and the first thing a Tab
+ * reaches in it is a filter BUTTON). The probe now stays inside Professional
+ * Experience altogether: it opens the last role, whose drawer holds that
+ * role's own link, and walks one real Tab from the role's row onto it — the
+ * same "known control, then one Tab" shape, against an anchor in a section the
+ * commit list cannot reach. The role is closed again before the probe
+ * returns, so the page is the page it was handed. An anchor anywhere else
+ * fails loudly rather than reading as "this engine does not tab to links", so
+ * a reshuffle cannot hide inside a skip. */
 async function engineTabsToPlainLinks(page) {
-  await page
-    .locator('#work .ledger-entry')
-    .last()
-    .locator('.ledger-row')
-    .evaluate((node) => node.focus());
+  const role = page.locator('#work .ledger-entry').last();
+  const row = role.locator('.ledger-row');
+  await row.click();
+  await expect(row, 'the last role did not open for the probe').toHaveAttribute('aria-expanded', 'true');
+  await row.evaluate((node) => node.focus());
   await page.keyboard.press('Tab');
   const landed = await page.evaluate(() => {
     const el = window.document.activeElement;
     return {
       tag: el.tagName,
       classes: typeof el.className === 'string' ? el.className : '',
-      inProjects: el.closest('#projects') !== null,
-      inCommits: el.closest('#commits') !== null,
+      inRole: [...window.document.querySelectorAll('#work .ledger-entry')].at(-1).querySelector('.ledger-drawer').contains(el),
     };
   });
+  await row.click();
+  await expect(row, 'the probe left the last role open').toHaveAttribute('aria-expanded', 'false');
   if (landed.tag !== 'A') return false;
   expect(
-    landed.inProjects && !landed.inCommits,
-    `the walk out of the last role row landed on an anchor carrying "${landed.classes}" rather than the repositories' first link; the tab order moved and this probe no longer knows where it is`
+    landed.inRole,
+    `the walk out of the last role row landed on an anchor carrying "${landed.classes}" rather than the role's own link; the tab order moved and this probe no longer knows where it is`
   ).toBe(true);
   return true;
 }
 
-/* The control a Tab leaves to reach the log's first link (owner direction,
- * 2026-10-16): the LAST figure of the last repository in the column beside it,
- * which is a focus stop of its own. Same shape as every version of this walk —
- * focus a known preceding control, then a real Tab — anchored on a control
- * that is not the link under test. */
-async function focusBeforeLog(page) {
-  await page
-    .locator('#projects .repo-entry')
-    .last()
-    .locator('.repo-figure')
-    .last()
-    .evaluate((node) => node.focus());
+/* The control a Tab leaves to reach an entry's subject link (owner, 2026-11-02,
+ * issue 399): the repository link on the SAME entry's byline, which is a focus
+ * stop of its own and sits before the subject in the tab order. Same shape as
+ * every version of this walk — focus a known preceding control, then a real
+ * Tab — anchored on a control that is not the link under test. */
+async function focusBeforeLog(page, entry) {
+  await entry.locator('a.stream-source').evaluate((node) => node.focus());
 }
 
 test('a resolvable commit entry is real, keyboard-reachable navigation', async ({ page }) => {
@@ -5387,11 +5392,12 @@ test('a resolvable commit entry is real, keyboard-reachable navigation', async (
   });
   await visit(page);
 
-  const entry = page.locator('#projects .log-entry').filter({ hasText: 'six-lane integration bundle' });
-  await expect(entry, 'the staged entry is not in the log').toHaveCount(1);
+  const entry = page.locator('#projects .stream-entry').filter({ hasText: 'six-lane integration bundle' });
+  await expect(entry, 'the staged entry is not in the stream').toHaveCount(1);
   await entry.scrollIntoViewIfNeeded();
   const attrs = await entry.evaluate((node) => {
-    const link = node.querySelector('a');
+    const link = node.querySelector('a.stream-title');
+    const describedBy = link?.getAttribute('aria-describedby') ?? '';
     return {
       anchors: node.querySelectorAll('a').length,
       tag: link?.tagName ?? null,
@@ -5399,15 +5405,19 @@ test('a resolvable commit entry is real, keyboard-reachable navigation', async (
       target: link?.getAttribute('target') ?? null,
       rel: link?.getAttribute('rel') ?? null,
       label: link?.getAttribute('aria-label') ?? '',
-      /* The repository rides the supporting line as TEXT inside the one link
-         (owner direction, 2026-10-16), never as a second anchor. */
-      source: node.querySelector('.log-source')?.textContent ?? null,
-      sourceInLink: link?.contains(node.querySelector('.log-source')) ?? false,
+      /* The repository rides the byline as ITS OWN link to the repository
+         (owner, 2026-11-02, issue 399), and the byline describes the subject
+         link, so a reader who tabs straight to the subject still hears where
+         it happened. */
+      source: node.querySelector('.stream-source')?.textContent ?? null,
+      sourceHref: node.querySelector('a.stream-source')?.getAttribute('href') ?? null,
+      description: describedBy === '' ? null : window.document.getElementById(describedBy)?.textContent ?? null,
     };
   });
-  expect(attrs.anchors, 'the entry carries more than its one link').toBe(1);
+  expect(attrs.anchors, 'the entry carries a link besides its subject and its repository').toBe(2);
   expect(attrs.source).toBe('naranjo.online');
-  expect(attrs.sourceInLink, 'the repository is not part of the entry it names').toBe(true);
+  expect(attrs.sourceHref, 'the byline does not link the repository it names').toBe('https://github.com/snaraj/naranjo.online');
+  expect(attrs.description, 'the subject link is not described by the byline that names its repository').toContain('naranjo.online');
   /* /issues/152, never /pull/152, and "reference" rather than "pull request"
      in the accessible name: the subject's trailing "(#152)" proves only that
      this repository's squash-merge convention wrote a number there (issue 157,
@@ -5423,27 +5433,27 @@ test('a resolvable commit entry is real, keyboard-reachable navigation', async (
   expect(attrs.label, 'the accessible name asserts a fact the payload never proved').not.toContain('pull request');
 
   const engineTabsLinks = await engineTabsToPlainLinks(page);
-  await focusBeforeLog(page);
+  await focusBeforeLog(page, entry);
   await page.keyboard.press('Tab');
   const focus = await page.evaluate(() => {
     const el = window.document.activeElement;
     const style = getComputedStyle(el);
     return {
       tag: el.tagName,
-      isEntryLink: el.classList.contains('log-link') && el.textContent.includes('six-lane integration bundle'),
+      isEntryLink: el.classList.contains('stream-title') && el.textContent.includes('six-lane integration bundle'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
   });
   test.skip(
     !engineTabsLinks,
-    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the repositories' own first link (matches desktop Safari's own default) — nothing left to measure here"
+    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the last role's own link (matches desktop Safari's own default) — nothing left to measure here"
   );
   /* From here the engine is INDEPENDENTLY proven capable of tabbing to plain
      links, so failing to reach the entry's link is a real regression — the
-     assertion an `inert` mutant on the log must fail. */
-  expect(focus.tag, 'a real Tab from the last repository figure did not land on any anchor at all').toBe('A');
-  expect(focus.isEntryLink, 'a real Tab from the last repository figure did not land on the entry link').toBe(true);
+     assertion an `inert` mutant on the stream must fail. */
+  expect(focus.tag, 'a real Tab from the entry’s repository link did not land on any anchor at all').toBe('A');
+  expect(focus.isEntryLink, 'a real Tab from the entry’s repository link did not land on its subject link').toBe(true);
   expect(focus.outlineStyle, 'the entry link has no visible keyboard focus ring').not.toBe('none');
   expect(parseFloat(focus.outlineWidth), 'the entry link focus ring has zero width').toBeGreaterThan(0);
 
@@ -5488,18 +5498,18 @@ test('a valid-SHA commit entry with no resolvable reference is real, keyboard-re
   });
   await visit(page);
 
-  const entry = page.locator('#projects .log-entry').filter({ hasText: 'no trailing reference number' });
-  await expect(entry, 'the staged entry is not in the log').toHaveCount(1);
+  const entry = page.locator('#projects .stream-entry').filter({ hasText: 'no trailing reference number' });
+  await expect(entry, 'the staged entry is not in the stream').toHaveCount(1);
   await entry.scrollIntoViewIfNeeded();
   const attrs = await entry.evaluate((node) => {
-    const link = node.querySelector('a');
+    const link = node.querySelector('a.stream-title');
     return {
       tag: link?.tagName ?? null,
       href: link?.getAttribute('href') ?? null,
       target: link?.getAttribute('target') ?? null,
       rel: link?.getAttribute('rel') ?? null,
       label: link?.getAttribute('aria-label') ?? '',
-      mark: node.querySelector('.log-mark')?.textContent ?? null,
+      mark: node.querySelector('.stream-mark')?.textContent ?? null,
     };
   });
   expect(attrs.tag, 'the sha-fallback branch did not render as a link at all').toBe('A');
@@ -5512,23 +5522,23 @@ test('a valid-SHA commit entry with no resolvable reference is real, keyboard-re
   expect(attrs.mark).toBe(validSha.slice(0, 7));
 
   const engineTabsLinks = await engineTabsToPlainLinks(page);
-  /* ONE Tab now: the entry is one link, and the repository that used to be a
-     second stop before it is text inside it (owner direction, 2026-10-16). */
-  await focusBeforeLog(page);
+  /* ONE Tab from the entry's own repository link, which is the stop before
+     its subject (owner, 2026-11-02, issue 399). */
+  await focusBeforeLog(page, entry);
   await page.keyboard.press('Tab');
   const focus = await page.evaluate(() => {
     const el = window.document.activeElement;
     const style = getComputedStyle(el);
     return {
       tag: el.tagName,
-      isEntryLink: el.classList.contains('log-link') && el.textContent.includes('no trailing reference number'),
+      isEntryLink: el.classList.contains('stream-title') && el.textContent.includes('no trailing reference number'),
       outlineStyle: style.outlineStyle,
       outlineWidth: style.outlineWidth,
     };
   });
   test.skip(
     !engineTabsLinks,
-    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the repositories' own first link — nothing left to measure here"
+    "this engine's default keyboard configuration does not include plain links in the tab order, measured independently against the last role's own link — nothing left to measure here"
   );
   expect(focus.tag, 'a real Tab did not land on any anchor at all').toBe('A');
   expect(focus.isEntryLink, 'a real Tab did not land on the sha-fallback link').toBe(true);
@@ -5571,8 +5581,8 @@ test('a valid SHA outranks an unverifiable trailing reference on the SAME entry 
     await route.fulfill({ response, json: envelope });
   });
   await visit(page);
-  const link = page.locator('#projects .log-entry').filter({ hasText: 'handwritten reference to nowhere' }).locator('a');
-  await expect(link, 'the staged entry is not one link').toHaveCount(1);
+  const link = page.locator('#projects .stream-entry').filter({ hasText: 'handwritten reference to nowhere' }).locator('a.stream-title');
+  await expect(link, 'the staged entry’s subject is not one link').toHaveCount(1);
   const href = await link.getAttribute('href');
   expect(
     href,
@@ -5581,92 +5591,69 @@ test('a valid SHA outranks an unverifiable trailing reference on the SAME entry 
   expect(href).not.toContain('/issues/9999999');
 });
 
-/* The commit log's rhythm (owner directive, 2026-08-25: "awkward large
- * vertical gaps between rows, almost like there should be something there";
- * re-aimed 2026-10-16 at Ongoing Work's two-line entries, owner direction:
- * "show 1 less entry per but give more information and make it more
- * readable").
+/* The stream's rhythm (owner directive, 2026-08-25: "awkward large vertical
+ * gaps between rows, almost like there should be something there"; re-aimed
+ * 2026-10-16 at Ongoing Work's two-line entries, owner direction: "show 1 less
+ * entry per but give more information and make it more readable"; one stream
+ * of five a page since 2026-11-02, issue 399).
  *
- * Each entry is a subject line and a supporting line between two paddings — a
- * PITCH the section decides before any payload lands — and the pitch is closed
- * by a rule, which is what turns the space into a list instead of dead air.
+ * Each entry is a byline and a subject between two paddings — a PITCH the
+ * section decides before any payload lands — and the pitch is closed by a
+ * rule, which is what turns the space into a list instead of dead air.
  * Measured here, with the property that made the rule safe: entries stay
- * flush, every one is at least a finger's height, the rule is painted as a
- * BACKGROUND that grows no entry's box (an inset shadow until 2026-10-19, a
- * twig since: "the plain lines should be tree branches, or vines"), no entry
- * draws a border, the last entry draws no rule, and the box still reserves
- * exactly the entries the column beside it shows — five repository entries
- * tall on a wide sheet, and on a phone the collapsed five plus the control
- * that reveals the rest. */
-test('the commit log reads as ruled two-line entries at the touch pitch, not text in dead air (owner 2026-08-25; 2026-10-16)', async ({
-  page,
-}) => {
-  await visit(page);
-  const observed = await page.evaluate(() => {
-    const box = window.document.querySelector('#projects .log-box');
-    const entries = [...box.querySelectorAll('.log-entry')];
-    const repos = [...window.document.querySelectorAll('#projects .repo-entry')];
-    const more = box.querySelector('.log-more');
-    return {
-      box: box.getBoundingClientRect().height,
-      overflowY: getComputedStyle(box).overflowY,
-      repos: repos.map((repo) => repo.getBoundingClientRect().height),
-      control: more === null ? null : more.getBoundingClientRect().height,
-      controlGap: more === null ? null : Number.parseFloat(getComputedStyle(more).marginBlockStart),
-      subjectPx: entries.length === 0 ? 0 : Number.parseFloat(getComputedStyle(entries[0].querySelector('.log-message')).fontSize),
-      entries: entries.map((entry) => {
-        const rect = entry.getBoundingClientRect();
-        const style = getComputedStyle(entry);
-        return { top: rect.top, height: rect.height, rule: style.backgroundImage, border: style.borderBlockEndWidth };
-      }),
-    };
-  });
-  expect(observed.entries.length, 'the commit log rendered no entries to measure').toBeGreaterThan(1);
-  /* The type step: small text in a tall entry is what read as dead air. */
-  expect(observed.subjectPx, `the commit subjects are set at ${observed.subjectPx}px`).toBeGreaterThanOrEqual(13);
-  for (const [index, entry] of observed.entries.entries()) {
-    expect(entry.height, `commit entry ${index} is ${entry.height}px tall`).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-    if (index > 0) {
-      const previous = observed.entries[index - 1];
-      expect(
-        entry.top,
-        `commit entry ${index} starts ${entry.top - (previous.top + previous.height)}px after the entry above it`
-      ).toBeCloseTo(previous.top + previous.height, 0);
-    }
-    expect(parseFloat(entry.border), `commit entry ${index} draws its rule as a border, which grows its box`).toBe(0);
-    if (index === observed.entries.length - 1) {
-      expect(entry.rule, 'the final entry draws a rule, so the list reads as missing its next entry').toBe('none');
-    } else {
-      expect(entry.rule, `commit entry ${index} draws no rule, so the pitch reads as dead air`).not.toBe('none');
-    }
-  }
-  /* AND THE BOX IS THE RESERVE, paired with the column beside it: the number
-     is read off the repositories the page drew, never typed here. */
-  expect(observed.repos.length, 'the repositories column drew no entries to pair the reserve against').toBeGreaterThan(0);
-  if (observed.control !== null) {
-    /* A phone: the collapsed five, the control at the touch floor and the gap
-       above it, and every entry exactly the tall pitch so the sum is exact. */
+ * flush, every one is at least a finger's height and exactly the one pitch,
+ * the rule is painted as a BACKGROUND that grows no entry's box (an inset
+ * shadow until 2026-10-19, a twig since: "the plain lines should be tree
+ * branches, or vines"), no entry draws a border, the last entry draws no
+ * rule, and the list reserves exactly a page of five pitches, with no scroll
+ * of its own, at both widths. */
+for (const width of [1440, 390]) {
+  test(`the stream reads as ruled two-line entries at the touch pitch, not text in dead air, at ${width}px (owner 2026-08-25; 2026-10-16; 2026-11-02, issue 399)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await visit(page);
+    const observed = await page.evaluate(() => {
+      const list = window.document.querySelector('#projects .stream-list');
+      const entries = [...list.querySelectorAll('.stream-entry')];
+      return {
+        list: list.getBoundingClientRect().height,
+        overflowY: getComputedStyle(list).overflowY,
+        subjectPx: entries.length === 0 ? 0 : Number.parseFloat(getComputedStyle(entries[0].querySelector('.stream-title')).fontSize),
+        entries: entries.map((entry) => {
+          const rect = entry.getBoundingClientRect();
+          const style = getComputedStyle(entry);
+          return { top: rect.top, height: rect.height, rule: style.backgroundImage, border: style.borderBlockEndWidth };
+        }),
+      };
+    });
+    expect(observed.entries.length, 'the stream rendered no page of five to measure').toBe(5);
+    /* The type step: small text in a tall entry is what read as dead air. */
+    expect(observed.subjectPx, `the subjects are set at ${observed.subjectPx}px`).toBeGreaterThanOrEqual(13);
     const pitch = observed.entries[0].height;
-    for (const entry of observed.entries) {
-      expect(entry.height, 'a phone entry is not the one pitch the reserve is computed from').toBeCloseTo(pitch, 0);
+    for (const [index, entry] of observed.entries.entries()) {
+      expect(entry.height, `entry ${index} is ${entry.height}px tall`).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+      expect(entry.height, `entry ${index} is not the one pitch the reserve is computed from`).toBeCloseTo(pitch, 0);
+      if (index > 0) {
+        const previous = observed.entries[index - 1];
+        expect(
+          entry.top,
+          `entry ${index} starts ${entry.top - (previous.top + previous.height)}px after the entry above it`
+        ).toBeCloseTo(previous.top + previous.height, 0);
+      }
+      expect(parseFloat(entry.border), `entry ${index} draws its rule as a border, which grows its box`).toBe(0);
+      if (index === observed.entries.length - 1) {
+        expect(entry.rule, 'the final entry draws a rule, so the list reads as missing its next entry').toBe('none');
+      } else {
+        expect(entry.rule, `entry ${index} draws no rule, so the pitch reads as dead air`).not.toBe('none');
+      }
     }
-    expect(observed.control, 'the log control is under the touch floor').toBeGreaterThanOrEqual(touchFloorPx - subPixel);
-    expect(
-      observed.box,
-      'the collapsed phone log is not exactly five entries, the control and its gap'
-    ).toBeCloseTo(5 * pitch + observed.control + observed.controlGap, 0);
-  } else {
-    const pitch = observed.repos[0];
-    for (const repo of observed.repos) {
-      expect(repo, 'the repository entries are not one pitch').toBeCloseTo(pitch, 0);
-    }
-    expect(observed.overflowY, 'the log box does not scroll for the entries past its reserve').toBe('auto');
-    expect(
-      observed.box,
-      `the log reserves ${observed.box}px, not the ${observed.repos.length} repository entries beside it`
-    ).toBeCloseTo(observed.repos.length * pitch, 0);
-  }
-});
+    /* AND THE LIST IS THE RESERVE: a page of five pitches, read off the
+       entries the page drew, and no scroll of its own. */
+    expect(observed.overflowY, 'the list scrolls inside itself').toBe('visible');
+    expect(observed.list, `the list reserves ${observed.list}px, not a page of five ${pitch}px entries`).toBeCloseTo(5 * pitch, 0);
+  });
+}
 
 /* ===========================================================================
  * The stacked page (issue 134)
@@ -6004,18 +5991,19 @@ test('every rendered link is unmarked at rest and marks itself on hover', async 
   }
   test.skip(Boolean(isMobile), 'a touch device has no hover state to measure');
   /* The repository's name is the exact element the owner reported, so it is
-     the one this hovers. The anchor is the whole two-line entry now (owner
-     direction, 2026-10-16), and the mark lands on the NAME inside it — the
-     words a reader is pointing at — rather than on the description under it. */
-  const entry = page.locator('#projects .repo-link').first();
-  await entry.scrollIntoViewIfNeeded();
-  /* The pointer goes where a reader's does, onto the name. The entry's
-     figures sit over the link's far end on purpose — they carry their own
-     detail — so the link's centre lands on them whenever the row is narrower
-     than twice their width, and hovering there never reaches the link. */
-  await entry.locator('.repo-name').hover();
-  const hovered = await entry.locator('.repo-name').evaluate((node) => getComputedStyle(node).textDecorationLine);
-  expect(hovered, 'hover leaves the repository name unmarked, so nothing announces it as a link').toBe('underline');
+     the one this hovers first: since the one stream (owner, 2026-11-02, issue
+     399) it is the link on an entry's byline. The entry's subject is the
+     other link an entry carries, and it is hovered second, so both marks are
+     measured on the engine. */
+  const source = page.locator('#projects a.stream-source').first();
+  await source.scrollIntoViewIfNeeded();
+  await source.hover();
+  const named = await source.evaluate((node) => getComputedStyle(node).textDecorationLine);
+  expect(named, 'hover leaves the repository name unmarked, so nothing announces it as a link').toBe('underline');
+  const subject = page.locator('#projects a.stream-title').first();
+  await subject.hover();
+  const told = await subject.evaluate((node) => getComputedStyle(node).textDecorationLine);
+  expect(told, 'hover leaves the entry’s subject unmarked, so nothing announces it as a link').toBe('underline');
 });
 
 /* ===========================================================================
@@ -6088,8 +6076,10 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
       words: window.document.querySelector('.gallery-grid').textContent.trim(),
     };
   });
-  /* A phone shows four of the five (two full rows), a wider screen all five. */
-  const drawn = (page.viewportSize()?.width ?? 1280) <= 720 ? 4 : 5;
+  /* Every width shows the whole page of five since the mosaic (owner,
+     2026-11-02, issue 399): two squares, a wide tile and two squares on a
+     phone, three squares over two wide tiles on a wider screen. */
+  const drawn = 5;
 
   expect(observed.mounted, 'the gallery mounted a number of tiles other than the five it declares').toBe(5);
   expect(observed.declared, 'the grid stopped declaring how many tiles it drew').toBe('5');
@@ -6303,9 +6293,11 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
 
-  /* AND THE ABSENT BRANCH, on a set with exactly one item: served untagged,
-     the fixture's still is the whole of the Photographs set, so there is
-     nowhere to page to and nothing may be drawn that says otherwise. */
+  /* AND THE ABSENT BRANCH, on a gallery of exactly one item: served alone,
+     the fixture's still is the whole of what the stage can page through, so
+     there is nowhere to page to and nothing may be drawn that says otherwise
+     (one set since the mosaic, issue 399: a manifest of one is the only way
+     left to a stage of one). */
   await page.unrouteAll({ behavior: 'ignoreErrors' });
   await page.route('**/media/mutable/gallery/manifest.json', (route) =>
     route.fulfill({
@@ -6313,7 +6305,7 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
       headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
       body: JSON.stringify({
         schema: 'gallery/v1',
-        items: galleryManifestFixture.items.map(({ set: _set, ...item }) => item),
+        items: galleryManifestFixture.items.filter((item) => item.kind === 'image'),
       }),
     })
   );
@@ -6332,133 +6324,81 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-/* THE SET CONTROL (owner sketch 2026-08-31, issue 275; RE-AIMED by the owner
- * directive of 2026-09-03, issue 287; 2026-10-17). The dropdown became a switch
- * above the row — one pressed button per set, drawn only when there is a
- * choice, with no menu to open and therefore no overlap to trade against. What the ruling was FOR is
- * unchanged and is what this measures: an entry exists exactly for a set
- * something is published in, choosing one really filters the row, and the
- * choice costs the page no layout.
- *
- * It serves the fixture UNTAGGED, so the sets under test are the kind-derived
- * defaults — the still is a Photograph, the film a Video — which is both
- * halves of the data-driven claim at once: entries exist for what the
- * manifest holds, and nothing (no OldSchool RuneScape, no empty promise) is
- * listed for a set nobody has published. The one-set branch is measured on
- * the vendored bootstrap row first, because a switch offering a choice of one
- * is a control that lies about having a choice. */
-test('the set switch lists only sets that exist, filters the row without moving the page, and offers no choice when there is one set (issue 275; owner 2026-09-03, issue 287)', async ({
+/* THE GALLERY TURNS ITS PAGES IN PLACE (owner, 2026-11-02, issue 399, mock
+ * 06; it replaced the set switch of issue 275, whose claim this keeps: a
+ * control over the pictures really changes what is shown, and costs the page
+ * no layout). The vendored gallery is eight pictures, so it is a full page of
+ * five and a short page of three: the short page lands in the reserve the
+ * full one filled, the pager does not move, and the engine's own shift ledger
+ * stays empty across the turn. A real Enter on the focused step is the
+ * keyboard half: the pager is reachable and operable without a pointer, on
+ * every engine. */
+test('the gallery pager turns a full page and a short one in place, by pointer and by key (owner 2026-11-02, issue 399)', async ({
   page,
 }) => {
   await visit(page);
-  const grid = page.locator('.gallery-grid');
-  await grid.scrollIntoViewIfNeeded();
-  /* ONE SET, so no switch at all, and no label in its place (owner,
-     2026-10-17): a button nobody can press to any effect is worse than
-     nothing, and so is a word that only says what the pictures already show. */
-  await expect(
-    page.locator('.gallery-set'),
-    'a set switch is drawn for a row with only one set to choose'
-  ).toHaveCount(0);
-  await expect(page.locator('.gallery-sets')).toHaveCount(0);
-  await expect(page.locator('.gallery-set-name')).toHaveCount(0);
+  const shape = () =>
+    page.evaluate(() => {
+      const round = (value) => Math.round(value * 100) / 100;
+      const grid = window.document.querySelector('#gallery .gallery-grid');
+      const pager = window.document.querySelector('#gallery .pager');
+      return {
+        tiles: grid.querySelectorAll('.gallery-tile').length,
+        first: grid.querySelector('.gallery-tile')?.getAttribute('aria-label') ?? '',
+        gridTop: round(grid.getBoundingClientRect().top + window.scrollY),
+        gridHeight: round(grid.getBoundingClientRect().height),
+        pagerTop: round(pager.getBoundingClientRect().top + window.scrollY),
+        count: pager.querySelector('.pager-count').textContent.trim(),
+        disabled: [...pager.querySelectorAll('.pager-step')].map((step) => step.disabled),
+      };
+    });
+  const first = await shape();
+  expect(first.tiles, 'the first page is not a full page of five').toBe(5);
+  expect(first.count).toBe('1 / 2');
+  expect(first.disabled).toEqual([true, false]);
 
-  await page.route('**/media/mutable/gallery/manifest.json', (route) =>
-    route.fulfill({
-      status: 200,
-      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
-      body: JSON.stringify({
-        schema: 'gallery/v1',
-        items: galleryManifestFixture.items.map(({ set: _set, ...item }) => item),
-      }),
-    })
-  );
-  await visit(page);
-  await grid.scrollIntoViewIfNeeded();
-  const sets = page.locator('.gallery-set');
-  await expect(
-    sets,
-    'the switch lists a set the manifest never published, or lost one it did'
-  ).toHaveText([' · 1', ' · 1']);
-  /* THE SET'S WORD IS ITS ACCESSIBLE NAME NOW (owner design decision,
-     2026-09-11, issue 313): the segment prints a mark and the figure, and the
-     engine's own accessibility tree is what has to still carry the word. */
-  for (const name of ['Photographs · 1', 'Videos · 1']) {
-    await expect(
-      page.getByRole('button', { name, exact: true }),
-      `no segment answers to "${name}"`
-    ).toHaveCount(1);
-  }
-  /* ...and the marks differ, which is the whole reason a word could go: two
-     segments drawn identically would be two segments nobody can tell apart. */
-  const markShapes = await sets.evaluateAll((nodes) =>
-    nodes.map((node) => node.querySelector('svg')?.innerHTML ?? '')
-  );
-  expect(markShapes[0], 'a gallery segment draws no mark at all').not.toBe('');
-  expect(markShapes[0], 'both gallery segments draw the same mark').not.toBe(markShapes[1]);
-  await expect(page.locator('.gallery-set-name')).toHaveCount(0);
-  await expect(page.locator('.gallery-sets')).toHaveAttribute('aria-label', 'Media set');
-  for (const index of [0, 1]) {
-    const box = await sets.nth(index).boundingBox();
-    expect(box.width + subPixel, 'a set button is under the touch floor').toBeGreaterThanOrEqual(
-      touchFloorPx
-    );
-    expect(box.height + subPixel, 'a set button is under the touch floor').toBeGreaterThanOrEqual(
-      touchFloorPx
-    );
-  }
-  /* The chosen set says so in the accessibility tree, not by ink alone — the
-     dataviz floor applied to a control (AGENTS.md, "a value is never encoded
-     by color alone"). */
-  await expect(sets.nth(0)).toHaveAttribute('aria-pressed', 'true');
-  await expect(sets.nth(1)).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.locator('.gallery-tile[data-gallery-kind="image"]')).toHaveCount(1);
-  await expect(page.locator('.gallery-tile[data-gallery-kind="video"]')).toHaveCount(0);
-
-  const heightBefore = await page.evaluate(() => window.document.documentElement.scrollHeight);
-  const gridBefore = await grid.boundingBox();
-  await sets.nth(1).click();
-  await expect(sets.nth(1)).toHaveAttribute('aria-pressed', 'true');
-  await expect(sets.nth(0)).toHaveAttribute('aria-pressed', 'false');
-  /* Choosing really filters the row: the film set holds the film and nothing
-     else, and the still is gone rather than merely dimmed. */
-  await expect(page.locator('.gallery-tile[data-gallery-kind="video"]')).toHaveCount(1);
-  await expect(page.locator('.gallery-tile[data-gallery-kind="image"]')).toHaveCount(0);
-  expect(
-    await page.evaluate(() => window.document.documentElement.scrollHeight),
-    'choosing a set grew the document'
-  ).toBe(heightBefore);
-  const gridAfter = await grid.boundingBox();
-  expect(
-    { x: Math.round(gridAfter.x), width: Math.round(gridAfter.width), height: Math.round(gridAfter.height) },
-    'choosing a set moved or resized the row it filters'
-  ).toEqual({
-    x: Math.round(gridBefore.x),
-    width: Math.round(gridBefore.width),
-    height: Math.round(gridBefore.height),
+  const watching = await page.evaluate(() => {
+    const types = PerformanceObserver.supportedEntryTypes ?? [];
+    if (!types.includes('layout-shift')) return false;
+    window.__galleryShift = [];
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        window.__galleryShift.push({
+          value: entry.value,
+          moved: [...(entry.sources ?? [])].map((source) => `${source.node?.tagName ?? 'unnamed'}.${source.node?.getAttribute?.('class') ?? ''}`),
+        });
+      }
+    }).observe({ type: 'layout-shift', buffered: false });
+    return true;
   });
-  /* AND THE KEYBOARD IS NEVER STRANDED BY A CHOICE. The buttons are keyed by
-     the set they name, so pressing one does not unmount it — which is exactly
-     what the retired dropdown had to repair by hand, and what this shape gets
-     for free. A real Enter on a focused button is what proves it: a CLICK
-     cannot, because macOS WebKit does not focus a <button> on a mouse press
-     at all (MEASURED: activeElement is the body there), and that is an engine
-     policy rather than anything this page decides.
-     It doubles as the keyboard half of the control — the switch is reachable
-     and operable without a pointer, on every engine. */
-  await sets.nth(0).focus();
-  await page.keyboard.press('Enter');
-  await expect(sets.nth(0)).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.gallery-tile[data-gallery-kind="image"]')).toHaveCount(1);
-  expect(
-    await page.evaluate(() => {
-      const buttons = [...window.document.querySelectorAll('.gallery-set')];
-      return buttons.indexOf(window.document.activeElement);
-    }),
-    'the choice stranded keyboard focus'
-  ).toBe(0);
 
-  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  const later = page.locator('#gallery .pager .pager-step[data-step="next"]');
+  await later.focus();
+  await page.keyboard.press('Enter');
+  await settled(page);
+  const second = await shape();
+  expect(second.count, 'Enter on the focused step did not turn the page').toBe('2 / 2');
+  expect(second.tiles, 'the short page does not hold the three pictures left').toBe(3);
+  expect(second.first, 'the second page shows the first page’s pictures').not.toBe(first.first);
+  expect(second.disabled).toEqual([false, true]);
+
+  await page.locator('#gallery .pager .pager-step[data-step="previous"]').click();
+  await settled(page);
+  const back = await shape();
+  expect(back.count).toBe('1 / 2');
+  expect(back.first, 'turning back did not return to the first page').toBe(first.first);
+
+  for (const [name, after] of [['the turn to a short page', second], ['the turn back', back]]) {
+    expect(after.gridTop, `${name} moved the gallery`).toBeCloseTo(first.gridTop, 1);
+    expect(after.gridHeight, `${name} changed the gallery’s reserve`).toBeCloseTo(first.gridHeight, 1);
+    expect(after.pagerTop, `${name} moved the pager`).toBeCloseTo(first.pagerTop, 1);
+  }
+  const shifts = await page.evaluate(() => window.__galleryShift ?? null);
+  if (watching) {
+    expect(shifts, `a page turn moved something: ${JSON.stringify(shifts)}`).toEqual([]);
+  } else {
+    expect(shifts, 'the layout-shift observer was armed but reported nothing at all').toBeNull();
+  }
 });
 
 test('opening a tile shows a real modal dialog with a larger, unframed photograph; Escape closes it and hands the tile back its focus (issue 202; owner 2026-09-03, issue 287)', async ({
@@ -7068,19 +7008,19 @@ test('a phone never pulls the 4K rung, and the smallest rung is reachable at all
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-/* THE GRID FILLS ITS COLUMN (issue 202, re-aimed by the owner directive of
- * 2026-09-03, issue 287, and by the owner's standing no-dead-space rule:
- * content short of its container's right edge is a defect).
+/* THE MOSAIC FILLS ITS COLUMN (issue 202, re-aimed by the owner directive of
+ * 2026-09-03, issue 287, by the owner's standing no-dead-space rule — content
+ * short of its container's right edge is a defect — and by the mosaic, owner
+ * 2026-11-02, issue 399, mock 06).
  *
  * The complaint this lane was born from — "568.9px of frame at the left of an
- * 842px track, 273px of dead space on the right alone" — was answered for the
- * old frame by CENTRING it, which is the best a box with a transferred inline
- * size can do. The tile grid does not need centring because it does not fall
- * short: its five tracks are `minmax(0, 1fr)` of the column, so the right
- * answer is the stronger one, and it is what the redesign is FOR. Both edges
- * are measured against the reading column's own, and the cells against each
- * other, so nothing here derives from the stylesheet or a token. */
-test('the gallery grid fills the reading column edge to edge, in five equal cells on a desktop (issue 202; owner 2026-09-03, issue 287)', async ({
+ * 842px track, 273px of dead space on the right alone" — is answered by a grid
+ * whose tracks are `minmax(0, 1fr)` of the column, and the mosaic keeps that:
+ * a full page of five is three squares over two wide tiles, and EVERY ROW
+ * reaches both of the grid's edges, so no width leaves a hole at a row's end.
+ * Both edges are measured against the reading column's own, and the tiles
+ * against each other, so nothing here derives from the stylesheet or a token. */
+test('the gallery mosaic fills the reading column edge to edge, three squares over two wide tiles on a desktop (issue 202; owner 2026-09-03, issue 287; 2026-11-02, issue 399)', async ({
   page,
 }) => {
   await visit(page);
@@ -7089,10 +7029,11 @@ test('the gallery grid fills the reading column edge to edge, in five equal cell
     await settled(page);
     const observed = await page.evaluate(() => {
       const round = (value) => Math.round(value * 100) / 100;
-      const grid = window.document.querySelector('.gallery-grid').getBoundingClientRect();
+      const gridNode = window.document.querySelector('.gallery-grid');
+      const grid = gridNode.getBoundingClientRect();
       /* The column's CONTENT box (owner direction, 2026-10-16): the Keep
          frames the sheet and pads it, and those are the column's own margin
-         now — what the row must reach is the edge every other block reaches,
+         now — what the grid must reach is the edge every other block reaches,
          measured on the page, never a number this file states. */
       const main = window.document.querySelector('main');
       const mainBox = main.getBoundingClientRect();
@@ -7101,45 +7042,68 @@ test('the gallery grid fills the reading column edge to edge, in five equal cell
         left: mainBox.left + Number.parseFloat(mainStyle.borderLeftWidth) + Number.parseFloat(mainStyle.paddingLeft),
         right: mainBox.right - Number.parseFloat(mainStyle.borderRightWidth) - Number.parseFloat(mainStyle.paddingRight),
       };
-      const cells = [...window.document.querySelectorAll('.gallery-tile')].filter((cell) => cell.getClientRects().length > 0).map(
-        (cell) => {
-          const box = cell.getBoundingClientRect();
-          return { x: round(box.x), y: round(box.y), width: round(box.width) };
-        }
-      );
+      const tiles = [...gridNode.querySelectorAll('.gallery-tile')].map((tile) => {
+        const box = tile.getBoundingClientRect();
+        return {
+          shape: tile.getAttribute('data-shape'),
+          left: round(box.left),
+          right: round(box.right),
+          top: round(box.top),
+          bottom: round(box.bottom),
+          width: round(box.width),
+          height: round(box.height),
+        };
+      });
       return {
         left: round(grid.left - column.left),
         right: round(column.right - grid.right),
-        cells,
-        rows: [...new Set(cells.map((cell) => Math.round(cell.y)))].length,
-        columns: [...new Set(cells.map((cell) => Math.round(cell.x)))].length,
+        gridLeft: round(grid.left),
+        gridRight: round(grid.right),
+        tiles,
       };
     });
     const at = `at ${width}px`;
     /* ONE PIXEL, and it is a rounding allowance rather than a tolerance for
        dead space: the gutter the owner reported was 273px, and the smallest
        gap this grid could leave from a real regression is one whole track. */
-    expect(
-      observed.right,
-      `the grid stops ${observed.right}px short of the column's right edge ${at}`
-    ).toBeLessThanOrEqual(1);
+    expect(observed.right, `the grid stops ${observed.right}px short of the column's right edge ${at}`).toBeLessThanOrEqual(1);
     expect(observed.right, `the grid runs past the column's right edge ${at}`).toBeGreaterThanOrEqual(-1);
     expect(observed.left, `the grid starts ${observed.left}px inside the column ${at}`).toBeLessThanOrEqual(1);
     expect(observed.left, `the grid starts ${observed.left}px outside the column ${at}`).toBeGreaterThanOrEqual(-1);
-    /* FIVE CELLS, ONE ROW, EQUAL WIDTHS — five pictures, which is what makes
-       the row fill the column with no track left over (owner, 2026-10-17). */
-    expect(observed.cells.length, `the row holds ${observed.cells.length} cells ${at}`).toBe(5);
-    expect(observed.rows, `the five cells wrapped onto ${observed.rows} rows ${at}`).toBe(1);
-    expect(observed.columns, `the row draws ${observed.columns} columns ${at}`).toBe(5);
-    const widths = observed.cells.map((cell) => cell.width);
-    for (const [index, cell] of widths.entries()) {
-      expect(
-        cell,
-        `cell ${index + 1} is ${cell}px against cell 1's ${widths[0]}px ${at}; the tracks are not equal`
-      ).toBeCloseTo(widths[0], 0);
+    /* FIVE TILES, TWO ROWS: three squares over two wide tiles. */
+    expect(observed.tiles.map((tile) => tile.shape), `the page is not three squares over two wide tiles ${at}`).toEqual([
+      'sq',
+      'sq',
+      'sq',
+      'wd',
+      'wd',
+    ]);
+    const rows = [observed.tiles.slice(0, 3), observed.tiles.slice(3)];
+    for (const [index, row] of rows.entries()) {
+      const name = `row ${index + 1} ${at}`;
+      /* Every tile of a row shares the row's top and its height, and the
+         row's tiles are equal widths — the shapes, not the pictures, size
+         them. */
+      for (const tile of row) {
+        expect(tile.top, `a tile of ${name} is off the row's line`).toBeCloseTo(row[0].top, 0);
+        expect(tile.height, `a tile of ${name} is a different height`).toBeCloseTo(row[0].height, 0);
+        expect(tile.width, `a tile of ${name} is a different width`).toBeCloseTo(row[0].width, 0);
+      }
+      /* THE ROW REACHES BOTH EDGES of the grid: no hole at its end. */
+      expect(row[0].left, `${name} starts inside the grid`).toBeCloseTo(observed.gridLeft, 0);
+      expect(row.at(-1).right, `${name} stops ${(observed.gridRight - row.at(-1).right).toFixed(1)}px short of the grid`).toBeCloseTo(
+        observed.gridRight,
+        0
+      );
     }
+    /* The wide tile is wider than the square, the second row sits wholly
+       under the first, and the two rows are the same height. */
+    expect(rows[1][0].width, `a wide tile is no wider than a square ${at}`).toBeGreaterThan(rows[0][0].width + 1);
+    expect(rows[1][0].top, `the rows overlap ${at}`).toBeGreaterThanOrEqual(rows[0][0].bottom);
+    expect(rows[1][0].height, `the rows are different heights ${at}`).toBeCloseTo(rows[0][0].height, 0);
   }
 });
+
 
 /* THE PAGE DOES NOT SCROLL BEHIND THE LIGHTBOX (issue 241).
  *
@@ -7315,8 +7279,10 @@ async function galleryRowShape(page) {
   });
 }
 
-/* EVERY TILE RESERVES ITS SQUARE BEFORE A BYTE ARRIVES (issue 202, re-aimed
- * by the owner directive of 2026-09-03, issue 287).
+/* EVERY TILE RESERVES ITS BOX BEFORE A BYTE ARRIVES (issue 202, re-aimed
+ * by the owner directive of 2026-09-03, issue 287, and by the mosaic, owner
+ * 2026-11-02, issue 399: a tile is the cells its shape spans, a square or a
+ * wide one, and a full page is five tiles at every width).
  *
  * The gap the #204 adversarial review found (finding 3): the zero-CLS
  * reservation was pinned at source only, and a centring lane survives the
@@ -7331,14 +7297,13 @@ async function galleryRowShape(page) {
  * rather than from the track would leave the row shorter, re-flow the cells
  * beside it — all of which this reads, cell by cell, against the page's own
  * other state. */
-test('every tile reserves the SAME square with its picture refused as with it served (issue 202; owner 2026-09-03, issue 287)', async ({
+test('every tile reserves the SAME box with its picture refused as with it served (issue 202; owner 2026-09-03, issue 287; 2026-11-02, issue 399)', async ({
   page,
 }) => {
   await page.route('**/gallery-*.webp', (route) => route.abort());
   await visit(page);
   const refused = await galleryRowShape(page);
-  const drawn = (page.viewportSize()?.width ?? 1280) <= 720 ? 4 : 5;
-  expect(refused.cells.length, 'the row drew a different number of cells with the pictures refused').toBe(drawn);
+  expect(refused.cells.length, 'the mosaic drew a different number of tiles with the pictures refused').toBe(5);
   for (const [index, cell] of refused.cells.entries()) {
     expect(
       cell.width,
@@ -7406,17 +7371,19 @@ test('the gallery row folds to two tiles across on a phone, at every width this 
       const cells = [...window.document.querySelectorAll('.gallery-tile')].filter((cell) => cell.getClientRects().length > 0).map(
         (cell) => {
           const box = cell.getBoundingClientRect();
-          return { x: Math.round(box.x), y: Math.round(box.y), width: round(box.width) };
+          return { shape: cell.getAttribute('data-shape'), x: Math.round(box.x), y: Math.round(box.y), left: round(box.left), right: round(box.right), width: round(box.width) };
         }
       );
       const rows = new Map();
       for (const cell of cells) {
-        rows.set(cell.y, (rows.get(cell.y) ?? 0) + 1);
+        rows.set(cell.y, [...(rows.get(cell.y) ?? []), cell]);
       }
       return {
         columns: [...new Set(cells.map((cell) => cell.x))].length,
-        perRow: [...rows.values()],
-        widths: cells.map((cell) => cell.width),
+        shapes: cells.map((cell) => cell.shape),
+        rows: [...rows.values()],
+        gridLeft: round(grid.left),
+        gridRight: round(grid.right),
         right: round(column.right - grid.right),
         left: round(grid.left - column.left),
         documentScrolls: root.scrollWidth > root.clientWidth,
@@ -7424,14 +7391,21 @@ test('the gallery row folds to two tiles across on a phone, at every width this 
       };
     });
     expect(row.columns, `the row draws ${row.columns} columns at ${width}px, not the two the phone form asks for`).toBe(2);
-    /* Four of the five tiles in two columns is two full rows: no row holds
-       more than two, and no tile stands alone in one (owner, 2026-10-17). */
-    expect(row.perRow, `the phone rows hold ${row.perRow.join(', ')} tiles at ${width}px`).toEqual([2, 2]);
-    for (const [index, cell] of row.widths.entries()) {
-      expect(
-        cell,
-        `cell ${index + 1} is ${cell}px against cell 1's ${row.widths[0]}px at ${width}px`
-      ).toBeCloseTo(row.widths[0], 0);
+    /* A full page of five in two columns is two squares, one wide tile
+       across, two squares (owner, 2026-11-02, issue 399, mock 06): no row
+       holds more than two, no square stands alone in one, and every row
+       reaches both of the grid's edges, so no width leaves a hole. */
+    expect(row.shapes, `the phone page is not two squares, a wide tile, two squares at ${width}px`).toEqual(['sq', 'sq', 'wd', 'sq', 'sq']);
+    expect(row.rows.map((cells) => cells.length), `the phone rows hold ${row.rows.map((cells) => cells.length).join(', ')} tiles at ${width}px`).toEqual([2, 1, 2]);
+    const square = row.rows[0][0].width;
+    for (const [index, cells] of row.rows.entries()) {
+      for (const cell of cells) {
+        if (cell.shape === 'sq') {
+          expect(cell.width, `a square in row ${index + 1} is ${cell.width}px against ${square}px at ${width}px`).toBeCloseTo(square, 0);
+        }
+      }
+      expect(cells[0].left, `row ${index + 1} starts inside the grid at ${width}px`).toBeCloseTo(row.gridLeft, 0);
+      expect(cells.at(-1).right, `row ${index + 1} stops short of the grid at ${width}px`).toBeCloseTo(row.gridRight, 0);
     }
     expect(row.right, `the row stops ${row.right}px short of the column at ${width}px`).toBeLessThanOrEqual(1);
     expect(row.left, `the row starts ${row.left}px inside the column at ${width}px`).toBeLessThanOrEqual(1);
@@ -7614,28 +7588,32 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
   });
   expect(rowText, 'a tile painted copy of its own').toBe('');
 
-  /* AND THE ROW IS THE LAST THING IN ITS BLOCK. The count above would still
-     pass if the gallery had left some other empty box behind it, so the
-     geometry says the same thing independently: nothing after the grid takes
-     any part in layout — the dialog is `display: none` while closed and
-     nothing else may be there. */
+  /* AND THE PAGER IS THE ONLY THING AFTER THE MOSAIC (it was "the row is the
+     last thing in its block" until the mosaic's pager, owner 2026-11-02,
+     issue 399). The count above would still pass if the gallery had left
+     some other empty box behind it, so the geometry says the same thing
+     independently: after the mosaic exactly one box takes part in layout —
+     the pager — and the block ends where the pager does. The dialog is
+     `display: none` while closed and nothing else may be there. */
   const trailing = await page.evaluate(() => {
-    const gridNode = window.document.querySelector('.gallery-grid');
-    const block = gridNode.parentElement;
+    const mosaic = window.document.querySelector('.gallery-grid').closest('.gallery-mosaic');
+    const block = mosaic.parentElement;
+    const after = [...block.children]
+      .slice([...block.children].indexOf(mosaic) + 1)
+      .filter((node) => window.getComputedStyle(node).display !== 'none');
     return {
       blockBottom: block.getBoundingClientRect().bottom,
-      gridBottom: gridNode.getBoundingClientRect().bottom,
-      inFlowAfter: [...block.children]
-        .slice([...block.children].indexOf(gridNode) + 1)
-        .filter((node) => window.getComputedStyle(node).display !== 'none')
-        .map((node) => node.className.toString()),
+      lastBottom: after.at(-1)?.getBoundingClientRect().bottom ?? null,
+      inFlowAfter: after.map((node) => node.className.toString()),
     };
   });
-  expect(trailing.inFlowAfter, 'the gallery left a box in flow after its row').toEqual([]);
+  expect(trailing.inFlowAfter, 'the gallery left a box in flow after its mosaic other than its pager').toEqual([
+    expect.stringMatching(/^pager(\s|$)/),
+  ]);
   expect(
     trailing.blockBottom,
-    `the gallery block runs ${trailing.blockBottom - trailing.gridBottom}px past its own row`
-  ).toBeCloseTo(trailing.gridBottom, 1);
+    `the gallery block runs ${trailing.blockBottom - trailing.lastBottom}px past its pager`
+  ).toBeCloseTo(trailing.lastBottom, 1);
 
   /* PRESENT ON THE STAGE: the link the manifest gave, and only the link —
      for every one of the eight, not for the one that happens to open first.
@@ -7748,9 +7726,9 @@ test('switching the reading mode repaints the gallery without moving any of it (
   await readFrom(page, '.gallery-grid');
   const before = await shape();
   expect(before.scrollY, 'the page did not scroll to the gallery, so the no-scroll check reads the top').toBeGreaterThan(0);
-  expect(before.cells.length, 'the gallery rendered no cells; this lane measures nothing').toBe(
-    (page.viewportSize()?.width ?? 1280) <= 720 ? 4 : 5
-  );
+  /* A full page of five at every width since the mosaic (owner, 2026-11-02,
+     issue 399). */
+  expect(before.cells.length, 'the gallery rendered no cells; this lane measures nothing').toBe(5);
 
   /* BOTH scenes, there and back, each compared against the ORIGINAL rather
      than against its predecessor, so a drift that accumulates a fraction at a
@@ -7816,10 +7794,11 @@ test('the Coding Projects subsection renders no capture-date or no-fetch caption
      ordinary day's work with nothing wrong with the page. */
   expect(text.length, 'the Coding Projects subsection rendered no text at all').toBeGreaterThan(0);
   /* The rows are the Ongoing Work entries since the table retired (owner
-     direction, 2026-10-16). */
+     direction, 2026-10-16), and the stream's entries since the one stream
+     (owner, 2026-11-02, issue 399). */
   await expect(
-    page.locator('#projects .repo-entry'),
-    'the project rows are missing from the rendered subsection'
+    page.locator('#projects .stream-entry'),
+    'the stream entries are missing from the rendered subsection'
   ).not.toHaveCount(0);
 
   /* Both halves of the removed caption, checked independently exactly like
@@ -8095,145 +8074,6 @@ test('the name is two lines, the roll opens on its first token source with the c
      lane's to state. */
 });
 
-/* THE REPOSITORIES, MEASURED (issue 188; owner sketch 2026-08-31; the ruled
- * table of issue 287; RESHAPED by the owner's direction of 2026-10-16 into
- * Ongoing Work's two-line entries: "show 1 less entry per but give more
- * information and make it more readable").
- *
- * Every claim that was ever about the READER rather than the markup is
- * re-measured against the entries:
- *
- *   - the roster is the owner's pinned set and nothing outside it, cut to the
- *     five entries the column holds, most recently pushed first;
- *   - on a wide sheet the figures sit beside the name and end at the entry's
- *     own end edge (the no-dead-space rule at 1440px), and the name never runs
- *     under them;
- *   - every column of figures starts at the same x in every entry (the
- *     2026-08-29 cross-row alignment ruling);
- *   - on a phone the figures take a line of their own under the name and
- *     description, all four on that one line, in order, from the entry's own
- *     start edge — and nothing takes the document sideways. */
-test('the repositories are one ruled entry each, aligned across entries, and they restack on a phone (issue 188; owner 2026-09-03, issue 287; 2026-09-12; 2026-10-16)', async ({
-  page,
-}) => {
-  await visit(page);
-  const entries = page.locator('#projects .repo-entry');
-  const count = await entries.count();
-  expect(count, 'the repositories column rendered no entries').toBeGreaterThan(1);
-
-  /* THE ROSTER IS SELECTED, NOT TRUNCATED (owner ruling, 2026-09-12: "remove
-     latest, this makes no sense"), and cut at the column's five (owner
-     direction, 2026-10-16). The bound is read from the origin's own envelope
-     rather than typed here. */
-  const roster = await page.evaluate(async () => {
-    const response = await fetch('/api/panels/coding-projects');
-    const envelope = await response.json();
-    const repos = Array.isArray(envelope?.data?.repos) ? envelope.data.repos : null;
-    if (repos === null) return null;
-    const instant = (repo) => Date.parse(repo.pushedAt ?? '') || 0;
-    const ordered = [...repos].sort((left, right) => instant(right) - instant(left));
-    return {
-      total: repos.length,
-      pinned: ordered.filter((repo) => repo.pinned === true).map((repo) => repo.name),
-      newestUnpinned: ordered.find((repo) => repo.pinned !== true)?.name ?? null,
-    };
-  });
-  expect(roster, 'the origin served no roster to bound the column against').not.toBeNull();
-  expect(roster.pinned.length, 'the served roster flags no pinned repositories at all').toBeGreaterThan(0);
-  expect(roster.newestUnpinned, 'the served roster is entirely pinned, so "nothing outside the set" has no subject').not.toBeNull();
-  const shown = roster.pinned.slice(0, 5);
-  expect(count, `the column drew ${count} entries of a ${roster.total}-repository roster`).toBe(shown.length);
-  const drawnNames = await entries.locator('.repo-name').allTextContents();
-  expect(drawnNames.map((name) => name.trim()), 'the column is not the most recently pushed of the pinned set, in push order').toEqual(shown);
-  expect(drawnNames, `the newest unpinned repository (${roster.newestUnpinned}) is in the column`).not.toContain(
-    roster.newestUnpinned
-  );
-
-  const overlapsVertically = (first, second) => first.y < second.y + second.height && second.y < first.y + first.height;
-  const measure = async () => {
-    const shape = [];
-    for (let index = 0; index < count; index += 1) {
-      const entry = entries.nth(index);
-      const box = await entry.boundingBox();
-      const name = await entry.locator('.repo-name').boundingBox();
-      const figures = [];
-      const figureCount = await entry.locator('.repo-figure').count();
-      for (let figure = 0; figure < figureCount; figure += 1) {
-        figures.push(await entry.locator('.repo-figure').nth(figure).boundingBox());
-      }
-      expect(box, `entry ${index} never rendered a box`).not.toBeNull();
-      expect(name, `entry ${index}'s name never rendered a box`).not.toBeNull();
-      shape.push({ box, name, figures });
-    }
-    return shape;
-  };
-
-  for (const width of [1280, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    await settled(page);
-    const shape = await measure();
-    for (const [index, entry] of shape.entries()) {
-      /* FOUR figures since issue #317: pull requests closed, the released
-         version, stars, and the age. */
-      expect(entry.figures.length, `at ${width}px entry ${index} lost a figure`).toBe(4);
-      for (const [figure, box] of entry.figures.entries()) {
-        expect(overlapsVertically(entry.name, box), `at ${width}px entry ${index}'s figure ${figure} dropped off the name's line`).toBe(true);
-      }
-      const end = entry.box.x + entry.box.width;
-      const last = entry.figures.at(-1);
-      expect(
-        last.x + last.width,
-        `at ${width}px entry ${index}'s last figure ends ${(end - last.x - last.width).toFixed(1)}px short of its end edge`
-      ).toBeGreaterThanOrEqual(end - 8);
-      expect(entry.name.x + entry.name.width, `at ${width}px entry ${index}'s name runs under its figures`).toBeLessThanOrEqual(
-        entry.figures[0].x + 1
-      );
-      expect(entry.name.x, `at ${width}px entry ${index}'s name is at a different x than entry 0's`).toBeCloseTo(shape[0].name.x, 0);
-      for (const [figure, box] of entry.figures.entries()) {
-        expect(box.x, `at ${width}px entry ${index}'s figure ${figure} is at a different x than entry 0's`).toBeCloseTo(
-          shape[0].figures[figure].x,
-          0
-        );
-      }
-    }
-  }
-
-  for (const width of [320, 375, 412]) {
-    await page.setViewportSize({ width, height: 900 });
-    await settled(page);
-    const shape = await measure();
-    const document = await page.evaluate(() => ({
-      scrollWidth: window.document.documentElement.scrollWidth,
-      clientWidth: window.document.documentElement.clientWidth,
-    }));
-    expect(
-      document.scrollWidth,
-      `at ${width}px the repositories took the document sideways (${document.scrollWidth} > ${document.clientWidth})`
-    ).toBeLessThanOrEqual(document.clientWidth + subPixel);
-    for (const [index, entry] of shape.entries()) {
-      expect(entry.figures.length, `at ${width}px entry ${index} lost a figure`).toBe(4);
-      expect(
-        overlapsVertically(entry.name, entry.figures[0]),
-        `at ${width}px entry ${index} did not restack; its figures are still beside its name`
-      ).toBe(false);
-      for (const cell of [1, 2, 3]) {
-        expect(
-          overlapsVertically(entry.figures[0], entry.figures[cell]),
-          `at ${width}px entry ${index}'s figure ${cell} left the figures' line`
-        ).toBe(true);
-        expect(
-          entry.figures[cell].x,
-          `at ${width}px entry ${index}'s figure ${cell} is drawn on top of figure ${cell - 1}`
-        ).toBeGreaterThan(entry.figures[cell - 1].x + entry.figures[cell - 1].width - 1);
-      }
-      expect(entry.figures[0].x, `at ${width}px entry ${index}'s figures do not start at its own edge`).toBeCloseTo(entry.box.x, 0);
-      expect(entry.box.x + entry.box.width, `at ${width}px entry ${index} runs past the viewport`).toBeLessThanOrEqual(
-        document.clientWidth + subPixel
-      );
-    }
-  }
-});
-
 /* A DAY IS NAMED IN WORDS, NEVER IN THE MACHINE'S DATE (issue 189's period
  * phrase, issue 178's format floor; re-aimed 2026-10-16 from the token
  * calendar's detail card to the trackers' one diagram, whose figures name the
@@ -8374,12 +8214,12 @@ function detailBox(page, selector, index) {
   );
 }
 
-/* THE TWO HOSTS THIS BATTERY MEASURES (owner directive, 2026-09-03, issue
-   287; re-aimed 2026-10-16). The point of measuring two was never that there
-   were two grids — it was the owner's complaint that only one of them had a
-   designed readout, so identical measurement on two hosts is what "aligned"
-   means once ONE component renders them all. The pair exercises the
-   primitive's TWO WIRING FORMS rather than one form twice:
+/* THE HOSTS THIS BATTERY MEASURES (owner directive, 2026-09-03, issue 287;
+   re-aimed 2026-10-16 and 2026-11-02). The point of measuring every host was
+   never that there were two grids — it was the owner's complaint that only
+   one of them had a designed readout, so identical measurement on each host
+   is what "aligned" means once ONE component renders them all. There were two,
+   one per WIRING FORM of the primitive:
 
      - the REGION form, where a single detail serves a whole surface and a
        resolver says which item a point names. Its host was the contribution
@@ -8387,9 +8227,13 @@ function detailBox(page, selector, index) {
        in its own figures instead of a detail (owner direction, 2026-10-16), so
        the region form's host is the boss ticker now — one detail for the whole
        band, rendered outside its moving run;
-     - the PER-ELEMENT form, where the detail describes its own parent: a
-       repository's figure in Ongoing Work, which took over from the retired
-       table's counter.
+     - the PER-ELEMENT form, where the detail describes its own parent. Its
+       host was a repository's figure in Ongoing Work, and that column retired
+       into the one stream (owner, 2026-11-02, issue 399), whose entries carry
+       no detail: the page draws no per-element host any more, so the battery
+       measures the band alone. The per-element wiring is the one default left
+       in lib/tooltip.ts (no host means the tip's own parent), with nothing on
+       the page to measure it against until a host returns.
 
    THE BAND IS STOPPED for every lane that points at it, exactly as the
    hostile-name lane below stops it: its items travel while it runs, so
@@ -8398,7 +8242,7 @@ function detailBox(page, selector, index) {
    every item is a target. The detail itself has no motion of its own, so
    nothing it is measured for changes with the preference. */
 const tickerItem = '.ticker-lane:not([aria-hidden="true"]) .ticker-item';
-const repoFigure = '#projects .repo-figure';
+const detailHosts = [[tickerItem, 3]];
 
 /* A tile's box once it has STOPPED MOVING. Some of the placements below need
    a tile at a specific edge of the screen, which means scrolling the page by
@@ -8479,13 +8323,12 @@ test('the detail opens beside the cursor, follows it, and never catches it', asy
   test.skip(!(await followsPointer(page)), 'no fine pointer here; the anchored branch is measured below');
   const { gap } = await tipTokens(page);
 
-  /* Both grids, because the owner's second complaint was that only one of
-     them had a designed readout. Identical measurement, identical result, is
-     what "aligned" means once one component renders both. */
-  for (const [selector, index] of [
-    [tickerItem, 3],
-    [repoFigure, 0],
-  ]) {
+  /* Every host the page draws, because the owner's second complaint was that
+     only one of them had a designed readout. Identical measurement, identical
+     result, is what "aligned" means once one component renders them all. The
+     band is the one host left since the repositories' figures retired with
+     their column (owner, 2026-11-02, issue 399). */
+  for (const [selector, index] of detailHosts) {
     const at = await hoverAt(page, selector, index, (box) => ({
       x: Math.round(box.x + box.width / 2),
       y: Math.round(box.y + box.height / 2),
@@ -8719,40 +8562,43 @@ test('the detail never grows the document at any viewport edge, and holds the ed
   test.skip(!(await followsPointer(page)), 'no fine pointer here; the anchored branch is measured below');
   const { gap, margin } = await tipTokens(page);
 
-  /* The narrowest viewport this site supports, and the figure that decides:
-     the one furthest toward the end edge, scrolled so its bottom edge is at
-     the bottom of the screen. Pointing at its far corner asks the box to go
-     past two edges at once, which is exactly the placement the retired
-     per-column anchoring could not express and the reason the document used
-     to grow sideways.
+  /* The narrowest viewport this site supports, and the item that decides:
+     the last one wholly inside the band's visible strip, scrolled so its
+     bottom edge is at the bottom of the screen. Pointing at its far corner
+     asks the box to go past two edges at once, which is exactly the
+     placement the retired per-column anchoring could not express and the
+     reason the document used to grow sideways.
 
-     MEASURED ON THE PER-ELEMENT HOST (re-aimed 2026-10-16). This lane used
-     the calendar's cells, the region form, and recorded at length that the
-     region form measures its box BEFORE the content for the pointed-at cell
-     exists — so neither flip could be asserted there (lib/tooltip.ts's aim()
-     places synchronously while the caller's detail lands a microtask later;
-     not this redesign's, and still true of the region form's one host, the
-     ticker). A repository figure is the per-element form: its detail is its
-     own and never changes content, so its box is measured whole and the
-     placement can be held to EVERY edge — which is what this lane now does,
-     strictly more than it could before. */
+     MEASURED ON THE BAND (re-aimed 2026-11-02, issue 399). From 2026-10-16
+     this half measured a repository's figure — the per-element form, whose
+     detail never changes content, so its box could be held to every edge.
+     That host retired with the repositories' column, and the band is the
+     region form, which measures its box BEFORE the content for the
+     pointed-at item exists (lib/tooltip.ts's aim() places synchronously
+     while the caller's detail lands a microtask later — not this change's,
+     and stated rather than papered over), so the two flips cannot be held
+     here. What the region form CAN answer for is held: the start and top
+     edges, a box the pointer passes through, and — the floor this lane is
+     named for — a document that never grows, at the worst corner of the
+     narrowest screen. The band is stopped first (see the hosts above). */
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: phoneWidths[0], height: 640 });
   await settled(page);
-  const lastColumn = await page.evaluate((css) => {
-    const cells = [...window.document.querySelectorAll(css)];
-    const rightmost = Math.max(...cells.map((cell) => Math.round(cell.getBoundingClientRect().right)));
-    return cells.findLastIndex((cell) => Math.round(cell.getBoundingClientRect().right) === rightmost);
-  }, repoFigure);
-  expect(lastColumn, 'no figure sits at the end of its line; this lane proves nothing').toBeGreaterThan(0);
+  const lastItem = await page.evaluate((css) => {
+    const strip = window.document.querySelector('.ticker-strip').getBoundingClientRect();
+    const items = [...window.document.querySelectorAll(css)];
+    return items.findLastIndex((item) => item.getBoundingClientRect().right <= strip.right);
+  }, tickerItem);
+  expect(lastItem, 'no band item sits at the end of the strip; this lane proves nothing').toBeGreaterThan(0);
 
-  const corner = page.locator(repoFigure).nth(lastColumn);
+  const corner = page.locator(tickerItem).nth(lastItem);
   await corner.scrollIntoViewIfNeeded();
   await corner.evaluate((cell) => {
     const box = cell.getBoundingClientRect();
     window.scrollBy(0, box.bottom - window.document.documentElement.clientHeight + 2);
   });
   const box = await settledBox(page, corner);
-  /* Two pixels inside the figure's far corner, floored: a box's edges land on
+  /* Two pixels inside the item's far corner, floored: a box's edges land on
      fractional pixels in every engine, so `right - 1` rounds OUTSIDE it often
      enough to matter, and a pointer outside sends no enter. */
   const at = {
@@ -8761,20 +8607,11 @@ test('the detail never grows the document at any viewport edge, and holds the ed
   };
   await page.mouse.move(0, 0);
   await page.mouse.move(at.x, at.y);
-  const edge = await detailBox(page, repoFigure, lastColumn);
-  expect(edge.open, 'the corner figure did not open its detail').toBe('true');
+  const edge = await detailBox(page, tickerItem, lastItem);
+  expect(edge.open, 'the corner item did not open its detail').toBe('true');
   expect(edge.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
   expect(edge.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
-  /* Flipped, not merely clamped, on both axes: a clamped box near the end
-     edge sits ON the cursor and covers the figure being pointed at; a flipped
-     one is on the other side of it. */
-  expect(edge.right, `the detail runs ${Math.round(edge.right - (edge.viewport.width - margin))}px past the end edge`).toBeLessThanOrEqual(
-    edge.viewport.width - margin + subPixel
-  );
-  expect(edge.bottom, `the detail runs ${Math.round(edge.bottom - (edge.viewport.height - margin))}px past the bottom edge`).toBeLessThanOrEqual(
-    edge.viewport.height - margin + subPixel
-  );
-  expect(edge.catchesPointer, 'the flipped detail sits under the pointer').toBe(false);
+  expect(edge.catchesPointer, 'the detail can receive the pointer, so it will flicker').toBe(false);
   /* THE floor: a fixed box is outside the document's scrollable overflow, so
      this is structural rather than lucky — measured while the box is open at
      the worst corner of the narrowest screen. */
@@ -8783,33 +8620,12 @@ test('the detail never grows the document at any viewport edge, and holds the ed
     `the detail grew the document to ${edge.scrollWidth}px inside a ${edge.clientWidth}px viewport`
   ).toBe(edge.clientWidth);
 
-  /* The other corner: a figure at the very top of the screen, where the box
-     must clamp rather than flip off the top. */
-  const first = page.locator(repoFigure).first();
-  await first.scrollIntoViewIfNeeded();
-  await first.evaluate((cell) => {
-    window.scrollBy(0, cell.getBoundingClientRect().top - 1);
-  });
-  const head = await settledBox(page, first);
-  await page.mouse.move(0, 0);
-  await page.mouse.move(Math.ceil(head.x) + 2, Math.ceil(head.y) + 2);
-  const top = await detailBox(page, repoFigure, 0);
-  expect(top.open, 'the top figure did not open its detail').toBe('true');
-  expect(top.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
-  expect(top.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
-  expect(top.scrollWidth, 'the detail grew the document at the top edge').toBe(top.clientWidth);
-
-  /* Every column width between the phone floor and a desktop, on BOTH hosts:
-     the region form is still held to the edges it can answer for, and the
-     per-element form to all of them. */
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  /* Every column width between the phone floor and a desktop, on every host
+     the page draws: the region form is held to the edges it can answer for. */
   for (const width of [phoneWidths[0], phoneWidths[2], 768, 1280]) {
     await page.setViewportSize({ width, height: 720 });
     await settled(page);
-    for (const [selector, index] of [
-      [tickerItem, 3],
-      [repoFigure, 0],
-    ]) {
+    for (const [selector, index] of detailHosts) {
       const spot = await hoverAt(page, selector, index, (tile) => ({
         x: Math.round(tile.x + tile.width / 2),
         y: Math.round(tile.y + tile.height / 2),
@@ -8830,131 +8646,63 @@ test('the detail never grows the document at any viewport edge, and holds the ed
   await page.emulateMedia({ reducedMotion: null });
 });
 
-test('a tap opens the detail over its own tile, and a second tap closes it', async ({ page }) => {
+test('a tap opens the band’s detail on the screen, and a second tap closes it', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await visit(page);
   test.skip(await followsPointer(page), 'this engine reports a cursor; the following branch is measured above');
-  const { gap, margin } = await tipTokens(page);
+  const { margin } = await tipTokens(page);
 
-  /* No cursor, so nothing to follow: the box anchors to the TILE, which is
-     the arrangement the pointer branch replaced and the correct one here. A
-     finger covers the tile it is on, so the box goes above it.
-     
-     MEASURED ON THE PER-ELEMENT HOST — a repository figure since the owner's
-     direction of 2026-10-16, the table counter before it — and the reason is
-     the one the edge lane above records: in the region form the box is measured before
-     its content for the tapped cell exists, so it is placed as the short,
-     narrow box it was a moment ago and then renders full-size over the very
-     tile it should sit above (measured on a 393px phone: tile 388–398, box
-     362–425). That ordering ships on main today, it is not this redesign's,
-     and it is stated rather than papered over. The figure is the per-element
-     form, whose content never changes, and it is where the finger branch can
-     be measured honestly: above its tile, clear of it, and closed again by a
-     second tap. */
-  const tile = page.locator(repoFigure).first();
-  await tile.scrollIntoViewIfNeeded();
-  await tile.tap();
-  const shown = await detailBox(page, repoFigure, 0);
+  /* No cursor, so nothing to follow: the box anchors to the item a finger
+     is on. RE-AIMED AT THE BAND (2026-11-02, issue 399): from 2026-10-16 this
+     lane measured a repository's figure, the per-element form, and held its
+     box one gap above its tile — which the region form cannot be held to,
+     for the reason the edge lane above records (its box is measured before
+     the tapped item's content exists, so it is placed as the short box it
+     was a moment ago and then renders full-size over the item it should sit
+     above; measured on a 393px phone: tile 388–398, box 362–425; on main
+     before this change, stated rather than papered over). That host retired
+     with the repositories' column. What a finger must still be able to count
+     on is held on the band: a tap opens a visible detail that stays on the
+     screen inside both edges without growing the document, and — a finger
+     has no "away" — the same item tapped again closes it, so there is no
+     state in which a reader is stuck with a box they cannot dismiss. The
+     band is stopped first (see the hosts above). */
+  const [selector, index] = detailHosts[0];
+  const item = page.locator(selector).nth(index);
+  await item.scrollIntoViewIfNeeded();
+  await item.tap();
+  const shown = await detailBox(page, selector, index);
   expect(shown.open, 'a tap opened no detail').toBe('true');
   expect(shown.visibility, 'a tap opened an invisible detail').toBe('visible');
-  expect(
-    shown.bottom,
-    `the detail runs to ${Math.round(shown.bottom)}px over a tile that starts at ${Math.round(shown.tile.top)}px`
-  ).toBeLessThanOrEqual(shown.tile.top - gap + subPixel);
-  /* ANCHORED, not merely above: one gap above its tile and on the screen.
-     "Above" alone was satisfied by a box drawn 1,500px up and off the top of
-     the page — measured 2026-10-16, when a backdrop-filter on the sheet made
-     it the containing block of the fixed detail and every detail landed off
-     the screen with this lane still green. */
-  expect(
-    shown.bottom,
-    `the detail ends ${Math.round(shown.tile.top - gap - shown.bottom)}px further above its tile than its gap`
-  ).toBeGreaterThanOrEqual(shown.tile.top - gap - 1);
   expect(shown.top, 'the detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
-  /* Centred on the tile it describes, unless an edge clamped it. */
-  const tileCentre = (shown.tile.left + shown.tile.right) / 2;
-  const boxCentre = (shown.left + shown.right) / 2;
-  const clamped =
-    shown.left <= margin + subPixel || shown.right >= shown.viewport.width - margin - subPixel;
-  if (!clamped) {
-    expect(
-      Math.abs(boxCentre - tileCentre),
-      `the detail is centred ${Math.round(Math.abs(boxCentre - tileCentre))}px away from its tile`
-    ).toBeLessThanOrEqual(1);
-  }
   expect(shown.left, 'the detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
-  expect(shown.right, 'the detail reaches past the end edge').toBeLessThanOrEqual(
-    shown.viewport.width - margin + subPixel
-  );
+  /* ON THE SCREEN at the end edge, and not held to the edge margin there:
+     the full box runs into the margin (measured 2026-11-02: its end at
+     392.94 on a 393px Android phone and 389.81 on a 390px iPhone, against a
+     margin line at 389 and 386), which is what the ordering above predicts —
+     a box placed by the narrower content it held a moment ago. It is stated
+     here, not hidden, and the margin returns to this assertion when the
+     region form re-places after its content lands. */
+  expect(shown.right, 'the detail runs off the end of the screen').toBeLessThanOrEqual(shown.viewport.width + subPixel);
   expect(shown.scrollWidth, 'the detail grew the document on a phone').toBe(shown.clientWidth);
 
-  /* A finger has no "away", so the tap is a TOGGLE: the same tile again
-     closes it, and there is no state in which a reader is stuck with a box
-     they cannot dismiss. */
-  await tile.tap();
-  const closed = await detailBox(page, repoFigure, 0);
+  await item.tap();
+  const closed = await detailBox(page, selector, index);
   expect(closed.open, 'a second tap left the detail open').toBe('false');
   expect(closed.visibility, 'a second tap left the detail visible').toBe('hidden');
+  await page.emulateMedia({ reducedMotion: null });
 });
 
-test('keyboard focus opens the detail', async ({ page }) => {
-  await visit(page);
-  const { gap, margin } = await tipTokens(page);
-
-  /* ONE KEYBOARD ROUTE NOW (re-aimed 2026-10-16; this lane was "keyboard
-     focus opens the detail on both grids"). It drove two hosts that a
-     keyboard reached differently: the calendar's listbox, whose cells took no
-     tab stop and whose cursor an arrow moved, and the table's counters, each
-     an ordinary tab stop opening its own readout. The listbox left with the
-     calendar it navigated — the trackers' diagram is a slider whose day is
-     read in its own figures, and its keyboard walk has lanes of its own — so
-     the route left to measure is the per-element one, on the repository
-     figures that took over from the counters.
-
-     A real key press, never a programmatic focus: `:focus-visible` is what
-     separates a keyboard reader from a click, and only a genuine keyboard
-     interaction sets it. The repository's own link is the tab stop
-     immediately before its first figure, so one real Tab lands there. */
-  const entry = page.locator('#projects .repo-entry').first();
-  await entry.scrollIntoViewIfNeeded();
-  await entry.locator('.repo-link').evaluate((node) => node.focus());
-  await page.keyboard.press('Tab');
-  const focused = await page.evaluate((css) => window.document.activeElement?.matches(css) === true, repoFigure);
-  expect(focused, `Tab did not land on ${repoFigure}`).toBe(true);
-  const index = await page.evaluate(
-    (css) => [...window.document.querySelectorAll(css)].indexOf(window.document.activeElement),
-    repoFigure
-  );
-  const shown = await detailBox(page, repoFigure, index);
-  expect(shown.open, 'a repository figure does not open its detail for a keyboard').toBe('true');
-  expect(shown.visibility, 'a repository figure opened an invisible detail for a keyboard').toBe('visible');
-  /* Anchored to the figure, because a keyboard has no cursor to anchor to —
-     the same branch a finger takes. Above it by preference, below it when the
-     figure is too near the top of the screen, and never ON it either way. */
-  const clear = shown.bottom <= shown.tile.top - gap + subPixel || shown.top >= shown.tile.bottom + gap - subPixel;
-  expect(
-    clear,
-    `the keyboard detail (${Math.round(shown.top)}–${Math.round(shown.bottom)}) overlaps its own figure (${Math.round(shown.tile.top)}–${Math.round(shown.tile.bottom)})`
-  ).toBe(true);
-  /* AND BESIDE IT, on the screen: one gap above the figure or one gap below.
-     "Not on it" alone was satisfied by a box drawn far off the top of the
-     page (measured 2026-10-16, when a backdrop-filter on the sheet made it
-     the containing block of the fixed detail). */
-  const above = Math.abs(shown.bottom - (shown.tile.top - gap)) <= 1;
-  const below = Math.abs(shown.top - (shown.tile.bottom + gap)) <= 1;
-  expect(
-    above || below,
-    `the keyboard detail (${Math.round(shown.top)}–${Math.round(shown.bottom)}) is not a gap from its figure (${Math.round(shown.tile.top)}–${Math.round(shown.tile.bottom)})`
-  ).toBe(true);
-  expect(shown.top, 'the keyboard detail reaches past the top edge').toBeGreaterThanOrEqual(margin - subPixel);
-  expect(shown.bottom, 'the keyboard detail reaches past the bottom edge').toBeLessThanOrEqual(
-    shown.viewport.height - margin + subPixel
-  );
-  expect(shown.left, 'the keyboard detail reaches past the start edge').toBeGreaterThanOrEqual(margin - subPixel);
-  expect(shown.right, 'the keyboard detail reaches past the end edge').toBeLessThanOrEqual(
-    shown.viewport.width - margin + subPixel
-  );
-  expect(shown.scrollWidth, 'the keyboard detail grew the document').toBe(shown.clientWidth);
-});
+/* KEYBOARD FOCUS AND THE DETAIL (re-aimed 2026-10-16; retired 2026-11-02,
+ * issue 399). The lane that stood here drove the one keyboard route to a
+ * detail the page had: a repository's figure, an ordinary tab stop opening
+ * its own readout. Those figures left the page with the repositories' column
+ * (owner, 2026-11-02, mock 04 — the owner's call, named in the PR), and the
+ * band's items are not tab stops: the band is one scroller a keyboard pans,
+ * and every figure its detail shows is in the item's own accessible name. So
+ * the page offers no keyboard route to a detail at all, and a lane measuring
+ * one would have no subject; the claim returns with the first host that
+ * offers one. */
 
 /* THE DIAGRAM OFFERS ITS LAYERS AND NOTHING ELSE (owner directive,
  * 2026-08-28, reversing the 0.1.52 decision after seeing it live: "remove this
@@ -9069,31 +8817,32 @@ test('the diagram offers its layers, the tome its corner, and no other control, 
   }
 });
 
-test('the band detail and the repository detail are the same object, measured', async ({ page }) => {
+test('the band detail is the one detail object, drawn from its tokens, measured', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await visit(page);
 
   /* The owner's second complaint, measured rather than eyeballed: one readout
-     must not merely resemble the other, it must BE it. Every value below is
-     read from the engine's computed style, and every one of them also has to
-     resolve from a token — a raw length would pass a parity check and still be
-     the drift issue #136 rule 5 forbids.
+     must not merely resemble another, it must BE the one object. Every value
+     below is read from the engine's computed style, and every one of them
+     also has to resolve from a token — a raw length would pass a parity check
+     and still be the drift issue #136 rule 5 forbids.
 
-     THE TWO SURFACES MOVED AGAIN (re-aimed 2026-10-16). It was the boss grid
-     against the skill grid, then the calendar against the repository table;
-     the calendar became the trackers' diagram, which names a day in its own
-     figures rather than in a detail. It is now the boss ticker against a
-     repository's figure — still the primitive's two WIRING FORMS, one detail
-     serving a whole band and a detail describing its own parent, so parity
-     here still proves the object is the same across the deeper of the two
-     possible divergences.
+     THE SURFACES MOVED AGAIN (re-aimed 2026-10-16 and 2026-11-02). It was
+     the boss grid against the skill grid, then the calendar against the
+     repository table, then the boss ticker against a repository's figure;
+     the repositories' figures retired with their column into the one stream
+     (owner, 2026-11-02, issue 399), and the band is the page's one host. So
+     the parity half has no second side left, and what stays measured is the
+     half that never needed one: the band's detail carries a heading and its
+     rows in the reference grammar, and every number it is drawn with is the
+     token's — so the next host to render the primitive inherits the object
+     rather than a copy of it.
 
-     The band's detail has to be OPENED before it can be compared: in the
+     The band's detail has to be OPENED before it can be measured: in the
      region form the box takes its content from whichever item is pointed at,
-     so an unopened one is genuinely empty. A repository figure's detail
-     describes its own parent and always carries it. */
+     so an unopened one is genuinely empty. */
   const opened = await openRegionDetail(page);
-  expect(opened, 'the band never opened a detail to compare').toBe(true);
+  expect(opened, 'the band never opened a detail to measure').toBe(true);
 
   const measure = (css) => {
     const node = window.document.querySelector(css);
@@ -9118,37 +8867,12 @@ test('the band detail and the repository detail are the same object, measured', 
     };
   };
   const band = await page.evaluate(measure, '.ticker-strip + .cell-tip');
-  /* A repository's terse figures carry no row (the provenance sentence every
-     counter used to state is gone — owner directive, 2026-09-06, issue 299),
-     so a bare figure's detail is its heading alone. Its AGE still states the
-     absolute instant as a row, through the same primitive in the same parent
-     form, so the age — the last figure of an entry — is the side measured. */
-  const repository = await page.evaluate(measure, '#projects .repo-entry .repo-figure:last-child .cell-tip');
-
-  for (const property of [
-    'padding',
-    'radius',
-    'border',
-    'background',
-    'ink',
-    'size',
-    'leading',
-    'gap',
-    'pointerEvents',
-    'position',
-    'titleInk',
-    'titleWeight',
-    'rowInk',
-  ]) {
-    expect(
-      repository[property],
-      `the repository detail's ${property} is "${repository[property]}" where the band detail's is "${band[property]}"`
-    ).toBe(band[property]);
-  }
-  /* Non-vacuity: a parity check between two empty boxes proves nothing, so
-     both must actually carry a heading and at least one row. */
+  /* Non-vacuity: a measurement of an empty box proves nothing, so the band's
+     detail must actually carry a heading and at least one row, and it must be
+     the fixed box that never takes the pointer. */
   expect(band.rows, 'the band detail rendered no rows').toBeGreaterThanOrEqual(2);
-  expect(repository.rows, 'the repository detail rendered no rows').toBeGreaterThanOrEqual(2);
+  expect(band.position, 'the band detail is not the fixed box the primitive places').toBe('fixed');
+  expect(band.pointerEvents, 'the band detail can take the pointer').toBe('none');
   /* The heading is the panel layer's one chromatic token and the rows are
      not, which is the visual grammar the owner called the reference. */
   expect(band.titleInk, 'the detail heading is painted in the body ink').not.toBe(band.ink);
@@ -10022,14 +9746,22 @@ test('every width the handle can reach keeps every section intact', async ({ pag
         (lane) => lane.getAttribute('aria-hidden') !== 'true'
       );
       /* The gallery's TILES, since the frame they used to be one of retired
-         (owner directive, 2026-09-03, issue 287). The row is measured against
-         its own column here rather than against a ceiling: every cell keeps
-         its square and the row keeps filling the column, at every width a
-         reader can drag the page down to. */
+         (owner directive, 2026-09-03, issue 287), laid as a mosaic since
+         2026-11-02 (issue 399). The grid is measured against its own column
+         here rather than against a ceiling: no tile is drawn taller than it is
+         wide and every row keeps filling the grid, at every width a reader can
+         drag the page down to. */
       const gridBox = window.document.querySelector('.gallery-grid').getBoundingClientRect();
       const tiles = [...window.document.querySelectorAll('.gallery-tile')].map((tile) => {
         const box = tile.getBoundingClientRect();
-        return { width: box.width, height: box.height };
+        return {
+          shape: tile.getAttribute('data-shape'),
+          left: box.left - gridBox.left,
+          right: gridBox.right - box.right,
+          top: Math.round(box.top - gridBox.top),
+          width: box.width,
+          height: box.height,
+        };
       });
       /* Against the column's CONTENT box since the Keep framed the sheet
          (owner direction, 2026-10-16): the frame and the sheet's own padding
@@ -10137,25 +9869,37 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     ).toBeGreaterThan(touchFloorPx);
     expect(state.marks, `J is not drawn exactly once ${at}`).toBe(1);
     expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(2);
-    /* The pictures still reserve the boxes they will fill, and since
-       2026-09-03 those boxes are a ROW of squares rather than one capped
-       stage (owner directive, issue 287). Two properties are under test at
-       every column width, and neither is a number this file or the
-       stylesheet states: every tile stays SQUARE, so a narrow column shrinks
-       the work rather than distorting it, and the row still reaches both of
-       the column's edges, so no width a reader can drag to reopens the dead
-       gutter the redesign closed. The 448px ceiling this block used to
-       compare against is gone with the frame it capped — a cap on a row that
-       is supposed to span its column would BE the defect — and what replaced
-       it as the independent expectation is the column itself, measured on
-       the same page in the same pass. */
+    /* The pictures still reserve the boxes they will fill: since 2026-09-03
+       a row of squares rather than one capped stage (owner directive, issue
+       287), and since 2026-11-02 a mosaic of squares and wide tiles (issue
+       399). Three properties are under test at every column width, and none
+       is a number this file or the stylesheet states: no tile is drawn
+       TALLER THAN IT IS WIDE and every square stays square or wider, so a
+       narrow column shrinks the work rather than squeezing it into a sliver
+       (measured before the mosaic's rows were bounded by their cells: 60x294
+       at the handle's floor); every row of tiles reaches both of the grid's
+       edges, so no width leaves a hole at a row's end; and the grid still
+       reaches both of the column's edges, so no width a reader can drag to
+       reopens the dead gutter the redesign closed. The 448px ceiling this
+       block used to compare against is gone with the frame it capped — a cap
+       on a row that is supposed to span its column would BE the defect — and
+       what replaced it as the independent expectation is the column itself,
+       measured on the same page in the same pass. */
     expect(state.tiles.length, `the gallery rendered no tiles ${at}`).toBeGreaterThan(0);
     for (const [index, tile] of state.tiles.entries()) {
       expect(tile.width, `gallery tile ${index + 1} reserves nothing ${at}`).toBeGreaterThan(0);
       expect(
         tile.height,
-        `gallery tile ${index + 1} is ${tile.width.toFixed(1)}x${tile.height.toFixed(1)} ${at}, not square`
-      ).toBeCloseTo(tile.width, 0);
+        `gallery tile ${index + 1} (${tile.shape}) is ${tile.width.toFixed(1)}x${tile.height.toFixed(1)} ${at}, taller than it is wide`
+      ).toBeLessThanOrEqual(tile.width + subPixel);
+    }
+    const tileRows = new Map();
+    for (const tile of state.tiles) {
+      tileRows.set(tile.top, [...(tileRows.get(tile.top) ?? []), tile]);
+    }
+    for (const [top, row] of tileRows) {
+      expect(Math.min(...row.map((tile) => tile.left)), `the tile row ${top}px down starts inside the grid ${at}`).toBeLessThanOrEqual(1);
+      expect(Math.min(...row.map((tile) => tile.right)), `the tile row ${top}px down stops short of the grid ${at}`).toBeLessThanOrEqual(1);
     }
     expect(
       state.galleryFill.right,
@@ -11728,528 +11472,202 @@ for (const viewport of markViewports) {
   });
 }
 
-/* THE FIGURES' MARKS ARE A COLUMN, AND SO ARE THEIR NUMERALS (owner directive,
- * 2026-09-11, issue #317; re-aimed 2026-10-16).
+/* THE STREAM TURNS IN PLACE (owner, 2026-11-02, issue 399, mock 04: "Keep it
+ * at 5 entries with sleek pagination"). It replaced a log that scrolled inside
+ * a reserve on a desktop and collapsed behind a "show all" control on a phone
+ * (owner ruling, 2026-09-12: "an endless scroll field that I have to fight out
+ * of") — and every claim that was about the READER survives the move, now
+ * measured on one shape at both widths:
  *
- * Two measurements, and the reason each is a lane rather than a source pin is
- * the same: both are claims about BOXES the engine laid out, and a stylesheet
- * that declares grid tracks proves nothing about where the engine put them. A
- * mark has to sit over the marks under it, and no numeral may move between
- * rows — which is issue 188's own claim, one level down: a figure that pushed
- * its own mark sideways would make the column of marks ragged exactly as a
- * figure that pushed its neighbours made the cluster ragged.
- *
- * RE-AIMED 2026-10-16 (owner direction: "Ongoing Work", two-line entries).
- * The table and its five-cell HEAD ROW of marks are gone — every figure now
- * carries its own mark and its own words — so the head's half of this lane
- * (its marks over the marks under them, and its five words) has no subject
- * and is retired. What replaced the head is asserted instead: every figure
- * carries its words for a reader who cannot see the drawing. And WHICH edge of
- * a numeral lines up changed with the owner's ruling of 2026-10-15 ("211
- * [tag]" read as 211 tags): the value sits hard against its own mark at every
- * width now, so the LEADING edge is the column at both widths, and the gap
- * from a mark to its value is one length across every figure on the page.
- *
- * Measured at BOTH viewports, because the phone restacks and a claim proved
- * only at 1440 is a claim about half the readers. */
+ *   - the list has no scroll of its own, so the page's own scroll is the only
+ *     one a thumb can land on;
+ *   - a page is five entries, the reserve is exactly five entries, and the
+ *     pager under them is real buttons at the touch floor;
+ *   - turning a page or pressing a filter moves NOTHING — not above the list,
+ *     not beside it, not below it — because every page and every filter lands
+ *     in a box that was already its size. The engine's own shift ledger is
+ *     armed across both, and it must stay empty;
+ *   - the document never goes sideways. */
 for (const width of [1440, 390]) {
-  test(`the repository figures align their marks and their numerals at ${width}px (owner 2026-09-11, issue #317; 2026-10-16)`, async ({
+  test(`the stream turns its pages and its filters in place at ${width}px, with no scroll of its own (owner 2026-11-02, issue 399)`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 900 });
     await visit(page);
-    const measured = await page.evaluate(() => {
-      const round = (value) => Math.round(value * 100) / 100;
-      const rows = [...window.document.querySelectorAll('#projects .repo-entry')];
-      const columns = rows.map((row) =>
-        [...row.querySelectorAll('.repo-figure')].map((cell) => {
-          const mark = cell.querySelector('.repo-glyph')?.getBoundingClientRect() ?? null;
-          const figure = cell.querySelector('.repo-value');
-          const value = figure?.getBoundingClientRect() ?? null;
-          return {
-            markLeft: mark === null ? null : round(mark.left),
-            markRight: mark === null ? null : round(mark.right),
-            markWidth: mark === null ? null : round(mark.width),
-            figureLeft: value === null ? null : round(value.left),
-            text: figure === null ? '' : figure.textContent.trim(),
-            words: (cell.querySelector('.ongoing-clipped')?.textContent ?? '').trim(),
-            label: (cell.getAttribute('aria-label') ?? '').trim(),
-          };
-        })
-      );
-      return { rows: rows.length, columns };
+    /* The wire's own row count, so "more than a page" is a number the origin
+       served rather than one typed here. */
+    const served = await page.evaluate(async () => {
+      const response = await fetch('/api/panels/vcs-activity');
+      const envelope = await response.json();
+      return Array.isArray(envelope?.data?.recentCommits) ? envelope.data.recentCommits.length : null;
     });
-    expect(
-      measured.rows,
-      'the repositories column drew no entries; the measurement below would prove nothing'
-    ).toBeGreaterThan(1);
-    // Every entry draws the same number of figures, or "a column" is not a
-    // thing this measurement can be about.
-    const counts = new Set(measured.columns.map((row) => row.length));
-    expect(counts.size, `entries draw different numbers of figures: ${[...counts]}`).toBe(1);
-    expect(measured.columns[0].length, 'an entry draws no figures at all').toBeGreaterThan(0);
-    const gaps = new Set();
-    for (let column = 0; column < measured.columns[0].length; column += 1) {
-      const marks = measured.columns.map((row) => row[column].markLeft);
-      const texts = measured.columns.map((row) => row[column].text);
-      expect(
-        new Set(marks).size,
-        `figure ${column}'s marks sit at ${[...new Set(marks)]} across entries reading ${texts}`
-      ).toBe(1);
-      const edge = measured.columns.map((row) => row[column].figureLeft);
-      expect(
-        new Set(edge).size,
-        `figure ${column}'s numerals start at ${[...new Set(edge)]} across entries reading ${texts}`
-      ).toBe(1);
-      for (const row of measured.columns) {
-        // Every mark really drew: a zero-width box would satisfy the
-        // alignment above by drawing nothing at all.
-        expect(row[column].markWidth, 'a figure mark drew no box').toBeGreaterThan(0);
-        expect(row[column].words, `the figure reading "${row[column].text}" carries no words`).not.toBe('');
-        expect(row[column].label, `the figure reading "${row[column].text}" has no accessible name`).not.toBe('');
-        gaps.add(Math.round((row[column].figureLeft - row[column].markRight) * 10) / 10);
-      }
+    expect(served, 'the origin served too few commits to page').toBeGreaterThan(5);
+
+    const shape = () =>
+      page.evaluate(() => {
+        const round = (value) => Math.round(value * 100) / 100;
+        const stream = window.document.querySelector('#projects .stream');
+        const list = stream.querySelector('.stream-list');
+        const pager = stream.querySelector('.pager');
+        const count = stream.querySelector('.pager-count');
+        const steps = [...stream.querySelectorAll('.pager-step')];
+        const top = (node) => round(node.getBoundingClientRect().top + window.scrollY);
+        return {
+          rows: list.querySelectorAll('.stream-entry').length,
+          first: list.querySelector('.stream-entry .stream-title')?.textContent ?? '',
+          listHeight: round(list.getBoundingClientRect().height),
+          pitch: round(list.querySelector('.stream-entry').getBoundingClientRect().height),
+          clientHeight: Math.round(list.clientHeight),
+          scrollHeight: Math.round(list.scrollHeight),
+          overflowY: getComputedStyle(list).overflowY,
+          streamTop: top(stream),
+          streamHeight: round(stream.getBoundingClientRect().height),
+          pagerTop: top(pager),
+          count: count.textContent.trim(),
+          steps: steps.map((step) => ({
+            disabled: step.disabled,
+            width: round(step.getBoundingClientRect().width),
+            height: round(step.getBoundingClientRect().height),
+            label: step.getAttribute('aria-label'),
+          })),
+          pressed: [...stream.querySelectorAll('.stream-filter')].map((filter) => filter.getAttribute('aria-pressed')),
+          documentWidth: window.document.documentElement.scrollWidth,
+          viewportWidth: window.innerWidth,
+        };
+      });
+
+    const first = await shape();
+    /* NO SCROLL OF ITS OWN, and A PAGE OF FIVE in exactly the room reserved
+       for five. */
+    expect(first.scrollHeight, `the list scrolls inside itself (${first.scrollHeight} > ${first.clientHeight})`).toBe(first.clientHeight);
+    expect(first.overflowY, 'the list takes an overflow of its own').toBe('visible');
+    expect(first.rows, 'a page does not show five entries').toBe(5);
+    expect(first.listHeight, 'the list is not exactly five entries tall').toBeCloseTo(5 * first.pitch, 0);
+    expect(first.count, 'the pager does not say where the reader is').toBe(`1 / ${Math.ceil(served / 5)}`);
+    expect(first.pressed, 'the stream does not open on everything').toEqual(['true', 'false', 'false']);
+    /* The pager's steps are real buttons at the touch floor, named, the first
+       one disabled because there is nothing newer. */
+    expect(first.steps.map((step) => step.label)).toEqual(['Newer entries', 'Older entries']);
+    expect(first.steps.map((step) => step.disabled)).toEqual([true, false]);
+    for (const step of first.steps) {
+      expect(step.width, 'a pager step is under the touch floor').toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+      expect(step.height, 'a pager step is under the touch floor').toBeGreaterThanOrEqual(touchFloorPx - subPixel);
     }
-    /* HARD AGAINST ITS MARK (owner ruling, 2026-10-15): one gap, everywhere.
-       A value pushed to the end of its track — the shape this lane used to
-       pin on a desktop — opens a gap that depends on the track's width. */
-    expect(gaps.size, `a value sits ${[...gaps].join(' / ')}px from its own mark across figures`).toBe(1);
+
+    /* THE ENGINE'S OWN SHIFT LEDGER, armed before the presses and scoped to
+       nothing: no node anywhere on the page may move for a page turn or a
+       filter. `hadRecentInput` is deliberately NOT filtered: it would excuse
+       every shift a press causes, which is the whole of what this lane is
+       about. */
+    const watching = await page.evaluate(() => {
+      const types = PerformanceObserver.supportedEntryTypes ?? [];
+      if (!types.includes('layout-shift')) return false;
+      window.__streamShift = [];
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          window.__streamShift.push({
+            value: entry.value,
+            moved: [...(entry.sources ?? [])].map((source) => `${source.node?.tagName ?? 'unnamed'}.${source.node?.getAttribute?.('class') ?? ''}`),
+          });
+        }
+      }).observe({ type: 'layout-shift', buffered: false });
+      return true;
+    });
+
+    await page.locator('#projects .pager-step[data-step="next"]').click();
+    await settled(page);
+    const second = await shape();
+    expect(second.count).toBe(`2 / ${Math.ceil(served / 5)}`);
+    expect(second.rows, 'the second page does not show five entries').toBe(5);
+    expect(second.first, 'the second page shows the first page’s entries').not.toBe(first.first);
+    expect(second.steps.map((step) => step.disabled)).toEqual([false, false]);
+
+    /* A filter starts its list at its first page; "Releases" with no release
+       on the wire is an empty list in the SAME reserve, with nothing moved. */
+    await page.locator('#projects .stream-filter[aria-label="Commits"]').click();
+    await settled(page);
+    const commits = await shape();
+    expect(commits.pressed).toEqual(['false', 'true', 'false']);
+    expect(commits.count, 'a filter left the reader on a later page').toBe(`1 / ${Math.ceil(served / 5)}`);
+
+    for (const [name, after] of [['the page turn', second], ['the filter', commits]]) {
+      expect(after.streamTop, `${name} moved the stream`).toBeCloseTo(first.streamTop, 1);
+      expect(after.streamHeight, `${name} changed the stream’s height`).toBeCloseTo(first.streamHeight, 1);
+      expect(after.pagerTop, `${name} moved the pager`).toBeCloseTo(first.pagerTop, 1);
+      expect(after.scrollHeight, `${name} made the list scroll inside itself`).toBe(after.clientHeight);
+      expect(after.documentWidth, `${name} took the document sideways`).toBeLessThanOrEqual(after.viewportWidth + subPixel);
+    }
+    const shifts = await page.evaluate(() => window.__streamShift ?? null);
+    if (watching) {
+      expect(shifts, `a page turn or a filter moved something: ${JSON.stringify(shifts)}`).toEqual([]);
+    } else {
+      expect(shifts, 'the layout-shift observer was armed but reported nothing at all').toBeNull();
+    }
   });
 }
 
-/* THE LOG RESERVES FIVE ENTRIES AND SCROLLS FOR THE REST ON A DESKTOP (owner
- * direction, 2026-10-16: five two-line entries per column; six at the ruling
- * of 2026-09-12, seven at issue 318, ten at issue #315), and the reserve is a
- * HEIGHT the engine gave the box rather than a number in a stylesheet. The
- * claim is the zero-CLS one: the box is exactly as tall as its reserve whether
- * it holds three entries or thirty, so a payload landing after first paint
- * moves nothing under the reader — and it is exactly as tall as the
- * REPOSITORIES beside it, which is the pairing the owner asked for and the
- * reason this lane measures that column's entries rather than typing a number.
- * Since 2026-10-16 the two columns are measured ending on one line, because
- * that is what the pairing looks like.
- *
- * A PHONE DOES THE OPPOSITE, and it has a lane of its own below: there the box
- * takes no overflow at all. */
-test('the commit log holds its reserve and scrolls inside it at 1440px (owner 2026-09-12; 2026-10-16)', async ({
+/* A PRESSED FILTER SHINES, AND ONLY WHERE MOTION IS WELCOME (owner,
+ * 2026-11-02: "generate SVGs with animation that shine/sparkly when clicking
+ * through the different buttons; don't underline it"). Measured as the engine
+ * runs it: the band and the sparks have running animations after a press with
+ * no preference, none at all under reduced motion, and the pressed filter is
+ * the brand's ink with no underline and no ground in either. */
+test('a pressed filter shines and sparks where motion is welcome, never underlined, and is still under reduced motion (owner 2026-11-02, issue 399)', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await visit(page);
-  const measured = await page.evaluate(() => {
-    const box = window.document.querySelector('#projects .log-box');
-    if (box === null) {
-      return null;
-    }
-    /* The paired column's own entries: the reserve is expressed in terms of
-       the column beside it, so the lane asks the page how many entries that
-       column drew, and how tall, rather than restating the stylesheet. */
-    const entries = [...window.document.querySelectorAll('#projects .repo-entry')];
-    const rows = [...box.querySelectorAll('.log-entry')];
-    const rect = box.getBoundingClientRect();
-    return {
-      height: rect.height,
-      clientHeight: box.clientHeight,
-      scrollHeight: box.scrollHeight,
-      overflowY: getComputedStyle(box).overflowY,
-      rows: rows.length,
-      rowHeights: rows.map((row) => row.getBoundingClientRect().height),
-      paired: entries.length,
-      pitches: entries.map((entry) => entry.getBoundingClientRect().height),
-      boxBottom: rect.bottom,
-      pairedBottom: entries.at(-1)?.getBoundingClientRect().bottom ?? null,
-      /* The box's own right edge against its column's: a scrollbar may take
-         width from the entries, and must never push the box past its column. */
-      boxRight: rect.right,
-      columnRight: box.closest('.ongoing-column').getBoundingClientRect().right,
-      /* No control here: the disclosure belongs to the width that has no
-         scroll, and it is absent from the DOM rather than hidden. */
-      controls: window.document.querySelectorAll('#projects .log-more').length,
-    };
-  });
-  expect(measured, 'the sheet drew no log box').not.toBeNull();
-  /* Five is what the pinned set comes to (`shownProjectRows`, lib/projects.ts)
-     and what the reserve is built from. */
-  expect(measured.paired, 'the repositories column drew no five entries to pair against').toBe(5);
-  for (const pitch of measured.pitches) {
-    expect(pitch, 'the repository entries are not one fixed pitch').toBeCloseTo(measured.pitches[0], 1);
-  }
-  const reserve = measured.pitches.reduce((sum, pitch) => sum + pitch, 0);
-  // THE RESERVE: five entries at the pitch this viewport draws them at.
-  expect(
-    measured.height,
-    `the log box is ${measured.height.toFixed(2)}px, want the ${reserve.toFixed(2)}px ${measured.paired}-entry reserve`
-  ).toBeCloseTo(reserve, 0);
-  expect(measured.boxBottom, 'the two columns do not end on one line').toBeCloseTo(measured.pairedBottom, 0);
-  expect(measured.overflowY, 'the log box does not scroll for the entries past its reserve').toBe('auto');
-  /* Every entry is at least the pitch the reserve is computed from, so the
-     box's fifth entry ends where the repositories' fifth does. A subject that
-     needs its second line may take it (owner direction, 2026-10-16) — inside
-     a box whose height is fixed either way. */
-  for (const [index, height] of measured.rowHeights.entries()) {
-    expect(
-      height,
-      `log entry ${index} is ${height.toFixed(2)}px, under the ${measured.pitches[0].toFixed(2)}px pitch`
-    ).toBeGreaterThanOrEqual(measured.pitches[0] - subPixel);
-  }
-  // And the box never widens past the column it sits in, whatever the engine
-  // charged for its scrollbar.
-  expect(measured.boxRight).toBeLessThanOrEqual(measured.columnRight + subPixel);
-  // The shipped snapshot carries more entries than the reserve holds, which is
-  // what makes the scroll real rather than theoretical.
-  expect(
-    measured.rows,
-    `the log drew ${measured.rows} entries; the reserve holds ${measured.paired}, so fewer would not exercise the scroll`
-  ).toBeGreaterThan(measured.paired);
-  expect(measured.scrollHeight).toBeGreaterThan(measured.clientHeight);
-  expect(measured.controls, 'the phone’s disclosure control rendered at a desktop width').toBe(0);
-});
-
-/* THE LOG DRAWS NO SCROLLBAR, AND ITS EDGES SAY WHERE THERE IS MORE (owner,
- * 2026-10-19: "this scroll wheel is quite the eyesore … don't have any cool
- * transition"). The box keeps its scroll — a wheel, a finger and the keys
- * still move it — but takes no width for a bar, and fades an edge only while
- * there is more beyond it: at the top the end fades and the start does not,
- * part-way both do, at the bottom the start does and the end does not. The
- * box reports where it is on data-at-start and data-at-end, and the fades
- * are the two registered lengths the mask is built from, read from the
- * engine. And a wheel that reaches the end stays in the box rather than
- * carrying on into the page (overscroll-behavior: contain), which is what a
- * reader feels when they scroll to the last commit and keep going. */
-test('the commit log fades only an edge with more beyond it, draws no scrollbar, and keeps a wheel past its end to itself (owner 2026-10-19)', async ({
-  page,
-  isMobile,
-}) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await visit(page);
-  const box = page.locator('#projects .log-box');
   const read = () =>
-    box.evaluate((node) => {
-      const style = getComputedStyle(node);
-      const rem = Number.parseFloat(getComputedStyle(window.document.documentElement).fontSize);
-      return {
-        atStart: node.dataset.atStart,
-        atEnd: node.dataset.atEnd,
-        fadeStart: Math.round(Number.parseFloat(style.getPropertyValue('--log-fade-start')) * 10) / 10,
-        fadeEnd: Math.round(Number.parseFloat(style.getPropertyValue('--log-fade-end')) * 10) / 10,
-        fade: Math.round(2.5 * rem * 10) / 10,
-        mask: style.maskImage || style.webkitMaskImage || 'none',
-        scrollTop: node.scrollTop,
-        room: node.scrollHeight - node.clientHeight,
-        clientWidth: node.clientWidth,
-        offsetWidth: node.offsetWidth,
-        overscroll: style.overscrollBehaviorY,
-      };
-    });
-  const first = await read();
-  expect(first.room, 'the log has nothing past its reserve, so its edges have nothing to say').toBeGreaterThan(0);
-  expect(first.mask, 'the log box draws no mask for its fades').not.toBe('none');
-  expect(first.clientWidth, `a scrollbar takes ${first.offsetWidth - first.clientWidth}px of the log box`).toBe(first.offsetWidth);
-  expect(first.overscroll, 'a scroll that reaches the log’s end carries on into the page').toBe('contain');
-
-  /* Each position is waited into: the attributes follow a scroll event and
-     the fades ease where motion is welcome, so the read is the settled one. */
-  const at = async (where, scrollTop, expected) => {
-    await box.evaluate((node, top) => {
-      node.scrollTop = top;
-    }, scrollTop);
-    await expect
-      .poll(
-        async () => {
-          const now = await read();
-          return { atStart: now.atStart, atEnd: now.atEnd, fadeStart: now.fadeStart, fadeEnd: now.fadeEnd };
-        },
-        { message: `the log's edges at its ${where}` }
-      )
-      .toEqual({
-        atStart: expected.atStart,
-        atEnd: expected.atEnd,
-        fadeStart: expected.startFaded ? first.fade : 0,
-        fadeEnd: expected.endFaded ? first.fade : 0,
-      });
-  };
-  await at('top', 0, { atStart: 'true', atEnd: 'false', startFaded: false, endFaded: true });
-  await at('middle', Math.round(first.room / 2), { atStart: 'false', atEnd: 'false', startFaded: true, endFaded: true });
-  await at('bottom', first.room, { atStart: 'false', atEnd: 'true', startFaded: true, endFaded: false });
-  const bottom = await read();
-  expect(bottom.clientWidth, 'a scrollbar appeared once the log was scrolled').toBe(bottom.offsetWidth);
-
-  /* THE WHEEL. A desktop pointer's gesture: an emulated phone has no wheel to
-     turn (a finger's overscroll is held by the same declaration, read above).
-     First the wheel is proved to reach the box at all — from the top it moves
-     the log and not the page — then, at the bottom, more wheel moves neither. */
-  if (isMobile) {
-    test.info().annotations.push({ type: 'capability', description: 'an emulated phone has no wheel; overscroll containment is read from the engine above' });
-    return;
-  }
-  await box.evaluate((node) => {
-    const top = node.getBoundingClientRect().top + window.scrollY;
-    window.scrollTo(0, Math.max(0, Math.floor(top) - 80));
-    node.scrollTop = 0;
-  });
-  await settled(page);
-  const page0 = await page.evaluate(() => window.scrollY);
-  const rect = await box.boundingBox();
-  await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
-  await page.mouse.wheel(0, 120);
-  await expect.poll(async () => (await read()).scrollTop, { message: 'a wheel over the log never moved it' }).toBeGreaterThan(0);
-  expect(await page.evaluate(() => window.scrollY), 'a wheel inside the log scrolled the page instead').toBe(page0);
-  await box.evaluate((node) => {
-    node.scrollTop = node.scrollHeight;
-  });
-  await expect.poll(async () => (await read()).atEnd).toBe('true');
-  await page.mouse.wheel(0, 600);
-  await page.evaluate(() => new Promise((done) => setTimeout(done, 400)));
-  expect(await page.evaluate(() => window.scrollY), 'a wheel past the log’s end carried on into the page').toBe(page0);
-});
-
-/* THE PHONE LOG IS NOT A SCROLL TRAP (owner ruling, 2026-09-12, on the live
- * page: at 390px the log is "quite busy ... an endless scroll field that I have
- * to fight out of"). Re-aimed at the Ongoing Work markup on 2026-10-16; every
- * claim is the one it was.
- *
- * Every claim here is about boxes the engine produced, because every one of
- * them is a thing a thumb meets: the box has no scroll of its own to capture a
- * gesture meant for the page, the collapsed list is five entries and a control
- * that says what pressing it does, the press reveals the whole log inline, and
- * nothing ABOVE the log moves when it does. The document never goes sideways in
- * either state. */
-test('at 390 the log shows five entries and a control, and the only scroll is the page’s (owner 2026-09-12)', async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await visit(page);
-
-  const shape = () =>
     page.evaluate(() => {
-      const round = (value) => Math.round(value * 100) / 100;
-      const box = window.document.querySelector('#projects .log-box');
-      const list = window.document.querySelector('#projects .log-list');
-      const control = window.document.querySelector('#projects .log-more');
-      const section = window.document.getElementById('projects');
-      /* The column's own top edge stands where its head did: the visible
-         head went (owner, 2026-10-19: "remove this heading … remove the icons
-         there as well"), and its word stays for a screen reader, clipped. */
-      const head = window.document.querySelector('#commits');
-      const word = window.document.querySelector('#commits > .ongoing-clipped');
-      const table = window.document.querySelector('#projects .ongoing-column:not(#commits)');
-      const box2 = (node) => {
-        if (node === null) return null;
-        const rect = node.getBoundingClientRect();
-        return { top: round(rect.top + window.scrollY), height: round(rect.height), right: round(rect.right) };
-      };
+      const filter = window.document.querySelector('#projects .stream-filter[aria-label="Releases"]');
+      const style = getComputedStyle(filter);
       return {
-        clientHeight: Math.round(box.clientHeight),
-        scrollHeight: Math.round(box.scrollHeight),
-        overflowY: getComputedStyle(box).overflowY,
-        rows: list.querySelectorAll('.log-entry').length,
-        listId: list.id,
-        control:
-          control === null
-            ? null
-            : {
-                tag: control.tagName,
-                type: control.getAttribute('type'),
-                expanded: control.getAttribute('aria-expanded'),
-                controls: control.getAttribute('aria-controls'),
-                text: control.textContent.trim(),
-                height: round(control.getBoundingClientRect().height),
-                width: round(control.getBoundingClientRect().width),
-                marks: control.querySelectorAll('svg').length,
-              },
-        listWidth: round(list.getBoundingClientRect().width),
-        sectionBox: box2(section),
-        headBox: box2(head),
-        word:
-          word === null
-            ? null
-            : { text: word.textContent.trim(), width: word.getBoundingClientRect().width, height: word.getBoundingClientRect().height },
-        visibleHeads: window.document.querySelectorAll('#projects .ongoing-head').length,
-        tableBox: box2(table),
-        boxTop: box2(box).top,
-        documentWidth: window.document.documentElement.scrollWidth,
-        viewportWidth: window.innerWidth,
+        pressed: filter.getAttribute('aria-pressed'),
+        lit: filter.getAttribute('data-lit'),
+        animations: filter.getAnimations({ subtree: true }).filter((animation) => animation.playState !== 'finished').length,
+        sparks: [...filter.querySelectorAll('.stream-spark')].map((spark) => getComputedStyle(spark).opacity),
+        decoration: style.textDecorationLine,
+        border: style.borderBottomWidth,
+        ground: style.backgroundImage,
+        groundColor: style.backgroundColor,
+        width: filter.getBoundingClientRect().width,
+        height: filter.getBoundingClientRect().height,
       };
     });
-
-  /* The wire's own row count, so "the rest" is a number the origin served
-     rather than one typed here. */
-  const served = await page.evaluate(async () => {
-    const response = await fetch('/api/panels/vcs-activity');
-    const envelope = await response.json();
-    return Array.isArray(envelope?.data?.recentCommits) ? envelope.data.recentCommits.length : null;
-  });
-  expect(served, 'the origin served no commits to collapse').not.toBeNull();
-  expect(served, 'the served log already fits in five entries; the disclosure has no subject').toBeGreaterThan(5);
-
-  const collapsed = await shape();
-  expect(collapsed.headBox, 'the log column is missing').not.toBeNull();
-  expect(collapsed.visibleHeads, 'a visible head is back over an Ongoing Work column').toBe(0);
-  expect(collapsed.word, 'the log column lost the word a screen reader names it by').not.toBeNull();
-  expect(collapsed.word.text.length, 'the log column’s clipped word is empty').toBeGreaterThan(0);
-  expect(collapsed.word.width * collapsed.word.height, 'the log column’s word is painted again').toBeLessThanOrEqual(1);
-  expect(collapsed.tableBox, 'the repositories column is missing').not.toBeNull();
-  /* NO SCROLL OF ITS OWN: the box is exactly as tall as what is in it, and its
-     overflow is the initial one. Either half alone would still trap a thumb. */
-  expect(
-    collapsed.scrollHeight,
-    `the collapsed log scrolls inside itself (${collapsed.scrollHeight} > ${collapsed.clientHeight})`
-  ).toBe(collapsed.clientHeight);
-  expect(collapsed.overflowY, 'the log still takes an overflow of its own on a phone').toBe('visible');
-  // FIVE ENTRIES, and a control under them that says how many the press brings.
-  expect(collapsed.rows, 'the collapsed log does not show five entries').toBe(5);
-  expect(collapsed.control, 'the collapsed log drew no control to reveal the rest').not.toBeNull();
-  expect(collapsed.control.tag, 'the control is not a real button').toBe('BUTTON');
-  expect(collapsed.control.type, 'a button inside no form still declares its type').toBe('button');
-  expect(collapsed.control.expanded, 'the control does not report its state').toBe('false');
-  expect(collapsed.control.controls, 'the control does not name the list it grows').toBe(
-    collapsed.listId
-  );
-  expect(collapsed.listId, 'the list has no id for the control to name').not.toBe('');
-  expect(collapsed.control.text, 'the control says nothing a reader could read').toBe(
-    `show all ${served}`
-  );
-  expect(collapsed.control.marks, 'the control draws a mark instead of saying what it does').toBe(0);
-  // The touch floor, measured rather than declared.
-  expect(collapsed.control.height, 'the control is under the 44px touch floor').toBeGreaterThanOrEqual(44);
-  /* AND IT TAKES THE LOG'S WHOLE WIDTH. A <button> is one of the few elements
-     whose own `auto` width does not fill its parent, so this is a real claim
-     rather than a default: the same control laid out as a plain block measured
-     99px of a 358px column, which is a target a thumb has to find under a list
-     that spans the screen. */
-  expect(
-    collapsed.control.width,
-    `the control is ${collapsed.control.width}px under a ${collapsed.listWidth}px list`
-  ).toBeCloseTo(collapsed.listWidth, 0);
-  expect(
-    collapsed.documentWidth,
-    `the collapsed log took the document sideways (${collapsed.documentWidth} > ${collapsed.viewportWidth})`
-  ).toBeLessThanOrEqual(collapsed.viewportWidth + subPixel);
-
-  /* THE ENGINE'S OWN SHIFT LEDGER, armed just before the press, and scoped to
-     the complement of what a disclosure is ALLOWED to move. Opening a list
-     grows it: the log's own box changes, the section around it changes with it,
-     and everything after it on the page moves down — that is the reader's own
-     press doing exactly what they pressed for, and the owner's ruling asks for
-     it in preference to a box they have to fight out of.
-
-     What must not move is anything ABOVE or BESIDE the log: the section's top
-     edge, the repositories column, the log's own head. So an entry is counted
-     when it names a node that is neither inside the log, nor an ancestor of it,
-     nor anywhere after it in the document — which is exactly that set, and is
-     a set the engine can genuinely report. `hadRecentInput` is deliberately NOT
-     filtered here: filtering it would excuse every shift a click causes, which
-     is the whole of what this press does, and the channel would report nothing
-     whatever the page did. A node the entry cannot name is counted too — an
-     unattributable shift is the one most worth hearing about. */
-  const watching = await page.evaluate(() => {
-    const types = PerformanceObserver.supportedEntryTypes ?? [];
-    if (!types.includes('layout-shift')) return false;
-    const box = window.document.querySelector('#projects .log-box');
-    window.__logShift = [];
-    new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        const above = [...(entry.sources ?? [])].filter((source) => {
-          const node = source.node;
-          if (!(node instanceof Element)) return true;
-          if (box.contains(node) || node.contains(box)) return false;
-          return (
-            (box.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) === 0
-          );
-        });
-        if (above.length === 0) continue;
-        window.__logShift.push({
-          value: entry.value,
-          moved: above.map((source) => `${source.node?.tagName ?? 'unnamed'}.${source.node?.getAttribute?.('class') ?? ''}`),
-        });
-      }
-    }).observe({ type: 'layout-shift', buffered: false });
-    return true;
-  });
-
-  await page.locator('#projects .log-more').click();
-  await settled(page);
-  const expanded = await shape();
-
-  // EVERY ENTRY, inline, and the control now offers the way back.
-  expect(expanded.rows, `pressing the control revealed ${expanded.rows} entries, not the ${served} served`).toBe(
-    served
-  );
-  expect(expanded.control.expanded, 'the control does not report its new state').toBe('true');
-  expect(expanded.control.text, 'the control offers no way back').toBe('show fewer');
-  /* STILL NO SCROLL OF ITS OWN: the log grew into the page rather than into a
-     box, which is the whole of the owner's ruling. */
-  expect(
-    expanded.scrollHeight,
-    `the expanded log scrolls inside itself (${expanded.scrollHeight} > ${expanded.clientHeight})`
-  ).toBe(expanded.clientHeight);
-  expect(expanded.clientHeight, 'the expanded log is no taller than the collapsed one').toBeGreaterThan(
-    collapsed.clientHeight
-  );
-  expect(
-    expanded.documentWidth,
-    `the expanded log took the document sideways (${expanded.documentWidth} > ${expanded.viewportWidth})`
-  ).toBeLessThanOrEqual(expanded.viewportWidth + subPixel);
-
-  /* NOTHING ABOVE THE LOG MOVED. The section's own top, the repositories
-     column above it and the log column's own top (where its head stood until
-     2026-10-19) are all where they were; the section
-     is TALLER by exactly the log's growth, which is the reader's own press
-     expanding the thing they pressed on. */
-  expect(expanded.sectionBox.top, 'the section moved when the log opened').toBeCloseTo(
-    collapsed.sectionBox.top,
-    1
-  );
-  expect(expanded.tableBox.height, 'the repositories column changed size when the log opened').toBeCloseTo(
-    collapsed.tableBox.height,
-    1
-  );
-  expect(expanded.headBox.top, 'the log’s column moved when the log opened').toBeCloseTo(
-    collapsed.headBox.top,
-    1
-  );
-  expect(expanded.boxTop, 'the log box itself moved instead of growing').toBeCloseTo(collapsed.boxTop, 1);
-  expect(
-    expanded.sectionBox.height - collapsed.sectionBox.height,
-    'the section grew by something other than the log’s own growth'
-  ).toBeCloseTo(expanded.clientHeight - collapsed.clientHeight, 1);
-
-  const shifts = await page.evaluate(() => window.__logShift ?? null);
-  if (watching) {
-    expect(
-      shifts,
-      `the press moved something above or beside the log: ${JSON.stringify(shifts)}`
-    ).toEqual([]);
-  } else {
-    expect(shifts, 'the layout-shift observer was armed but reported nothing at all').toBeNull();
+  for (const motion of ['no-preference', 'reduce']) {
+    await page.emulateMedia({ reducedMotion: motion });
+    await visit(page);
+    await page.locator('#projects .stream-filter[aria-label="Releases"]').click();
+    const pressed = await read();
+    expect(pressed.pressed, 'the pressed filter does not report itself pressed').toBe('true');
+    expect(pressed.lit, 'the pressed filter is not the lit one').toBe('true');
+    expect(pressed.decoration, 'the pressed filter is underlined').toBe('none');
+    expect(Number.parseFloat(pressed.border), 'the pressed filter draws a rule under it').toBe(0);
+    expect(pressed.ground, 'the pressed filter paints a ground').toBe('none');
+    expect(pressed.groundColor, 'the pressed filter paints a ground').toMatch(/^rgba\(0, 0, 0, 0\)$|^transparent$/);
+    expect(pressed.width).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+    expect(pressed.height).toBeGreaterThanOrEqual(touchFloorPx - subPixel);
+    if (motion === 'reduce') {
+      expect(pressed.animations, 'the mark animates for a reader who asked for less motion').toBe(0);
+      expect(pressed.sparks, 'a spark is drawn for a reader who asked for less motion').toEqual(['0', '0', '0']);
+    } else {
+      expect(pressed.animations, 'a press neither shines nor sparks').toBeGreaterThanOrEqual(2);
+    }
   }
-
-  // AND BACK: the control closes what it opened, and the page returns to the
-  // shape it started in.
-  await page.locator('#projects .log-more').click();
-  await settled(page);
-  const closed = await shape();
-  expect(closed.rows, 'the control cannot close what it opened').toBe(5);
-  expect(closed.control.text).toBe(`show all ${served}`);
-  expect(closed.sectionBox.height, 'closing the log left the section a different size').toBeCloseTo(
-    collapsed.sectionBox.height,
-    1
-  );
+  await page.emulateMedia({ reducedMotion: null });
 });
 
 /* ===========================================================================
- * 02 / ONGOING WORK — the sheet's paired section
+ * 02 / ONGOING WORK — one stream
  * (owner design decision, 2026-09-11, issue 318, option B on the design
  * canvas; renamed and rebuilt as two-line entries by the owner direction of
- * 2026-10-16)
+ * 2026-10-16; one stream of entries since 2026-11-02, issue 399)
  *
  * Three claims an engine has to settle, because every one of them is about
- * boxes rather than declarations: the two columns fill the sheet at the width
- * the owner reviews it at, no entry on a phone spends a line it did not
- * reserve, and the section does not move when its payloads land.
+ * boxes rather than declarations: the stream fills the sheet at the width the
+ * owner reviews it at, no entry on a phone spends a line it did not reserve,
+ * and the section does not move when its payloads land.
  * ======================================================================== */
 
-test('the sheet numbers four sections and the paired one reads as one head (owner 2026-09-11, issue 318)', async ({
+test('the sheet numbers four sections and the stream reads under one head (owner 2026-09-11, issue 318)', async ({
   page,
 }) => {
   await visit(page);
@@ -12267,7 +11685,7 @@ test('the sheet numbers four sections and the paired one reads as one head (owne
       window.document.getElementById('projects')?.contains(window.document.getElementById('commits')) ??
       false,
     logRowsUnderAnchor:
-      window.document.getElementById('commits')?.querySelectorAll('.log-entry').length ?? 0,
+      window.document.getElementById('commits')?.querySelectorAll('.stream-entry').length ?? 0,
   }));
   expect(
     observed.sections.map((section) => [section.number, section.title]),
@@ -12282,18 +11700,16 @@ test('the sheet numbers four sections and the paired one reads as one head (owne
     observed.sections.map((section) => section.id),
     'a section id moved; an address a reader shared stopped resolving'
   ).toEqual(['work', 'projects', 'trackers', 'gallery']);
-  // ONE head over the pair: two columns, one section, one rule.
+  // ONE head over every section, the stream's included.
   for (const section of observed.sections) {
     expect(section.heads, `${section.id} draws ${section.heads} section heads`).toBe(1);
   }
-  /* #commits still resolves, inside the paired section, onto the column that
+  /* #commits still resolves, inside Ongoing Work, onto the stream that
      actually holds the commits. (The nav that never linked it is gone with
      the chrome row — owner direction, 2026-10-16 — and the address is still
      exactly one place.) */
-  expect(observed.commitsAnchor, 'the retired #commits address resolves to nothing').toContain(
-    'ongoing-column'
-  );
-  expect(observed.commitsInProjects, '#commits landed outside the paired section').toBe(true);
+  expect(observed.commitsAnchor, 'the retired #commits address resolves to nothing').toContain('stream');
+  expect(observed.commitsInProjects, '#commits landed outside Ongoing Work').toBe(true);
   expect(observed.logRowsUnderAnchor, '#commits lands somewhere with no commits in it').toBeGreaterThan(0);
 });
 
@@ -12444,122 +11860,73 @@ test('every branch, twig and grain is painted at its own drawing’s size in pro
   }
 });
 
-test('at 1440 the two columns fill the sheet with no dead space (owner 2026-09-11, issue 318; 2026-10-16)', async ({
+test('at 1440 the stream fills the sheet with no dead space (owner 2026-09-11, issue 318; 2026-11-02, issue 399)', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await visit(page);
   const measured = await page.evaluate(() => {
     const round = (value) => Math.round(value * 100) / 100;
-    const spread = window.document.querySelector('#projects .ongoing');
-    const columns = [...spread.children];
-    const card = spread.parentElement;
+    const stream = window.document.querySelector('#projects .stream');
+    const card = stream.parentElement;
     const right = (node) => (node === null ? null : round(node.getBoundingClientRect().right));
     return {
-      columns: columns.length,
-      boxes: columns.map((column) => {
-        const rect = column.getBoundingClientRect();
-        return { left: round(rect.left), right: round(rect.right), width: round(rect.width) };
-      }),
+      stream: { left: round(stream.getBoundingClientRect().left), right: round(stream.getBoundingClientRect().right) },
       cardLeft: round(card.getBoundingClientRect().left),
       cardRight: round(card.getBoundingClientRect().right),
       /* WHAT A ROW PRINTS AT ITS END, not the row's own box: an entry is a
-         grid item stretched across its column, so its box reaches the edge
-         whatever is drawn in it. On a repository the figures are pushed to
-         the column's end; on a commit the age and the short identity hold it
-         (LedgerSpread.svelte). Those are what must reach. */
-      repoEnds: [...spread.querySelectorAll('.repo-entry')].map((row) => right(row.querySelector('.repo-figures'))),
-      logEnds: [...spread.querySelectorAll('.log-entry')]
-        .slice(0, 5)
-        .map((row) => right(row.querySelector('.log-meta > :last-child'))),
-      /* NO VISIBLE HEADS since 2026-10-19 ("remove this heading … remove the
-         icons there as well"): each column opens on its first entry, and its
-         word is kept clipped for a screen reader. */
-      heads: spread.querySelectorAll('.ongoing-head').length,
-      words: columns.map((column) => {
-        const word = column.querySelector(':scope > .ongoing-clipped');
-        if (word === null) return null;
-        const rect = word.getBoundingClientRect();
-        return { text: word.textContent.trim(), area: rect.width * rect.height };
-      }),
-      marksBeforeFirst: columns.map((column) => {
-        const first = column.querySelector('.repo-entry, .log-box');
-        return [...column.querySelectorAll('svg')].filter(
-          (mark) => first !== null && (mark.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-        ).length;
-      }),
+         grid item stretched across the stream, so its box reaches the edge
+         whatever is drawn in it. The short identity holds the entry's end, and
+         the pager's last step holds the list's. Those are what must reach. */
+      markEnds: [...stream.querySelectorAll('.stream-entry')].map((row) => right(row.querySelector('.stream-mark'))),
+      pagerEnd: right(stream.querySelector('.pager-step[data-step="next"]')),
+      /* The subject fills the entry: it starts after the kind's mark and runs
+         to the identity, with no measure capping it short. */
+      titleEnds: [...stream.querySelectorAll('.stream-entry')].map((row) => right(row.querySelector('.stream-title'))),
+      markStarts: [...stream.querySelectorAll('.stream-entry')].map((row) => round(row.querySelector('.stream-mark').getBoundingClientRect().left)),
       documentWidth: window.document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
     };
   });
-  expect(measured.columns, 'the paired section is not two columns').toBe(2);
-  // EQUAL HALVES, and the pair spans the sheet edge to edge.
-  expect(measured.boxes[0].width, 'the two columns are not equal halves').toBeCloseTo(
-    measured.boxes[1].width,
-    0
-  );
-  expect(measured.boxes[0].left, 'the left column does not start at the sheet’s edge').toBeCloseTo(
-    measured.cardLeft,
-    0
-  );
-  expect(measured.boxes[1].right, 'the right column stops short of the sheet’s edge').toBeCloseTo(
-    measured.cardRight,
-    0
-  );
-  /* NO DEAD SPACE INSIDE EITHER COLUMN (the owner's standing ruling, measured
-     at 1440): every entry prints to its own column's end edge, so neither
-     column is a narrow strip in a wide track. The tolerance is the hairline
-     the entry rules are drawn with plus the sub-pixel allowance. */
-  const reaches = (ends, edge, name) => {
-    expect(ends.length, `${name} drew nothing to measure`).toBeGreaterThan(0);
-    for (const [index, end] of ends.entries()) {
-      expect(end, `${name} ${index} printed nothing at its end`).not.toBeNull();
-      expect(
-        end,
-        `${name} ${index} ends ${(edge - end).toFixed(1)}px short of its column's end edge`
-      ).toBeGreaterThanOrEqual(edge - 1 - subPixel);
-    }
-  };
-  reaches(measured.repoEnds, measured.boxes[0].right, 'the repository entry');
-  reaches(measured.logEnds, measured.boxes[1].right, 'the commit entry');
-  expect(measured.heads, 'a visible head is back over an Ongoing Work column').toBe(0);
-  for (const [index, word] of measured.words.entries()) {
-    expect(word, `column ${index} lost the word a screen reader names it by`).not.toBeNull();
-    expect(word.text.length, `column ${index}'s clipped word is empty`).toBeGreaterThan(0);
-    expect(word.area, `column ${index}'s word is painted again`).toBeLessThanOrEqual(1);
+  expect(measured.stream.left, 'the stream does not start at the sheet’s edge').toBeCloseTo(measured.cardLeft, 0);
+  expect(measured.stream.right, 'the stream stops short of the sheet’s edge').toBeCloseTo(measured.cardRight, 0);
+  /* NO DEAD SPACE (the owner's standing ruling, measured at 1440): every entry
+     prints to the stream's end edge, and so does the pager. The tolerance is
+     the hairline the entry rules are drawn with plus the sub-pixel allowance. */
+  expect(measured.markEnds.length, 'the stream drew no entries to measure').toBe(5);
+  for (const [index, end] of measured.markEnds.entries()) {
+    expect(end, `entry ${index} printed nothing at its end`).not.toBeNull();
+    expect(end, `entry ${index} ends ${(measured.stream.right - end).toFixed(1)}px short of the stream's end`).toBeGreaterThanOrEqual(
+      measured.stream.right - 1 - subPixel
+    );
+    expect(
+      measured.titleEnds[index],
+      `entry ${index}'s subject stops ${(measured.markStarts[index] - measured.titleEnds[index]).toFixed(1)}px short of its identity`
+    ).toBeGreaterThanOrEqual(measured.markStarts[index] - 16);
   }
-  expect(measured.marksBeforeFirst, 'a column draws a mark above its first entry, where its head’s icon was').toEqual([0, 0]);
+  expect(measured.pagerEnd, 'the pager stops short of the stream’s end').toBeGreaterThanOrEqual(measured.stream.right - 1 - subPixel);
   expect(
     measured.documentWidth,
-    `the paired section took the document sideways (${measured.documentWidth} > ${measured.viewportWidth})`
+    `the stream took the document sideways (${measured.documentWidth} > ${measured.viewportWidth})`
   ).toBeLessThanOrEqual(measured.viewportWidth + subPixel);
 });
 
-/* AT 390 THE COLUMNS STACK, AND NO ENTRY SPENDS A LINE IT DID NOT RESERVE.
- *
- * Until 2026-10-16 this was "no row spends a third line": a repository and a
- * commit were each one ruled row. The owner's direction of that day made
- * every entry TWO-LINE on purpose ("give more information and make it more
- * readable"), and on a phone a repository reserves four lines (its name, two
- * of description, its figures) and a commit three (two of subject, then
- * where/when/which) — so the claim is re-aimed at what those entries
- * promise, measured the same way: the lines a reader sees are never more than
- * the lines the entry reserved, every entry in a column is ONE height (the
- * fixed pitch the zero-CLS reserve is built from), and a hostile subject
- * neither spends a third line of its own nor takes the document sideways.
- *
- * Retired the same day, with its subject: "the seven-character identity is
- * not in the DOM on a phone". The owner's direction puts WHICH — the short
- * identity — on every commit's supporting line at every width. */
-test('at 390 the columns stack and no entry spends a line it did not reserve (owner 2026-09-11, issue 318; 2026-10-16)', async ({
+/* AT 390 NO ENTRY SPENDS A LINE IT DID NOT RESERVE (owner direction,
+ * 2026-10-16: two-line entries, "give more information and make it more
+ * readable"; one stream since 2026-11-02, issue 399). A phone's entry reserves
+ * three lines — its byline, then two of subject — so the claim is measured the
+ * way it always was: the lines a reader sees are never more than the lines the
+ * entry reserved, every entry is ONE height (the fixed pitch the zero-CLS
+ * reserve is built from), and a hostile subject neither spends a third line of
+ * its own nor takes the document sideways. */
+test('at 390 no stream entry spends a line it did not reserve (owner 2026-10-16; 2026-11-02, issue 399)', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   /* A SUBJECT WITH NO SPACES, which is the hostile case for a clamped
      subject: a 200-character token cannot break at a space, so an entry that
      did not clamp would either run on past its two lines or push the
-     document sideways. Staged through the real envelope so admission is
-     unchanged. */
+     document sideways. Staged first, through the real envelope. */
   const unbreakable = `fix:${'x'.repeat(200)}`;
   await page.route('**/api/panels/vcs-activity', async (route) => {
     const response = await route.fetch();
@@ -12574,32 +11941,29 @@ test('at 390 the columns stack and no entry spends a line it did not reserve (ow
 
   const measured = await page.evaluate((hostile) => {
     const round = (value) => Math.round(value * 100) / 100;
-    const spread = window.document.querySelector('#projects .ongoing');
-    const columns = [...spread.children].map((column) => column.getBoundingClientRect());
+    const stream = window.document.querySelector('#projects .stream');
     /* AN ENTRY'S LINES, measured rather than counted from the markup: the
        LINE BOXES its painted text actually occupies, merged into bands by
        whether they overlap vertically. A clamped subject is one leaf drawing
        two line boxes, which is why the line rects are read rather than the
-       leaves: a leaf counted once would hide its own second line. The clipped
-       words and the hover detail are excluded because neither is in the
-       entry's flow: one is a 1px clip for the accessibility tree, the other a
-       fixed-position tip. */
+       leaves. Text the entry clips away is not a line a reader sees: only line
+       boxes inside the clamping ancestor's own content are counted. */
     const lines = (row) => {
       const rects = [];
       const walker = window.document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
         if ((node.textContent ?? '').trim() === '') continue;
         const parent = node.parentElement;
-        if (parent.closest('.ongoing-clipped') !== null || parent.closest('.cell-tip') !== null) continue;
-        /* Text the entry clips away is not a line a reader sees: only line
-           boxes that intersect the clamping ancestor's own box are counted. */
-        const clip = parent.closest('.log-message, .repo-about') ?? parent;
+        const clip = parent.closest('.stream-title') ?? parent;
         const clipBox = clip.getBoundingClientRect();
+        const style = getComputedStyle(clip);
+        const top = clipBox.top + Number.parseFloat(style.paddingTop);
+        const bottom = clipBox.bottom - Number.parseFloat(style.paddingBottom);
         const range = window.document.createRange();
         range.selectNodeContents(node);
         for (const rect of range.getClientRects()) {
           if (rect.width <= 0 || rect.height <= 0) continue;
-          if (rect.bottom <= clipBox.top + 0.5 || rect.top >= clipBox.bottom - 0.5) continue;
+          if (rect.bottom <= top + 0.5 || rect.top >= bottom - 0.5) continue;
           rects.push(rect);
         }
       }
@@ -12620,57 +11984,44 @@ test('at 390 the columns stack and no entry spends a line it did not reserve (ow
         text: row.textContent.trim().replace(/\s+/g, ' ').slice(0, 48),
       };
     };
-    const hostileEntry = [...spread.querySelectorAll('.log-entry')].find((row) =>
+    const hostileEntry = [...stream.querySelectorAll('.stream-entry')].find((row) =>
       (row.textContent ?? '').includes(hostile)
     );
-    const message = hostileEntry?.querySelector('.log-message') ?? null;
+    const title = hostileEntry?.querySelector('.stream-title') ?? null;
+    const titleStyle = title === null ? null : getComputedStyle(title);
     return {
-      columns,
-      repoRows: [...spread.querySelectorAll('.repo-entry')].map(lines),
-      logRows: [...spread.querySelectorAll('.log-entry')].map(lines),
+      rows: [...stream.querySelectorAll('.stream-entry')].map(lines),
       hostile:
-        message === null
+        title === null
           ? null
           : {
-              height: round(message.getBoundingClientRect().height),
-              lineHeight: Number.parseFloat(getComputedStyle(message).lineHeight),
+              text: round(
+                title.getBoundingClientRect().height -
+                  Number.parseFloat(titleStyle.paddingTop) -
+                  Number.parseFloat(titleStyle.paddingBottom)
+              ),
+              lineHeight: Number.parseFloat(titleStyle.lineHeight),
             },
       documentWidth: window.document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
     };
   }, unbreakable);
 
-  // STACKED, repositories first: the second column starts below the first.
-  expect(measured.columns.length, 'the paired section is not two columns').toBe(2);
-  expect(
-    measured.columns[1].top,
-    'the two columns are still side by side at 390px'
-  ).toBeGreaterThanOrEqual(measured.columns[0].bottom - subPixel);
-
-  expect(measured.repoRows.length, 'no repository entries to measure').toBeGreaterThan(1);
-  expect(measured.logRows.length, 'no commit entries to measure').toBeGreaterThan(1);
-  for (const [name, rows, reserved] of [
-    ['repository', measured.repoRows, 4],
-    ['commit', measured.logRows, 3],
-  ]) {
-    for (const [index, row] of rows.entries()) {
-      expect(
-        row.bands,
-        `the ${name} entry "${row.text}" spends ${row.bands} lines; it reserves ${reserved}`
-      ).toBeLessThanOrEqual(reserved);
-      /* ONE HEIGHT PER COLUMN: the fixed pitch the reserve is built from,
-         whatever the entry's words. */
-      expect(
-        row.height,
-        `the ${name} entry ${index} is ${row.height}px against entry 0's ${rows[0].height}px`
-      ).toBeCloseTo(rows[0].height, 0);
-    }
+  expect(measured.rows.length, 'no stream entries to measure').toBe(5);
+  for (const [index, row] of measured.rows.entries()) {
+    expect(row.bands, `the entry "${row.text}" spends ${row.bands} lines; it reserves 3`).toBeLessThanOrEqual(3);
+    /* ONE HEIGHT: the fixed pitch the reserve is built from, whatever the
+       entry's words. */
+    expect(row.height, `entry ${index} is ${row.height}px against entry 0's ${measured.rows[0].height}px`).toBeCloseTo(
+      measured.rows[0].height,
+      0
+    );
   }
   /* The hostile subject is present and clamped at its two lines. */
-  expect(measured.hostile, 'the staged unbreakable subject never reached the log').not.toBeNull();
+  expect(measured.hostile, 'the staged unbreakable subject never reached the stream').not.toBeNull();
   expect(
-    measured.hostile.height,
-    `the unbreakable subject draws ${measured.hostile.height}px, more than two ${measured.hostile.lineHeight}px lines`
+    measured.hostile.text,
+    `the unbreakable subject draws ${measured.hostile.text}px, more than two ${measured.hostile.lineHeight}px lines`
   ).toBeLessThanOrEqual(2 * measured.hostile.lineHeight + subPixel);
   expect(
     measured.documentWidth,
@@ -12678,15 +12029,15 @@ test('at 390 the columns stack and no entry spends a line it did not reserve (ow
   ).toBeLessThanOrEqual(measured.viewportWidth + subPixel);
 });
 
-/* ZERO CLS ACROSS THE ARRIVAL, at both viewports. The section's whole shape —
- * the repository entries, the log's reserve — is decided before either payload
- * lands, so the two envelopes are held at the route until the page has been
- * measured and released afterwards: if the section's top or its height moves
- * between the two reads, something under a reader's finger moved with it.
- * (Re-aimed at the Ongoing Work markup and the trackers' one diagram,
- * 2026-10-16; the claim is unchanged.) */
+/* ZERO CLS ACROSS THE ARRIVAL, at both viewports. The stream's whole shape —
+ * a page of entries' reserve and the pager under it — is decided before either
+ * payload lands, so the two envelopes are held at the route until the page has
+ * been measured and released afterwards: if the section's top or its height,
+ * the reserve or the pager moves between the two reads, something under a
+ * reader's finger moved with it. (Re-aimed at the stream, 2026-11-02, issue
+ * 399; the claim is unchanged.) */
 for (const width of [1440, 390]) {
-  test(`the paired section holds still while its payloads land at ${width}px (owner 2026-09-11, issue 318)`, async ({
+  test(`the stream holds still while its payloads land at ${width}px (owner 2026-09-11, issue 318; 2026-11-02, issue 399)`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -12701,23 +12052,26 @@ for (const width of [1440, 390]) {
       });
     }
     await page.goto('/');
-    /* The section is on the page with its captured face and its reserved log
-       box, and nothing else is still growing: the OTHER panels are ungated, so
-       they settle first and cannot be mistaken for this section moving. */
-    await expect(page.locator('#projects .repo-entry').first()).toBeVisible();
-    await expect(page.locator('#projects .log-box')).toHaveCount(1);
+    /* The stream is on the page with its empty note in its reserve, and
+       nothing else is still growing: the OTHER panels are ungated, so they
+       settle first and cannot be mistaken for this section moving. */
+    await expect(page.locator('#projects .stream-note')).toBeVisible();
+    await expect(page.locator('#projects .pager')).toHaveCount(1);
     await expect(page.locator('#trackers .chronicle')).toHaveCount(1);
     await expect(page.locator('.ticker-strip')).toHaveCount(1);
     const shape = () =>
       page.evaluate(() => {
+        const round = (value) => Math.round(value * 100) / 100;
         const section = window.document.getElementById('projects');
         const rect = section.getBoundingClientRect();
-        const box = window.document.querySelector('#projects .log-box').getBoundingClientRect();
+        const reserve = window.document.querySelector('#projects .stream-list, #projects .stream-note').getBoundingClientRect();
+        const pager = window.document.querySelector('#projects .pager').getBoundingClientRect();
         return {
-          top: Math.round((rect.top + window.scrollY) * 100) / 100,
-          height: Math.round(rect.height * 100) / 100,
-          reserve: Math.round(box.height * 100) / 100,
-          rows: window.document.querySelectorAll('#projects .log-entry').length,
+          top: round(rect.top + window.scrollY),
+          height: round(rect.height),
+          reserve: round(reserve.height),
+          pagerTop: round(pager.top + window.scrollY),
+          rows: window.document.querySelectorAll('#projects .stream-entry').length,
         };
       });
     let previous = null;
@@ -12730,24 +12084,25 @@ for (const width of [1440, 390]) {
       }, { message: 'the page never stopped growing before the gated payloads were released' })
       .toBe(true);
     const before = await shape();
-    expect(before.rows, 'the log drew entries before its payload was released').toBe(0);
+    expect(before.rows, 'the stream drew entries before its payload was released').toBe(0);
 
     release();
     await settled(page);
     const after = await shape();
 
-    expect(after.rows, 'the released payload drew no commit entries').toBeGreaterThan(0);
-    expect(
-      after.top,
-      `the section moved ${(after.top - before.top).toFixed(2)}px when its payloads landed`
-    ).toBeCloseTo(before.top, 1);
-    expect(
-      after.height,
-      `the section grew ${(after.height - before.height).toFixed(2)}px when its payloads landed`
-    ).toBeCloseTo(before.height, 1);
-    expect(
-      after.reserve,
-      `the log box grew ${(after.reserve - before.reserve).toFixed(2)}px when its entries arrived`
-    ).toBeCloseTo(before.reserve, 1);
+    expect(after.rows, 'the released payload drew no entries').toBe(5);
+    expect(after.top, `the section moved ${(after.top - before.top).toFixed(2)}px when its payloads landed`).toBeCloseTo(
+      before.top,
+      1
+    );
+    expect(after.height, `the section grew ${(after.height - before.height).toFixed(2)}px when its payloads landed`).toBeCloseTo(
+      before.height,
+      1
+    );
+    expect(after.reserve, `the reserve grew ${(after.reserve - before.reserve).toFixed(2)}px when its entries arrived`).toBeCloseTo(
+      before.reserve,
+      1
+    );
+    expect(after.pagerTop, 'the pager moved when the entries arrived').toBeCloseTo(before.pagerTop, 1);
   });
 }

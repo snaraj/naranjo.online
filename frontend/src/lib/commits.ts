@@ -1,22 +1,21 @@
 /* The two multi-panel adapters the commit record feeds (owner directive,
  * 2026-09-03, issue 287; split by the owner's 2026-09-11 directive, issue
- * 318): a cycling calendar, and a log beside the repositories it happened in.
+ * 318): a cycling calendar, and Ongoing Work's stream (issue #399).
  *
  * THE SECTION SPLIT, THE CODE DID NOT. The commits section used to be one
  * block — a calendar over a log. The owner's design decision moved the log
- * into the sheet's paired section, beside the repositories table, and the
- * calendar down into Trackers under the token cards. So this module now builds
- * TWO props bags from the same pieces: `contributionCalendarProps` takes the
- * sets, `projectsCommitsProps` takes the rows and hands the table half
- * straight through from lib/projects.ts. Nothing is duplicated — the sets, the
- * rows, the window anchor and every honest empty note are the same functions
- * they were.
+ * into Ongoing Work and the calendar down into Trackers under the token cards,
+ * so this module builds TWO props bags from the same pieces:
+ * `contributionCalendarProps` takes the sets, `projectsCommitsProps` takes the
+ * rows. Nothing is duplicated — the sets, the rows, the window anchor and
+ * every honest empty note are the same functions they were.
  *
  * BOTH READ SEVERAL PANELS, and that is the whole reason this module exists
  * rather than the work living in lib/activity.ts. The calendar cycles between
  * the version-control contributions and each token source's daily series —
- * three pictures of the same year; the sheet pairs the repositories panel with
- * the contributions one. Neither section's props can be built from one
+ * three pictures of the same year; the stream reads the repositories panel for
+ * the release each commit may be, beside the contributions one for the
+ * commits themselves. Neither section's props can be built from one
  * envelope. The block bindings are multi-panel ones (lib/blocks.ts), the
  * envelopes arrive here in the order each binding names them, and every domain
  * word on the way through — a repository, a vendor, a commit — stays on this
@@ -60,12 +59,13 @@ import {
   activityEntriesNote,
   activityPanelId,
   activityStripEmptyNote,
+  commitRepoUrl,
   commitShaUrl,
   commitTitleLink,
   isValidCommitSha,
   parseVCSActivity
 } from './activity.ts';
-import type { CalendarSet, CommitLogRow, ContributionCalendarProps, LedgerSpreadProps } from './blocks.ts';
+import type { CalendarSet, ContributionCalendarProps, StreamFilter, StreamProps, StreamRow } from './blocks.ts';
 import {
   calendarColumns,
   formatMagnitude,
@@ -80,7 +80,7 @@ import type {
   VCSCommit,
   VCSPrivateDay
 } from './panels';
-import { codingProjectsPanelId, projectTableProps } from './projects.ts';
+import { codingProjectsPanelId, parseCodingProjects, projectLinkLabel } from './projects.ts';
 import { knownSourceKeys, sourceName, tokenUsagePanelId, tokenUsageSources } from './token-usage.ts';
 
 /* The panels each block binds, in the order its adapter reads them. The block
@@ -89,50 +89,35 @@ import { knownSourceKeys, sourceName, tokenUsagePanelId, tokenUsageSources } fro
 export const calendarPanelIds: readonly string[] = [activityPanelId, tokenUsagePanelId];
 export const spreadPanelIds: readonly string[] = [codingProjectsPanelId, activityPanelId];
 
-/* The id the commit column answers to (owner design decision, 2026-09-11,
- * issue 318). The log had a numbered section of its own until that directive
- * and the nav no longer links this word — but an address a reader already
- * shared has to keep landing them on the log (issue 287's rule: never break a
- * URL), so the column carries the old section's id and the page keeps
- * resolving it. It is the PAGE's word, not the host's, which is why it is
- * spelled here in the adapter and reaches the component as data. */
+/* The id the stream answers to (owner design decision, 2026-09-11, issue 318).
+ * The log had a numbered section of its own until that directive and the nav
+ * no longer links this word — but an address a reader already shared has to
+ * keep landing them on the commits (issue 287's rule: never break a URL), so
+ * the stream carries the old section's id and the page keeps resolving it. It
+ * is the PAGE's word, not the host's, which is why it is spelled here in the
+ * adapter and reaches the component as data. */
 export const commitColumnId = 'commits';
 
-/* The id of the list inside that column. The disclosure control below names it
- * in `aria-controls`, and the two ids are different things on purpose: the
- * anchor above addresses the column a shared address has to keep landing on,
- * head and all, while this one names exactly the list the control grows. */
+/* The id of the list inside the stream: the anchor above addresses the whole
+ * stream a shared address has to keep landing on, filters and all, while this
+ * one names exactly the list of entries. */
 export const commitLogListId = 'commits-log';
 
-/* HOW MANY ROWS THE LOG SHOWS ON A PHONE BEFORE THE READER ASKS FOR MORE
- * (owner ruling, 2026-09-12: at that width the log is "quite busy ... an
- * endless scroll field that I have to fight out of"). Five entries is already
- * most of a screen; the rest arrive on a press, in the page's own scroll,
- * rather than inside a box a finger has to escape. It is also the column's
- * own count since the owner's direction of 2026-10-16 (`shownProjectRows`), so
- * a phone shows exactly what a desktop's reserve shows before either scrolls.
- *
- * ONE constant, TWO seats: this number and the component's collapsed reserve
- * (LedgerSpread.svelte) are the same fact, and tests/activity.test.mjs
- * recomputes the reserve's calc from this constant so the box and the slice
- * cannot drift apart. */
-export const phoneLogRows = 5;
+/* HOW MANY ENTRIES A PAGE OF THE STREAM SHOWS (owner, 2026-11-02, issue #399:
+ * "Keep it at 5 entries with sleek pagination"). Five on every width, and the
+ * list reserves exactly five entries' height before a payload lands, so a page
+ * turn, a filter and an arriving payload all land in a box that was already
+ * its size. The scroll box and the phone's "show all" disclosure it replaces
+ * are gone. */
+export const streamPageRows = 5;
 
-/* The control's two words. "show all N" carries the figure because a reader
- * deciding whether to press it is deciding about that number; "show fewer"
- * carries none, because the collapsed count is not a promise worth restating
- * in a word the reader is pressing to leave. */
-export const logCollapseWord = 'show fewer';
-
-export function logExpandWord(rows: number): string {
-  return `show all ${rows}`;
-}
-
-/* The commit column's own ruled head. It names the whole stream, because the
- * owner's ruling is that it is every repository's record rather than a
- * selection (issue #315) — and since the owner's direction of 2026-10-16 the
- * column beside it wears one word too, rather than a head per figure. */
-export const commitColumnHead = 'Commits · every repository';
+/* The stream's three filters (issue #399): marks the eye reads, the words a
+ * screen reader hears in their place. Their order is the order they sit in. */
+export const streamFilters: readonly StreamFilter[] = [
+  { key: 'all', glyph: 'list', label: 'Everything' },
+  { key: 'commit', glyph: 'pull', label: 'Commits' },
+  { key: 'release', glyph: 'tag', label: 'Releases' }
+];
 
 /* How many characters of a commit identity the log prints. Seven is the
  * host's own convention for a human-readable short reference; the href always
@@ -218,15 +203,14 @@ export function privateRowText(day: VCSPrivateDay): string {
  * the row itself prints a day-granular age because a day is all the aggregate
  * knows.
  *
- * NOTHING IS SLICED HERE ANY MORE. The log used to hand the component exactly
- * the rows its box could hold; the box is now a RESERVE that scrolls (owner
- * ruling, 2026-09-11), so every row the wire carried renders and the wire's own
- * cap is what bounds the list. A cap in this function would be the page
- * quietly deciding the record stops at whatever the box happens to hold. */
-function logRows(activity: VCSActivityData, now: Date): CommitLogRow[] {
+ * NOTHING IS SLICED HERE. Every row the wire carried reaches the component,
+ * which pages them (issue #399), so the wire's own cap is what bounds the
+ * list. A cap in this function would be the page quietly deciding the record
+ * stops at whatever one page happens to hold. */
+function logRows(activity: VCSActivityData, releases: ReleaseMap, now: Date): StreamRow[] {
   const commits = activity.recentCommits;
   const days = activity.privateActivity ?? [];
-  const rows: CommitLogRow[] = [];
+  const rows: StreamRow[] = [];
   let commit = 0;
   let day = 0;
   while (commit < commits.length || day < days.length) {
@@ -243,7 +227,7 @@ function logRows(activity: VCSActivityData, now: Date): CommitLogRow[] {
     if (nextCommit === undefined) {
       break;
     }
-    rows.push(publicRow(nextCommit, commit, now));
+    rows.push(publicRow(nextCommit, commit, releases, now));
     commit += 1;
   }
   return rows;
@@ -256,15 +240,16 @@ function privateInstant(day: VCSPrivateDay): string {
   return `${day.date}T23:59:59Z`;
 }
 
-function privateRow(day: VCSPrivateDay, now: Date): CommitLogRow {
+function privateRow(day: VCSPrivateDay, now: Date): StreamRow {
   const text = privateRowText(day);
   return {
     key: `private-${day.date}`,
+    kind: 'private',
     age: panelAge(privateInstant(day), now),
-    /* No href: a private row has no destination this page may offer, and an
-       anchor pointing nowhere is a promise the page cannot keep. The
-       component renders the entry as plain text for a null href. */
-    source: privateRowLabel,
+    /* No href on either half: a private row has no destination this page may
+       offer, and an anchor pointing nowhere is a promise the page cannot keep.
+       The component renders both as plain text for a null href. */
+    source: { text: privateRowLabel, href: null, label: privateRowLabel },
     title: { text, href: null, label: text },
     /* And no identity. A private commit's sha is exactly the kind of fact
        that must never reach the wire, so there is nothing to shorten. */
@@ -272,22 +257,44 @@ function privateRow(day: VCSPrivateDay, now: Date): CommitLogRow {
   };
 }
 
-/* A public entry. The repository is TEXT on the supporting line (owner
- * direction, 2026-10-16): the entry is one link, the title's, and the whole
- * two-line entry is its target — a second link on the same entry could not
- * be a finger's width tall without the entry growing a line, which is the
- * height the direction asked the section not to spend. The repository stays
- * one press away: the commit's own page names and links it, and the pinned
- * ones are entries in the column beside this one. The text is the payload's
- * name verbatim; it reaches the page as text, never as an address, so a
- * hostile name has nothing to become. */
-function publicRow(commit: VCSCommit, index: number, now: Date): CommitLogRow {
+/* Each repository's latest release, by name, for the repositories that report
+ * BOTH a tag and the commit it names. A repository with a tag and no commit
+ * marks nothing: the version is real, but which entry it was cut from is not
+ * a guess this page makes. */
+type ReleaseMap = ReadonlyMap<string, { readonly tag: string; readonly sha: string }>;
+
+function releaseMap(envelope: PanelEnvelope | null): ReleaseMap {
+  const projects =
+    envelope !== null && envelope.kind === panelKinds.codingProjects ? parseCodingProjects(envelope.data) : null;
+  const releases = new Map<string, { readonly tag: string; readonly sha: string }>();
+  for (const repo of projects?.repos ?? []) {
+    if (repo.release !== undefined && repo.releaseSha !== undefined) {
+      releases.set(repo.name, { tag: repo.release, sha: repo.releaseSha });
+    }
+  }
+  return releases;
+}
+
+/* A public entry: the repository as its byline, the subject as its title. The
+ * repository's link is built from the validated slug and nothing else
+ * (commitRepoUrl), so a hostile name is text and never an address.
+ *
+ * THE RELEASE RIDES ON ITS COMMIT (owner, 2026-11-02, issue #399: "combine
+ * both entries"). An entry carries its repository's version exactly when the
+ * repository's latest release names THIS commit: the full forty-digit
+ * identities compared for equality, never a prefix and never case-folded,
+ * because a near match is a different commit and a version on the wrong entry
+ * is a claim the record does not make. */
+function publicRow(commit: VCSCommit, index: number, releases: ReleaseMap, now: Date): StreamRow {
+  const release = releases.get(commit.repo);
   return {
     key: `${commit.repo}-${commit.sha}-${index}`,
+    kind: 'commit',
     age: panelAge(commit.at, now),
-    source: commit.repo,
+    source: { text: commit.repo, href: commitRepoUrl(commit.repo), label: projectLinkLabel({ name: commit.repo }) },
     title: commitTitleLink(commit),
-    mark: commitShaUrl(commit) === null ? noMark : commitMark(commit.sha)
+    mark: commitShaUrl(commit) === null ? noMark : commitMark(commit.sha),
+    ...(release !== undefined && release.sha === commit.sha ? { release: release.tag } : {})
   };
 }
 
@@ -364,64 +371,41 @@ export function contributionCalendarProps(
   };
 }
 
-/* THE SHEET'S PAIRED SECTION (owner design decision, 2026-09-11, issue 318;
- * named "Ongoing Work" and re-cut as two-line entries by the owner's direction
- * of 2026-10-16): the repositories from lib/projects.ts on the left, this
- * module's commit entries on the right, in one props bag because they are one
- * section.
- *
- * The two halves are handed through rather than rebuilt: the table half IS
- * `projectTableProps`, with every rule it already proved — the payload's
- * roster, the effective instant, the captured fallback face and the one
- * validated href shape — and the log half is the same `logRows` walk the
- * calendar block used to render under its own grid.
+/* ONGOING WORK AS ONE STREAM (owner, 2026-11-02, issue #399, mock 04:
+ * "Implement the 04 one stream and combine both entries"). The repositories
+ * and the commits were two columns of one section; they are one dated list
+ * now, newest first, and what the repositories column said about a release
+ * rides on the commit that release was cut from. The repositories panel is
+ * read for that and nothing else: a null, wrong-kinded or refused one is an
+ * empty release map, so the stream renders every commit and marks no version
+ * — the honest face of not knowing one.
  *
  * THE SECTION CARRIES NO FRESHNESS LINE (owner ruling, 2026-09-12, on the live
- * page: "DATA THROUGH SEP 12, 2026 · LAST CAPTURE JUST NOW" goes). It composed
- * one from whichever of its two envelopes had something to say, and the reader
- * it was written for does not exist: the figures are dated in their own rows,
- * an unavailable panel still renders its honest empty note where its rows
- * would be, and a line dating the whole sheet was a caption over facts that
- * already carry their own. The contributions panel keeps its data-through line
- * where the reader meets that panel — under the calendar, in
- * `contributionCalendarProps` — so nothing was made silent, it stopped being
- * said twice.
+ * page: "DATA THROUGH SEP 12, 2026 · LAST CAPTURE JUST NOW" goes): every entry
+ * is dated in its own byline, and the contributions panel keeps its
+ * data-through line where the reader meets that panel, under the calendar.
  *
  * NOTHING IS SLICED IN THIS FUNCTION. Every row the wire carried reaches the
- * component; how many of them a PHONE shows before the reader asks for the
- * rest is `logDisclosure`, which is a rendering decision the component makes
- * against a width, not a cap on the record. */
+ * component, which pages and filters them; that is a rendering decision, not
+ * a cap on the record. */
 export function projectsCommitsProps(
   envelopes: readonly (PanelEnvelope | null)[],
   now: Date = new Date()
-): LedgerSpreadProps {
+): StreamProps {
   const [projectsEnvelope = null, activityEnvelope = null] = envelopes;
-  const table = projectTableProps(projectsEnvelope, now.getTime());
   const activity =
     activityEnvelope !== null && activityEnvelope.kind === panelKinds.vcsActivity
       ? parseVCSActivity(activityEnvelope.data)
       : null;
-  const rows = activity === null ? [] : logRows(activity, now);
   return {
-    ...table,
-    logHead: commitColumnHead,
-    logAnchor: commitColumnId,
-    logListId: commitLogListId,
-    logRows: rows,
-    logNote: activityEntriesNote,
-    /* THE THRESHOLD: a control exists only when pressing it would reveal
-       something. Five rows of five, or of three, hide nothing, so those
-       payloads render the whole log and no control at all — a disclosure over
-       a complete list is a button that says "show all 5" and then does
-       nothing, which is the honest-states floor breaking on a control. */
-    ...(rows.length > phoneLogRows
-      ? {
-          logDisclosure: {
-            collapsed: phoneLogRows,
-            more: logExpandWord(rows.length),
-            fewer: logCollapseWord
-          }
-        }
-      : {})
+    status: activityEnvelope?.status ?? 'unavailable',
+    generatedAt: activityEnvelope?.generatedAt,
+    anchor: commitColumnId,
+    listId: commitLogListId,
+    rows: activity === null ? [] : logRows(activity, releaseMap(projectsEnvelope), now),
+    pageSize: streamPageRows,
+    emptyNote: activityEntriesNote,
+    filters: streamFilters
   };
 }
+

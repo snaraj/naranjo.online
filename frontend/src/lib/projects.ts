@@ -1,371 +1,59 @@
-/* The Projects section's information module (owner directive, issue 134; live
- * since issue 242): the owner's public repositories, most recently pushed
- * first.
+/* The repositories panel's information module (owner directive, issue 134;
+ * live since issue 242): the owner's public repositories as the origin reads
+ * them, and the one link shape every repository address on this page takes.
  *
  * THE ROSTER IS THE PANEL'S (issue 281). The owner's ruling reversed the
  * curated-seven reading of 2026-08-29: a new public repository must appear
  * on the site without a release, so the origin enumerates the account's own
- * public listing and this module renders whatever roster the payload
- * carries. Curation lives server-side as an explicit exclusion list in
+ * public listing and this module admits whatever roster the payload carries.
+ * Curation lives server-side as an explicit exclusion list in
  * `internal/panels/config/fetch.json` — data, never a whitelist that goes
- * stale. What this module still fixes is the LINK SHAPE: every entry's href
- * is the one `projectHost` constant plus a name admitted through the
+ * stale. What this module still fixes is the LINK SHAPE: every repository
+ * href is the one `projectHost` constant plus a name admitted through the
  * repository-name grammar below, so a payload can decide which of the
  * owner's repositories show and can never point a link at another host or
- * an unparseable path. The rows captured below remain as the no-payload
- * fallback and as the source of the one figure no listing reports — the
- * captured commit totals.
+ * an unparseable path.
  *
- * IT IS NO LONGER A CAPTURE. It was one, deliberately: `PANELS_REFRESH` was
- * default-off, so a live count would have been a promise the deployment could
- * not keep. That premise expired on 2026-08-27, when the owner enabled refresh
- * together with its egress allowance, and the gap showed up immediately — the
- * owner changed a repository description on the host and the site did not
- * follow. The origin now reads the repository metadata itself, on the panels
- * refresh cadence, and serves it as the coding-projects/v2 panel; this module
- * adapts that panel and keeps the rows below as its FALLBACK.
+ * WHAT READS IT NOW (owner, 2026-11-02, issue #399). The repositories stopped
+ * being a column of their own when Ongoing Work became one stream: what the
+ * stream takes from this panel is each repository's latest release and the
+ * commit its tag names, so a commit that IS a release carries the version
+ * (lib/commits.ts). The trackers read it too, for the pull requests the
+ * repositories have closed (lib/chronicle.ts). The captured rows that were the
+ * table's no-payload face left with the table: a stream with no repositories
+ * panel marks no release, which is the honest face of not knowing one.
  *
  * The page still makes no outbound request of its own. Requirement 1 keeps the
  * frontend local-origin-only: the panel is read from this origin's own
  * /api/panels path like every other panel, the host URLs here remain link
  * TARGETS a human may click, and no code in this module requests `projectHost`.
- * What changed is which side of the origin does the reading, not whether the
- * browser leaves it.
  *
- * ONE figure stays recorded: every figure of a row whose live read failed.
- * That row falls back to the values below and marks all of them, rather than
- * borrowing the freshness of the rows beside it. The captured COMMIT TOTAL
- * that used to be the other one left with the column that drew it (owner
- * directive, 2026-09-11, issue #317): the table's four metrics are pull
- * requests closed, the released version, stars and the last push, and none of
- * them is a figure only a capture can report.
- *
- * Vendor names are data. The host label lives in this module beside the rows
- * it describes, exactly as the panels keep theirs in config data, so the
- * components stay neutral and a move to another host is a data edit.
- *
- * One fallback description is shipped shortened, and deliberately: the
- * repository's own text names the deployment's edge provider, and owner
- * requirement R9 (the deployment-provider contract in AGENTS.md, enforced by
- * internal/doctrine/provider_neutrality_test.go over this whole tree) admits a
- * provider name nowhere but the chart's values defaults. Splitting the word up
- * to slip past that scan would defeat a fail-closed pin rather than respect
- * it, so the clause is dropped and the omission is stated here. The embedded
- * snapshot these rows mirror carries the same one-clause trim for the same
- * reason, and for the same one row. The LIVE row carries whatever the host
- * currently says, which is the owner's own text on the owner's own origin and
- * not this repository's tree at all. */
+ * Vendor names are data. The host label lives in this module beside the
+ * address it describes, exactly as the panels keep theirs in config data, so
+ * the components stay neutral and a move to another host is a data edit. */
 
-import { ageDetail, relativeAge } from './age.ts';
-import {
-  type LedgerCount,
-  type LedgerSpreadProps,
-  type LedgerTableRow
-} from './blocks.ts';
-import { formatWhole } from './grid.ts';
-import { panelKinds } from './panels.ts';
-import type { CodingProjectRow, CodingProjectsData, PanelEnvelope } from './panels';
-import type { TipDetail } from './tooltip.ts';
+import type { CodingProjectRow, CodingProjectsData } from './panels';
 
-export interface Project {
-  /* The repository name — the visible title, the stable key, and the last
-   * path segment of its URL. */
-  readonly name: string;
-  /* The repository's own description, verbatim (see the R9 note above). */
-  readonly description: string;
-  /* Stars at the capture date. */
-  readonly stars: number;
-  /* The repository's last push, as the ISO instant GitHub reported at the
-   * capture date (owner directive, 0.1.52: an icon showing how long since
-   * the last update). An INSTANT rather than a pre-written "3 days ago",
-   * because the words drift the moment they are captured: the page turns
-   * this into a sentence against the reader's own clock, so the label stays
-   * as true as the capture itself, and goes stale only the way the counts
-   * beside it already do. */
-  readonly pushedAt: string;
-}
-
-/* The host label the section shows and the accessible names carry. */
+/* The host label the accessible names carry. */
 export const projectHostLabel = 'GitHub';
 
 /* The owner's account, and the only remote origin this repository's frontend
- * source spells. Every project URL is this plus the repository name, so the
+ * source spells. Every repository URL is this plus the repository name, so the
  * host is written once and a row cannot point somewhere else by typo. The
- * recent-commits feed's outbound links (lib/activity.ts, issue 157) import
- * this constant rather than writing a second one, which is what keeps the
- * claim in this comment true as a second consumer arrives. */
+ * commit stream's outbound links (lib/activity.ts, issue 157) import this
+ * constant rather than writing a second one, which is what keeps the claim in
+ * this comment true as a second consumer arrives. */
 export const projectHost = 'https://github.com/snaraj';
 
-/* The registry identifier the projects feed loads; the one place the id is
- * spelled on the frontend. */
+/* The registry identifier the repositories panel loads; the one place the id
+ * is spelled on the frontend. */
 export const codingProjectsPanelId = 'coding-projects';
 
-/* The ISO date these counts were read on. A maintenance record ONLY (issue
- * 167) — no longer rendered by the section, since the capture date is a
- * maintainer/reviewer fact rather than visitor information. Provenance
- * stays truthful without display: this constant exists so the date is
- * recorded somewhere durable, and the no-fetch guarantee it used to
- * accompany on the page is enforced structurally, not by announcing it. */
-export const projectsCapturedOn = '2026-09-11';
-
-/* The CAPTURED rows: the owner's public repositories as read on the capture
- * date above. Since issue 281 this list no longer fixes the roster — the
- * panel's payload does, and a repository created after this capture renders
- * from the payload alone. What these rows still are: the complete fallback
- * face when no payload has arrived or none was admitted (a true thing to
- * show, dated), and the only source of each repository's captured
- * repository. The order is a MAINTENANCE order — alphabetical, deliberately
- * NOT the push order the feed sorts by, so a deleted sort fails a test rather
- * than passing by luck (tests/sections.test.mjs). */
-export const projects: readonly Project[] = [
-  {
-    name: "dotfiles",
-    description:
-      "My dotfiles",
-    stars: 0,
-    pushedAt: "2026-09-11T15:27:59Z"
-  },
-  {
-    name: "foobar2000-library-visualizer",
-    description:
-      "Library Visualizer is a highly customizable Foobar2000 Component that renders and displays selected music library.",
-    stars: 2,
-    pushedAt: "2026-08-07T00:16:32Z"
-  },
-  {
-    name: "foobar2000-lyricsbuddy",
-    description:
-      "LyricsBuddy is a native x64 lyrics panel for foobar2000. It combines a Spotify-inspired reading experience with local-first lyric discovery, precise LRC synchronization, safe customization, and an extensible provider model.",
-    stars: 2,
-    pushedAt: "2026-08-07T00:19:49Z"
-  },
-  {
-    name: "lidersea.com",
-    description:
-      "The home of lidersea.com",
-    stars: 1,
-    pushedAt: "2026-09-08T03:25:34Z"
-  },
-  {
-    name: "naranjo.online",
-    description:
-      "Personal Website & Media Gallery",
-    stars: 1,
-    pushedAt: "2026-09-11T20:58:39Z"
-  },
-  {
-    name: "obsync",
-    description:
-      "obsync: self-hosted, end-to-end encrypted live sync for Obsidian. One dependency-free Rust binary with a dashboard, plus an Obsidian plugin.",
-    stars: 1,
-    pushedAt: "2026-09-11T22:46:22Z"
-  },
-  {
-    name: "platform",
-    description:
-      "My infrastructure for self-hosting scalable and secure applications using Kubernetes",
-    stars: 1,
-    pushedAt: "2026-09-11T19:19:57Z"
-  },
-  {
-    name: "platform-k8s-infra",
-    description:
-      "Application GitOps composition for the homelab platform.",
-    stars: 1,
-    pushedAt: "2026-09-11T21:48:07Z"
-  },
-  {
-    name: "SpotiPlus",
-    description:
-      "Retired historical showcase. No longer maintained or supported.",
-    stars: 0,
-    pushedAt: "2026-09-08T01:52:09Z"
-  },
-  {
-    name: "theme",
-    description:
-      "Minimal, blazing fast CLI to manage the aesthethics of your terminal and desktop",
-    stars: 1,
-    pushedAt: "2026-09-11T22:22:14Z"
-  },
-  {
-    name: "Tiger-Book",
-    description:
-      "Retired historical showcase. No longer maintained or supported.",
-    stars: 0,
-    pushedAt: "2026-09-08T01:52:17Z"
-  },
-  {
-    name: "world",
-    description:
-      "Retired historical showcase. No longer maintained or supported.",
-    stars: 0,
-    pushedAt: "2026-09-08T01:51:36Z"
-  }
-];
-
-/* The repository's address: the ONE host constant plus a name. Every name
- * that reaches this function has passed the repository-name grammar — the
- * captured rows by review, a payload row by parseCodingProjects — so the
- * link can only ever point inside the owner's own account. */
-export function projectUrl(project: Pick<Project, 'name'>): string {
-  return `${projectHost}/${project.name}`;
-}
-
-/* The accessible name one project link carries. It names the destination and
- * says the link leaves the page, because a link that opens a new tab without
- * warning is a surprise for anyone who cannot see it happen. */
-export function projectLinkLabel(project: Pick<Project, 'name'>): string {
+/* The accessible name one repository link carries. It names the destination
+ * and says the link leaves the page, because a link that opens a new tab
+ * without warning is a surprise for anyone who cannot see it happen. */
+export function projectLinkLabel(project: { readonly name: string }): string {
   return `${project.name} on ${projectHostLabel}, opens in a new tab`;
-}
-
-/* The rendering for a figure this card has no number for. It is deliberately
- * not a zero: "nothing open" and "not reported" are different claims and only
- * one of them is supported. */
-const unknownFigure = '—';
-
-/* The detail one counter carries: the full phrase as its name. The grammar is
- * bossLog.ts's `summaryDetail`, deliberately — a tile shows the short form and
- * the detail's NAME is the long one — so the two grids and this feed present
- * one idea one way rather than three. */
-function countDetail(label: string): TipDetail {
-  return { name: label, rows: [] };
-}
-
-/* projectColumns renders one row's FOUR figures — the owner's columns, in the
- * owner's order (2026-09-11, issue #317): pull requests closed, the released
- * version, stars, and how long since the last push. Open issues and open pull
- * requests left the page with the same directive, and the origin stopped
- * reading them at all.
- *
- * `live` is the panel's row when one arrived and was admitted; absent means
- * this row is serving its captured values, and the page says nothing about
- * provenance on any counter (owner directive, 2026-09-06, issue 299).
- *
- * EVERY FIGURE IS TERSE (issue 268, owner directive): the visible channel is
- * the mark and the bare figure, and the WORD it counts lives in the counter's
- * clipped accessible name and in its detail. The dataviz floor is unchanged —
- * a value is carried by mark plus number, never by the mark alone — and the
- * plural is still derived rather than assumed, because "1 pull requests" is
- * the kind of small lie a page tells when nobody reads its labels out loud.
- *
- * A figure the host did not report renders as an explicit unknown, never as a
- * zero: those are different claims, and only one of them is true. */
-export function projectColumns(
-  project: Project | undefined,
-  live?: CodingProjectRow,
-  now: number = Date.now()
-): { readonly counts: LedgerCount[]; readonly updated: LedgerCount } {
-  const recorded = live === undefined || live.recorded === true;
-  const stars = recorded ? (project?.stars ?? null) : live.stars;
-  const starLabel =
-    stars === null ? 'stars unknown' : `${formatWhole(stars)} ${stars === 1 ? 'star' : 'stars'}`;
-  return {
-    counts: [
-      closedPullCount(live?.closedPulls),
-      releaseCount(live?.release),
-      {
-        key: 'stars',
-        glyph: 'star',
-        label: starLabel,
-        value: stars === null ? unknownFigure : formatWhole(stars),
-        detail: countDetail(starLabel)
-      }
-    ],
-    updated: updatedCount(effectivePushedAt(project, live), now)
-  };
-}
-
-/* The closed pull-request column. There is no captured fallback for it and
- * there should not be: it is the figure the panel reads live or not at all, so
- * nothing to report renders as a dash — "not known" — while a reported zero
- * renders as 0, which says "none ever". Those are different claims and the
- * table makes only the one it can support. */
-function closedPullCount(tally: number | undefined): LedgerCount {
-  if (tally === undefined) {
-    const label = 'closed pull requests not reported';
-    return { key: 'pulls', glyph: 'pull', label, value: unknownFigure, detail: countDetail(label) };
-  }
-  const figure = formatWhole(tally);
-  const label = `${figure} closed pull ${tally === 1 ? 'request' : 'requests'}`;
-  return { key: 'pulls', glyph: 'pull', label, value: figure, detail: countDetail(label) };
-}
-
-/* The version column: the release tag exactly as the host names it. A
- * repository that has never released and a read that could not report one both
- * render the dash, because both are "no version to show" — and inventing one,
- * or printing a zero, would be the fabrication the honest-states floor
- * forbids. */
-function releaseCount(release: string | undefined): LedgerCount {
-  if (release === undefined || release === '') {
-    const label = 'no released version';
-    return { key: 'release', glyph: 'tag', label, value: unknownFigure, detail: countDetail(label) };
-  }
-  const label = `version ${release}`;
-  return { key: 'release', glyph: 'tag', label, value: release, detail: countDetail(label) };
-}
-
-/* How long since the last update (owner directive, 0.1.52), computed from the
- * instant against the reader's own clock rather than shipped as frozen words.
- * The table is redrawn from a fresh envelope on the panels' own 60-second
- * cadence, so the age advances by the delivery rather than by a second clock
- * inside the component. An instant nobody reported renders as the honest dash,
- * never as an age of nothing. */
-function updatedCount(pushedAt: string | undefined, now: number): LedgerCount {
-  if (pushedAt === undefined) {
-    const label = 'last update not reported';
-    return {
-      key: 'updated',
-      glyph: 'clock',
-      label,
-      value: unknownFigure,
-      detail: countDetail(label)
-    };
-  }
-  const age = relativeAge(pushedAt, now);
-  return {
-    key: 'updated',
-    glyph: 'clock',
-    label: age.phrase,
-    value: age.compact,
-    detail: ageDetail(pushedAt, now)
-  };
-}
-
-/* The instant a row is ORDERED and dated by: the panel's when it vouched for
- * one, the captured one otherwise. It is the one place that choice is made, so
- * the sentence a card shows ("updated 3 days ago") and the position it holds
- * in the feed can never disagree about which push they mean. Undefined when
- * neither side reports one, which the counter renders as a dash and the sort
- * places last. */
-function effectivePushedAt(
-  project: Project | undefined,
-  live?: CodingProjectRow
-): string | undefined {
-  if (live !== undefined && live.recorded !== true) {
-    return live.pushedAt ?? project?.pushedAt;
-  }
-  return project?.pushedAt ?? live?.pushedAt;
-}
-
-/* THE ENTRY'S SUPPORTING LINE (owner direction, 2026-10-16): the repository's
- * own description, chosen by the SAME provenance rule as the instant above —
- * the panel's words when it vouched for them, the captured words otherwise —
- * so a row that fell back never pairs a live name with a stale sentence, or
- * the reverse. Verbatim apart from its outer whitespace: the host's text is
- * the owner's own, and the one
- * captured row trimmed for the provider-neutrality pin (see the module note)
- * stays exactly as trimmed.
- *
- * An empty description is a REAL state — the repository has none — and it
- * renders as the honest dash rather than as a blank line a reader would read
- * as missing data, or as words this module invented to fill it. */
-export function effectiveDescription(project: Project | undefined, live?: CodingProjectRow): string {
-  const text =
-    live !== undefined && live.recorded !== true
-      ? live.description
-      : (project?.description ?? live?.description ?? '');
-  return text.trim() === '' ? unknownFigure : text.trim();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -384,15 +72,21 @@ function isOptionalTally(value: unknown): boolean {
 }
 
 /* The release-tag grammar, the frontend's half of the gate the origin's
- * isReleaseTag applies (issue #317). The cell prints the tag verbatim, so this
- * is what stops a payload printing a sentence, a path or a control character
- * where a version belongs — the same layering the repository name already
- * has. */
+ * isReleaseTag applies (issue #317). The stream prints the tag verbatim, so
+ * this is what stops a payload printing a sentence, a path or a control
+ * character where a version belongs — the same layering the repository name
+ * already has. */
 const releaseTagPattern = /^[A-Za-z0-9._-]{1,64}$/;
 
 function isReleaseTag(tag: string): boolean {
   return tag !== '.' && tag !== '..' && releaseTagPattern.test(tag);
 }
+
+/* The identity a release's tag names: 40 lowercase hex digits, the origin's
+ * isCommitIdentity exactly (issue #399). The stream compares it with a
+ * commit's own full identity for EQUALITY, so a short or case-folded form is
+ * not a weaker match, it is drift — and refused with everything else. */
+const releaseShaPattern = /^[0-9a-f]{40}$/;
 
 /* The repository-name grammar, the frontend's half of the identity gate the
  * origin's mapRepositoryListing applies (issue 281): letters, digits, dots,
@@ -407,12 +101,12 @@ function isRepositoryName(name: string): boolean {
   return name !== '.' && name !== '..' && repositoryNamePattern.test(name);
 }
 
-/* parseCodingProjects admits only payloads carrying the exact shape the feed
- * renders: a repos array of rows with a grammatical repository name, a string
- * description, a null-or-non-negative-integer star tally, an optional ISO
- * push instant, and an optional boolean provenance flag. Anything else
- * returns null and the feed falls back to its captured rows — a data fault
- * degrades one section's freshness, never the page.
+/* parseCodingProjects admits only payloads carrying the exact shape the page
+ * reads: a repos array of rows with a grammatical repository name, a string
+ * description, a null-or-non-negative-integer star tally, an optional push
+ * instant, an optional release with its instant and commit, and optional
+ * boolean flags. Anything else returns null and every reader treats the panel
+ * as absent — a data fault degrades what this panel feeds, never the page.
  *
  * The refusal is WHOLESALE rather than per row, and that is the fail-closed
  * direction here: a payload that half-parses is drift, and a half-parsed
@@ -426,7 +120,8 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
     if (!isRecord(entry)) {
       return null;
     }
-    const { name, description, stars, pushedAt, closedPulls, release, pinned, recorded } = entry;
+    const { name, description, stars, pushedAt, closedPulls, release, releasedAt, releaseSha, pinned, recorded } =
+      entry;
     if (typeof name !== 'string' || !isRepositoryName(name) || typeof description !== 'string') {
       return null;
     }
@@ -445,6 +140,12 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
     if (release !== undefined && (typeof release !== 'string' || !isReleaseTag(release))) {
       return null;
     }
+    if (releasedAt !== undefined && typeof releasedAt !== 'string') {
+      return null;
+    }
+    if (releaseSha !== undefined && (typeof releaseSha !== 'string' || !releaseShaPattern.test(releaseSha))) {
+      return null;
+    }
     if (pinned !== undefined && typeof pinned !== 'boolean') {
       return null;
     }
@@ -461,6 +162,12 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
     if (typeof release === 'string') {
       row.release = release;
     }
+    if (typeof releasedAt === 'string') {
+      row.releasedAt = releasedAt;
+    }
+    if (typeof releaseSha === 'string') {
+      row.releaseSha = releaseSha;
+    }
     if (pinned === true) {
       row.pinned = true;
     }
@@ -470,157 +177,4 @@ export function parseCodingProjects(document: unknown): CodingProjectsData | nul
     repos.push(row);
   }
   return { repos };
-}
-
-/* One feed row's two sides: the captured record, the live one, or both. */
-type ProjectView = readonly [Project | undefined, CodingProjectRow | undefined];
-
-/* The instant one view is ordered by; an unreported instant sorts last, the
- * honest place for a row nobody can date. */
-function viewInstant([project, live]: ProjectView): number {
-  const instant = effectivePushedAt(project, live);
-  const parsed = instant === undefined ? Number.NaN : Date.parse(instant);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
-/* ---------------------------------------------------------------------------
- * The ledger table (owner directive, 2026-09-03, issue 287; re-cut for the
- * paired sheet, 2026-09-11, issue 318)
- *
- * The section became a ruled table rather than a feed of cards, and it is now
- * the LEFT column of one section it shares with the commit log. Two things
- * moved with that: the rows are the owner's pinned set plus the latest one
- * outside it rather than the four most recently pushed, and the description
- * column is gone — a half-sheet column holds a name and four figures, and a
- * repository's own words are one click away on its own link.
- *
- * RE-CUT AGAIN as two-line entries (owner direction, 2026-10-16: one entry
- * fewer, more information, more readable, no taller). The description came
- * back — not as the column it was, but as each entry's second line under the
- * name — and the head row of marks went, because each figure now carries its
- * own. Five entries rather than six is what pays for the second line.
- *
- * Everything the cards proved stays proved. The roster is still the payload's,
- * the order is still derived from each row's effective instant, the captured
- * face is still what renders when no payload arrived, the staleness line is
- * still the same three honest states, and every href is still the fixed host
- * constant plus a name that passed the repository grammar. What changed is the
- * SHAPE the same facts are handed to a component in.
- * ------------------------------------------------------------------------ */
-
-/* The column's one head (owner direction, 2026-10-16). It was five heads — a
- * word over the names and a mark over each figure column — until the section
- * stopped being a spreadsheet: every figure now carries its own mark beside it
- * and its own words in the accessibility tree, so the list needs one word over
- * it, like the log beside it, and nothing over its figures. The word is here
- * rather than in the component for the reason every label on this page is: a
- * component that named its list would be a component that knows what it is
- * showing. */
-export const projectColumnHead = 'Repositories';
-
-/* HOW MANY ENTRIES EACH COLUMN OF THE SHEET HOLDS (owner direction,
- * 2026-10-16: "show 1 less entry per but give more information and make it
- * more readable … not trying to make this larger block in the page"). FIVE: the
- * height the sixth row used to take is what pays for each remaining entry's
- * second line — the repository's own description, and room for a commit's
- * whole subject — so the section is no taller than it was with six one-line
- * rows. It was six, the host's own ceiling on a pinned set (owner ruling,
- * 2026-09-12), seven while a `latest` row rode along, and four while the
- * section was a full-width table (2026-09-03). A pinned set of six now shows
- * its five most recently pushed.
- *
- * ONE constant, TWO seats. The commit column beside this one reserves the same
- * number of entries — the two columns of one section are paired on a height —
- * so a second number would be the two free to disagree about it. The
- * component's reserve reads this through tests/activity.test.mjs, which
- * recomputes the box's own calc from this constant rather than from a number
- * typed twice. */
-export const shownProjectRows = 5;
-
-export const projectsEmptyNote = 'no repositories reported';
-
-/* WHICH REPOSITORIES THE TABLE SHOWS (owner ruling, 2026-09-12: "remove
- * latest, this makes no sense"). The owner's PINNED set — the curation GitHub
- * already lets the owner maintain, carried on the wire as `pinned: true`
- * (issue #317) — in push order, and nothing else. A seventh row rode along for
- * being the most recently pushed repository outside the set until this ruling;
- * it wore a `latest` chip to explain why it was there, and a row that needs a
- * word to justify its own presence is a row the table is better without.
- *
- * It is the curation the owner actually maintains, in the place they maintain
- * it: a repository promoted or dropped on the host changes this table on the
- * next refresh with no release, exactly as issue 281's dynamic roster
- * intended, while the table stops being "whatever was touched last".
- *
- * FOUR THINGS IT REFUSES TO DO, each one a hostile case rather than a
- * preference:
- *
- *   * It never invents a row. The selection FILTERS the views the payload (or
- *     the captured fallback) already produced, so a `pinned` flag can only
- *     ever promote a repository that is on the wire — a pinned repository the
- *     account keeps private is simply absent from the answer and is absent
- *     here too, with nothing said about it.
- *   * It never pads. Three pinned repositories render as three rows, not as
- *     six with three rows of filler.
- *   * It never overflows the pair. A pinned set larger than the constant —
- *     the host's own ceiling is six, and the column shows five (owner
- *     direction, 2026-10-16) — is cut at the same constant the commit column
- *     reserves its entries from, keeping the most recently pushed of them,
- *     because the two columns are paired on one height.
- *   * It falls back rather than emptying. A payload with no `pinned` flag
- *     anywhere — an origin older than issue #317, mid-rollout — is not a
- *     payload with an empty pinned set, and rendering it as one would blank
- *     the table on a wire that is merely older. Those payloads keep the
- *     pre-directive face: the first rows by push. */
-function selectedViews(ordered: readonly ProjectView[]): readonly ProjectView[] {
-  const isPinned = ([, live]: ProjectView): boolean => live?.pinned === true;
-  if (!ordered.some(isPinned)) {
-    return ordered.slice(0, shownProjectRows);
-  }
-  return ordered.filter(isPinned).slice(0, shownProjectRows);
-}
-
-export function projectTableProps(
-  envelope: PanelEnvelope | null,
-  now?: number
-): Omit<
-  LedgerSpreadProps,
-  'logHead' | 'logAnchor' | 'logListId' | 'logRows' | 'logNote' | 'logDisclosure'
-> {
-  const payload =
-    envelope !== null && envelope.kind === panelKinds.codingProjects
-      ? parseCodingProjects(envelope.data)
-      : null;
-  const capturedByName = new Map(projects.map((project) => [project.name, project]));
-  const views: readonly ProjectView[] =
-    payload !== null && payload.repos.length > 0
-      ? payload.repos.map((row) => [capturedByName.get(row.name), row] as const)
-      : projects.map((project) => [project, undefined] as const);
-  const ordered = views.toSorted((left, right) => viewInstant(right) - viewInstant(left));
-  const rows: LedgerTableRow[] = selectedViews(ordered).map(([project, live]) => {
-    const name = project?.name ?? live?.name ?? '';
-    const columns = projectColumns(project, live, now);
-    return {
-      key: name,
-      link: {
-        text: name,
-        href: projectUrl({ name }),
-        label: projectLinkLabel({ name })
-      },
-      about: effectiveDescription(project, live),
-      updated: columns.updated,
-      counts: columns.counts
-    };
-  });
-  /* No title: the section head ("Ongoing Work" since the owner's direction of
-     2026-10-16) already names this sheet, and the origin's own "Coding
-     Projects" beneath it was one label too many (owner directive, 2026-09-04,
-     issue 292). */
-  return {
-    status: envelope?.status ?? 'unavailable',
-    generatedAt: envelope?.generatedAt,
-    head: projectColumnHead,
-    rows,
-    emptyNote: projectsEmptyNote
-  };
 }

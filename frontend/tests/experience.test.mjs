@@ -2258,12 +2258,13 @@ test('the sheet draws no plain line: every separator is the keep’s own prop (o
   // A surface's prop, or null where it is parted by space alone. (The list
   // heads that wore a branch are gone from the page, 2026-10-19; the column
   // words that replaced them are pinned in tests/sections.test.mjs. The
-  // strip's lead went the same day, so the strip is its band and its items.)
+  // strip's lead went the same day, so the strip is its band and its items.
+  // The repositories' entries and the log's became the stream's one entry,
+  // owner 2026-11-02, issue 399, parted by the same twig.)
   const surfaces = {
     '.section-head::after': 'vine',
     '.ledger-entry': 'branch',
-    '.repo-entry': 'twig',
-    '.log-entry': 'twig',
+    '.stream-entry': 'twig',
     '.ticker-strip': null,
     '.ticker-item': null,
   };

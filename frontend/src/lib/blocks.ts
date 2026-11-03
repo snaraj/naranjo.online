@@ -288,102 +288,65 @@ export type LedgerLogProps = {
   readonly collapseLabel: string;
 };
 
-/* One counter in a table row: a drawn glyph, its bare figure, the words the
- * glyph replaced (kept for the accessibility tree, exactly as EntryCount keeps
- * them), and the detail every figure on this page carries. */
-export type LedgerCount = {
+/* --- The stream (owner, 2026-11-02, issue #399) -------------------------
+ *
+ * Ongoing Work stopped being two columns — the repositories beside the commits
+ * — and became ONE dated column of entries, newest first, a page of them at a
+ * time. Every entry has one shape whatever it records, and what the
+ * repositories column used to say rides on the entry it is about: a commit
+ * that IS a repository's latest release carries the version.
+ * ------------------------------------------------------------------------ */
+
+/* What an entry records: a public commit, or a day of private work that can
+ * name nothing but its own counts. */
+export type StreamKind = 'commit' | 'private';
+
+export type StreamRow = {
   readonly key: string;
-  /* The mark drawn in place of the word, named from the Hairline family
-   * (lib/icons.ts). The union is narrow rather than the family's whole name
-   * list because these four are the columns the owner asked for (issue #317):
-   * a fifth mark in a table cell is a fifth column, not a spelling. */
-  readonly glyph: 'pull' | 'tag' | 'star' | 'clock';
-  readonly value: string;
+  readonly kind: StreamKind;
+  /* How long ago, already written. */
+  readonly age: string;
+  /* Where it happened: the repository, a link the information layer
+   * validated, or plain text (a null href) where there is nowhere to send a
+   * reader. */
+  readonly source: ActivityLink;
+  /* What happened: the subject, linked to the commit itself when its identity
+   * is one the information layer can vouch for. */
+  readonly title: ActivityLink;
+  /* The short identity, display-only, or the honest dash. */
+  readonly mark: string;
+  /* The version this entry released, present ONLY when the repository's
+   * latest release names exactly this commit. */
+  readonly release?: string;
+};
+
+/* One filter at the stream's head: a mark the eye reads and the words a
+ * screen reader hears in its place. */
+export type StreamFilter = {
+  readonly key: 'all' | 'commit' | 'release';
+  readonly glyph: IconName;
   readonly label: string;
-  readonly detail: TipDetail;
 };
 
-export type LedgerTableRow = {
-  readonly key: string;
-  /* The entry's title, as navigation the information layer validated. */
-  readonly link: ActivityLink;
-  /* The entry's SUPPORTING LINE (owner direction, 2026-10-16: one entry fewer,
-   * each carrying more and reading better). The description left as a CELL
-   * with the 2026-09-11 directive — it was the widest column of a five-column
-   * row — and returns as a line of its own under the name, which costs the row
-   * no column at all. Already written: the entry's own words, or the honest
-   * dash when it has none, so the component decides nothing about it. The
-   * `latest` chip stays retired (ruling of 2026-09-12). */
-  readonly about: string;
-  /* How long since the row's own last change — the same counter the other
-   * three are, so its provenance and its exact instant reach a reader the same
-   * way theirs do. It is drawn last, after the cluster. */
-  readonly updated: LedgerCount;
-  readonly counts: readonly LedgerCount[];
-};
-
-/* THE SHEET'S TWO COLUMNS (owner design decision, 2026-09-11, issue 318,
- * option B on the design canvas): one block that draws the repositories beside
- * the log, each under its own one-word head, and stacks them at a phone width.
- * Since the owner's direction of 2026-10-16 ("Ongoing Work") each column is
- * five two-line entries — a title line and a supporting line — where it was
- * six one-line rows.
- *
- * It is ONE props contract rather than two blocks side by side because the two
- * columns are one picture the reader compares across — the repositories on the
- * left and, beside them, what actually landed in them — and because the
- * heights are paired: the log reserves exactly as many rows as the table
- * shows, so the section's box is decided before either payload arrives.
- *
- * `logAnchor` is the id the log column answers to. The section carries one id
- * for the nav; the log had a section of its own until this directive, and an
- * address a reader already shared must keep landing them on it (issue 287's
- * rule). It arrives as data so this contract, not a component, is where the
- * page's addresses live. */
-export type LedgerSpreadProps = {
+export type StreamProps = {
   readonly status: PanelStatus;
   readonly generatedAt?: string;
-  /* The first column's own head: ONE word over the whole list, like the log's
-   * (owner direction, 2026-10-16). The five-cell head row of marks left with
-   * the spreadsheet look — every figure now carries its mark beside it and its
-   * words in the accessibility tree, so a row of marks over them named nothing
-   * a reader did not already have. */
-  readonly head: string;
-  readonly rows: readonly LedgerTableRow[];
-  readonly emptyNote: string;
-  /* The log column's own head, its anchor, its rows and its empty line. */
-  readonly logHead: string;
-  readonly logAnchor: string;
-  /* The id of the list itself, which is what the phone's disclosure control
-   * names in `aria-controls` — the anchor above addresses the whole column,
-   * head included, and a control that claimed to operate the head would be
-   * describing something it does not touch. It arrives as data for the same
-   * reason `logAnchor` does: this contract is where the page's addresses
+  /* The id the stream answers to. An address a reader already shared keeps
+   * landing on it (issue 287's rule: never break a URL), and it arrives as
+   * data so this contract, not a component, is where the page's addresses
    * live. */
-  readonly logListId: string;
-  readonly logRows: readonly CommitLogRow[];
-  readonly logNote: string;
-  /* Present only when the log holds more rows than a phone shows at once; see
-   * LogDisclosure. Absent means there is nothing to reveal, and a control that
-   * revealed nothing would be a promise the page cannot keep. */
-  readonly logDisclosure?: LogDisclosure;
-};
-
-/* THE PHONE LOG'S DISCLOSURE (owner ruling, 2026-09-12: on a phone the commit
- * log is "an endless scroll field that I have to fight out of"). The log stops
- * being a scroll region at that width and shows a few rows with a control that
- * reveals the rest inline, so the page's own scroll is the only scroll.
- *
- * Every word and every number is the ADAPTER's: the count in "show all N" is a
- * figure, and a component that composed it would be formatting. Whether this
- * object exists at all is the threshold — the adapter builds one only when
- * there are rows the collapsed log does not show. */
-export type LogDisclosure = {
-  /* How many rows the collapsed log shows. */
-  readonly collapsed: number;
-  /* The words the control wears, in both of its states. */
-  readonly more: string;
-  readonly fewer: string;
+  readonly anchor: string;
+  /* The id of the list itself. */
+  readonly listId: string;
+  /* EVERY row, newest first; the component pages them, so a page turn or a
+   * filter is a rendering decision and never a cap on the record. */
+  readonly rows: readonly StreamRow[];
+  /* How many entries a page shows, which is also how many the list reserves
+   * before a payload lands. */
+  readonly pageSize: number;
+  /* Rendered instead of the list when there are no rows at all. */
+  readonly emptyNote: string;
+  readonly filters: readonly StreamFilter[];
 };
 
 /* One selectable calendar in the trackers' calendar block: a heatmap and the
@@ -404,28 +367,14 @@ export type CalendarSet = {
   readonly format: (value: number) => string;
 };
 
-/* One entry of the log: the subject as its title line, and where, when and
- * which as its supporting line (owner direction, 2026-10-16). The entry is ONE
- * link — the title's — and the whole entry is its target; `source` is text. It
- * was a second link until this direction, and two links on one two-line entry
- * cannot both be a finger's width tall without the entry growing a line. */
-export type CommitLogRow = {
-  readonly key: string;
-  readonly age: string;
-  readonly source: string;
-  readonly title: ActivityLink;
-  /* The short identity, display-only; the full one rides the href. */
-  readonly mark: string;
-};
-
 /* No `title`: the block renders no panel label (owner directive, 2026-09-04,
  * issue 294). The envelope's title names one source — the version-control
  * host — and the calendar now opens on a token series, so a label over it
  * would be false; the segments underneath name every source themselves.
  *
  * The LOG that used to ride under these sets left with the owner's 2026-09-11
- * directive (issue 318): the rows are the right-hand column of the sheet's
- * paired section now, and the calendar is a tracker among the trackers. What
+ * directive (issue 318): the rows are Ongoing Work's stream now (issue #399),
+ * and the calendar is a tracker among the trackers. What
  * moved is which block renders them — the sets and the rows are built by the
  * same two functions in lib/commits.ts they always were. */
 export type ContributionCalendarProps = {
@@ -758,11 +707,6 @@ export type MediaGalleryItem = {
   readonly title?: string;
   readonly description?: string;
   readonly link?: MediaGalleryLink;
-  /* The named set the gallery's dropdown groups this item under (owner
-   * sketch, 2026-08-31, issue 275). Optional: an item without one falls
-   * into the component's kind-derived default set, so every existing
-   * caller renders exactly as it did. */
-  readonly set?: string;
   /* Present exactly when the item moves; see MediaGalleryVideo. */
   readonly video?: MediaGalleryVideo;
   /* This item's own intrinsic box, when it differs from the gallery's
@@ -788,7 +732,8 @@ export type MediaGalleryProps = {
   /* The intrinsic box every frame declares, so arrival moves nothing. */
   readonly width: number;
   readonly height: number;
-  /* How many tiles the row shows of the chosen set (owner, 2026-10-17: five). */
-  readonly tiles?: number;
+  /* How many tiles a page of the mosaic shows (owner, 2026-10-17: five; still
+   * five as a page since the mosaic, 2026-11-02, issue #399). */
+  readonly pageSize?: number;
 };
 

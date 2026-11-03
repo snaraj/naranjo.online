@@ -214,9 +214,10 @@ func TestMapHiscoresAdmitsTheRealUpstreamDocument(t *testing.T) {
 	if err := decodeStrict(data, &payload); err != nil {
 		t.Fatalf("decode mapped payload: %v", err)
 	}
-	// The capture carries 91 activities, 20 of them excluded as non-bosses.
-	if len(payload.Bosses) != 71 {
-		t.Errorf("mapped %d bosses from the real response, want 71", len(payload.Bosses))
+	// The capture carries 92 activities, 20 of them excluded as non-bosses
+	// (recaptured 2026-11-03, issue #399, when The Fractured Archive joined).
+	if len(payload.Bosses) != 72 {
+		t.Errorf("mapped %d bosses from the real response, want 72", len(payload.Bosses))
 	}
 	if len(payload.Bosses) < 50 {
 		t.Error("the panel is back to serving a handful of bosses; the whole point is the complete list")

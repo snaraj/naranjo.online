@@ -258,6 +258,12 @@ export interface CodingProjectRow {
    * and "not read" are both "no version to show", and neither is a number this
    * page may invent. */
   release?: string;
+  /* When that release was published, and the full identity of the commit its
+   * tag names (issue #399): the stream marks THAT commit with the version.
+   * Absent when the host reported none, or when the origin could not vouch
+   * for one; either way no commit is marked. */
+  releasedAt?: string;
+  releaseSha?: string;
   /* True when the owner has PINNED this repository on the host (owner
    * directive, 2026-09-11). It is curation expressed where the owner already
    * expresses it, carried as a flag rather than acted on by the origin:

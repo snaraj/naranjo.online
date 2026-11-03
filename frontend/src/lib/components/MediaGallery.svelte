@@ -1,9 +1,9 @@
 <!-- MediaGallery is the sheet's last section (owner directive, 2026-09-03,
-  issue 287): a row of square tiles — the first few of the chosen set — and a
-  native <dialog> that is the stage. Five pictures span the column with nothing
-  beside them (owner, 2026-10-17: no box of information and dead content); a
-  set switch sits above them only when there is a set to switch to, and what an
-  item is lives under it on the stage.
+  issue 287): a mosaic of tiles, a page at a time, and a native <dialog> that
+  is the stage. Drawings and films share the one grid in manifest order (owner,
+  2026-11-02, issue 399: "let's combine videos and drawings"), so the set
+  switch that chose between them is gone; what an item is lives under it on
+  the stage.
 
   A FILM'S TILE OPENS THE STAGE LIKE A PICTURE'S (issue 384). The user, on an
   iPhone, 2026-10-22: "the videos are not responsive to the touch, I should be
@@ -31,63 +31,55 @@
   neighbour warming and the caption lane, none of which a tile grid has a
   surface for.
 
-  The tiles are a GRID, not a carousel: at the reading width five squares
-  fill the column, and on a phone the first four fold to two across. Which set
-  the tiles show is data — an item's set is the manifest's word when it wrote
-  one and the kind-derived default when it did not — and the switch offers a
-  set only when there is more than one to choose (honest-states floor: a set
-  exists exactly when something is in it). Every dimension is a token in styles.css; the component states no
-  colour, length, radius or duration of its own. -->
+  The tiles are a MOSAIC, not a carousel: five to a page, squares and wide
+  tiles in a fixed pattern for each count (lib/mosaic.ts) that fills every row
+  of six columns at the reading width and of two on a phone, with the shared
+  pager under it. Every dimension is a token in styles.css; the component
+  states no colour, length, radius or duration of its own. -->
 <script lang="ts">
   import { tick } from 'svelte';
   import FeedCard from './FeedCard.svelte';
   import Icon from './Icon.svelte';
+  import Pager from './Pager.svelte';
+  import { browserMedia, spreadMediaQuery, watchMedia } from '../columnWidth';
   import { swipeHorizontal } from '../gesture.ts';
+  import { mosaicShapes } from '../mosaic.ts';
+  import { pageCount, pageRows } from '../stream.ts';
   import type { MediaGalleryItem, MediaGalleryProps } from '../blocks.ts';
-  import type { IconName } from '../icons.ts';
 
-  let { items, width, height, tiles = 5 }: MediaGalleryProps = $props();
+  let { items, width, height, pageSize = 5 }: MediaGalleryProps = $props();
 
-  /* The set an item belongs to: the manifest's word, else its kind's. */
-  function setOf(candidate: MediaGalleryItem): string {
-    return candidate.set ?? (candidate.video === undefined ? 'Photographs' : 'Videos');
-  }
-  const sets = $derived([...new Set(items.map(setOf))]);
-  let chosenSet = $state<string | undefined>(undefined);
-  /* A choice that no longer names a set (the items were replaced under it —
-     a manifest load) resolves to the first set rather than to nothing. */
-  const activeSet = $derived(
-    chosenSet !== undefined && sets.includes(chosenSet) ? chosenSet : sets[0]
-  );
-  const visible = $derived(items.filter((candidate) => setOf(candidate) === activeSet));
-  const shownTiles = $derived(visible.slice(0, Math.max(1, tiles)));
-  function countOf(name: string): number {
-    return items.filter((candidate) => setOf(candidate) === name).length;
-  }
-  /* A SET'S MARK IS ITS CONTENTS, not its word (owner design decision,
-     2026-09-11, issue 313). The segment buttons print a mark where they used
-     to print "Photographs" or "Videos", and the mark is decided the same way
-     the default NAME already is — by what the set holds — so a manifest that
-     names its own set still gets the right drawing, and a set that is all
-     films is the only one that reads as film. A mixed set reads as pictures,
-     which is the honest answer: it is not all films. */
-  function setGlyph(name: string): IconName {
-    const members = items.filter((candidate) => setOf(candidate) === name);
-    return members.every((candidate) => candidate.video !== undefined) ? 'film' : 'photo';
-  }
+  /* THE MOSAIC'S PAGE (owner, 2026-11-02, issue 399): every item in manifest
+     order, films and drawings together, a page of tiles at a time. */
+  let page = $state(1);
+  const pages = $derived(pageCount(items.length, pageSize));
+  const at = $derived(Math.min(page, pages));
+  const pageTiles = $derived(pageRows(items, at, pageSize));
+
+  /* WHICH GRID THE PAGE IS LAID IN is a question the SCRIPT asks, through the
+     media seam the column handles use (lib/columnWidth.ts): the tiles' shapes
+     are chosen for six columns or for two, and the grid takes its columns from
+     the same answer, so the pattern and the grid it fills can never be read
+     from two different widths. Read once for the first paint, then kept
+     current for a reader who rotates a phone. */
+  let wide = $state(browserMedia(spreadMediaQuery).matches);
+  $effect(() => watchMedia(browserMedia, spreadMediaQuery, (matches) => (wide = matches)));
+  const columns = $derived(wide ? 6 : 2);
+  const shapes = $derived(mosaicShapes(pageTiles.length, columns));
+
   function itemNoun(candidate: MediaGalleryItem): string {
     return candidate.video === undefined ? 'photograph' : 'film';
   }
-  /* THE STAGE pages the WHOLE chosen set, stills and films alike (issue
-     384): a film is opened exactly as a picture is. index is assigned in
-     exactly four places — open, next, previous and a set change — and read
-     clamped, so a set shrinking under it (a manifest load) can never leave it
-     pointing past the end. */
+  /* THE STAGE pages EVERY item, stills and films alike (issue 384; one set
+     since the mosaic, issue 399): a film is opened exactly as a picture is.
+     index is assigned in exactly three places — open, next and previous — and
+     read clamped, so items shrinking under it (a manifest load) can never
+     leave it pointing past the end. */
   let index = $state(0);
   let enlarged = $state(false);
-  const total = $derived(visible.length);
+  const total = $derived(items.length);
   const shown = $derived(Math.min(index, Math.max(0, total - 1)));
-  const item = $derived(visible[shown]);
+  const item = $derived(items[shown]);
   let openerEl: HTMLElement | undefined;
   /* WHICH FILM A PRESS ASKED FOR. The press on a film's tile is the reader
      asking to watch it, so the film that press opened starts; paging onto a
@@ -97,7 +89,7 @@
      mounts, and every other road onto the stage clears it first. */
   let pressedKey: string | undefined;
   function open(chosen: MediaGalleryItem, from: EventTarget | null): void {
-    index = Math.max(0, visible.indexOf(chosen));
+    index = Math.max(0, items.indexOf(chosen));
     openerEl = from instanceof HTMLElement ? from : undefined;
     pressedKey = chosen.video === undefined ? undefined : chosen.key;
     enlarged = true;
@@ -123,13 +115,6 @@
     if (!side) return;
     await tick();
     dialogEl?.querySelector<HTMLElement>(`.gallery-nav[data-gallery-nav="${side}"]`)?.focus();
-  }
-  function selectSet(name: string): void {
-    if (name !== activeSet) {
-      chosenSet = name;
-      pressedKey = undefined;
-      index = 0;
-    }
   }
   const hasMeta = $derived(
     item !== undefined && (Boolean(item.title) || Boolean(item.description) || item.link !== undefined)
@@ -233,57 +218,43 @@
 
 {#if items.length > 0}
   <FeedCard variant="flat">
-    {#snippet media()}
-      {#if sets.length > 1}
-        <div class="gallery-sets" role="group" aria-label="Media set">
-          {#each sets as name (name)}
-            <!-- The set's WORD moved to the accessible name and nowhere else:
-              aria-label replaces a control's contents in the accessibility
-              tree, so a screen reader hears "Photographs · 1" where the eye
-              reads a mark and a figure. The count stays visible because a
-              figure is a fact, not a label. -->
+      {#snippet media()}
+      <div class="gallery-mosaic">
+        <div class="gallery-grid" data-gallery-tiles={pageTiles.length} data-columns={columns}>
+          {#each pageTiles as tile, place (tile.key)}
+            <!-- ONE TILE SHAPE for every item (issue 384): a still and a film
+              are the same button over the same lazy preview, so a press on a
+              film's picture opens the stage exactly as a press on a still's
+              does. A film's tile adds a play mark, centred and hidden from the
+              accessibility tree: it says what the tile holds, and the button's
+              own name already says so in words. -->
             <button
               type="button"
-              class="gallery-set"
-              aria-pressed={name === activeSet}
-              aria-label={`${name} · ${countOf(name)}`}
-              onclick={() => selectSet(name)}
-              ><Icon name={setGlyph(name)} slot="row" /> · {countOf(name)}</button>
+              class="gallery-tile"
+              data-gallery-kind={tile.video ? 'video' : 'image'}
+              data-shape={shapes[place]}
+              onclick={(event) => open(tile, event.currentTarget)}
+              aria-label={`Open ${itemNoun(tile)}: ${tile.alt}`}
+            >
+              <img
+                class="gallery-thumb"
+                src={tile.previewSrc}
+                alt=""
+                width={tile.width ?? width}
+                height={tile.height ?? height}
+                loading="lazy"
+                decoding="async"
+              />
+              {#if tile.video}
+                <span class="gallery-play-disc" aria-hidden="true">
+                  <Icon name="play" slot="chrome" />
+                </span>
+              {/if}
+            </button>
           {/each}
         </div>
-      {/if}
-      <div class="gallery-grid" data-gallery-tiles={shownTiles.length}>
-        {#each shownTiles as tile (tile.key)}
-          <!-- ONE TILE SHAPE for every item (issue 384): a still and a film
-            are the same button over the same lazy preview, so a press on a
-            film's picture opens the stage exactly as a press on a still's
-            does. A film's tile adds a play mark, centred and hidden from the
-            accessibility tree: it says what the tile holds, and the button's
-            own name already says so in words. -->
-          <button
-            type="button"
-            class="gallery-tile"
-            data-gallery-kind={tile.video ? 'video' : 'image'}
-            onclick={(event) => open(tile, event.currentTarget)}
-            aria-label={`Open ${itemNoun(tile)}: ${tile.alt}`}
-          >
-            <img
-              class="gallery-thumb"
-              src={tile.previewSrc}
-              alt=""
-              width={tile.width ?? width}
-              height={tile.height ?? height}
-              loading="lazy"
-              decoding="async"
-            />
-            {#if tile.video}
-              <span class="gallery-play-disc" aria-hidden="true">
-                <Icon name="play" slot="chrome" />
-              </span>
-            {/if}
-          </button>
-        {/each}
       </div>
+      <Pager page={at} {pages} previousLabel="Earlier pictures" nextLabel="Later pictures" onturn={(next) => (page = next)} />
     {/snippet}
   </FeedCard>
 
@@ -316,7 +287,7 @@
             class="gallery-nav"
             data-gallery-nav="previous"
             onclick={previous}
-            aria-label={`Previous ${itemNoun(visible[(shown - 1 + total) % total])}`}
+            aria-label={`Previous ${itemNoun(items[(shown - 1 + total) % total])}`}
           >
             <span class="gallery-nav-disc">
               <Icon name="chevron-left" slot="row" />
@@ -327,7 +298,7 @@
             class="gallery-nav"
             data-gallery-nav="next"
             onclick={next}
-            aria-label={`Next ${itemNoun(visible[(shown + 1) % total])}`}
+            aria-label={`Next ${itemNoun(items[(shown + 1) % total])}`}
           >
             <span class="gallery-nav-disc">
               <Icon name="chevron-right" slot="row" />
@@ -423,26 +394,82 @@
 {/if}
 
 <style>
-  /* THE GRID: one track per tile, so the row fills the column with no
-     gutter left dead (owner rule: content short of its container's edge is a
-     defect). The column count is a token the phone block halves, and there
-     only the first four tiles show, so no tile stands alone in a row. */
+  /* THE MOSAIC (owner, 2026-11-02, issue 399): six columns at the reading
+     width and two on a phone, every row a fixed height, and each tile spanning
+     the cells its shape names (lib/mosaic.ts), so a page of any count fills its
+     rows to the edge (owner rule: content short of its container's edge is a
+     defect). The grid takes its columns from the same answer the shapes were
+     chosen for — the data attribute — never from a media query of its own, so
+     the pattern and the grid cannot disagree at any width.
+
+     THE GRID RESERVES its fullest page — four rows at the reading width, three
+     on a phone — before a byte arrives, so a shorter page, a turn, a lazy
+     thumbnail or a manifest landing moves nothing under a reader.
+
+     A ROW IS NEVER TALLER THAN ITS CELL IS WIDE. The row height is the
+     token's, until the column a reader drags narrow makes a cell narrower
+     than that: from there the row is the cell's own width, so a square stays
+     a square and no tile is drawn as a sliver taller than it is wide
+     (measured before this rule: 60x294 at the handle's 288px floor). The
+     cell is read off the mosaic's own box, which is why the wrapper is a
+     size container; an engine without container units keeps the token. */
+  .gallery-mosaic {
+    container-type: inline-size;
+  }
   .gallery-grid {
+    --gallery-track: var(--gallery-row);
     display: grid;
-    grid-template-columns: repeat(var(--gallery-columns), minmax(0, 1fr));
-    gap: var(--gallery-tile-gap);
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-auto-rows: var(--gallery-track);
+    gap: var(--gallery-mosaic-gap);
+    min-block-size: calc(4 * var(--gallery-track) + 3 * var(--gallery-mosaic-gap));
+    align-content: start;
+  }
+  .gallery-grid[data-columns='2'] {
+    --gallery-track: var(--gallery-row-phone);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-block-size: calc(3 * var(--gallery-track) + 2 * var(--gallery-mosaic-gap));
+  }
+  @supports (width: 1cqi) {
+    .gallery-grid {
+      --gallery-track: min(var(--gallery-row), (100cqi - 5 * var(--gallery-mosaic-gap)) / 6);
+    }
+    .gallery-grid[data-columns='2'] {
+      --gallery-track: min(var(--gallery-row-phone), (100cqi - var(--gallery-mosaic-gap)) / 2);
+    }
+  }
+  .gallery-tile[data-shape='sq'] {
+    grid-column: span 2;
+    grid-row: span 2;
+  }
+  .gallery-tile[data-shape='wd'] {
+    grid-column: span 3;
+    grid-row: span 2;
+  }
+  .gallery-tile[data-shape='full'] {
+    grid-column: span 6;
+    grid-row: span 2;
+  }
+  .gallery-grid[data-columns='2'] .gallery-tile[data-shape='sq'] {
+    grid-column: span 1;
+    grid-row: span 1;
+  }
+  .gallery-grid[data-columns='2'] .gallery-tile[data-shape='wd'],
+  .gallery-grid[data-columns='2'] .gallery-tile[data-shape='full'] {
+    grid-column: span 2;
+    grid-row: span 1;
   }
 
-  /* EVERY TILE RESERVES ITS SQUARE before a byte arrives: the box is the
-     track's width by aspect, never the picture's, so a lazy thumbnail or a
-     poster in flight moves nothing under a reader. */
+  /* A tile is exactly the cells it spans, stretched to them on both axes and
+     never sized by the picture, and the picture covers it: no radius, no
+     border, no shadow — the page frame is the sheet's only line. */
   .gallery-tile {
     position: relative;
     display: block;
     justify-self: stretch;
+    align-self: stretch;
     min-inline-size: var(--control-target);
     min-block-size: var(--control-target);
-    aspect-ratio: var(--gallery-tile-aspect);
     margin: 0;
     padding: 0;
     border: 0;
@@ -483,44 +510,6 @@
   .gallery-tile:hover .gallery-play-disc,
   .gallery-tile:focus-visible .gallery-play-disc {
     opacity: 1;
-  }
-
-  /* THE SET SWITCH, only when there is a choice: a centred row above the
-     strip with no box and no ground, the chosen set marked by the brand ink
-     and its underline, like every other switch on the sheet. */
-  .gallery-sets {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: var(--gallery-sets-gap);
-    margin-block-end: var(--gallery-sets-gap);
-  }
-  .gallery-set {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--icon-gap);
-    min-inline-size: var(--control-target);
-    min-block-size: var(--control-target);
-    padding: 0 var(--gallery-sets-gap);
-    border: 0;
-    border-block-end: 2px solid transparent;
-    background: none;
-    color: var(--ledger-muted);
-    font-family: var(--font-mono);
-    font-size: var(--ledger-label-size);
-    letter-spacing: var(--ledger-label-tracking);
-    text-transform: uppercase;
-    cursor: pointer;
-  }
-  /* The chosen set is underlined by a sword, like the trackers' picked layer
-     (owner, 2026-10-19: "we should have swords"). */
-  .gallery-set[aria-pressed='true'] {
-    color: var(--color-brand);
-    background: var(--keep-sword-underline);
-  }
-  .gallery-set:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
   }
 
   /* THE STAGE: a native dialog anchored to the viewport, the picture

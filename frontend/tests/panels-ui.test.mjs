@@ -21,7 +21,6 @@ import {
 import { contributionCalendarProps } from '../src/lib/commits.ts';
 import { gridLevel, gridLevels } from '../src/lib/grid.ts';
 import { unavailablePanel } from '../src/lib/panels.ts';
-import { projects } from '../src/lib/projects.ts';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
@@ -96,9 +95,9 @@ const [
   read('../src/lib/blocks/bossTicker.ts'),
 ]);
 
-/* The sheet's paired section (owner design decision, 2026-09-11, issue 318):
- * the component that draws the repositories table beside the commit log. */
-const ledgerSpread = await read('../src/lib/components/LedgerSpread.svelte');
+/* Ongoing Work's stream (owner, 2026-11-02, issue #399): the component that
+ * draws the commits, and on them the releases, as one list. */
+const stream = await read('../src/lib/components/Stream.svelte');
 
 /* The multi-panel binding modules, read beside the one above so the
  * stays-current pin can sweep every panel binding. */
@@ -312,12 +311,10 @@ test('no card announces its own age, and none keeps a control', () => {
   assert.equal(failed.status, 'unavailable');
   assert.match(ticker, /\{#if items\.length === 0\}\s*<p class="ticker-note">\{emptyNote\}<\/p>/);
   /* The log's own honest empty line moved with the log (owner design decision,
-     2026-09-11, issue 318): the rows are the sheet's right-hand column now, so
-     the note that stands in for them is rendered there, from the same adapter
-     word — one note class for both columns since the section became two-line
-     entries (owner direction, 2026-10-16). */
-  assert.match(ledgerSpread, /<p class="ongoing-note">\{logNote\}<\/p>/);
-  assert.match(ledgerSpread, /<p class="ongoing-note">\{emptyNote\}<\/p>/);
+     2026-09-11, issue 318): the rows are Ongoing Work's stream now (issue
+     #399), so the note that stands in for them is rendered there, from the
+     same adapter word. */
+  assert.match(stream, /<p class="stream-note">\{emptyNote\}<\/p>/);
   assert.match(chronicle, /<p class="chronicle-note">\{emptyNote\}<\/p>/);
   // No per-card control, and no panel hands one up any more.
   assert.doesNotMatch(shell, /panel-refresh|<button/, 'a card grew its own refresh control back');
@@ -869,21 +866,17 @@ test('the project roster is derived from the account listing, never enumerated i
   );
 });
 
-test('the snapshot and the frontend fallback describe the same captured set', {
+/* The frontend's own captured rows, and the parity pin that held them to this
+ * snapshot, left with the repositories column (owner, 2026-11-02, issue #399):
+ * the stream reads the panel for releases only, and a panel it cannot read
+ * marks none. The snapshot itself still serves cold, and still says so. */
+test('the repositories snapshot says it is a capture', {
   skip: reducedContextNote,
 }, async () => {
   const snapshot = await read('../../internal/panels/snapshots/coding-projects.json').then(
     JSON.parse
   );
-  const shipped = snapshot.data.repos.map((repo) => repo.name).sort();
-  const rendered = projects.map((project) => project.name).toSorted();
-  assert.deepEqual(
-    shipped,
-    rendered,
-    'snapshots/coding-projects.json and frontend/src/lib/projects.ts disagree; the cold-boot face and the no-payload face would show different repositories'
-  );
-  // Non-vacuity: two empty lists would satisfy the assertion above.
-  assert.ok(rendered.length > 0, 'the captured fallback set is empty');
+  assert.ok(snapshot.data.repos.length > 0, 'the cold-start snapshot is empty');
   // Every snapshot row says it is a capture: the cold-start payload must
   // never wear live provenance.
   for (const repo of snapshot.data.repos) {
@@ -1003,7 +996,7 @@ test('every mounted panel stays current instead of painting once', () => {
     /\bloadPanel\b/,
     'the block host reads an envelope directly; the one-shot read is the bug'
   );
-  for (const [name, source] of Object.entries({ ticker, chronicle, ledgerSpread })) {
+  for (const [name, source] of Object.entries({ ticker, chronicle, stream })) {
     assert.doesNotMatch(
       source,
       /\bloadPanel\b|\bwatchPanel\b|\bfetch\(/,
@@ -1132,9 +1125,10 @@ test('the chronicle opens its roll with the figures, beside the writing on a des
  * rather than a choice of how to re-read one.
  *
  * The segmented control was buttons with a pressed state, deliberately not a
- * radiogroup — the same grammar the gallery's set switch uses, so the page has
- * one way of saying "pick which of these to show". The Chronicle's layer
- * switch (owner direction, 2026-10-16) keeps that grammar.
+ * radiogroup — the same grammar the Ongoing Work stream's filters use (and the
+ * gallery's set switch used until the mosaic, 2026-11-02, issue 399), so the
+ * page has one way of saying "pick which of these to show". The Chronicle's
+ * layer switch (owner direction, 2026-10-16) keeps that grammar.
  *
  * The lens ENGINE is untouched and still proven, executed rather than
  * pattern-matched, in tests/grid.test.mjs and tests/periods.test.mjs. */
@@ -1157,7 +1151,7 @@ test('every calendar shares one window, and no display control survives', () => 
   /* The control is pressed buttons, not a radio group — carried from the
      retired segmented control to the Chronicle's layer switch (owner
      direction, 2026-10-16), which picks what the line plots and the calendar
-     paints, in the same grammar the gallery's set switch speaks. */
+     paints, in the same grammar the stream's filters speak. */
   assert.match(
     chronicle,
     /<div class="chronicle-layers" role="group" aria-label="Diagram layer">[\s\S]*?<button\s+type="button"\s+data-tone=\{option\.tone\}\s+data-initial=\{option\.label\.charAt\(0\)\}\s+aria-pressed=\{option\.key === layer\?\.key\}/

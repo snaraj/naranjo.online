@@ -812,6 +812,20 @@
   --ticker-item-pad: var(--ticker-item-pad-block) var(--ticker-item-pad-inline);
   --ticker-dim: 0.35;
 
+  /* THE STREAM (owner, 2026-11-02, issue 399): Ongoing Work's one column of
+     entries. An entry is a byline over a subject between two paddings, and its
+     pitch is made of those lengths and nothing else, so the page the list
+     reserves is exact before any payload lands. A desktop subject takes one
+     line; a phone's takes two, and the phone block below restates the pitch.
+     The gap parts the entry's columns and the byline's facts. */
+  --stream-line: 1.25rem;
+  --stream-sub: 1.125rem;
+  --stream-pad: 0.5rem;
+  --stream-gap: 0.75rem;
+  --stream-pitch: calc(var(--stream-line) + var(--stream-sub) + 2 * var(--stream-pad));
+  /* A pager step with nowhere to go: the same mark, quieter. */
+  --pager-rest-dim: 0.35;
+
   /* Motion, as tokens, because how this page moves is as much a dial as how it
      is coloured — and because every one of these is read from inside a
      (prefers-reduced-motion: no-preference) block, so a reader who asked for
@@ -822,6 +836,12 @@
   --drawer-duration: 520ms;
   --masthead-draw: 1400ms;
   --ticker-duration: 90s;
+  /* A stream filter's press (issue 399): its ink easing to the brand, the
+     band of light crossing its mark once, and three sparks a beat apart. */
+  --stream-press: 250ms;
+  --stream-shine-duration: 700ms;
+  --stream-spark-duration: 650ms;
+  --stream-spark-stagger: 90ms;
 
   /* The panel theme layer. Every panel component was built "shaped, not
      styled" — each color reads a --panel-* custom property with a
@@ -1188,10 +1208,6 @@
   --keep-twig-2: url('./assets/images/props/twig-2.svg');
   --keep-twig-3: url('./assets/images/props/twig-3.svg');
   --keep-twig-tile: calc(640 * var(--keep-prop)) calc(4 * var(--keep-prop));
-  --keep-sword: url('./assets/images/props/sword.svg');
-  /* A picked layer's or set's underline: the whole sword, one pixel a pixel,
-     lying under the name. */
-  --keep-sword-underline: var(--keep-sword) center bottom 0.25rem / 40px 7px no-repeat;
   --keep-sword-hilt: url('./assets/images/props/sword-hilt.svg');
   /* The blade between the hilt and the point: its three rows of steel as
      bands, drawn once along the blade. It was a drawing one pixel wide,
@@ -1842,15 +1858,14 @@ h1 {
    branch by reading mode for the same reason that sibling does not -- it is
    read against the scrim, which is the same near-black in every mode. */
 :root {
-  /* THE GALLERY IS A ROW OF TILES (owner directive, 2026-09-03, issue 287):
-     the first few of the chosen set as squares, beside one control tile, in
-     one grid whose column count is the only number that changes between the
-     reading width and a phone. Every tile reserves its square before a byte
-     arrives, so arrival moves nothing. */
-  --gallery-columns: 5;
-  --gallery-tile-gap: 0.5rem;
-  --gallery-tile-aspect: 1;
-  --gallery-sets-gap: 0.5rem;
+  /* THE GALLERY IS A MOSAIC (owner, 2026-11-02, issue 399): the height of one
+     row of its grid at the reading width and on a phone, and the gap between
+     its tiles. A tile spans whole rows, so these three size every tile — and
+     a row never grows taller than the cell it heads is wide (MediaGallery's
+     own rule), so a narrowed column shrinks a row below its token. */
+  --gallery-row: 9rem;
+  --gallery-row-phone: 10rem;
+  --gallery-mosaic-gap: 0.375rem;
   /* The GROUND a tile and a film sit on (issue 239) is --gallery-stage-ground,
      declared with the palettes because it branches by reading mode. */
   /* The stage's prev/next pair: the disc inside the 44px target, its ink, its
@@ -2203,16 +2218,11 @@ h1 {
 /* --- The phone (owner's first requirement) ------------------------------- */
 
 @media (max-width: 45rem) {
-  /* Two tiles across on a phone. Declared AFTER the gallery token block above,
-     because an earlier declaration at equal specificity loses to it. */
+  /* A stream entry gives its subject a second line on a phone (issue 399).
+     Declared AFTER the token block above, because an earlier declaration at
+     equal specificity loses to it. */
   :root {
-    --gallery-columns: 2;
-  }
-
-  /* Two across holds four of the five tiles; the fifth would stand alone in
-     its row, so a phone shows four and the stage still pages through all. */
-  .gallery-grid > :nth-child(n + 5) {
-    display: none;
+    --stream-pitch: calc(2 * var(--stream-line) + var(--stream-sub) + 2 * var(--stream-pad));
   }
 
   /* Every wide row collapses to stacked lines rather than scrolling sideways:

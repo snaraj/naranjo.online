@@ -33,14 +33,12 @@ export type IconName =
   | 'chevron-up'
   | 'chevron-right'
   | 'chevron-left'
-  | 'star'
+  | 'list'
   | 'pull'
-  | 'clock'
   | 'tag'
   | 'chip'
   | 'sessions'
   | 'photo'
-  | 'film'
   | 'play'
   | 'work'
   | 'folder';
@@ -69,19 +67,15 @@ export const icons: Record<IconName, readonly IconPart[]> = {
   'chevron-right': [{ tag: 'path', attrs: { d: 'M9 6l6 6-6 6' } }],
   'chevron-left': [{ tag: 'path', attrs: { d: 'M15 5l-7 7 7 7' } }],
 
-  /* projects */
-  'star': [
-    { tag: 'path', attrs: { d: 'M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 17l-5.3 2.7 1.1-5.9-4.3-4.1 5.9-.8z' } }
-  ],
+  /* the stream (issue #399): its three filters, a commit's mark and a
+     release's. The star, the clock and the film left with the repository
+     figures and the gallery's set switch that drew them. */
+  'list': [{ tag: 'path', attrs: { d: 'M4 7h16M4 12h16M4 17h10' } }],
   'pull': [
     { tag: 'circle', attrs: { cx: '6', cy: '5', r: '2' } },
     { tag: 'circle', attrs: { cx: '6', cy: '19', r: '2' } },
     { tag: 'circle', attrs: { cx: '18', cy: '19', r: '2' } },
     { tag: 'path', attrs: { d: 'M6 7v10M18 17v-6a3 3 0 0 0-3-3h-3.5M13.5 5l-3 3 3 3' } }
-  ],
-  'clock': [
-    { tag: 'circle', attrs: { cx: '12', cy: '12', r: '9' } },
-    { tag: 'path', attrs: { d: 'M12 7v5l3 2' } }
   ],
   'tag': [
     { tag: 'path', attrs: { d: 'M3 12V4h8l10 10-8 8z' } },
@@ -101,10 +95,6 @@ export const icons: Record<IconName, readonly IconPart[]> = {
     { tag: 'rect', attrs: { x: '3', y: '4', width: '18', height: '16' } },
     { tag: 'rect', attrs: { x: '7', y: '8', width: '3', height: '3' }, solid: true },
     { tag: 'path', attrs: { d: 'M21 15l-5-5-8 8' } }
-  ],
-  'film': [
-    { tag: 'rect', attrs: { x: '3', y: '4', width: '18', height: '16', rx: '2' } },
-    { tag: 'path', attrs: { d: 'M7.5 4v16M16.5 4v16M3 9h4.5M3 15h4.5M16.5 9H21M16.5 15H21' } }
   ],
   'play': [{ tag: 'path', attrs: { d: 'M7.5 5.5v13l11-6.5z' }, solid: true }],
 

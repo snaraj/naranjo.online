@@ -699,6 +699,10 @@ func mapRepositoryQuery(raw []byte, spec *codingProjectsFetchSpec, now time.Time
 		}
 		if node.LatestRelease != nil {
 			candidate.release = node.LatestRelease.TagName
+			candidate.releasedAt = node.LatestRelease.PublishedAt
+			if node.LatestRelease.TagCommit != nil {
+				candidate.releaseSHA = node.LatestRelease.TagCommit.OID
+			}
 		}
 		candidates = append(candidates, candidate)
 	}
@@ -729,6 +733,12 @@ type listingCandidate struct {
 	// release is the latest release tag, empty for a repository that has
 	// never released or a producer that cannot read one.
 	release string
+	// releasedAt and releaseSHA are that release's publication instant and
+	// the commit its tag names, as the producer reported them (issue #399);
+	// empty from a producer that cannot read them, which is the public
+	// listing.
+	releasedAt string
+	releaseSHA string
 	// pinned marks a row the owner pinned on the host; false from a producer
 	// that cannot read the pinned set, which is the public listing.
 	pinned bool
@@ -843,6 +853,8 @@ func earlierListing(have, candidate listedProject) bool {
 // already: a tally outside the plausible range and a tag outside the host's
 // own tag grammar each fail the ROW, which the page then draws as a dash —
 // "not known", which is true, rather than a zero or a version nobody released.
+// The release's instant and commit (issue #399) are softer: each is kept only
+// when well formed and otherwise simply absent.
 func admitListedRepository(entry listingCandidate, now time.Time) (listedProject, error) {
 	at, err := time.Parse(time.RFC3339, entry.pushedAt)
 	if err != nil {
@@ -879,6 +891,16 @@ func admitListedRepository(entry listingCandidate, now time.Time) (listedProject
 			return listedProject{}, fmt.Errorf("a release tag is outside the host's tag grammar")
 		}
 		row.Release = entry.release
+		// The release's instant and commit ride beside the tag only, and
+		// each is dropped ON ITS OWN when malformed (issue #399): neither is
+		// a figure the page prints from a guess, and a bad one must not cost
+		// the row its version the way a bad tag costs it the row.
+		if published, err := time.Parse(time.RFC3339, entry.releasedAt); err == nil {
+			row.ReleasedAt = published.UTC().Format(time.RFC3339)
+		}
+		if isCommitIdentity(entry.releaseSHA) {
+			row.ReleaseSHA = entry.releaseSHA
+		}
 	}
 	return listedProject{row: row, at: at}, nil
 }
