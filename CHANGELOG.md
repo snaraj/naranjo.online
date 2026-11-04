@@ -26,17 +26,15 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   tile, so drawings and films mix at random on every load. The order holds for
   the visit: the pager, the stage's previous and next, and the tile a closed
   stage returns focus to all follow it, and a page turn or a rotation never
-  draws again. The mosaic's pattern is unchanged and by position. The
-  manifest's item order no longer means feed order, so the operator need not
-  interleave the kinds (#405).
-- A drawing in a wide tile keeps its subject. Where covering a tile would cut
-  more than a quarter of a picture on either axis, the tile shows the whole
-  picture over an ambient copy of itself: the same preview, blurred, dimmed and
-  reaching past the tile's edges so the blur's rim never shows. Films always
-  cover their tile. The crop is judged against the box each tile is actually
-  laid as, because a wide reading column stretches the cells: at 1440px the
-  square tile is 1.27:1 and the wide one 1.91:1. The vendored fallback
-  photographs are 16:9, so most square tiles show them whole too (#405).
+  draws again. The manifest's item order no longer means feed order, so the
+  operator need not interleave the kinds. And every tile shows its picture
+  whole: a tile keeps the column width its place in the mosaic gives it and
+  takes the picture's own proportions for its height, so nothing is cropped
+  and nothing is padded, and a row ends as unevenly as its pictures do. Each
+  tile has that box before its picture arrives, from the item's declared size,
+  so the arrival moves nothing; the gallery's height now follows its pictures,
+  so a page turn or the published set replacing the fallback one can change it
+  (#405).
 
 ## [0.1.103] - 2026-11-03
 

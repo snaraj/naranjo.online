@@ -197,17 +197,14 @@ browser's own 404 line as the only console output. The frame's measured box
 was byte-identical between the two runs and the page reported a cumulative
 layout shift of 0 across the swap.
 
-There is no layout shift between the two sets. The frame's reserved box comes
-from the shared `--card-media-*` tokens and is identical for every item; the
-manifest's `width`/`height` are the element's intrinsic-size HINT, not the
-reservation. The vendored set therefore renders before any request exists, and
-a live manifest replaces its CONTENT without moving its box.
-
-A still's `full` box also decides how its tile shows it (0.1.104): where
-covering the tile would cut more than a quarter of the picture on either axis,
-the tile shows the whole picture over a blurred copy of its own preview. So a
-still's declared `width` and `height` must have the picture's real
-proportions. A film's tile always covers.
+The vendored set renders before any request exists. Since 0.1.104 a tile
+shows its picture whole, at the width its place in the mosaic gives it and in
+the picture's own proportions, so an item's `full` `width` and `height` set its
+tile's proportions, and the tile has that box before a byte of the preview
+arrives: a picture's arrival moves nothing. They must therefore be the
+picture's real proportions, and its preview must have the same ones. The
+mosaic's height follows its pictures, so a live manifest replacing the
+vendored set can change it, as a page turn can.
 
 ## Publishing, from the operator's side
 

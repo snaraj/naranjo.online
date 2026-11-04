@@ -6,10 +6,13 @@
   Their order is chance, once per visit (owner, 2026-11-04, issue 405: "this
   is fine, just make it random"): the grid lays a shuffled copy of the items,
   and the manifest's own order means nothing to it. So a drawing lands in a
-  wide tile as often as in a square, and where covering that tile would cut
-  too much of it, the tile shows the whole drawing over an ambient fill made
-  of the drawing itself (owner, 2026-11-04: "if the drawing is lost you can
-  represent it in a different way"; lib/mosaic.ts, thumbFit).
+  wide tile as often as in a square, and every tile shows its picture WHOLE,
+  at the width its shape spans and in the picture's own proportions (owner,
+  2026-11-04, on the 0.1.104 preview: "just zoom out instead of having the
+  ugly border, make the picture smaller. it doesn't have to work out to be a
+  perfect square, the bottom side can be uneven"). Nothing is cropped and
+  nothing is padded: a tile is as tall as its picture makes it, and a row
+  ends as unevenly as its pictures do.
 
   A FILM'S TILE OPENS THE STAGE LIKE A PICTURE'S (issue 384). The user, on an
   iPhone, 2026-10-22: "the videos are not responsive to the touch, I should be
@@ -39,9 +42,9 @@
 
   The tiles are a MOSAIC, not a carousel: five to a page, squares and wide
   tiles in a fixed pattern for each count (lib/mosaic.ts) that fills every row
-  of six columns at the reading width and of two on a phone, with the shared
-  pager under it. Every dimension is a token in styles.css; the component
-  states no colour, length, radius or duration of its own. -->
+  of six columns at the reading width and of two on a phone, edge to edge,
+  with the shared pager under it. Every dimension is a token in styles.css;
+  the component states no colour, length, radius or duration of its own. -->
 <script lang="ts">
   import { tick } from 'svelte';
   import FeedCard from './FeedCard.svelte';
@@ -49,7 +52,7 @@
   import Pager from './Pager.svelte';
   import { browserMedia, spreadMediaQuery, watchMedia } from '../columnWidth';
   import { swipeHorizontal } from '../gesture.ts';
-  import { mosaicShapes, shuffled, thumbFit, tileAspect } from '../mosaic.ts';
+  import { mosaicShapes, shuffled } from '../mosaic.ts';
   import { pageCount, pageRows } from '../stream.ts';
   import type { MediaGalleryItem, MediaGalleryProps } from '../blocks.ts';
 
@@ -84,33 +87,6 @@
   $effect(() => watchMedia(browserMedia, spreadMediaQuery, (matches) => (wide = matches)));
   const columns = $derived(wide ? 6 : 2);
   const shapes = $derived(mosaicShapes(pageTiles.length, columns));
-
-  /* THE SHAPE EACH TILE REALLY HAS (owner, 2026-11-04, on the 0.1.104
-     preview). Whether a picture is shown whole is a question about the box it
-     would be cropped to, and a tile's cells are square only where a row's
-     token is at least a cell's width: across a wide reading column the cells
-     widen and the rows do not (lib/mosaic.ts states what was measured). So
-     each tile's box is read as it mounts and again whenever it changes — a
-     rotation, a dragged column — and forgotten when the tile leaves the page;
-     until a tile has a box, the shape it is laid as stands in. Changing a fit
-     changes no box, because the ambient layer is out of flow and object-fit
-     sizes nothing, so a write here never wakes the observer again. */
-  const tileShapes: Record<string, number> = $state({});
-  function measureTile(node: HTMLElement, key: string): { destroy: () => void } | undefined {
-    if (typeof ResizeObserver === 'undefined') return undefined;
-    const write = (box: { width: number; height: number } | undefined): void => {
-      if (box !== undefined && box.width > 0 && box.height > 0) tileShapes[key] = box.width / box.height;
-    };
-    write(node.getBoundingClientRect());
-    const observer = new ResizeObserver((entries) => write(entries[0]?.contentRect));
-    observer.observe(node);
-    return {
-      destroy: () => {
-        observer.disconnect();
-        delete tileShapes[key];
-      }
-    };
-  }
 
   function itemNoun(candidate: MediaGalleryItem): string {
     return candidate.video === undefined ? 'photograph' : 'film';
@@ -265,59 +241,42 @@
 {#if items.length > 0}
   <FeedCard variant="flat">
     {#snippet media()}
-      <div class="gallery-mosaic">
-        <div class="gallery-grid" data-gallery-tiles={pageTiles.length} data-columns={columns}>
-          {#each pageTiles as tile, place (tile.key)}
-            <!-- ONE TILE SHAPE for every item (issue 384): a still and a film
-              are the same button over the same lazy preview, so a press on a
-              film's picture opens the stage exactly as a press on a still's
-              does. A film's tile adds a play mark, centred and hidden from the
-              accessibility tree: it says what the tile holds, and the button's
-              own name already says so in words.
-              HOW THE PICTURE FITS is thumbFit's (lib/mosaic.ts), from the
-              item's declared box — the gallery's own where the item states
-              none, as the thumb's size hint does — and the tile's measured
-              shape. A contained picture sits over an ambient copy of itself:
-              the same preview URL, so the one fetch serves both, and hidden
-              from the accessibility tree, because the button's name already
-              says what the tile holds. -->
-            {@const fit = thumbFit(
-              tile.video ? 'video' : 'image',
-              tile.width ?? width,
-              tile.height ?? height,
-              tileShapes[tile.key] ?? tileAspect(shapes[place], columns)
-            )}
-            <button
-              type="button"
-              class="gallery-tile"
-              data-gallery-kind={tile.video ? 'video' : 'image'}
-              data-key={tile.key}
-              data-shape={shapes[place]}
-              data-fit={fit}
-              use:measureTile={tile.key}
-              onclick={(event) => open(tile, event.currentTarget)}
-              aria-label={`Open ${itemNoun(tile)}: ${tile.alt}`}
-            >
-              {#if fit === 'contain'}
-                <img class="gallery-ambient" src={tile.previewSrc} alt="" aria-hidden="true" loading="lazy" decoding="async" />
-              {/if}
-              <img
-                class="gallery-thumb"
-                src={tile.previewSrc}
-                alt=""
-                width={tile.width ?? width}
-                height={tile.height ?? height}
-                loading="lazy"
-                decoding="async"
-              />
-              {#if tile.video}
-                <span class="gallery-play-disc" aria-hidden="true">
-                  <Icon name="play" slot="chrome" />
-                </span>
-              {/if}
-            </button>
-          {/each}
-        </div>
+      <div class="gallery-grid" data-gallery-tiles={pageTiles.length} data-columns={columns}>
+        {#each pageTiles as tile, place (tile.key)}
+          <!-- ONE TILE SHAPE for every item (issue 384): a still and a film
+            are the same button over the same lazy preview, so a press on a
+            film's picture opens the stage exactly as a press on a still's
+            does. A film's tile adds a play mark, centred and hidden from the
+            accessibility tree: it says what the tile holds, and the button's
+            own name already says so in words.
+            The thumb's width and height are the item's declared box — the
+            gallery's own where the item states none — and they are what
+            gives the tile its proportions before a byte arrives (below). -->
+          <button
+            type="button"
+            class="gallery-tile"
+            data-gallery-kind={tile.video ? 'video' : 'image'}
+            data-key={tile.key}
+            data-shape={shapes[place]}
+            onclick={(event) => open(tile, event.currentTarget)}
+            aria-label={`Open ${itemNoun(tile)}: ${tile.alt}`}
+          >
+            <img
+              class="gallery-thumb"
+              src={tile.previewSrc}
+              alt=""
+              width={tile.width ?? width}
+              height={tile.height ?? height}
+              loading="lazy"
+              decoding="async"
+            />
+            {#if tile.video}
+              <span class="gallery-play-disc" aria-hidden="true">
+                <Icon name="play" slot="chrome" />
+              </span>
+            {/if}
+          </button>
+        {/each}
       </div>
       <Pager page={at} {pages} previousLabel="Earlier pictures" nextLabel="Later pictures" onturn={(next) => (page = next)} />
     {/snippet}
@@ -460,80 +419,72 @@
 
 <style>
   /* THE MOSAIC (owner, 2026-11-02, issue 399): six columns at the reading
-     width and two on a phone, every row a fixed height, and each tile spanning
-     the cells its shape names (lib/mosaic.ts), so a page of any count fills its
-     rows to the edge (owner rule: content short of its container's edge is a
-     defect). The grid takes its columns from the same answer the shapes were
-     chosen for — the data attribute — never from a media query of its own, so
-     the pattern and the grid cannot disagree at any width.
+     width and two on a phone, and each tile spanning the columns its shape
+     names (lib/mosaic.ts), so a page of any count fills every row to the edge
+     (owner rule: content short of its container's edge is a defect). The grid
+     takes its columns from the same answer the shapes were chosen for — the
+     data attribute — never from a media query of its own, so the pattern and
+     the grid cannot disagree at any width.
 
-     THE GRID RESERVES its fullest page — four rows at the reading width, three
-     on a phone — before a byte arrives, so a shorter page, a turn, a lazy
-     thumbnail or a manifest landing moves nothing under a reader.
+     A ROW IS AS TALL AS ITS TALLEST PICTURE (owner, 2026-11-04, on the
+     0.1.104 preview: "it doesn't have to work out to be a perfect square, the
+     bottom side can be uneven"). Every tile starts at its row's top, so a
+     shorter picture's tile ends above its neighbour's and the wall shows
+     under it. The heights are the pictures', and the grid reserves none of
+     its own: each tile has its box before a byte arrives (the thumb, below),
+     so a lazy thumbnail moves nothing, and what changes the mosaic's height
+     is a different set of pictures — a page turn, or the runtime manifest
+     replacing the vendored set as it lands — the same class of change as the
+     page count moving.
 
-     A ROW IS NEVER TALLER THAN ITS CELL IS WIDE. The row height is the
-     token's, until the column a reader drags narrow makes a cell narrower
-     than that: from there the row is the cell's own width, so a square stays
-     a square and no tile is drawn as a sliver taller than it is wide
-     (measured before this rule: 60x294 at the handle's 288px floor). The
-     cell is read off the mosaic's own box, which is why the wrapper is a
-     size container; an engine without container units keeps the token. */
-  .gallery-mosaic {
-    container-type: inline-size;
-  }
+     The rows are max-content rather than auto, which lays them out the same
+     here — the grid's height is its rows', so auto has no space to stretch
+     a row into — because WebKit keeps an auto row's height when its columns
+     change width but not number. MEASURED in WebKit on the vendored set:
+     widening the window from 1440px to 1920px left the rows 209 and 316px
+     tall under tiles 262 and 394px tall, so the wide tiles overlapped the
+     squares by 46px, and narrowing from 1920px to 1280px left 86px between
+     the rows. Chromium and Gecko lay both values identically, and
+     max-content holds in all three. */
   .gallery-grid {
-    --gallery-track: var(--gallery-row);
     display: grid;
     grid-template-columns: repeat(6, minmax(0, 1fr));
-    grid-auto-rows: var(--gallery-track);
+    grid-auto-rows: max-content;
     gap: var(--gallery-mosaic-gap);
-    min-block-size: calc(4 * var(--gallery-track) + 3 * var(--gallery-mosaic-gap));
-    align-content: start;
   }
   .gallery-grid[data-columns='2'] {
-    --gallery-track: var(--gallery-row-phone);
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    min-block-size: calc(3 * var(--gallery-track) + 2 * var(--gallery-mosaic-gap));
-  }
-  @supports (width: 1cqi) {
-    .gallery-grid {
-      --gallery-track: min(var(--gallery-row), (100cqi - 5 * var(--gallery-mosaic-gap)) / 6);
-    }
-    .gallery-grid[data-columns='2'] {
-      --gallery-track: min(var(--gallery-row-phone), (100cqi - var(--gallery-mosaic-gap)) / 2);
-    }
   }
   .gallery-tile[data-shape='sq'] {
     grid-column: span 2;
-    grid-row: span 2;
   }
   .gallery-tile[data-shape='wd'] {
     grid-column: span 3;
-    grid-row: span 2;
   }
   .gallery-tile[data-shape='full'] {
     grid-column: span 6;
-    grid-row: span 2;
   }
   .gallery-grid[data-columns='2'] .gallery-tile[data-shape='sq'] {
     grid-column: span 1;
-    grid-row: span 1;
   }
   .gallery-grid[data-columns='2'] .gallery-tile[data-shape='wd'],
   .gallery-grid[data-columns='2'] .gallery-tile[data-shape='full'] {
     grid-column: span 2;
-    grid-row: span 1;
   }
 
-  /* A tile is exactly the cells it spans, stretched to them on both axes and
-     never sized by the picture: no radius, no border, no shadow — the page
-     frame is the sheet's only line. The picture covers it, unless covering
-     would cut too much of the picture (below). */
+  /* A tile is its picture at the width its shape spans: stretched across its
+     columns, but starting at its row's top rather than stretched down it, so
+     it is exactly as tall as its picture and pads and crops nothing. The one
+     exception is the touch floor: a picture so wide that its tile would be
+     under 44px tall keeps the 44px, with the ground under it. No radius, no
+     border, no shadow — the page frame is the sheet's only line. Its ground
+     shows only until the picture paints, because the picture is the whole
+     tile. */
   .gallery-tile {
     position: relative;
     display: block;
     justify-self: stretch;
-    align-self: stretch;
+    align-self: start;
     min-inline-size: var(--control-target);
     min-block-size: var(--control-target);
     margin: 0;
@@ -549,41 +500,15 @@
     outline: 2px solid var(--color-accent);
     outline-offset: -2px;
   }
+  /* THE PICTURE, WHOLE (owner, 2026-11-04): the tile's width, and the height
+     its own proportions give it, fitted to no box but its own. Its width and
+     height attributes are the item's declared box, which the engine maps to
+     the box's aspect ratio, so the tile has its final size before the bytes
+     land and their arrival moves nothing: zero CLS. */
   .gallery-thumb {
     display: block;
     inline-size: 100%;
-    block-size: 100%;
-    object-fit: cover;
-  }
-
-  /* A PICTURE THE TILE WOULD CUT IS SHOWN WHOLE (owner, 2026-11-04, on the
-     0.1.104 preview). The tile says so in data-fit, and draws the preview
-     twice: behind, an ambient fill that covers the tile, blurred, and reaching
-     past the tile's clipped edge by the token's bleed so the blur's soft rim
-     falls outside it; above, the whole picture, contained. The DIM is the
-     contained picture's own background: an overlay between the ambient and
-     the picture, which keeps the token a colour and adds no element. It
-     darkens whatever lies under the picture — the ambient once it decodes,
-     the tile's ground before — where a brightness() filter would need a
-     number for a token and darken the ambient's pixels alone. The picture is
-     lifted above the ambient by position alone, in source order. The picture
-     fills the tile's box exactly as a covered tile's does, and the ambient is
-     out of flow and clipped by the tile, so a tile's fit moves nothing: zero
-     CLS. */
-  .gallery-ambient {
-    position: absolute;
-    inset-block-start: calc(-1 * var(--gallery-ambient-bleed));
-    inset-inline-start: calc(-1 * var(--gallery-ambient-bleed));
-    display: block;
-    inline-size: calc(100% + 2 * var(--gallery-ambient-bleed));
-    block-size: calc(100% + 2 * var(--gallery-ambient-bleed));
-    object-fit: cover;
-    filter: blur(var(--gallery-ambient-blur));
-  }
-  .gallery-tile[data-fit='contain'] .gallery-thumb {
-    position: relative;
-    object-fit: contain;
-    background: var(--gallery-ambient-dim);
+    block-size: auto;
   }
 
   /* A film's play mark (issue 384): decoration centred over the picture,

@@ -2615,107 +2615,75 @@ test('the gallery is a mosaic of every item, a page at a time, whose shapes and 
      attribute rather than a second branch of markup. */
   assert.match(
     mediaGallery,
-    /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind=\{tile\.video \? 'video' : 'image'\}\s+data-key=\{tile\.key\}\s+data-shape=\{shapes\[place\]\}\s+data-fit=\{fit\}\s+use:measureTile=\{tile\.key\}\s+onclick=\{\(event\) => open\(tile, event\.currentTarget\)\}\s+aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}\s*>/,
+    /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind=\{tile\.video \? 'video' : 'image'\}\s+data-key=\{tile\.key\}\s+data-shape=\{shapes\[place\]\}\s+onclick=\{\(event\) => open\(tile, event\.currentTarget\)\}\s+aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}\s*>/,
     'every tile, still or film, is the one button that opens the stage'
   );
   assert.equal((mediaGallery.match(/class="gallery-tile"/g) ?? []).length, 1, 'a second tile shape is back beside the button');
   assert.match(mediaGallery, /class="gallery-thumb"\s+src=\{tile\.previewSrc\}\s+alt=""[\s\S]*?loading="lazy"\s+decoding="async"/, 'a thumbnail is decoration inside a labelled button, lazy and async');
-  /* THE GRID: six columns, or two, every row one track — the token's height,
-     bounded by the width of the cell it heads so no row is taller than its
-     cell is wide — and every tile exactly the cells its shape spans. */
+  /* THE GRID: six columns, or two, every tile exactly the columns its shape
+     spans, and every row as tall as its tallest picture (owner, 2026-11-04,
+     on the 0.1.104 preview: "it doesn't have to work out to be a perfect
+     square, the bottom side can be uneven"): max-content rows, which WebKit
+     re-measures when the columns widen where it kept an auto row's old
+     height; no tile spans a row; and no height reserved by the grid. */
   const grid = galleryRule('.gallery-grid');
-  assert.match(grid, /--gallery-track: var\(--gallery-row\);/);
-  assert.match(grid, /grid-template-columns: repeat\(6, minmax\(0, 1fr\)\);/);
-  assert.match(grid, /grid-auto-rows: var\(--gallery-track\);/);
-  assert.match(grid, /gap: var\(--gallery-mosaic-gap\);/);
-  const phone = galleryRule(".gallery-grid[data-columns='2']");
-  assert.match(phone, /--gallery-track: var\(--gallery-row-phone\);/);
-  assert.match(phone, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
-  assert.doesNotMatch(phone, /grid-auto-rows/, 'the phone grid sizes its rows apart from the one track');
-  /* The cell bound reads the mosaic's own box, so the wrapper is the size
-     container and the bound sits behind the engine's own support test. */
-  assert.equal(galleryRule('.gallery-mosaic'), 'container-type: inline-size;');
-  assert.match(mediaGallery, /<div class="gallery-mosaic">\s*<div class="gallery-grid"/);
-  const bounded = /@supports \(width: 1cqi\) \{([\s\S]*?)\n {2}\}/.exec(galleryStyle)?.[1]?.replace(/\s+/g, ' ') ?? '';
-  assert.match(bounded, /\.gallery-grid \{ --gallery-track: min\(var\(--gallery-row\), \(100cqi - 5 \* var\(--gallery-mosaic-gap\)\) \/ 6\); \}/);
-  assert.match(bounded, /\.gallery-grid\[data-columns='2'\] \{ --gallery-track: min\(var\(--gallery-row-phone\), \(100cqi - var\(--gallery-mosaic-gap\)\) \/ 2\); \}/);
+  assert.equal(
+    grid,
+    'display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); grid-auto-rows: max-content; gap: var(--gallery-mosaic-gap);'
+  );
+  assert.equal(galleryRule(".gallery-grid[data-columns='2']"), 'grid-template-columns: repeat(2, minmax(0, 1fr));');
   for (const [selector, span] of [
-    [".gallery-tile[data-shape='sq']", 'grid-column: span 2; grid-row: span 2;'],
-    [".gallery-tile[data-shape='wd']", 'grid-column: span 3; grid-row: span 2;'],
-    [".gallery-tile[data-shape='full']", 'grid-column: span 6; grid-row: span 2;'],
-    [".gallery-grid[data-columns='2'] .gallery-tile[data-shape='sq']", 'grid-column: span 1; grid-row: span 1;']
+    [".gallery-tile[data-shape='sq']", 'grid-column: span 2;'],
+    [".gallery-tile[data-shape='wd']", 'grid-column: span 3;'],
+    [".gallery-tile[data-shape='full']", 'grid-column: span 6;'],
+    [".gallery-grid[data-columns='2'] .gallery-tile[data-shape='sq']", 'grid-column: span 1;']
   ]) {
-    assert.equal(galleryRule(selector), span, `${selector} spans the wrong cells`);
+    assert.equal(galleryRule(selector), span, `${selector} spans the wrong columns`);
   }
   assert.match(
     galleryStyle.replace(/\s+/g, ' '),
-    /\.gallery-grid\[data-columns='2'\] \.gallery-tile\[data-shape='wd'\], \.gallery-grid\[data-columns='2'\] \.gallery-tile\[data-shape='full'\] \{ grid-column: span 2; grid-row: span 1; \}/
+    /\.gallery-grid\[data-columns='2'\] \.gallery-tile\[data-shape='wd'\], \.gallery-grid\[data-columns='2'\] \.gallery-tile\[data-shape='full'\] \{ grid-column: span 2; \}/
   );
-  /* ZERO CLS: the grid reserves its fullest page — four rows at the reading
-     width, three on a phone — so a shorter last page, a turn or a manifest
-     landing moves nothing under the reader, and the pager under it stays put. */
-  assert.match(grid, /min-block-size: calc\(4 \* var\(--gallery-track\) \+ 3 \* var\(--gallery-mosaic-gap\)\);/);
-  assert.match(phone, /min-block-size: calc\(3 \* var\(--gallery-track\) \+ 2 \* var\(--gallery-mosaic-gap\)\);/);
-  for (const token of ['--gallery-row: 9rem;', '--gallery-row-phone: 10rem;', '--gallery-mosaic-gap: 0.375rem;']) {
-    assert.ok(styles.includes(token), `${token} is not the sheet's`);
-  }
-  for (const retired of ['--gallery-columns', '--gallery-tile-aspect', '--gallery-sets-gap', '--gallery-tile-gap', 'nth-child(n + 5)']) {
+  assert.ok(styles.includes('--gallery-mosaic-gap: 0.375rem;'), 'the mosaic’s gap is not the sheet’s');
+  /* What sized and fitted the tiles before is gone from both sheets and the
+     component's code: the row tracks and their tokens, the wrapper that was
+     their size container, and the fit with its measured tiles, its ambient
+     copy and its tokens (owner, 2026-11-04: "not this"). */
+  for (const retired of [
+    '--gallery-columns',
+    '--gallery-tile-aspect',
+    '--gallery-sets-gap',
+    '--gallery-tile-gap',
+    'nth-child(n + 5)',
+    '--gallery-row',
+    '--gallery-track',
+    '--gallery-ambient'
+  ]) {
     assert.ok(!styles.includes(retired) && !galleryStyle.includes(retired), `${retired} outlived the grid it sized`);
   }
-  /* A tile is the cells it spans: no radius, no border, no shadow (the page
-     frame is the sheet's only line), and the picture covers it — unless
-     covering would cut too much of it (the pin below). */
+  assert.doesNotMatch(
+    scriptOnly,
+    /grid-row|container-type|gallery-mosaic(?!-)|gallery-ambient|data-fit|thumbFit|tileAspect|thumbCropLimit|ResizeObserver|measureTile|tileShapes/,
+    'a tile spans a row, the grid reserves a track, or a tile is measured or fitted again'
+  );
+  /* A TILE IS ITS PICTURE, WHOLE: stretched across its columns but starting
+     at its row's top, so it is as tall as its picture and never stretched
+     past it; no radius, no border, no shadow (the page frame is the sheet's
+     only line). The thumb is the tile's width at the height its own
+     proportions give, fitted to no box but its own, and its width and height
+     are the item's declared box, so the tile has its proportions before a
+     byte arrives — zero CLS. */
   const tile = galleryRule('.gallery-tile');
   assert.doesNotMatch(tile, /border-radius|box-shadow|aspect-ratio/);
   assert.match(tile, /border: 0;/);
-  assert.match(galleryRule('.gallery-thumb'), /inline-size: 100%; block-size: 100%; object-fit: cover;/);
-  /* A PICTURE THE TILE WOULD CUT IS SHOWN WHOLE (owner, 2026-11-04, on the
-     0.1.104 preview: "if the drawing is lost you can represent it in a
-     different way"). The fit is lib/mosaic.ts's thumbFit (executed by
-     tests/mosaic.test.mjs), asked once per tile with the kind, the declared
-     box the thumb's own size hint carries and the tile's MEASURED shape —
-     the shape it is laid as only until it has a box — and the tile states it
-     as data-fit. A tile's box is read as it mounts, observed while it lives
-     and forgotten as it goes. A contained tile, and only a contained one,
-     draws the same preview a second time behind the picture: decoration, lazy
-     and async, hidden from the accessibility tree. */
+  assert.match(tile, /justify-self: stretch; align-self: start;/, 'a tile is stretched down its row past its picture');
+  assert.equal(galleryRule('.gallery-thumb'), 'display: block; inline-size: 100%; block-size: auto;');
   assert.match(
     mediaGallery,
-    /\{@const fit = thumbFit\(\s*tile\.video \? 'video' : 'image',\s*tile\.width \?\? width,\s*tile\.height \?\? height,\s*tileShapes\[tile\.key\] \?\? tileAspect\(shapes\[place\], columns\)\s*\)\}/,
-    'a tile’s fit is decided from something other than its kind, its declared box and the shape it really has'
+    /<img\s+class="gallery-thumb"\s+src=\{tile\.previewSrc\}\s+alt=""\s+width=\{tile\.width \?\? width\}\s+height=\{tile\.height \?\? height\}\s+loading="lazy"\s+decoding="async"\s*\/>/,
+    'the thumb no longer declares the item’s box before its bytes arrive'
   );
-  assert.match(mediaGallery, /const tileShapes: Record<string, number> = \$state\(\{\}\);/);
-  assert.match(mediaGallery, /write\(node\.getBoundingClientRect\(\)\);\s*const observer = new ResizeObserver\(\(entries\) => write\(entries\[0\]\?\.contentRect\)\);\s*observer\.observe\(node\);/, 'a tile’s box is not read as it mounts and whenever it changes');
-  assert.match(mediaGallery, /observer\.disconnect\(\);\s*delete tileShapes\[key\];/, 'a tile that left the page keeps a shape it no longer has');
-  assert.equal((mediaGallery.match(/tileShapes\[key\] = /g) ?? []).length, 1, 'a tile’s shape is written from somewhere besides its own box');
-  assert.equal((mediaGallery.match(/\bthumbFit\(/g) ?? []).length, 1, 'the fit is decided in more than one place');
-  assert.match(mediaGallery, /width=\{tile\.width \?\? width\}\s+height=\{tile\.height \?\? height\}/, 'the thumb’s size hint and its fit read different boxes');
-  assert.match(
-    mediaGallery,
-    /\{#if fit === 'contain'\}\s*<img class="gallery-ambient" src=\{tile\.previewSrc\} alt="" aria-hidden="true" loading="lazy" decoding="async" \/>\s*\{\/if\}\s*<img\s+class="gallery-thumb"/,
-    'a contained tile lost its ambient copy, the copy is not the tile’s own preview, or it is no longer decoration behind the picture'
-  );
-  assert.equal((mediaGallery.match(/class="gallery-ambient"/g) ?? []).length, 1, 'a second ambient layer is written');
-  /* The ambient covers the tile under the picture, blurred by a token and
-     reaching past every edge by the token's bleed, so the blur's rim is
-     clipped away; the contained picture is lifted over it by position alone
-     and carries the dim as its own background. No colour or length of the
-     component's own. */
-  assert.equal(
-    galleryRule('.gallery-ambient'),
-    'position: absolute; inset-block-start: calc(-1 * var(--gallery-ambient-bleed)); inset-inline-start: calc(-1 * var(--gallery-ambient-bleed)); display: block; inline-size: calc(100% + 2 * var(--gallery-ambient-bleed)); block-size: calc(100% + 2 * var(--gallery-ambient-bleed)); object-fit: cover; filter: blur(var(--gallery-ambient-blur));'
-  );
-  assert.equal(
-    galleryRule(".gallery-tile[data-fit='contain'] .gallery-thumb"),
-    'position: relative; object-fit: contain; background: var(--gallery-ambient-dim);'
-  );
-  for (const token of [
-    '--gallery-ambient-blur: 1.25rem;',
-    '--gallery-ambient-bleed: calc(3 * var(--gallery-ambient-blur));',
-    '--gallery-ambient-dim: rgba(0, 0, 0, 0.4);'
-  ]) {
-    assert.ok(styles.includes(token), `${token} is not the sheet's`);
-  }
+  assert.equal((scriptOnly.match(/<img\b/g) ?? []).length, 2, 'a tile draws a second picture besides its thumb (the stage’s still is the other)');
   /* THE PAGER IS THE SHARED ONE, once, under the grid; nothing explains the
      row in words, and the set switch is gone with its sets. */
   assert.equal((mediaGallery.match(/<Pager\b/g) ?? []).length, 1);
@@ -2723,7 +2691,7 @@ test('the gallery is a mosaic of every item, a page at a time, whose shapes and 
   assert.doesNotMatch(mediaGallery, /gallery-control|gallery-set|setOf|setGlyph|activeSet/, 'the set switch or a box of information is back');
   assert.doesNotMatch(mediaGallery, /open one to|page through|shown ·/, 'the row explains itself in words again');
   /* The grid is ONLY tiles: every child the row draws is a tile. */
-  const tiles = /<div class="gallery-grid" data-gallery-tiles=\{pageTiles\.length\} data-columns=\{columns\}>([\s\S]*?)\n {8}<\/div>/.exec(mediaGallery)?.[1] ?? '';
+  const tiles = /<div class="gallery-grid" data-gallery-tiles=\{pageTiles\.length\} data-columns=\{columns\}>([\s\S]*?)\n {6}<\/div>/.exec(mediaGallery)?.[1] ?? '';
   assert.ok(tiles.length > 0, 'the grid is not where this pin expects it');
   assert.match(tiles, /^\s*\{#each pageTiles as tile, place \(tile\.key\)\}[\s\S]*\{\/each\}\s*$/, 'the grid holds something besides its tiles');
 });
@@ -2792,7 +2760,7 @@ test('the stage pages the whole set, stills and films alike, with prev/next, the
 test('a film is a tile that opens the stage, where it is one native player started only by the press that opened it — and nothing autoplays (issue 384, superseding issues 233 and 243; issue 207)', () => {
   /* THE GRID HOLDS NO PLAYER. A film's tile is the still's button over the
      film's own preview, with a play mark that is decoration only. */
-  const grid = /<div class="gallery-grid" data-gallery-tiles=\{pageTiles\.length\} data-columns=\{columns\}>([\s\S]*?)\n {8}<\/div>/.exec(mediaGallery)?.[1] ?? '';
+  const grid = /<div class="gallery-grid" data-gallery-tiles=\{pageTiles\.length\} data-columns=\{columns\}>([\s\S]*?)\n {6}<\/div>/.exec(mediaGallery)?.[1] ?? '';
   assert.ok(grid.length > 0, 'the grid is not where this pin expects it');
   assert.doesNotMatch(grid, /<video|<source/, 'the grid mounts a player again');
   assert.match(

@@ -13,10 +13,6 @@ import { readFileSync } from 'node:fs';
 
 import { expect, test } from '@playwright/test';
 
-/* The gallery's fit rule, imported rather than restated: the lane that checks
-   every tile's fit asks the same function the component runs. */
-import { thumbFit } from '../src/lib/mosaic.ts';
-
 /* The model vocabulary, read from the one file every consumer reads (issue
  * #302). The lane below builds its payload from it rather than from a list
  * typed here, so it exercises the widest block the shipped vocabulary can
@@ -181,6 +177,16 @@ async function serveGalleryManifest(page) {
  * tolerance is a rounding allowance and nothing more — one hundredth of a
  * pixel cannot hide a control that is genuinely too small. */
 const subPixel = 0.01;
+
+/* One engine LAYOUT UNIT, for two boxes the engine lays out from one another
+ * rather than from one number: Blink and WebKit place boxes on a 1/64px grid
+ * and Gecko on 1/60px, so a box sized from its parent's can land one unit
+ * off it. A sixteenth of a pixel holds either grid's step with room to spare
+ * and still cannot hide a box that is genuinely another size. (MEASURED on
+ * the gallery's whole-picture set at 1440, 390 and 320px: a thumb sits 0px
+ * off its tile in all three engines, and a tile is within 0.014% of its
+ * picture's declared proportions.) */
+const layoutUnit = 1 / 16;
 
 /* The panels fetch their envelopes after hydration and the page grows as they
  * paint, so a measurement taken at load is a measurement of an empty page —
@@ -6149,10 +6155,17 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
          the point of the row is that eight masters are not stacked into it. */
       perTile: tiles.map((tile) => tile.querySelectorAll('img.gallery-thumb').length),
       lazy: images.map((image) => image.getAttribute('loading')),
-      fit: tiles.map((tile) => ({
-        declared: tile.getAttribute('data-fit'),
-        painted: getComputedStyle(tile.querySelector('img.gallery-thumb')).objectFit,
-      })),
+      /* Each thumb's box against its tile's: the picture is the whole tile. */
+      whole: tiles.map((tile) => {
+        const outer = tile.getBoundingClientRect();
+        const inner = tile.querySelector('img.gallery-thumb').getBoundingClientRect();
+        return Math.max(
+          Math.abs(inner.left - outer.left),
+          Math.abs(inner.top - outer.top),
+          Math.abs(inner.right - outer.right),
+          Math.abs(inner.bottom - outer.bottom)
+        );
+      }),
       previews: images.every((image) => /-preview-/.test(image.currentSrc)),
       masters: images.filter((image) => /-full-/.test(image.currentSrc)).length,
       /* Nothing enlarged exists until a tile is opened, which is the other
@@ -6180,15 +6193,12 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
   expect(observed.lazy, 'a thumbnail stopped being lazy, so the row costs a reader who never reaches it').toEqual(
     Array(drawn).fill('lazy')
   );
-  /* A thumbnail fills its tile, unless covering would cut too much of the
-     picture, where it is shown whole over an ambient copy of itself (owner,
-     2026-11-04, on the 0.1.104 preview). Which fit a tile must take is the
-     fit lane's question, asked of every tile against lib/mosaic.ts's rule;
-     here it is that the picture is fitted the way its tile declares and in
-     no third way. */
-  for (const { declared, painted } of observed.fit) {
-    expect(['cover', 'contain'], `a tile declares a fit of ${declared}`).toContain(declared);
-    expect(painted, `a thumbnail is fitted ${painted} in a tile that declares ${declared}`).toBe(declared);
+  /* A thumbnail IS its tile's whole box (owner, 2026-11-04, on the 0.1.104
+     preview): the tile is as big as its picture, so nothing is cropped from
+     it and nothing pads it. Whether that box has the picture's proportions,
+     before and after its bytes, is the whole-picture lane's question. */
+  for (const [index, offset] of observed.whole.entries()) {
+    expect(offset, `tile ${index + 1}'s thumbnail is ${offset.toFixed(2)}px off its tile's box`).toBeLessThanOrEqual(layoutUnit);
   }
   expect(observed.previews, 'a tile is showing something other than the preview derivative').toBe(true);
   expect(observed.masters, 'a full-size master is mounted in the tile row').toBe(0);
@@ -6434,11 +6444,16 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
  * 06; it replaced the set switch of issue 275, whose claim this keeps: a
  * control over the pictures really changes what is shown, and costs the page
  * no layout). The vendored gallery is eight pictures, so it is a full page of
- * five and a short page of three: the short page lands in the reserve the
- * full one filled, the pager does not move, and the engine's own shift ledger
- * stays empty across the turn. A real Enter on the focused step is the
- * keyboard half: the pager is reachable and operable without a pointer, on
- * every engine. */
+ * five and a short page of three. Since a tile is as tall as its own picture
+ * (owner, 2026-11-04: "the bottom side can be uneven") the grid reserves no
+ * height, so a page of other pictures is a mosaic of another height, and the
+ * pager stays where the pictures end: the gallery's top and everything above
+ * it hold still, the pager keeps its place under the pictures, the first
+ * page comes back at its own height, and the engine's shift ledger records
+ * nothing but what the reader's own press moved — the shifts a page's CLS
+ * leaves out by definition. A real Enter on the focused step is the keyboard
+ * half: the pager is reachable and operable without a pointer, on every
+ * engine. */
 test('the gallery pager turns a full page and a short one in place, by pointer and by key (owner 2026-11-02, issue 399)', async ({
   page,
 }) => {
@@ -6471,6 +6486,7 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
       for (const entry of list.getEntries()) {
         window.__galleryShift.push({
           value: entry.value,
+          pressed: entry.hadRecentInput,
           moved: [...(entry.sources ?? [])].map((source) => `${source.node?.tagName ?? 'unnamed'}.${source.node?.getAttribute?.('class') ?? ''}`),
         });
       }
@@ -6516,14 +6532,18 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
      same pictures in the same places, so a turn never draws again. */
   expect(back.keys, 'turning back did not return to the first page as the visit laid it').toEqual(first.keys);
 
+  const under = (shape) => shape.pagerTop - (shape.gridTop + shape.gridHeight);
   for (const [name, after] of [['the turn to a short page', second], ['the turn back', back]]) {
     expect(after.gridTop, `${name} moved the gallery`).toBeCloseTo(first.gridTop, 1);
-    expect(after.gridHeight, `${name} changed the gallery’s reserve`).toBeCloseTo(first.gridHeight, 1);
-    expect(after.pagerTop, `${name} moved the pager`).toBeCloseTo(first.pagerTop, 1);
+    expect(under(after), `${name} parted the pager from the pictures`).toBeCloseTo(under(first), 1);
   }
+  expect(back.gridHeight, 'turning back did not return the first page at its own height').toBeCloseTo(first.gridHeight, 1);
   const shifts = await page.evaluate(() => window.__galleryShift ?? null);
   if (watching) {
-    expect(shifts, `a page turn moved something: ${JSON.stringify(shifts)}`).toEqual([]);
+    expect(
+      shifts.filter((shift) => !shift.pressed),
+      `a page turn moved something the reader's press did not: ${JSON.stringify(shifts)}`
+    ).toEqual([]);
   } else {
     expect(shifts, 'the layout-shift observer was armed but reported nothing at all').toBeNull();
   }
@@ -6656,11 +6676,10 @@ test('opening a tile shows a real modal dialog with a larger, unframed photograp
   await expect(enlarged).toBeVisible();
   const enlargedBox = await enlarged.boundingBox();
 
-  /* "Larger" is measured, not assumed. The tile's thumbnail paints at most
-     its box — all of it when it covers the tile, a part of it when the tile
-     contains the picture (owner, 2026-11-04) — so the box is the generous
-     side of the comparison, and the enlarged picture must still out-paint
-     it. */
+  /* "Larger" is measured, not assumed. The tile's thumbnail is the whole
+     picture at the tile's own box (owner, 2026-11-04), so the picture it
+     paints IS that box, and the comparison is between the pixels a reader can
+     actually see in each of the two states. */
   expect(
     enlargedBox.width * enlargedBox.height,
     `the enlarged photograph paints ${Math.round(enlargedBox.width * enlargedBox.height)}px² against the tile's ${Math.round(tileBox.width * tileBox.height)}px²`
@@ -7255,7 +7274,12 @@ test('a phone never pulls the 4K rung, and the smallest rung is reachable at all
  * a full page of five is three squares over two wide tiles, and EVERY ROW
  * reaches both of the grid's edges, so no width leaves a hole at a row's end.
  * Both edges are measured against the reading column's own, and the tiles
- * against each other, so nothing here derives from the stylesheet or a token. */
+ * against each other, so nothing here derives from the stylesheet or a token.
+ * The claim is about WIDTHS: a tile is as tall as its own picture (owner,
+ * 2026-11-04: "the bottom side can be uneven"), so a row's tiles share its
+ * top and not its bottom, and the next row starts under the tallest — which
+ * is where WebKit's auto rows failed, kept at their 1440px heights after the
+ * widening to 1920px, so the wide tiles overlapped the squares by 46px. */
 test('the gallery mosaic fills the reading column edge to edge, three squares over two wide tiles on a desktop (issue 202; owner 2026-09-03, issue 287; 2026-11-02, issue 399)', async ({
   page,
 }) => {
@@ -7317,12 +7341,10 @@ test('the gallery mosaic fills the reading column edge to edge, three squares ov
     const rows = [observed.tiles.slice(0, 3), observed.tiles.slice(3)];
     for (const [index, row] of rows.entries()) {
       const name = `row ${index + 1} ${at}`;
-      /* Every tile of a row shares the row's top and its height, and the
-         row's tiles are equal widths — the shapes, not the pictures, size
-         them. */
+      /* Every tile of a row shares the row's top, and the row's tiles are
+         equal widths — the shapes, not the pictures, size them across. */
       for (const tile of row) {
         expect(tile.top, `a tile of ${name} is off the row's line`).toBeCloseTo(row[0].top, 0);
-        expect(tile.height, `a tile of ${name} is a different height`).toBeCloseTo(row[0].height, 0);
         expect(tile.width, `a tile of ${name} is a different width`).toBeCloseTo(row[0].width, 0);
       }
       /* THE ROW REACHES BOTH EDGES of the grid: no hole at its end. */
@@ -7332,231 +7354,247 @@ test('the gallery mosaic fills the reading column edge to edge, three squares ov
         0
       );
     }
-    /* The wide tile is wider than the square, the second row sits wholly
-       under the first, and the two rows are the same height. */
+    /* The wide tile is wider than the square, and the second row sits
+       wholly under the first: under its TALLEST tile. */
     expect(rows[1][0].width, `a wide tile is no wider than a square ${at}`).toBeGreaterThan(rows[0][0].width + 1);
-    expect(rows[1][0].top, `the rows overlap ${at}`).toBeGreaterThanOrEqual(rows[0][0].bottom);
-    expect(rows[1][0].height, `the rows are different heights ${at}`).toBeCloseTo(rows[0][0].height, 0);
+    expect(rows[1][0].top, `the rows overlap ${at}`).toBeGreaterThanOrEqual(Math.max(...rows[0].map((tile) => tile.bottom)));
   }
 });
 
-/* A PICTURE THE TILE WOULD CUT IS SHOWN WHOLE (owner, 2026-11-04, on the
- * 0.1.104 preview: "some of the drawings can be put longways and not just all
- * be squares, if the drawing is lost you can represent it in a different
- * way"). On that load the two drawings that fell into wide tiles were cropped
- * by a cover fit and read as lost. A drawing may still take a wide tile; where
- * covering it would cut more than lib/mosaic.ts allows, the tile contains the
- * whole drawing over an ambient copy of itself.
+/* A TILE IS ITS PICTURE, WHOLE (owner, 2026-11-04, on the 0.1.104 preview:
+ * "just zoom out instead of having the ugly border, make the picture smaller.
+ * it doesn't have to work out to be a perfect square, the bottom side can be
+ * uneven"). Every tile shows its picture at the width its shape spans and in
+ * the picture's own proportions: nothing is cropped, nothing is padded, and a
+ * row ends as unevenly as its pictures do.
  *
- * Which tile an item takes is chance once per visit (issue 405), so this lane
- * never asks where anything went. For EVERY tile laid, on every page, at the
- * reading width and at a phone's, it reads the tile's kind, declared fit and
- * MEASURED box and the thumb's declared box, and asks thumbFit — imported,
- * the very rule the component runs — what the fit must be for a tile of that
- * shape. A contained tile must draw its picture contained inside its box,
- * over an ambient layer that is the same preview, sits behind it, covers the
- * tile and is hidden from assistive technology; a covered tile draws no
- * ambient at all.
+ * Which tile an item takes is chance once per visit (issue 405), so the lane
+ * never asks where anything went. On two loads, at the reading width and at
+ * two phone widths, for EVERY tile on both pages it reads, in a real engine:
+ *   (a) the tile's box has the proportions its thumb's width and height
+ *       attributes declare, within 1.5%;
+ *   (b) the thumb's box IS the tile's box, and once the preview has decoded
+ *       the box has the picture's own proportions within 1.5%, so nothing is
+ *       cropped from it and nothing pads it;
+ *   (c) the tile's box while its preview is still in flight is the box it
+ *       keeps once the preview has decoded — every preview request is held
+ *       while the page is measured, then released, and the page measured
+ *       again — so the declared box alone makes the arrival move nothing;
+ *   (d) the document does not scroll sideways;
+ * and that the grid holds every tile with no two overlapping, and that some
+ * row really does end unevenly, so the lane cannot pass on a wall of equal
+ * tiles: the first page always lays a row of two different shapes.
  *
  * The manifest is the live set's shapes in miniature — a square drawing, a
- * 1.28:1 one, a portrait, a 16:9 still and a 16:9 film — plus one twice as
- * tall as it is wide, which no tile covers, so every load lays at least one
- * contained tile and (the film) one covered tile whatever order it drew. And
- * one at 1.38:1, the shape whose fit the table in lib/mosaic.ts gets wrong in
- * BOTH of the shapes a page of seven lays at 1440px: a "square" that is
- * really 1.27:1 crops it by 8%, not 28%, and a "3:2" wide tile that is really
- * 1.91:1 by 28%, not 8%. Wherever it lands at that width, a fit read off the
- * table instead of the tile turns this lane red. Each preview is served as an
- * SVG of its declared size, so both layers really decode in every engine.
- *
- * AND THE BLUR'S RIM NEVER SHOWS. A blur fades into transparency at its
- * layer's edge, which in the first form of this change showed as a dark band
- * and a line at a contained tile's border (a 1.12 scale, seen on the
- * preview). The fade is three blur radii deep before it is under 0.3%, so
- * the lane reads the engine's own blur radius and requires the ambient layer
- * to reach that far past every edge of the tile, where the tile clips it. */
-const ambientRimRadii = 3;
-const fitLaneItems = [
-  ['lane-fit-square', 'image', 3840, 3840],
-  ['lane-fit-landscape', 'image', 3840, 2996],
-  ['lane-fit-portrait', 'image', 3289, 3840],
-  ['lane-fit-tall', 'image', 1920, 3840],
-  ['lane-fit-between', 'image', 3840, 2783],
-  ['lane-fit-still', 'image', 3840, 2160],
-  ['lane-fit-film', 'video', 3840, 2160],
+ * 1.28:1 one, a portrait, one twice as tall as wide, one twice as wide as
+ * tall, a 16:9 still and a 16:9 film — and each preview is served as an SVG
+ * of a quarter of its item's declared size, exactly, so a decoded picture has
+ * the declared proportions and every engine really decodes one. */
+const wholeLaneItems = [
+  ['lane-whole-square', 'image', 3840, 3840],
+  ['lane-whole-landscape', 'image', 3840, 2996],
+  ['lane-whole-portrait', 'image', 3288, 3840],
+  ['lane-whole-tall', 'image', 1920, 3840],
+  ['lane-whole-wide', 'image', 3840, 1920],
+  ['lane-whole-still', 'image', 3840, 2160],
+  ['lane-whole-film', 'video', 3840, 2160],
 ];
-const fitLaneDigest = (index, part) => (index * 4 + part + 1).toString(16).padStart(64, '0');
-const fitLaneManifest = {
+const wholeLaneDigest = (index, part) => (index * 4 + part + 1).toString(16).padStart(64, '0');
+const wholeLaneManifest = {
   schema: 'gallery/v1',
-  items: fitLaneItems.map(([key, kind, width, height], index) => ({
+  items: wholeLaneItems.map(([key, kind, width, height], index) => ({
     kind,
     key,
-    alt: `A ${kind === 'video' ? 'film' : 'picture'} the fit lane serves, ${width} by ${height}`,
-    full: { path: `gallery/${key}.webp`, sha256: fitLaneDigest(index, 0), width, height },
-    preview: {
-      path: `gallery/${key}-preview.svg`,
-      sha256: fitLaneDigest(index, 1),
-      width: Math.round(width / 3),
-      height: Math.round(height / 3),
-    },
+    alt: `A ${kind === 'video' ? 'film' : 'picture'} the whole-picture lane serves, ${width} by ${height}`,
+    full: { path: `gallery/${key}.webp`, sha256: wholeLaneDigest(index, 0), width, height },
+    preview: { path: `gallery/${key}-preview.svg`, sha256: wholeLaneDigest(index, 1), width: width / 4, height: height / 4 },
     ...(kind === 'video'
       ? {
-          poster: { path: `gallery/${key}-poster.webp`, sha256: fitLaneDigest(index, 2), width, height },
-          sources: [{ path: `gallery/${key}-1080.mp4`, sha256: fitLaneDigest(index, 3), type: 'video/mp4', height: 1080 }],
+          poster: { path: `gallery/${key}-poster.webp`, sha256: wholeLaneDigest(index, 2), width, height },
+          sources: [{ path: `gallery/${key}-1080.mp4`, sha256: wholeLaneDigest(index, 3), type: 'video/mp4', height: 1080 }],
         }
       : {}),
   })),
 };
+/* The proportions a box may be off its picture's, and nothing looser: 1.5%. */
+const wholeLaneRatio = 0.015;
 
-test('a picture its tile would cut is shown whole over an ambient copy of itself, and every other picture covers its tile, whatever order the visit drew (owner 2026-11-04, on the 0.1.104 preview)', async ({
+test('every tile shows its whole picture at its column width and its own proportions, with the box it keeps before its bytes arrive, whatever order the visit drew (owner 2026-11-04, on the 0.1.104 preview)', async ({
   page,
 }) => {
+  test.setTimeout(test.info().timeout + 5 * settleWindow);
+  /* THE HOLD: while it is on, every preview request waits; releasing it
+     answers every waiting request and every later one at once. */
+  let holding = true;
+  let waiting = [];
+  const release = () => {
+    holding = false;
+    for (const answer of waiting.splice(0)) answer();
+  };
   await page.route('**/media/mutable/gallery/manifest.json', (route) =>
     route.fulfill({
       status: 200,
       headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
-      body: JSON.stringify(fitLaneManifest),
+      body: JSON.stringify(wholeLaneManifest),
     })
   );
   await page.route('**/media/immutable/**', (route) => {
-    const preview = fitLaneManifest.items.find((item) => route.request().url().endsWith(`/${item.preview.path}`))?.preview;
+    const preview = wholeLaneManifest.items.find((item) => route.request().url().endsWith(`/${item.preview.path}`))?.preview;
     if (preview === undefined) {
       return route.fulfill({ status: 404, body: '' });
     }
     const { width, height } = preview;
-    return route.fulfill({
-      status: 200,
-      headers: { 'content-type': 'image/svg+xml', 'cache-control': 'no-store' },
-      body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="#5a6b7c"/><circle cx="${width / 2}" cy="${height / 2}" r="${Math.min(width, height) / 3}" fill="#c9b27a"/></svg>`,
-    });
+    const answer = () =>
+      route
+        .fulfill({
+          status: 200,
+          headers: { 'content-type': 'image/svg+xml', 'cache-control': 'no-store' },
+          body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="#5a6b7c"/><circle cx="${width / 2}" cy="${height / 2}" r="${Math.min(width, height) / 3}" fill="#c9b27a"/></svg>`,
+        })
+        .catch(() => {});
+    if (holding) {
+      waiting.push(answer);
+      return undefined;
+    }
+    return answer();
   });
-  await visit(page);
   const grid = page.locator('#gallery .gallery-grid');
   const count = page.locator('#gallery .pager .pager-count');
-  const keys = fitLaneItems.map(([key]) => key).sort();
+  const keys = wholeLaneItems.map(([key]) => key).sort();
+  /* Every tile's box and its thumb's, relative to the grid's own origin, so a
+     panel painting elsewhere on the page cannot read as a tile moving. */
+  const measure = () =>
+    grid.evaluate((gridNode) => {
+      const origin = gridNode.getBoundingClientRect();
+      const box = (node) => {
+        const rect = node.getBoundingClientRect();
+        return { left: rect.left - origin.left, top: rect.top - origin.top, right: rect.right - origin.left, bottom: rect.bottom - origin.top };
+      };
+      const root = window.document.documentElement;
+      return {
+        columns: Number(gridNode.getAttribute('data-columns')),
+        grid: { width: origin.width, height: origin.height },
+        sideways: root.scrollWidth - root.clientWidth,
+        tiles: [...gridNode.querySelectorAll('.gallery-tile')].map((tile) => {
+          const thumb = tile.querySelector('img.gallery-thumb');
+          return {
+            key: tile.getAttribute('data-key'),
+            shape: tile.getAttribute('data-shape'),
+            tile: box(tile),
+            thumb: box(thumb),
+            declared: Number(thumb.getAttribute('width')) / Number(thumb.getAttribute('height')),
+            complete: thumb.complete && thumb.naturalWidth > 0,
+            natural: thumb.naturalHeight > 0 ? thumb.naturalWidth / thumb.naturalHeight : null,
+          };
+        }),
+      };
+    });
+  const aspect = (box) => (box.right - box.left) / (box.bottom - box.top);
+  const off = (first, second) =>
+    Math.max(...['left', 'top', 'right', 'bottom'].map((side) => Math.abs(first[side] - second[side])));
 
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    await settled(page);
-    const at = `at ${width}px`;
-    await expect(count).toHaveText('1 / 2');
-    const laid = [];
-    const fits = [];
-    for (let place = 1; place <= 2; place += 1) {
-      if (place > 1) {
-        await page.locator('#gallery .pager .pager-step[data-step="next"]').click();
-        await expect(count).toHaveText(`${place} / 2`);
-      }
-      await grid.scrollIntoViewIfNeeded();
-      await expect
-        .poll(
-          () =>
-            grid
-              .locator('img')
-              .evaluateAll((images) => images.length > 0 && images.every((image) => image.complete && image.naturalWidth > 0)),
-          { message: `a tile's picture or its ambient copy never decoded ${at}`, timeout: 10_000 }
-        )
-        .toBe(true);
-      const observed = await grid.evaluate((gridNode) => {
-        const box = (node) => {
-          const rect = node.getBoundingClientRect();
-          return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
-        };
-        return {
-          columns: Number(gridNode.getAttribute('data-columns')),
-          tiles: [...gridNode.querySelectorAll('.gallery-tile')].map((tile) => {
-            /* Centred before it is read, so the hit test below lands on the
-               tile itself and not on whatever the viewport's edge holds. */
-            tile.scrollIntoView({ block: 'center', inline: 'nearest' });
-            const thumb = tile.querySelector('img.gallery-thumb');
-            const ambients = [...tile.querySelectorAll('img.gallery-ambient')];
-            const ambient = ambients[0];
-            const tileBox = box(tile);
-            /* PAINT ORDER, read the way the engine hit-tests it: topmost
-               first, at the tile's centre, where the contained picture is
-               always drawn. */
-            const stack = window.document.elementsFromPoint(
-              (tileBox.left + tileBox.right) / 2,
-              (tileBox.top + tileBox.bottom) / 2
-            );
-            return {
-              key: tile.getAttribute('data-key'),
-              shape: tile.getAttribute('data-shape'),
-              aspect: (tileBox.right - tileBox.left) / (tileBox.bottom - tileBox.top),
-              kind: tile.getAttribute('data-gallery-kind'),
-              fit: tile.getAttribute('data-fit'),
-              width: Number(thumb.getAttribute('width')),
-              height: Number(thumb.getAttribute('height')),
-              painted: getComputedStyle(thumb).objectFit,
-              tile: tileBox,
-              thumb: box(thumb),
-              ambients: ambients.length,
-              ambient:
-                ambient === undefined
-                  ? null
-                  : {
-                      box: box(ambient),
-                      hidden: ambient.getAttribute('aria-hidden'),
-                      alt: ambient.getAttribute('alt'),
-                      fit: getComputedStyle(ambient).objectFit,
-                      blur: Number(/blur\(([\d.]+)px\)/.exec(getComputedStyle(ambient).filter)?.[1] ?? 0),
-                      sameSource: ambient.currentSrc !== '' && ambient.currentSrc === thumb.currentSrc,
-                      before: Boolean(ambient.compareDocumentPosition(thumb) & Node.DOCUMENT_POSITION_FOLLOWING),
-                      under: stack.includes(ambient) && stack.indexOf(thumb) < stack.indexOf(ambient),
-                    },
-              onTop: stack.includes(thumb),
-            };
-          }),
-        };
-      });
-      expect(observed.columns, `the grid laid ${observed.columns} columns ${at}`).toBe(width === 1440 ? 6 : 2);
-      for (const tile of observed.tiles) {
-        const name = `${tile.key} in a ${tile.shape} tile ${at}`;
-        laid.push(tile.key);
-        fits.push(tile.fit);
-        /* THE RULE: the tile's declared fit is thumbFit's answer for exactly
-           this tile — its kind, its picture's declared box, and the shape the
-           engine laid it as, measured here. */
-        expect(tile.fit, `${name}, ${tile.aspect.toFixed(2)}:1, declares ${tile.fit}`).toBe(
-          thumbFit(tile.kind, tile.width, tile.height, tile.aspect)
-        );
-        expect(tile.painted, `${name} declares ${tile.fit} and paints ${tile.painted}`).toBe(tile.fit);
-        expect(tile.onTop, `${name}: its picture is not where the tile's centre is drawn`).toBe(true);
-        if (tile.fit === 'cover') {
-          expect(tile.ambients, `${name} covers its tile and still draws an ambient copy`).toBe(0);
-          continue;
+  for (let load = 1; load <= 2; load += 1) {
+    for (const width of [1440, 390, 320]) {
+      const at = `at ${width}px on load ${load}`;
+      holding = true;
+      await page.setViewportSize({ width, height: 900 });
+      /* Not to the load event: WebKit holds it for the previews the hold is
+         holding, which is the point of the hold. */
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await settled(page);
+      await expect(grid.locator('.gallery-tile').first(), `the lane's manifest never replaced the vendored set ${at}`).toHaveAttribute(
+        'data-key',
+        /^lane-whole-/
+      );
+      await expect(count).toHaveText('1 / 2');
+      const laid = [];
+      for (let place = 1; place <= 2; place += 1) {
+        const name = `page ${place} ${at}`;
+        if (place > 1) {
+          holding = true;
+          await page.locator('#gallery .pager .pager-step[data-step="next"]').click();
+          await expect(count).toHaveText(`${place} / 2`);
         }
-        /* CONTAINED: the whole picture inside the tile's box... */
-        expect(tile.thumb.left, `${name}: the picture starts outside its tile`).toBeGreaterThanOrEqual(tile.tile.left - subPixel);
-        expect(tile.thumb.top, `${name}: the picture starts above its tile`).toBeGreaterThanOrEqual(tile.tile.top - subPixel);
-        expect(tile.thumb.right, `${name}: the picture runs past its tile`).toBeLessThanOrEqual(tile.tile.right + subPixel);
-        expect(tile.thumb.bottom, `${name}: the picture runs under its tile`).toBeLessThanOrEqual(tile.tile.bottom + subPixel);
-        /* ...over exactly one ambient copy of itself, behind it, covering the
-           tile, and hidden from assistive technology. */
-        expect(tile.ambients, `${name} is contained with no ambient copy behind it`).toBe(1);
-        expect(tile.ambient.sameSource, `${name}: the ambient copy is not the tile's own preview`).toBe(true);
-        expect(tile.ambient.hidden, `${name}: the ambient copy is announced to assistive technology`).toBe('true');
-        expect(tile.ambient.alt, `${name}: the ambient copy carries a name`).toBe('');
-        expect(tile.ambient.fit, `${name}: the ambient copy does not cover the tile`).toBe('cover');
-        expect(tile.ambient.before, `${name}: the ambient copy comes after the picture`).toBe(true);
-        expect(tile.ambient.under, `${name}: the ambient copy is not drawn behind the picture`).toBe(true);
-        /* Covering the tile, and with the blur's whole rim past every edge. */
-        expect(tile.ambient.blur, `${name}: the ambient copy is not blurred`).toBeGreaterThan(0);
-        const rim = ambientRimRadii * tile.ambient.blur;
-        expect(tile.tile.left - tile.ambient.box.left, `${name}: the blur's rim shows at the tile's left edge`).toBeGreaterThanOrEqual(rim - subPixel);
-        expect(tile.tile.top - tile.ambient.box.top, `${name}: the blur's rim shows at the tile's top edge`).toBeGreaterThanOrEqual(rim - subPixel);
-        expect(tile.ambient.box.right - tile.tile.right, `${name}: the blur's rim shows at the tile's right edge`).toBeGreaterThanOrEqual(rim - subPixel);
-        expect(tile.ambient.box.bottom - tile.tile.bottom, `${name}: the blur's rim shows at the tile's bottom edge`).toBeGreaterThanOrEqual(rim - subPixel);
+        await grid.scrollIntoViewIfNeeded();
+        await expect
+          .poll(() => waiting.length, { message: `no preview of ${name} reached the hold, so nothing was measured in flight`, timeout: 10_000 })
+          .toBeGreaterThan(0);
+        const before = await measure();
+        expect(before.columns, `the grid laid ${before.columns} columns on ${name}`).toBe(width === 1440 ? 6 : 2);
+        expect(
+          before.tiles.filter((tile) => tile.complete).map((tile) => tile.key),
+          `a preview decoded through the hold on ${name}, so this measured nothing in flight`
+        ).toEqual([]);
+        release();
+        await expect
+          .poll(async () => (await measure()).tiles.every((tile) => tile.complete), {
+            message: `a released preview never decoded on ${name}`,
+            timeout: 10_000,
+          })
+          .toBe(true);
+        const after = await measure();
+        expect(after.tiles.map((tile) => tile.key), `the page laid other tiles while its pictures arrived on ${name}`).toEqual(
+          before.tiles.map((tile) => tile.key)
+        );
+        /* (c) ZERO CLS: the box a tile had in flight is the box it keeps. */
+        expect(Math.abs(after.grid.height - before.grid.height), `the mosaic changed height as its pictures arrived on ${name}`).toBeLessThanOrEqual(
+          layoutUnit
+        );
+        for (const [index, tile] of after.tiles.entries()) {
+          const named = `${tile.key} in a ${tile.shape} tile on ${name}`;
+          laid.push(tile.key);
+          const moved = off(tile.tile, before.tiles[index].tile);
+          expect(moved, `${named} moved or resized by ${moved.toFixed(2)}px as its picture arrived`).toBeLessThanOrEqual(layoutUnit);
+          for (const [state, read] of [
+            ['in flight', before.tiles[index]],
+            ['decoded', tile],
+          ]) {
+            /* (a) the tile has its picture's declared proportions... */
+            expect(
+              Math.abs(aspect(read.tile) / read.declared - 1),
+              `${named} is ${aspect(read.tile).toFixed(3)}:1 ${state}, against its picture's ${read.declared.toFixed(3)}:1`
+            ).toBeLessThanOrEqual(wholeLaneRatio);
+            /* (b) ...and its thumb is the whole of it. */
+            const padded = off(read.thumb, read.tile);
+            expect(padded, `${named}: the picture is ${padded.toFixed(2)}px off its tile ${state}, so the tile crops or pads it`).toBeLessThanOrEqual(
+              layoutUnit
+            );
+          }
+          /* And the decoded picture is drawn at its own proportions: a box
+             of any other shape would crop it or pad it. */
+          expect(
+            Math.abs(aspect(tile.thumb) / tile.natural - 1),
+            `${named}: the picture is ${tile.natural.toFixed(3)}:1 and drawn into a ${aspect(tile.thumb).toFixed(3)}:1 box`
+          ).toBeLessThanOrEqual(wholeLaneRatio);
+          /* The grid holds the tile, and no other tile overlaps it. */
+          expect(tile.tile.left, `${named} starts outside the grid`).toBeGreaterThanOrEqual(-layoutUnit);
+          expect(tile.tile.top, `${named} starts above the grid`).toBeGreaterThanOrEqual(-layoutUnit);
+          expect(tile.tile.right, `${named} runs past the grid`).toBeLessThanOrEqual(after.grid.width + layoutUnit);
+          expect(tile.tile.bottom, `${named} runs under the grid`).toBeLessThanOrEqual(after.grid.height + layoutUnit);
+          for (const other of after.tiles.slice(index + 1)) {
+            const across = Math.min(tile.tile.right, other.tile.right) - Math.max(tile.tile.left, other.tile.left);
+            const down = Math.min(tile.tile.bottom, other.tile.bottom) - Math.max(tile.tile.top, other.tile.top);
+            expect(Math.min(across, down), `${named} overlaps ${other.key}`).toBeLessThanOrEqual(layoutUnit);
+          }
+        }
+        /* (d) the document never scrolls sideways. */
+        expect(after.sideways, `the document scrolls ${after.sideways}px sideways on ${name}`).toBe(0);
+        /* AND A ROW ENDS UNEVENLY: tiles sharing a row's top, of different
+           heights. The first page always lays one, because no three of the
+           seven share a shape and a phone's two rows of two cannot both be
+           the 16:9 pair. */
+        if (place === 1) {
+          const rows = new Map();
+          for (const tile of after.tiles) {
+            const top = Math.round(tile.tile.top);
+            rows.set(top, [...(rows.get(top) ?? []), tile.tile.bottom - tile.tile.top]);
+          }
+          const ragged = [...rows.values()].some((heights) => Math.max(...heights) - Math.min(...heights) > 1);
+          expect(ragged, `every row of ${name} ends level, so nothing here shows a tile keeping its own picture's height`).toBe(true);
+        }
       }
+      expect([...laid].sort(), `the two pages did not lay every item exactly once ${at}`).toEqual(keys);
     }
-    /* Every item once, and both fits laid: the tall picture is contained by
-       every tile and the film covers every tile, so neither branch above can
-       pass by never running. */
-    expect([...laid].sort(), `the two pages did not lay every item exactly once ${at}`).toEqual(keys);
-    expect(fits, `no tile was contained ${at}`).toContain('contain');
-    expect(fits, `no tile covered ${at}`).toContain('cover');
-    await page.locator('#gallery .pager .pager-step[data-step="previous"]').click();
-    await expect(count).toHaveText('1 / 2');
   }
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -8053,7 +8091,7 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
      the pager — and the block ends where the pager does. The dialog is
      `display: none` while closed and nothing else may be there. */
   const trailing = await page.evaluate(() => {
-    const mosaic = window.document.querySelector('.gallery-grid').closest('.gallery-mosaic');
+    const mosaic = window.document.querySelector('.gallery-grid');
     const block = mosaic.parentElement;
     const after = [...block.children]
       .slice([...block.children].indexOf(mosaic) + 1)
@@ -10261,9 +10299,9 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       /* The gallery's TILES, since the frame they used to be one of retired
          (owner directive, 2026-09-03, issue 287), laid as a mosaic since
          2026-11-02 (issue 399). The grid is measured against its own column
-         here rather than against a ceiling: no tile is drawn taller than it is
-         wide and every row keeps filling the grid, at every width a reader can
-         drag the page down to. */
+         here rather than against a ceiling: no 16:9 picture's tile is drawn
+         taller than it is wide and every row keeps filling the grid, at every
+         width a reader can drag the page down to. */
       const gridBox = window.document.querySelector('.gallery-grid').getBoundingClientRect();
       const tiles = [...window.document.querySelectorAll('.gallery-tile')].map((tile) => {
         const box = tile.getBoundingClientRect();
@@ -10384,13 +10422,15 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(2);
     /* The pictures still reserve the boxes they will fill: since 2026-09-03
        a row of squares rather than one capped stage (owner directive, issue
-       287), and since 2026-11-02 a mosaic of squares and wide tiles (issue
-       399). Three properties are under test at every column width, and none
-       is a number this file or the stylesheet states: no tile is drawn
-       TALLER THAN IT IS WIDE and every square stays square or wider, so a
-       narrow column shrinks the work rather than squeezing it into a sliver
-       (measured before the mosaic's rows were bounded by their cells: 60x294
-       at the handle's floor); every row of tiles reaches both of the grid's
+       287), since 2026-11-02 a mosaic of squares and wide tiles (issue 399),
+       and since 2026-11-04 each tile the width its shape spans at its own
+       picture's proportions. Three properties are under test at every column
+       width, and none is a number this file or the stylesheet states: no tile
+       is drawn TALLER THAN IT IS WIDE — the vendored pictures are 16:9, so a
+       tile that keeps its picture's proportions never is, and a narrow
+       column shrinks the work rather than squeezing it into a sliver
+       (measured under the fixed rows the mosaic began with: 60x294 at the
+       handle's floor); every row of tiles reaches both of the grid's
        edges, so no width leaves a hole at a row's end; and the grid still
        reaches both of the column's edges, so no width a reader can drag to
        reopens the dead gutter the redesign closed. The 448px ceiling this

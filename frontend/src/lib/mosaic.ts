@@ -5,24 +5,19 @@
  * picture: the pattern is what guarantees every row is filled to its edge,
  * with no hole on either width.
  *
- * In a grid of SIX columns (the reading width) a square spans two columns by
- * two rows, a wide tile three by two, a full tile all six by two. In a grid of
- * TWO (a phone) a square is one cell, and wide and full both span the row.
- * tests/mosaic.test.mjs lays every pattern into that grid and proves it. Pure,
- * so the node suite executes it.
+ * In a grid of SIX columns (the reading width) a square spans two columns, a
+ * wide tile three, a full tile all six. In a grid of TWO (a phone) a square is
+ * one column, and wide and full both span the row. tests/mosaic.test.mjs lays
+ * every pattern into that grid and proves it. The pattern decides WIDTHS only:
+ * a tile is as tall as its own picture makes it at that width (owner,
+ * 2026-11-04: "the bottom side can be uneven"). Pure, so the node suite
+ * executes it.
  *
  * WHICH ITEM TAKES WHICH PLACE is chance, once per visit (owner, 2026-11-04,
  * issue #405: "this is fine, just make it random"): the gallery lays a
  * shuffled copy of its items, so the manifest's own order means nothing to
  * the mosaic, and the pattern above stays by position — a film in a
- * drawing's slot takes the same tile.
- *
- * AND A TILE THAT WOULD LOSE ITS PICTURE SHOWS IT ANOTHER WAY (owner,
- * 2026-11-04, on the 0.1.104 preview: "some of the drawings can be put
- * longways and not just all be squares, if the drawing is lost you can
- * represent it in a different way"). A drawing may take a wide tile, but where
- * covering that tile would crop it too far, the tile contains the whole
- * drawing over an ambient fill made from the drawing itself (thumbFit). */
+ * drawing's slot takes the same tile. */
 
 export type MosaicShape = 'sq' | 'wd' | 'full';
 
@@ -76,61 +71,4 @@ export function shuffled<T>(items: readonly T[], random: () => number): readonly
     [order[last], order[pick]] = [order[pick], order[last]];
   }
   return order;
-}
-
-/* THE SHAPE A TILE IS LAID AS, width over height, on the grid
- * MediaGallery.svelte lays: six columns, where a square spans two by two
- * cells, a wide tile three by two and a full tile six by two; two columns,
- * where a square is one cell and wide and full both span the row of one. On
- * SQUARE cells, gaps aside, that is the spans' ratio, and tests/mosaic.test.mjs
- * reads the spans out of the component's sheet, so a span changed there
- * without this table, or this table without the sheet, fails the suite.
- *
- * The cells are square only where a row's token is at least a cell's width.
- * Where the reading column is wider, the cells widen and the rows do not, so a
- * tile is wider than this table says. MEASURED in Chromium: square cells at
- * 320 to 412px and at 721 to 1100px, but at 1280px the square is 1.1:1, at
- * 1440px 1.27:1 with the wide tile 1.91:1, at 1920px 1.58 and 2.38, and at
- * 720px (two columns) 1.83 and 3.7. So the gallery measures each tile and
- * hands thumbFit the shape the engine laid. This table is only the shape a
- * tile is laid as before it has a box to measure. */
-const aspects: Readonly<Record<6 | 2, Readonly<Record<MosaicShape, number>>>> = {
-  6: { sq: 1, wd: 1.5, full: 3 },
-  2: { sq: 1, wd: 2, full: 2 }
-};
-
-export function tileAspect(shape: MosaicShape, columns: 6 | 2): number {
-  return aspects[columns][shape];
-}
-
-/* How much of a picture a tile may crop before the tile shows it whole: a
- * QUARTER on either axis. A cover fit of a picture of aspect p into a tile of
- * aspect t keeps min(p, t) / max(p, t) of it on the cropped axis, so it loses
- * 1 − that. A quarter keeps a 1.28:1 drawing covering a square (22% lost),
- * and it contains a 1:1 drawing in a 3:2 wide tile (33% lost) and in a
- * phone's 2:1 one (half). At 1440px, where the 0.1.104 preview read as cut,
- * the wide tile is 1.91:1, so a 1:1 drawing would lose 48% there and the
- * 1.28:1 one 33%: both are contained. */
-export const thumbCropLimit = 0.25;
-
-export type ThumbFit = 'cover' | 'contain';
-
-/* COVER, or CONTAIN over the ambient fill, for a picture of the declared
- * width and height in a tile of aspect `tile`. A still that would lose more
- * than thumbCropLimit to a cover is contained; everything else covers. A FILM
- * ALWAYS COVERS: its tile shows a still of it, a gameplay frame crops well,
- * and the owner did not object to it. A picture or a tile whose size is
- * unknown, zero or not finite covers too, because a fit chosen from a size
- * nobody declared is a guess. */
-export function thumbFit(
-  kind: 'image' | 'video',
-  width: number | undefined,
-  height: number | undefined,
-  tile: number
-): ThumbFit {
-  if (kind !== 'image' || width === undefined || height === undefined) return 'cover';
-  if (![width, height, tile].every((value) => Number.isFinite(value) && value > 0)) return 'cover';
-  const picture = width / height;
-  const lost = 1 - Math.min(picture, tile) / Math.max(picture, tile);
-  return lost > thumbCropLimit ? 'contain' : 'cover';
 }

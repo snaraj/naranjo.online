@@ -2,18 +2,19 @@
  * that every page of one to five tiles fills its rows to the edge, with no
  * hole, at the reading width and on a phone. It is proved by laying each
  * pattern into a simulated grid exactly as CSS grid's auto-placement does —
- * row-major, every item at the first place it fits — with the spans
+ * row-major, every item at the first place it fits — with the column spans
  * MediaGallery.svelte gives each shape, and checking every cell of every row
- * the page uses is taken. */
+ * the page uses is taken. A tile spans one row: its height is its picture's
+ * (owner, 2026-11-04), so the claim is about widths alone. */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { mosaicShapes, shuffled, thumbCropLimit, thumbFit, tileAspect } from '../src/lib/mosaic.ts';
+import { mosaicShapes, shuffled } from '../src/lib/mosaic.ts';
 
-/* The spans the component gives each shape, by the grid's column count. */
+/* The columns and rows the component gives each shape, by the grid's column
+   count. */
 const spans = {
-  6: { sq: [2, 2], wd: [3, 2], full: [6, 2] },
+  6: { sq: [2, 1], wd: [3, 1], full: [6, 1] },
   2: { sq: [1, 1], wd: [2, 1], full: [2, 1] }
 };
 
@@ -57,14 +58,9 @@ test('every page of one to five tiles fills its rows with no hole, on both grids
   }
 });
 
-test('a full page is four rows at the reading width and three on a phone — the reserve the grid holds', () => {
-  assert.equal(layOut(mosaicShapes(5, 6), 6).length, 4);
+test('a full page is two rows at the reading width and three on a phone', () => {
+  assert.equal(layOut(mosaicShapes(5, 6), 6).length, 2);
   assert.equal(layOut(mosaicShapes(5, 2), 2).length, 3);
-  // No page is taller than the full one, so the reserve holds every page.
-  for (let count = 1; count <= 5; count += 1) {
-    assert.ok(layOut(mosaicShapes(count, 6), 6).length <= 4);
-    assert.ok(layOut(mosaicShapes(count, 2), 2).length <= 3);
-  }
 });
 
 test('the patterns are the ones the mock drew', () => {
@@ -177,126 +173,5 @@ test('an empty list and a list of one come back as they went in, drawing nothing
 test('a source that draws outside [0, 1) is refused rather than losing an item', () => {
   for (const draw of [1, -0.1, 2, Number.NaN]) {
     assert.throws(() => shuffled(letters, constant(draw)), RangeError, `a draw of ${draw} was used`);
-  }
-});
-
-/* A PICTURE THE TILE WOULD CUT IS SHOWN WHOLE (owner, 2026-11-04, on the
- * 0.1.104 preview: "some of the drawings can be put longways and not just all
- * be squares, if the drawing is lost you can represent it in a different
- * way"). A tile's aspect is the ratio of the cells its shape spans, and the
- * spans are the component's own: they are read here out of
- * MediaGallery.svelte's sheet, so a span changed there without the table
- * changing here — or the table without the sheet — fails this file. */
-const gallerySheet = /<style>([\s\S]*?)<\/style>/
-  .exec(readFileSync(new URL('../src/lib/components/MediaGallery.svelte', import.meta.url), 'utf8'))?.[1]
-  ?.replace(/\/\*[\s\S]*?\*\//g, '') ?? '';
-function sheetSpans() {
-  const read = { 6: {}, 2: {} };
-  for (const [, selectors, body] of gallerySheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    const column = /grid-column: span (\d+);/.exec(body)?.[1];
-    const row = /grid-row: span (\d+);/.exec(body)?.[1];
-    if (column === undefined || row === undefined) continue;
-    for (const selector of selectors.split(',').map((part) => part.trim())) {
-      const shape = /^(?:\.gallery-grid\[data-columns='2'\] )?\.gallery-tile\[data-shape='(sq|wd|full)'\]$/.exec(selector)?.[1];
-      if (shape === undefined) continue;
-      read[selector.startsWith('.gallery-grid') ? 2 : 6][shape] = [Number(column), Number(row)];
-    }
-  }
-  return read;
-}
-
-test('a tile’s aspect is the cells its shape spans in the component’s own sheet', () => {
-  const read = sheetSpans();
-  assert.deepEqual(read, spans, 'the spans this file lays out are not the spans the component gives its tiles');
-  for (const columns of [6, 2]) {
-    for (const shape of ['sq', 'wd', 'full']) {
-      const [across, down] = read[columns][shape];
-      assert.equal(tileAspect(shape, columns), across / down, `${shape} on ${columns} columns is not ${across} cells by ${down}`);
-    }
-  }
-  // And the table itself, stated: what a reader of lib/mosaic.ts should see.
-  assert.deepEqual(
-    Object.fromEntries([6, 2].map((columns) => [columns, ['sq', 'wd', 'full'].map((shape) => tileAspect(shape, columns))])),
-    { 6: [1, 1.5, 3], 2: [1, 2, 2] }
-  );
-});
-
-/* The live set's shapes, as the manifest declares them. */
-const square = [3840, 3840];
-const landscape = [3840, 2996]; // 1.28:1, img006
-const portrait = [3289, 3840]; // 0.86:1, img005
-const film = [3840, 2160]; // 16:9
-const laidAs = (shape, columns) => tileAspect(shape, columns);
-
-test('a drawing a tile would cut by more than a quarter is contained, and a drawing a tile crops less covers it', () => {
-  assert.equal(thumbCropLimit, 0.25, 'the crop a tile may make before it contains the picture is not a quarter');
-  // A 1:1 drawing in a 3:2 wide tile would lose a third: contained.
-  assert.equal(thumbFit('image', ...square, laidAs('wd', 6)), 'contain');
-  // A 1.28:1 drawing there loses 15%: it covers.
-  assert.equal(thumbFit('image', ...landscape, laidAs('wd', 6)), 'cover');
-  // A 1:1 drawing in a square loses nothing, on either grid.
-  assert.equal(thumbFit('image', ...square, laidAs('sq', 6)), 'cover');
-  assert.equal(thumbFit('image', ...square, laidAs('sq', 2)), 'cover');
-  // A phone's wide tile is 2:1, so a square drawing would lose half there.
-  assert.equal(thumbFit('image', ...square, laidAs('wd', 2)), 'contain');
-  // A 1.28:1 drawing in a phone's square loses 22%: it covers.
-  assert.equal(thumbFit('image', ...landscape, laidAs('sq', 2)), 'cover');
-  // A portrait drawing loses 14% to a square and 43% to a wide tile.
-  assert.equal(thumbFit('image', ...portrait, laidAs('sq', 6)), 'cover');
-  assert.equal(thumbFit('image', ...portrait, laidAs('sq', 2)), 'cover');
-  assert.equal(thumbFit('image', ...portrait, laidAs('wd', 6)), 'contain');
-  // Either axis: a picture twice as tall as wide loses half to a square.
-  assert.equal(thumbFit('image', 1920, 3840, laidAs('sq', 6)), 'contain');
-  // A full tile at the reading width is 3:1: a 16:9 still loses 41% to it.
-  assert.equal(thumbFit('image', ...film, laidAs('full', 6)), 'contain');
-});
-
-test('the fit is asked of the shape the tile really has, which a wide reading column stretches', () => {
-  /* MEASURED in Chromium at 1440px: the square is 372x294 and the wide tile
-     561x294. The drawing the 0.1.104 preview showed cut in a wide tile, and
-     the 1.28:1 one the table alone would let a wide tile crop by a third, are
-     both contained there; the portrait the "square" would crop by a third is
-     contained too, and the 1:1 drawing the square crops by a fifth covers. */
-  const square1440 = 372 / 294;
-  const wide1440 = 561 / 294;
-  assert.equal(thumbFit('image', ...square, wide1440), 'contain');
-  assert.equal(thumbFit('image', ...landscape, wide1440), 'contain');
-  assert.equal(thumbFit('image', ...landscape, laidAs('wd', 6)), 'cover', 'the table alone and the measured tile agree here, so this proves nothing');
-  assert.equal(thumbFit('image', ...portrait, square1440), 'contain');
-  assert.equal(thumbFit('image', ...portrait, laidAs('sq', 6)), 'cover', 'the table alone and the measured tile agree here, so this proves nothing');
-  assert.equal(thumbFit('image', ...square, square1440), 'cover');
-  // And at 1920px, where the square is 1.58:1, even a 1:1 drawing would lose 37%.
-  assert.equal(thumbFit('image', ...square, 465.34 / 294), 'contain');
-});
-
-test('the limit is MORE than a quarter: a picture that loses exactly a quarter still covers', () => {
-  // A 3:2 picture in a 2:1 tile keeps 1.5 / 2 = three quarters of itself.
-  assert.equal(thumbFit('image', 3000, 2000, 2), 'cover');
-  assert.equal(thumbFit('image', 2980, 2000, 2), 'contain');
-});
-
-test('a film always covers its tile, whatever the shape', () => {
-  for (const tile of [0.5, 1, 1.27, 1.5, 1.91, 2, 3, 3.7]) {
-    for (const box of [film, square, portrait, [1920, 3840]]) {
-      assert.equal(thumbFit('video', ...box, tile), 'cover', `a ${box.join('x')} film is contained in a ${tile}:1 tile`);
-    }
-  }
-});
-
-test('a picture or a tile whose size is unknown or unreadable covers rather than guessing', () => {
-  for (const [width, height] of [
-    [undefined, undefined],
-    [3840, undefined],
-    [undefined, 3840],
-    [0, 3840],
-    [3840, 0],
-    [-3840, 3840],
-    [Number.NaN, 3840],
-    [Number.POSITIVE_INFINITY, 3840]
-  ]) {
-    assert.equal(thumbFit('image', width, height, 2), 'cover', `${width}x${height} was given a fit of its own`);
-  }
-  for (const tile of [0, -2, Number.NaN, Number.POSITIVE_INFINITY]) {
-    assert.equal(thumbFit('image', ...square, tile), 'cover', `a tile of aspect ${tile} was given a fit`);
   }
 });
