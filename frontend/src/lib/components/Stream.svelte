@@ -4,7 +4,7 @@
   replaced the sheet's two columns side by side, and the scroll box and the
   phone's "show all" disclosure with them.
 
-  THREE FEEDS OF THE LATEST WORK (owner, 2026-11-03, issue 401): the marks
+  THREE FEEDS OF THE RECENT WORK (owner, 2026-11-03, issue 401): the marks
   choose the commits, the merges or the releases, and the stream opens on the
   first. ONE SHAPE FOR EVERY ENTRY whatever its feed: a mark for its kind, a
   byline — where, when, and the version when there is one — the subject under

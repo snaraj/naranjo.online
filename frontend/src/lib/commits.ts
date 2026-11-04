@@ -123,12 +123,14 @@ export const streamPageRows = 5;
  * it takes 100 px in height, then the other should match as well"). */
 export const streamFeedRows = 30;
 
-/* The stream's three marks are three FEEDS of the latest work (owner,
+/* The stream's three marks are three FEEDS of the recent work (owner,
  * 2026-11-03, issue #401: "all entries should display the same thing and
- * they all should display based on latest"): the latest commits with the
- * private days among them, the latest merged pull requests, the latest
- * releases. Each is newest first and every entry is in exactly one; there is
- * no view of everything, and the first feed is the one the stream opens on.
+ * they all should display based on latest"): the newest commits with the
+ * private days among them, the newest merged pull requests, the newest
+ * releases, each as far as the origin's bounded selection reaches (its
+ * vcs-activity field comments state it). Each is newest first and every
+ * entry is in exactly one; there is no view of everything, and the first feed
+ * is the one the stream opens on.
  * The marks are what the eye reads, the words what a screen reader hears in
  * their place, and their order is the order they sit in.
  *

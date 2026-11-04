@@ -222,7 +222,10 @@ export interface VCSActivityData {
    * the kind shipped, so a payload without it still renders. */
   endDate?: string;
   recentCommits: VCSCommit[];
-  /* The latest merged pull requests and releases, newest first. Optional:
+  /* The merge and release feeds, newest first: the newest thirty among each
+   * active repository's thirty most recently updated merged pull requests,
+   * and among its thirty most recently created releases less the drafts and
+   * pre-releases, a bounded selection the origin never paginates. Optional:
    * additive inside the kind, so a payload from a replica that predates them
    * still renders, and their feeds say they hold nothing. */
   recentMerges?: VCSMerge[];
