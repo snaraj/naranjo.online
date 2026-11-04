@@ -823,6 +823,10 @@
   --stream-pad: 0.5rem;
   --stream-gap: 0.75rem;
   --stream-pitch: calc(var(--stream-line) + var(--stream-sub) + 2 * var(--stream-pad));
+  /* The widest identity an entry prints whole (issue 406), in the mark's own
+     monospace characters: a seven-digit sha, a pull request's number, and a
+     release's tag of up to twelve. A longer tag ellipsizes inside it. */
+  --stream-mark-max: 12ch;
   /* A pager step with nowhere to go: the same mark, quieter. */
   --pager-rest-dim: 0.35;
 

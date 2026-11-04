@@ -354,6 +354,47 @@ async function goToItem(page, label) {
   await expect(count).toHaveText(label);
 }
 
+/* THE GALLERY'S ORDER IS THE VISIT'S (owner, 2026-11-04, issue 405: "this is
+ * fine, just make it random"). The mosaic lays a shuffled copy of its items,
+ * drawn once per visit, so no lane may assume which item a tile holds: a lane
+ * reads the order off the page — each tile's data-key and the name its button
+ * carries — and asserts what holds for EVERY order. The vendored set it is
+ * compared against is read from the module that declares it. */
+const vendoredGalleryKeys = [
+  ...readFileSync(new URL('../src/lib/gallery.ts', import.meta.url), 'utf8').matchAll(/\bsrc: '([^']+)'/g),
+].map((match) => match[1]);
+if (vendoredGalleryKeys.length < 6) {
+  throw new Error('lib/gallery.ts declares too few vendored items for the gallery lanes to page');
+}
+
+/* The tiles of the mosaic's current page, in the order it lays them. */
+async function galleryTiles(page) {
+  return page
+    .locator('#gallery .gallery-tile')
+    .evaluateAll((tiles) => tiles.map((tile) => ({ key: tile.getAttribute('data-key'), name: tile.getAttribute('aria-label') })));
+}
+
+/* The visit's whole order: every page of the mosaic read in turn through its
+ * own pager, then turned back to the first page, where the walk began. */
+async function galleryOrder(page) {
+  const pager = page.locator('#gallery .pager');
+  const count = pager.locator('.pager-count');
+  const pages = Number(/\/\s*(\d+)/.exec((await count.textContent()) ?? '')?.[1]);
+  expect(pages, 'the gallery pager states no page count').toBeGreaterThan(0);
+  await expect(count, 'the walk did not begin on the first page').toHaveText(`1 / ${pages}`);
+  const order = [...(await galleryTiles(page))];
+  for (let at = 2; at <= pages; at += 1) {
+    await pager.locator('.pager-step[data-step="next"]').click();
+    await expect(count).toHaveText(`${at} / ${pages}`);
+    order.push(...(await galleryTiles(page)));
+  }
+  for (let at = pages - 1; at >= 1; at -= 1) {
+    await pager.locator('.pager-step[data-step="previous"]').click();
+    await expect(count).toHaveText(`${at} / ${pages}`);
+  }
+  return order;
+}
+
 /* WCAG 2.2 relative luminance and contrast, over whatever spelling of a color
  * the engine computed. Twin of the source-side helper in
  * tests/experience.test.mjs: that one measures the palette the stylesheet
@@ -6167,6 +6208,10 @@ test('a tile costs a reader its preview and the master arrives only when one is 
   await visit(page);
   const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').first();
   await tile.scrollIntoViewIfNeeded();
+  /* WHICH picture the first tile holds is the visit's draw (issue 405), so
+     the master the press must pull is read off the tile, never assumed. */
+  const opened = await tile.getAttribute('data-key');
+  expect(opened, 'the first tile names no vendored item').toMatch(/^gallery-\d+-full\.webp$/);
   await expect
     .poll(() => requested.filter((name) => name.includes('-preview-')).length, {
       message: 'no preview was ever requested, so this lane measured no loading at all',
@@ -6192,8 +6237,8 @@ test('a tile costs a reader its preview and the master arrives only when one is 
     .toBe(1);
   expect(
     requested.filter((name) => name.includes('-full-'))[0],
-    'the stage pulled a master other than the tile that was opened'
-  ).toMatch(/^gallery-01-full-/);
+    `the stage pulled a master other than the ${opened} the tile holds`
+  ).toMatch(new RegExp(`^${opened.replace(/\.webp$/, '')}-`));
 });
 
 test('prev/next cycle the enlarged photograph without leaving the page (issue 176; owner 2026-09-03, issue 287)', async ({
@@ -6301,13 +6346,19 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
      sits on the film's own span exactly as it sits on the picture's. */
   await serveGalleryManifest(page);
   await visit(page);
+  /* The mosaic laid the two in the visit's order (issue 405), so each one's
+     place on the stage is read off the tiles rather than off the manifest. */
+  const mixed = (await galleryTiles(page)).map((tile) => tile.key);
+  expect([...mixed].sort(), 'the gallery did not lay the served still and film once each').toEqual(['lane-film', 'lane-still']);
+  const stillAt = mixed.indexOf('lane-still') + 1;
+  const filmAt = mixed.indexOf('lane-film') + 1;
   await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
   await expect(dialog).toBeVisible();
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
+  await expect(page.locator('.gallery-count')).toHaveText(`Photograph ${stillAt} of 2`);
   await expect(next).toHaveAttribute('aria-label', 'Next film');
   await next.click();
   await expect(page.locator('.gallery-count'), 'the stage skipped the film in its own set').toHaveText(
-    'Film 2 of 2'
+    `Film ${filmAt} of 2`
   );
   const film = await page.locator('dialog video.gallery-lightbox-film').boundingBox();
   expect(film, 'paging onto a film staged no player').not.toBeNull();
@@ -6328,7 +6379,7 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
   await expect(previous).toHaveAttribute('aria-label', 'Previous photograph');
   await next.click();
   await expect(page.locator('.gallery-count'), 'the end of a mixed set is a dead stop').toHaveText(
-    'Photograph 1 of 2'
+    `Photograph ${stillAt} of 2`
   );
   await expect(page.locator('dialog video'), 'the film’s player outlived the page it was on').toHaveCount(0);
   await page.keyboard.press('Escape');
@@ -6385,7 +6436,7 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
       const pager = window.document.querySelector('#gallery .pager');
       return {
         tiles: grid.querySelectorAll('.gallery-tile').length,
-        first: grid.querySelector('.gallery-tile')?.getAttribute('aria-label') ?? '',
+        keys: [...grid.querySelectorAll('.gallery-tile')].map((tile) => tile.getAttribute('data-key')),
         gridTop: round(grid.getBoundingClientRect().top + window.scrollY),
         gridHeight: round(grid.getBoundingClientRect().height),
         pagerTop: round(pager.getBoundingClientRect().top + window.scrollY),
@@ -6420,7 +6471,17 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
   const second = await shape();
   expect(second.count, 'Enter on the focused step did not turn the page').toBe('2 / 2');
   expect(second.tiles, 'the short page does not hold the three pictures left').toBe(3);
-  expect(second.first, 'the second page shows the first page’s pictures').not.toBe(first.first);
+  /* EVERY ITEM EXACTLY ONCE across the two pages, whatever order the visit
+     drew (issue 405): the pages share no picture, and together they are the
+     vendored set, nothing lost and nothing doubled. */
+  expect(
+    second.keys.filter((key) => first.keys.includes(key)),
+    'the second page shows the first page’s pictures'
+  ).toEqual([]);
+  expect(
+    [...first.keys, ...second.keys].sort(),
+    'the two pages do not hold every vendored picture exactly once'
+  ).toEqual([...vendoredGalleryKeys].sort());
   expect(second.disabled).toEqual(['false', 'true']);
   /* THE STEP KEEPS THE READER'S FOCUS though it has nowhere left to go
      (review, 2026-11-02): it is quiet, not disabled, so a reader turning by
@@ -6437,7 +6498,9 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
   await settled(page);
   const back = await shape();
   expect(back.count).toBe('1 / 2');
-  expect(back.first, 'turning back did not return to the first page').toBe(first.first);
+  /* The visit's order HOLDS across the turns: back on the first page, the
+     same pictures in the same places, so a turn never draws again. */
+  expect(back.keys, 'turning back did not return to the first page as the visit laid it').toEqual(first.keys);
 
   for (const [name, after] of [['the turn to a short page', second], ['the turn back', back]]) {
     expect(after.gridTop, `${name} moved the gallery`).toBeCloseTo(first.gridTop, 1);
@@ -6450,6 +6513,104 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
   } else {
     expect(shifts, 'the layout-shift observer was armed but reported nothing at all').toBeNull();
   }
+});
+
+/* THE ORDER IS DRAWN ONCE PER VISIT (owner, 2026-11-04, issue 405: "this is
+ * fine, just make it random"). The mosaic lays a shuffled copy of its items,
+ * so what this proves is what must hold for EVERY draw, in a real engine:
+ *   - every item is laid exactly once across the pages, nothing lost and
+ *     nothing doubled;
+ *   - the order holds for the visit: a page turn, the stage opened and
+ *     closed, and a phone's rotation (or a desktop's narrowing) across the
+ *     width the grid's shapes follow all leave it exactly as it was;
+ *   - the stage follows it: the tile pressed is the item staged, the next
+ *     item on the stage is the next tile even across a page of the mosaic,
+ *     the walk wraps from the first tile onto the order's last, and closing
+ *     hands focus back to the very tile pressed;
+ *   - and a new visit draws again: of three loads, not all lay one order. A
+ *     shuffle that never ran lays the declared order on every load; three
+ *     equal draws of eight items by chance is one in 40320 squared.
+ * Three visits settle three times, so the lane owes Playwright's per-test
+ * budget two more settle windows than one visit takes. */
+test('the gallery lays every item once, in an order drawn per visit that a turn, the stage and a rotation all keep (owner 2026-11-04, issue 405)', async ({
+  page,
+}) => {
+  test.setTimeout(test.info().timeout + 2 * settleWindow);
+  const dialog = page.locator('dialog.gallery-lightbox');
+  const counter = page.locator('.gallery-count');
+  const grid = page.locator('#gallery .gallery-grid');
+  const total = vendoredGalleryKeys.length;
+  const staged = () => dialog.getAttribute('aria-label');
+  const altOf = (tile) => tile.name.replace(/^Open photograph: /, '');
+  const pageKeys = async () => (await galleryTiles(page)).map((tile) => tile.key);
+  const focusedKey = () => page.evaluate(() => window.document.activeElement?.getAttribute?.('data-key') ?? null);
+  const orders = [];
+  for (let load = 1; load <= 3; load += 1) {
+    await visit(page);
+    await grid.scrollIntoViewIfNeeded();
+    const order = await galleryOrder(page);
+    const keys = order.map((tile) => tile.key);
+    expect([...keys].sort(), `load ${load} did not lay every vendored picture exactly once`).toEqual(
+      [...vendoredGalleryKeys].sort()
+    );
+    orders.push(keys.join(' '));
+    if (load > 1) {
+      continue;
+    }
+
+    /* THE TURNS KEEP IT: the walk turned through every page and back, and a
+       second walk lays the very same order. */
+    expect((await galleryOrder(page)).map((tile) => tile.key), 'turning the pages drew a new order').toEqual(keys);
+
+    /* THE STAGE FOLLOWS IT. The last tile of the first page opens on its own
+       item, and the next item on the stage is the second page's first tile. */
+    const perPage = (await galleryTiles(page)).length;
+    expect(perPage, 'the first page is not full, so the stage never crosses a page here').toBeLessThan(total);
+    await page.locator('#gallery .gallery-tile').nth(perPage - 1).click();
+    await expect(dialog).toHaveJSProperty('open', true);
+    await expect(counter).toHaveText(`Photograph ${perPage} of ${total}`);
+    expect(await staged(), 'the stage opened on an item other than the tile pressed').toBe(altOf(order[perPage - 1]));
+    await page.locator('.gallery-nav[data-gallery-nav="next"]').click();
+    await expect(counter).toHaveText(`Photograph ${perPage + 1} of ${total}`);
+    expect(await staged(), 'the next item on the stage is not the next tile').toBe(altOf(order[perPage]));
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveJSProperty('open', false);
+    await expect
+      .poll(focusedKey, { message: 'closing the stage handed focus to a tile other than the one pressed' })
+      .toBe(order[perPage - 1].key);
+
+    /* And it wraps the visit's way: previous from the first tile is the last
+       item of the order, wherever the manifest put it. */
+    await page.locator('#gallery .gallery-tile').first().click();
+    await expect(counter).toHaveText(`Photograph 1 of ${total}`);
+    expect(await staged(), 'the first tile opened on an item other than its own').toBe(altOf(order[0]));
+    await page.locator('.gallery-nav[data-gallery-nav="previous"]').click();
+    await expect(counter).toHaveText(`Photograph ${total} of ${total}`);
+    expect(await staged(), 'the walk wrapped onto an item other than the order’s last').toBe(altOf(order.at(-1)));
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveJSProperty('open', false);
+    expect(await pageKeys(), 'opening and closing the stage drew a new order').toEqual(keys.slice(0, perPage));
+
+    /* A TURN ACROSS THE WIDTH the grid's shapes follow, so the grid lays its
+       shapes for the other column count while the items stay where the visit
+       put them. A phone turned on its side is its SCREEN the other way round
+       — the emulated viewport is the portrait one less the browser's chrome,
+       390 by 664 on the iPhone, which turned would still be a phone's width —
+       and a desktop narrowed to a phone's width stands in for the other way. */
+    const columns = await grid.getAttribute('data-columns');
+    const viewport = page.viewportSize();
+    const screen = await page.evaluate(() => ({ width: window.screen.width, height: window.screen.height }));
+    await page.setViewportSize(columns === '2' ? { width: screen.height, height: screen.width } : { width: 390, height: 844 });
+    await expect(grid, 'the rotation did not cross the width the grid follows, so it proves nothing').not.toHaveAttribute(
+      'data-columns',
+      columns
+    );
+    expect(await pageKeys(), 'a rotation drew a new order').toEqual(keys.slice(0, perPage));
+    await page.setViewportSize(viewport);
+    await expect(grid).toHaveAttribute('data-columns', columns);
+    expect(await pageKeys(), 'rotating back drew a new order').toEqual(keys.slice(0, perPage));
+  }
+  expect(new Set(orders).size, `three visits laid one order (${orders[0]}), so nothing is drawn per visit`).toBeGreaterThan(1);
 });
 
 test('opening a tile shows a real modal dialog with a larger, unframed photograph; Escape closes it and hands the tile back its focus (issue 202; owner 2026-09-03, issue 287)', async ({
@@ -6730,6 +6891,15 @@ test('a film’s tile is a button that opens the stage, where one native player 
   await expect(page.locator('.gallery-tile')).toHaveCount(2);
   await expect(page.locator('.gallery-control')).toHaveCount(0);
   const rowBefore = await galleryRowShape(page);
+  /* IN THE VISIT'S ORDER (issue 405): the two are laid in an order drawn on
+     this load, so each one's place on the stage is the place its tile took,
+     read here, and every count below is that place. */
+  const laid = (await galleryTiles(page)).map((tile) => tile.key);
+  expect([...laid].sort(), 'the gallery did not lay the served still and film once each').toEqual(
+    galleryManifestFixture.items.map((entry) => entry.key).sort()
+  );
+  const filmAt = laid.indexOf('lane-film') + 1;
+  const stillAt = laid.indexOf('lane-still') + 1;
 
   const tiles = await page.evaluate(() => {
     const round = (box) => ({
@@ -6802,7 +6972,7 @@ test('a film’s tile is a button that opens the stage, where one native player 
      in it, and that press is the one start. */
   await filmTile.click();
   await expect(dialog).toHaveJSProperty('open', true);
-  await expect(counter).toHaveText('Film 2 of 2');
+  await expect(counter).toHaveText(`Film ${filmAt} of 2`);
   await expect
     .poll(plays, { message: 'pressing the film’s tile did not start it', timeout: 5_000 })
     .toEqual(['stage']);
@@ -6919,7 +7089,7 @@ test('a film’s tile is a button that opens the stage, where one native player 
     [[0.8, 0.7, 0.55, 0.4, 0.25].map((at) => stageBox.x + stageBox.width * at), stageBox.y + stageBox.height / 2]
   );
   await page.waitForTimeout(320);
-  await expect(counter, 'a horizontal drag across the film turned the page').toHaveText('Film 2 of 2');
+  await expect(counter, 'a horizontal drag across the film turned the page').toHaveText(`Film ${filmAt} of 2`);
 
   /* PAGING NEVER STARTS A FILM. Onto the still by the pair, back onto the
      film by the pair, and the same round again by the keyboard: the film
@@ -6927,12 +7097,12 @@ test('a film’s tile is a button that opens the stage, where one native player 
   const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
   const previous = page.locator('.gallery-nav[data-gallery-nav="previous"]');
   await next.click();
-  await expect(counter).toHaveText('Photograph 1 of 2');
+  await expect(counter).toHaveText(`Photograph ${stillAt} of 2`);
   await expect(page.locator('video'), 'the film’s player outlived its page').toHaveCount(0);
   await expect(page.locator('.gallery-meta-text'), 'the film’s description stayed on the still').toHaveCount(0);
   expect(await onPage(description), 'the film’s description is on the page with the still staged').toBe(false);
   await previous.click();
-  await expect(counter).toHaveText('Film 2 of 2');
+  await expect(counter).toHaveText(`Film ${filmAt} of 2`);
   await expect(page.locator('dialog video')).toHaveCount(1);
 
   /* THE KEYBOARD KEEPS ITS PLACE ACROSS A KIND. A turn between a film and a
@@ -6947,25 +7117,25 @@ test('a film’s tile is a button that opens the stage, where one native player 
     );
   await next.focus();
   await page.keyboard.press('Enter');
-  await expect(counter).toHaveText('Photograph 1 of 2');
+  await expect(counter).toHaveText(`Photograph ${stillAt} of 2`);
   await expect
     .poll(() => onPair('next'), { message: 'a turn from the film onto the still dropped the keyboard' })
     .toBe(true);
   await page.keyboard.press('ArrowRight');
-  await expect(counter, 'an arrow key on the still’s pair did not turn the stage').toHaveText('Film 2 of 2');
+  await expect(counter, 'an arrow key on the still’s pair did not turn the stage').toHaveText(`Film ${filmAt} of 2`);
   await expect
     .poll(() => onPair('next'), { message: 'a turn from the still onto the film dropped the keyboard' })
     .toBe(true);
   await page.keyboard.press('ArrowLeft');
-  await expect(counter).toHaveText('Photograph 1 of 2');
+  await expect(counter).toHaveText(`Photograph ${stillAt} of 2`);
   await page.keyboard.press('ArrowLeft');
-  await expect(counter).toHaveText('Film 2 of 2');
+  await expect(counter).toHaveText(`Film ${filmAt} of 2`);
   await expect(page.locator('dialog video')).toHaveCount(1);
   /* An arrow pressed ON the film's player is the player's — it seeks — and
      the stage stays where it is. */
   await page.locator('dialog video').dispatchEvent('keydown', { key: 'ArrowRight' });
   await painted();
-  await expect(counter, 'an arrow on the film’s own player turned the stage').toHaveText('Film 2 of 2');
+  await expect(counter, 'an arrow on the film’s own player turned the stage').toHaveText(`Film ${filmAt} of 2`);
   expect(await plays(), 'paging onto a film started it').toEqual(['stage']);
 
   /* CLOSING ends it: no player anywhere, focus on the film's own tile, the
@@ -11767,6 +11937,121 @@ for (const width of [1440, 390]) {
     }
   });
 }
+
+/* A RELEASE'S IDENTITY IS ITS TAG (owner, 2026-11-04, issue 406: "resolve
+ * it", on the live phone Releases feed, where every byline carried the tag
+ * as a chip and both the repository and the tag were cut — "naranjo.o…
+ * v0.1…"). The lane's origin serves no release, so the releases are staged
+ * through the real envelopes, with the latest one cut from a commit the
+ * commit feed holds, and measured at the phone width the owner read:
+ *   - in the Releases feed every entry's identity, at its end, is its own
+ *     tag, no byline carries a chip, the subject links to the release's own
+ *     page, and the repository and a short tag print whole;
+ *   - a tag as long as the grammar admits ellipsizes inside the mark's bound
+ *     instead of taking the subject's room and the document sideways;
+ *   - in the Commits feed the commit that release was cut from keeps its
+ *     chip and its short sha, before the Releases feed and after it. */
+test('a release entry ends on its tag with no chip in its byline, and the commit it was cut from keeps its chip (owner 2026-11-04, issue 406)', async ({
+  page,
+}) => {
+  const cutSha = 'b93ba24fd27c26e0edf52f21f903d3a4b9d4817a';
+  const longest = `v0.0.0-release-candidate.${'0'.repeat(39)}`;
+  expect(longest, 'the long tag is not the grammar’s longest').toHaveLength(64);
+  const releases = [
+    { repo: 'naranjo.online', tag: 'v0.1.103', title: 'Release 0.1.103: three feeds of the recent work', at: '2026-11-03T17:35:00Z', sha: cutSha },
+    { repo: 'obsync', tag: '1.1.12', title: 'Release 1.1.12: pairing again', at: '2026-11-02T18:58:00Z', sha: 'c'.repeat(40) },
+    { repo: 'theme', tag: longest, title: 'A release with the longest tag the grammar admits', at: '2026-11-01T12:00:00Z', sha: 'd'.repeat(40) },
+  ];
+  const cutSubject = 'Release 0.1.103: three feeds of the recent work (#403)';
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      { repo: 'naranjo.online', sha: cutSha, message: cutSubject, at: '2026-11-03T17:34:45Z' },
+      ...envelope.data.recentCommits,
+    ];
+    envelope.data.recentReleases = releases;
+    await route.fulfill({ response, json: envelope });
+  });
+  await page.route('**/api/panels/coding-projects', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.repos = envelope.data.repos.map((repo) =>
+      repo.name === 'naranjo.online' ? { ...repo, release: 'v0.1.103', releaseSha: cutSha } : repo
+    );
+    await route.fulfill({ response, json: envelope });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await visit(page);
+  const stream = page.locator('#projects .stream');
+  await stream.scrollIntoViewIfNeeded();
+  const entries = () =>
+    page.evaluate(() =>
+      [...window.document.querySelectorAll('#projects .stream-entry')].map((entry) => {
+        const mark = entry.querySelector('.stream-mark');
+        const source = entry.querySelector('.stream-source');
+        const title = entry.querySelector('.stream-title');
+        return {
+          kind: entry.getAttribute('data-kind'),
+          title: title.textContent.trim(),
+          href: entry.querySelector('a.stream-title')?.getAttribute('href') ?? null,
+          mark: mark.textContent.trim(),
+          markWhole: mark.scrollWidth <= mark.clientWidth,
+          markWidth: mark.getBoundingClientRect().width,
+          titleWidth: title.getBoundingClientRect().width,
+          sourceWhole: source.scrollWidth <= source.clientWidth,
+          chips: [...entry.querySelectorAll('.stream-release')].map((chip) => chip.textContent.trim()),
+        };
+      })
+    );
+  const sideways = () => page.evaluate(() => window.document.documentElement.scrollWidth - window.innerWidth);
+  const cutCommit = async () => (await entries()).find((entry) => entry.title === cutSubject);
+
+  /* THE COMMIT FEED FIRST: the commit the release was cut from wears it. */
+  const before = await cutCommit();
+  expect(before, 'the staged release commit is not on the commit feed’s first page').toBeTruthy();
+  expect(before.chips, 'the commit a release was cut from lost its chip').toEqual(['v0.1.103']);
+  expect(before.mark, 'the release commit no longer ends on its short sha').toBe(cutSha.slice(0, 7));
+
+  await page.locator('#projects .stream-filter[aria-label="Releases"]').click();
+  await settled(page);
+  const feed = await entries();
+  expect(feed.map((entry) => entry.kind), 'the Releases feed holds something besides the staged releases').toEqual([
+    'release',
+    'release',
+    'release',
+  ]);
+  expect(feed.map((entry) => entry.mark), 'a release does not end on its own tag').toEqual(releases.map((release) => release.tag));
+  expect(
+    feed.flatMap((entry) => entry.chips),
+    'a release still carries its tag as a chip in its byline'
+  ).toEqual([]);
+  await expect(page.locator('#projects .stream-list .stream-release'), 'the Releases feed draws a chip').toHaveCount(0);
+  expect(feed.map((entry) => entry.href), 'a release’s subject does not open the release’s own page').toEqual(
+    releases.map((release) => `https://github.com/snaraj/${release.repo}/releases/tag/${release.tag}`)
+  );
+  /* WHAT THE OWNER SAW CUT prints whole now: the repository, and a short
+     tag at the entry's end. */
+  for (const entry of feed.slice(0, 2)) {
+    expect(entry.sourceWhole, `the repository of the ${entry.mark} release is cut at 390px`).toBe(true);
+    expect(entry.markWhole, `the ${entry.mark} tag is cut at 390px`).toBe(true);
+  }
+  /* AND THE LONGEST TAG is held by the mark's bound: cut with an ellipsis,
+     the subject keeping more room than the tag takes, and the page still. */
+  const [, , long] = feed;
+  expect(long.markWhole, 'a 64-character tag fits whole, so this measured no bound').toBe(false);
+  expect(long.titleWidth, `the longest tag left its subject ${long.titleWidth}px against its own ${long.markWidth}px`).toBeGreaterThan(
+    long.markWidth
+  );
+  expect(await sideways(), 'a long tag took the document sideways').toBeLessThanOrEqual(subPixel);
+
+  /* BACK ON THE COMMITS, the chip is where it was. */
+  await page.locator('#projects .stream-filter[aria-label="Commits"]').click();
+  await settled(page);
+  const after = await cutCommit();
+  expect(after?.chips, 'the commit a release was cut from lost its chip after the Releases feed').toEqual(['v0.1.103']);
+  expect(after?.mark).toBe(cutSha.slice(0, 7));
+});
 
 /* A PRESSED FILTER SHINES, AND ONLY WHERE MOTION IS WELCOME (owner,
  * 2026-11-02: "generate SVGs with animation that shine/sparkly when clicking

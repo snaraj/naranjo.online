@@ -7,6 +7,29 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.104] - 2026-11-04
+
+### Fixed
+
+- A release in Ongoing Work's Releases feed ends on its tag, where a commit ends
+  on its short sha and a merge on its number, and its byline is the repository
+  and the age with no version chip, so a phone no longer cuts both the
+  repository and the tag. A commit that its repository's latest release was cut
+  from keeps its chip in the Commits feed. The identity at an entry's end is
+  bounded at twelve characters (`--stream-mark-max`): a tag as long as the tag
+  grammar admits ellipsizes there, as the chip did, instead of pushing the page
+  sideways (#406).
+
+### Changed
+
+- The gallery shuffles its items once per visit, on the page, before it lays a
+  tile, so drawings and films mix at random on every load. The order holds for
+  the visit: the pager, the stage's previous and next, and the tile a closed
+  stage returns focus to all follow it, and a page turn or a rotation never
+  draws again. The mosaic's pattern is unchanged and by position. The
+  manifest's item order no longer means feed order, so the operator need not
+  interleave the kinds (#405).
+
 ## [0.1.103] - 2026-11-03
 
 ### Fixed

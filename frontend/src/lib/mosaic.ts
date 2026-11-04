@@ -9,7 +9,13 @@
  * two rows, a wide tile three by two, a full tile all six by two. In a grid of
  * TWO (a phone) a square is one cell, and wide and full both span the row.
  * tests/mosaic.test.mjs lays every pattern into that grid and proves it. Pure,
- * so the node suite executes it. */
+ * so the node suite executes it.
+ *
+ * WHICH ITEM TAKES WHICH PLACE is chance, once per visit (owner, 2026-11-04,
+ * issue #405: "this is fine, just make it random"): the gallery lays a
+ * shuffled copy of its items, so the manifest's own order means nothing to
+ * the mosaic, and the pattern above stays by position — a film in a
+ * drawing's slot takes the same tile. */
 
 export type MosaicShape = 'sq' | 'wd' | 'full';
 
@@ -42,4 +48,25 @@ export function mosaicShapes(count: number, columns: 6 | 2): readonly MosaicShap
     throw new RangeError(`no mosaic pattern for ${count} tiles`);
   }
   return shapes;
+}
+
+/* A Fisher–Yates shuffle over a COPY: the input is never touched, and every
+ * order of n items is reached by exactly one sequence of n − 1 draws, so no
+ * order is likelier than another. The random source is a parameter rather
+ * than Math.random read here, because the claim is proved with a FIXED source
+ * (tests/mosaic.test.mjs): a fixed order for a fixed source, a permutation for
+ * every source, every order reachable. The gallery hands it Math.random. A
+ * draw outside [0, 1) is a broken source, and it throws rather than dropping
+ * or doubling an item. */
+export function shuffled<T>(items: readonly T[], random: () => number): readonly T[] {
+  const order = items.slice();
+  for (let last = order.length - 1; last > 0; last -= 1) {
+    const draw = random();
+    if (!(draw >= 0 && draw < 1)) {
+      throw new RangeError(`a random source drew ${draw}, outside [0, 1)`);
+    }
+    const pick = Math.floor(draw * (last + 1));
+    [order[last], order[pick]] = [order[pick], order[last]];
+  }
+  return order;
 }

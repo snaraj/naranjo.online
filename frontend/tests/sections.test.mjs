@@ -2561,8 +2561,10 @@ test('the coding-projects block declares no heading of its own (owner ruling, 20
  * is the same button a still's is and the stage pages the whole set.
  *
  * THE ROW BECAME A MOSAIC (owner, 2026-11-02, issue #399, mock 06: "let's
- * combine videos and drawings"): every item in one grid in manifest order, a
- * page of five at a time with the shared pager, the set switch gone. */
+ * combine videos and drawings"): every item in one grid, a page of five at a
+ * time with the shared pager, the set switch gone — in an order that is chance
+ * once per visit (owner, 2026-11-04, issue #405: "this is fine, just make it
+ * random"). */
 const galleryStyle = styleBlock(mediaGallery);
 
 /* The rules of the gallery's sheet, by selector, comments out and whitespace
@@ -2574,11 +2576,28 @@ const galleryRule = (selector) =>
     .trim() ?? '';
 
 test('the gallery is a mosaic of every item, a page at a time, whose shapes and grid are read from one width (issue #399)', () => {
-  /* EVERY ITEM, in manifest order, five a page: the page is cut by the shared
-     pure paging function, and the count is a prop with that default. */
+  /* EVERY ITEM, in the visit's order, five a page: the page is cut by the
+     shared pure paging function, and the count is a prop with that default. */
   assert.match(mediaGallery, /pageSize = 5 \}: MediaGalleryProps = \$props\(\)/, 'five tiles a page; the count is a prop with that default');
-  assert.match(mediaGallery, /const pageTiles = \$derived\(pageRows\(items, at, pageSize\)\);/, 'a page is cut from a subset of the items again');
-  assert.match(mediaGallery, /const pages = \$derived\(pageCount\(items\.length, pageSize\)\);/);
+  assert.match(mediaGallery, /const pageTiles = \$derived\(pageRows\(order, at, pageSize\)\);/, 'a page is cut from something other than the visit’s order');
+  assert.match(mediaGallery, /const pages = \$derived\(pageCount\(order\.length, pageSize\)\);/);
+  /* THE VISIT'S ORDER is lib/mosaic.ts's shuffle (executed by
+     tests/mosaic.test.mjs) over the items, ONCE: a derived that reads nothing
+     but the item list, so a page turn, the stage, a rotation or a re-render
+     never reaches it, and nothing else in the component reads the list the
+     host handed it but the guard that draws the gallery at all. The e2e
+     gallery lanes prove the consequence in an engine: every item exactly once
+     across the pages, the same order after a turn and a rotation, and the
+     stage opening on the very tile pressed. */
+  const scriptOnly = withoutHtmlComments(mediaGallery).replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(mediaGallery, /const order = \$derived\(shuffled\(items, Math\.random\)\);/, 'the gallery does not lay a shuffled copy of its items');
+  assert.equal((scriptOnly.match(/\bshuffled\(/g) ?? []).length, 1, 'the gallery shuffles in more than one place, so some read reshuffles');
+  assert.equal(
+    [...scriptOnly.matchAll(/(?<!-)\bitems\b/g)].length,
+    3,
+    'something besides the props, the one shuffle and the draw guard reads the unshuffled items'
+  );
+  assert.match(mediaGallery, /\{#if items\.length > 0\}/);
   /* THE SHAPES ARE lib/mosaic.ts's (executed by tests/mosaic.test.mjs), asked
      for the page's own count and for the grid the width selects — and the
      grid takes its columns from that SAME answer, through a data attribute,
@@ -2589,13 +2608,14 @@ test('the gallery is a mosaic of every item, a page at a time, whose shapes and 
   assert.match(mediaGallery, /const shapes = \$derived\(mosaicShapes\(pageTiles\.length, columns\)\);/);
   assert.match(mediaGallery, /<div class="gallery-grid" data-gallery-tiles=\{pageTiles\.length\} data-columns=\{columns\}>/);
   assert.match(mediaGallery, /data-shape=\{shapes\[place\]\}/);
+  assert.match(mediaGallery, /data-key=\{tile\.key\}/, 'a tile names no item the lanes can read its order by');
   assert.doesNotMatch(galleryStyle, /@media/, 'the grid asks a width of its own besides the one the shapes were chosen for');
   /* ONE TILE SHAPE (issue 384): a still's tile and a film's are the same
      button with the same press and the same name pattern, the kind a data
      attribute rather than a second branch of markup. */
   assert.match(
     mediaGallery,
-    /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind=\{tile\.video \? 'video' : 'image'\}\s+data-shape=\{shapes\[place\]\}\s+onclick=\{\(event\) => open\(tile, event\.currentTarget\)\}\s+aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}\s*>/,
+    /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind=\{tile\.video \? 'video' : 'image'\}\s+data-key=\{tile\.key\}\s+data-shape=\{shapes\[place\]\}\s+onclick=\{\(event\) => open\(tile, event\.currentTarget\)\}\s+aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}\s*>/,
     'every tile, still or film, is the one button that opens the stage'
   );
   assert.equal((mediaGallery.match(/class="gallery-tile"/g) ?? []).length, 1, 'a second tile shape is back beside the button');
@@ -2679,12 +2699,14 @@ test('opening a tile is the only way onto the stage, a native <dialog> that load
 });
 
 test('the stage pages the whole set, stills and films alike, with prev/next, the arrow keys and a swipe — all inside 44px targets — and wraps at both ends (issue 384)', () => {
-  /* EVERY ITEM, unfiltered (one set since the mosaic, issue #399): the count,
-     the item and the opener all read `items`, so a film is a stop on the walk
-     like any still, and the stage pages past the mosaic's own page. */
-  assert.match(mediaGallery, /const total = \$derived\(items\.length\);/, 'the stage counts a subset of the items again');
-  assert.match(mediaGallery, /const item = \$derived\(items\[shown\]\);/, 'the stage shows a subset of the items again');
-  assert.match(mediaGallery, /index = Math\.max\(0, items\.indexOf\(chosen\)\);/, 'a tile opens the stage at a place in some other list');
+  /* EVERY ITEM, unfiltered (one set since the mosaic, issue #399), in the
+     visit's order (issue #405): the count, the item and the opener all read
+     the one `order` the tiles are cut from, so a film is a stop on the walk
+     like any still, the stage pages past the mosaic's own page, and the next
+     item on the stage is the next tile. */
+  assert.match(mediaGallery, /const total = \$derived\(order\.length\);/, 'the stage counts something other than the visit’s order');
+  assert.match(mediaGallery, /const item = \$derived\(order\[shown\]\);/, 'the stage shows something other than the visit’s order');
+  assert.match(mediaGallery, /index = Math\.max\(0, order\.indexOf\(chosen\)\);/, 'a tile opens the stage at a place in some other list');
   assert.doesNotMatch(
     withoutHtmlComments(mediaGallery).replace(/\/\*[\s\S]*?\*\//g, ''),
     /\bstills\b|items\.filter\(|(?<!-)\bvisible\b/,
@@ -2697,8 +2719,8 @@ test('the stage pages the whole set, stills and films alike, with prev/next, the
   assert.equal((mediaGallery.match(/data-gallery-nav="previous"/g) ?? []).length, 1, 'the previous control is written twice');
   assert.equal((mediaGallery.match(/data-gallery-nav="next"/g) ?? []).length, 1, 'the next control is written twice');
   assert.equal((mediaGallery.match(/\{@render pager\(\)\}/g) ?? []).length, 2, 'a kind of stage lost its pair');
-  assert.match(mediaGallery, /aria-label=\{`Previous \$\{itemNoun\(items\[\(shown - 1 \+ total\) % total\]\)\}`\}/);
-  assert.match(mediaGallery, /aria-label=\{`Next \$\{itemNoun\(items\[\(shown \+ 1\) % total\]\)\}`\}/);
+  assert.match(mediaGallery, /aria-label=\{`Previous \$\{itemNoun\(order\[\(shown - 1 \+ total\) % total\]\)\}`\}/);
+  assert.match(mediaGallery, /aria-label=\{`Next \$\{itemNoun\(order\[\(shown \+ 1\) % total\]\)\}`\}/);
   /* A turn between a still and a film swaps the stage the pair sits in, so
      focus is read off the pressed control BEFORE the swap and handed to its
      twin after it; both turns do it. */

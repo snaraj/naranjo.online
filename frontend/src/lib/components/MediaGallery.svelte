@@ -1,9 +1,11 @@
 <!-- MediaGallery is the sheet's last section (owner directive, 2026-09-03,
   issue 287): a mosaic of tiles, a page at a time, and a native <dialog> that
-  is the stage. Drawings and films share the one grid in manifest order (owner,
-  2026-11-02, issue 399: "let's combine videos and drawings"), so the set
-  switch that chose between them is gone; what an item is lives under it on
-  the stage.
+  is the stage. Drawings and films share the one grid (owner, 2026-11-02,
+  issue 399: "let's combine videos and drawings"), so the set switch that
+  chose between them is gone; what an item is lives under it on the stage.
+  Their order is chance, once per visit (owner, 2026-11-04, issue 405: "this
+  is fine, just make it random"): the grid lays a shuffled copy of the items,
+  and the manifest's own order means nothing to it.
 
   A FILM'S TILE OPENS THE STAGE LIKE A PICTURE'S (issue 384). The user, on an
   iPhone, 2026-10-22: "the videos are not responsive to the touch, I should be
@@ -43,18 +45,30 @@
   import Pager from './Pager.svelte';
   import { browserMedia, spreadMediaQuery, watchMedia } from '../columnWidth';
   import { swipeHorizontal } from '../gesture.ts';
-  import { mosaicShapes } from '../mosaic.ts';
+  import { mosaicShapes, shuffled } from '../mosaic.ts';
   import { pageCount, pageRows } from '../stream.ts';
   import type { MediaGalleryItem, MediaGalleryProps } from '../blocks.ts';
 
   let { items, width, height, pageSize = 5 }: MediaGalleryProps = $props();
 
-  /* THE MOSAIC'S PAGE (owner, 2026-11-02, issue 399): every item in manifest
-     order, films and drawings together, a page of tiles at a time. */
+  /* THE VISIT'S ORDER (owner, 2026-11-04, issue 405): every item, films and
+     drawings together, shuffled ONCE per item list — the bootstrap set as the
+     component mounts, and the runtime manifest once, as it lands — because
+     this derived reads nothing but `items`, and the host hands a new list
+     exactly when the set itself changes (Block.svelte). A page turn, the
+     stage, a rotation and a re-render read `order` and never reach the
+     shuffle, so the pager, the stage's walk and the tile a closed stage hands
+     focus back to all follow the one order. It is computed before the tiles
+     of that list are first drawn, and it changes no count, so the reserve and
+     the shapes below are the same whatever it draws: zero CLS. */
+  const order = $derived(shuffled(items, Math.random));
+
+  /* THE MOSAIC'S PAGE (owner, 2026-11-02, issue 399): a page of tiles at a
+     time out of the visit's order. */
   let page = $state(1);
-  const pages = $derived(pageCount(items.length, pageSize));
+  const pages = $derived(pageCount(order.length, pageSize));
   const at = $derived(Math.min(page, pages));
-  const pageTiles = $derived(pageRows(items, at, pageSize));
+  const pageTiles = $derived(pageRows(order, at, pageSize));
 
   /* WHICH GRID THE PAGE IS LAID IN is a question the SCRIPT asks, through the
      media seam the column handles use (lib/columnWidth.ts): the tiles' shapes
@@ -71,15 +85,16 @@
     return candidate.video === undefined ? 'photograph' : 'film';
   }
   /* THE STAGE pages EVERY item, stills and films alike (issue 384; one set
-     since the mosaic, issue 399): a film is opened exactly as a picture is.
+     since the mosaic, issue 399), in the visit's order (issue 405): a film is
+     opened exactly as a picture is, and the next item is the next tile.
      index is assigned in exactly three places — open, next and previous — and
      read clamped, so items shrinking under it (a manifest load) can never
      leave it pointing past the end. */
   let index = $state(0);
   let enlarged = $state(false);
-  const total = $derived(items.length);
+  const total = $derived(order.length);
   const shown = $derived(Math.min(index, Math.max(0, total - 1)));
-  const item = $derived(items[shown]);
+  const item = $derived(order[shown]);
   let openerEl: HTMLElement | undefined;
   /* WHICH FILM A PRESS ASKED FOR. The press on a film's tile is the reader
      asking to watch it, so the film that press opened starts; paging onto a
@@ -89,7 +104,7 @@
      mounts, and every other road onto the stage clears it first. */
   let pressedKey: string | undefined;
   function open(chosen: MediaGalleryItem, from: EventTarget | null): void {
-    index = Math.max(0, items.indexOf(chosen));
+    index = Math.max(0, order.indexOf(chosen));
     openerEl = from instanceof HTMLElement ? from : undefined;
     pressedKey = chosen.video === undefined ? undefined : chosen.key;
     enlarged = true;
@@ -232,6 +247,7 @@
               type="button"
               class="gallery-tile"
               data-gallery-kind={tile.video ? 'video' : 'image'}
+              data-key={tile.key}
               data-shape={shapes[place]}
               onclick={(event) => open(tile, event.currentTarget)}
               aria-label={`Open ${itemNoun(tile)}: ${tile.alt}`}
@@ -287,7 +303,7 @@
             class="gallery-nav"
             data-gallery-nav="previous"
             onclick={previous}
-            aria-label={`Previous ${itemNoun(items[(shown - 1 + total) % total])}`}
+            aria-label={`Previous ${itemNoun(order[(shown - 1 + total) % total])}`}
           >
             <span class="gallery-nav-disc">
               <Icon name="chevron-left" slot="row" />
@@ -298,7 +314,7 @@
             class="gallery-nav"
             data-gallery-nav="next"
             onclick={next}
-            aria-label={`Next ${itemNoun(items[(shown + 1) % total])}`}
+            aria-label={`Next ${itemNoun(order[(shown + 1) % total])}`}
           >
             <span class="gallery-nav-disc">
               <Icon name="chevron-right" slot="row" />

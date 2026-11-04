@@ -342,9 +342,14 @@ function mergeRow(merge: VCSMerge, index: number, now: Date): StreamRow {
   };
 }
 
-/* A release: the version as the chip a released commit wears, the subject of
- * the commit it names linked to the release's own page, and that commit's
- * short identity. */
+/* A release: its title linked to the release's own page, and its TAG where a
+ * commit's short identity and a merge's number sit (owner, 2026-11-04, issue
+ * #406: "resolve it", on a phone byline that cut both the repository and the
+ * tag), so a release's byline is where and when, like every other entry's,
+ * and carries no chip. The tag is the release's own identity, admitted by the
+ * release-tag grammar (isReleaseTag) before it reaches here; the commit it
+ * names stays in the title link's address. The chip belongs to a COMMIT that
+ * a release was cut from (publicRow), and only there. */
 function releaseRow(release: VCSRelease, index: number, now: Date): StreamRow {
   return {
     key: `release-${release.repo}-${release.tag}-${index}`,
@@ -352,8 +357,7 @@ function releaseRow(release: VCSRelease, index: number, now: Date): StreamRow {
     age: panelAge(release.at, now),
     source: { text: release.repo, href: commitRepoUrl(release.repo), label: projectLinkLabel({ name: release.repo }) },
     title: releaseTitleLink(release),
-    mark: commitMark(release.sha),
-    release: release.tag
+    mark: release.tag
   };
 }
 

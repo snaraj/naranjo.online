@@ -315,11 +315,13 @@ export type StreamRow = {
    * release itself when its identity is one the information layer can vouch
    * for. */
   readonly title: ActivityLink;
-  /* The identity, already written and display-only: a commit's or a
-   * release's short identity, a merge's "#number", or the honest dash. */
+  /* The identity, already written and display-only: a commit's short
+   * identity, a merge's "#number", a release's tag (issue #406), or the
+   * honest dash. */
   readonly mark: string;
-  /* The version: a release entry's own tag, or on a commit, present ONLY
-   * when the repository's latest release names exactly this commit. */
+  /* The version chip, on a COMMIT only, present ONLY when the repository's
+   * latest release names exactly this commit. A release entry carries none:
+   * its tag is its mark. */
   readonly release?: string;
 };
 
@@ -733,6 +735,9 @@ export type MediaGalleryItem = {
 };
 
 export type MediaGalleryProps = {
+  /* Every item, in no particular order: the component lays a shuffled copy,
+   * once per list (owner, 2026-11-04, issue #405), so the order here is not
+   * the order a reader sees. */
   readonly items: readonly MediaGalleryItem[];
   /* The intrinsic box every frame declares, so arrival moves nothing. */
   readonly width: number;
