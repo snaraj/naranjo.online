@@ -139,17 +139,44 @@ because an answer over the cap would refuse the calendar itself rather than
 only its commit figure.
 
 Re-measured 2026-11-03, when the payload gained `recentMerges` and
-`recentReleases` (issue #401): each repository's latest merged pull requests
-and releases, read in the commit round's own history document. Each is newest
-first and capped at the same `max` as `recentCommits`, so the stream's three
-feeds page alike. Both fields are additive and optional, so the kind stays
-`vcs-activity/v1`. A payload written before them decodes and renders
-unchanged, and a reader that has never heard of them draws the commits
-exactly as it did. The maximal document now also carries thirty merges, each
-with a hundred-character repository name, the widest number a count may
-carry and a title at the truncation bound, and thirty releases with the
-longest tag the grammar admits beside the same name and title. It measures
-**39,645 bytes**, 91,427 under the ceiling, and the pinned ceiling is 40,000.
+`recentReleases` (issue #401), read in the commit round's own history
+document. The merge feed is the newest thirty among every active repository's
+thirty most recently updated merged pull requests. The release feed is the
+newest thirty among every active repository's thirty most recently created
+releases, less the drafts and pre-releases among them. The selection is
+bounded, not paginated, by design (confined egress), so a repository whose
+thirty most recently updated merged pull requests are all older than a newer
+merge omits that merge until the host updates it. The commit feed is the
+newest thirty among each active repository's ten newest default-branch commits
+by the account. Each feed is newest first and capped at the same `max`, so the
+stream's three feeds page alike. Both fields are additive and optional, so the
+kind stays `vcs-activity/v1`. A payload written before them decodes and
+renders unchanged, and a reader that has never heard of them draws the commits
+exactly as it did.
+
+The measurement is now encoding-aware: it counts the bytes the envelope is
+served as, not runes. The JSON encoder writes `&`, `<` and `>` as six bytes
+each, and the test finds the widest character `commitSubject` admits by asking
+it and the encoder about every rune. The maximal document carries thirty
+commits, thirty merges and thirty releases, every subject the longest
+`commitSubject` produces from that character (120 of them and the truncation
+marker, 723 bytes encoded), every repository name, tag and identity at its
+grammar's length, every number at `maxCountValue`, a year of weeks in both
+grids, one private aggregate per date the window can touch, the `stale`
+status and an instant written with a zone offset. Two of those numbers (the
+streak, a day's repository count) can never reach `maxCountValue`, and no
+payload has every cell and the total that sums them at the bound at once, so
+the figure is an upper bound rather than a reachable payload. One term it
+assumes rather than enforces: the calendar mappers check a day's
+contribution count for its sign only, and the private-day aggregate a day's
+commit count likewise, so a count past `maxCountValue` (which no browser
+reads exactly) would be wider. Whatever arrives, the serve-time refusal at
+the ceiling still holds. It measures
+**103,475 bytes**, 27,597 under the ceiling, and
+`TestActivityPayloadFitsTheOwnerBudget` pins that figure exactly, so it moves
+only when a bound moves or the fixture stops being maximal. The figure
+recorded here before, 39,645 bytes, was the size of a fixture with ASCII
+subjects, not a maximum.
 
 `coding-projects/v2` replaces `coding-projects/v1`: it carries `closedPulls`,
 `release` and `pinned`, and no longer carries `openIssues`/`openPulls` or the
@@ -171,10 +198,11 @@ commits each. Both endpoints cap at 262,144 — exactly half the shared bound,
 unchanged from the cap the retired REST commit documents carried — so the
 producer's worst-case transient read did not grow when its shape changed.
 With the merged pull requests and releases in the same history document
-(issue #401), its answer measured 32,832 bytes on 2026-11-03 for six
-repositories at ten rows in each of the three lists. The twelve repositories
-the document may ask about project to about 66 KB, a quarter of the
-unchanged cap.
+(issue #401), thirty of each per repository beside the ten commits, its
+answer measured 71,834 bytes on 2026-11-03 for six repositories (32,832 when
+it asked for ten of each), its largest single repository entry 15,447 bytes.
+Twelve entries that large come to 185,364 bytes, inside the unchanged cap. An
+answer past the cap is refused whole and the panel keeps its last good lists.
 
 ## Why two of the rendering-lane pins are structural
 

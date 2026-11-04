@@ -69,7 +69,7 @@
       },
       "history": {
         "endpoint": "https://api.github.com/graphql",
-        "query": "query($ids: [ID!]!, $author: ID!) { nodes(ids: $ids) { ... on Repository { name defaultBranchRef { target { ... on Commit { history(first: 10, author: {id: $author}) { nodes { oid messageHeadline committedDate } } } } } pullRequests(first: 10, states: MERGED, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { number title mergedAt mergeCommit { oid } } } releases(first: 10, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { tagName publishedAt isDraft isPrerelease tagCommit { oid messageHeadline } } } } } }",
+        "query": "query($ids: [ID!]!, $author: ID!) { nodes(ids: $ids) { ... on Repository { name defaultBranchRef { target { ... on Commit { history(first: 10, author: {id: $author}) { nodes { oid messageHeadline committedDate } } } } } pullRequests(first: 30, states: MERGED, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { number title mergedAt mergeCommit { oid } } } releases(first: 30, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { tagName publishedAt isDraft isPrerelease tagCommit { oid messageHeadline } } } } } }",
         "headers": { "Accept": "application/json", "Content-Type": "application/json" },
         "maxBytes": 262144,
         "contentType": "application/json"

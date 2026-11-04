@@ -1457,7 +1457,13 @@ func releaseNode(tag, publishedAt string, draft, prerelease bool, tagOID, headli
 // historyDocumentWith is historyDocument with the repository's merged pull
 // requests and releases beside its commits (issue #401).
 func historyDocumentWith(name string, commits, pulls, releases []string) string {
-	return fmt.Sprintf(`{"data":{"nodes":[{"name":%q,"defaultBranchRef":{"target":{"history":{"nodes":[%s]}}},"pullRequests":{"nodes":[%s]},"releases":{"nodes":[%s]}}]}}`,
+	return `{"data":{"nodes":[` + historyEntry(name, commits, pulls, releases) + `]}}`
+}
+
+// historyEntry is one repository's entry of a history answer, so a document
+// can carry several.
+func historyEntry(name string, commits, pulls, releases []string) string {
+	return fmt.Sprintf(`{"name":%q,"defaultBranchRef":{"target":{"history":{"nodes":[%s]}}},"pullRequests":{"nodes":[%s]},"releases":{"nodes":[%s]}}`,
 		name, strings.Join(commits, ","), strings.Join(pulls, ","), strings.Join(releases, ","))
 }
 
@@ -1522,8 +1528,8 @@ func TestMapCommitHistoriesRefusesEveryMalformedMergeOrRelease(t *testing.T) {
 	pulls := func(nodes ...string) string { return historyDocumentWith("fixture-repo", nil, nodes, nil) }
 	tags := func(nodes ...string) string { return historyDocumentWith("fixture-repo", nil, nil, nodes) }
 	oversized := func(node string) []string {
-		nodes := make([]string, 0, maxCommitDocumentItems+1)
-		for range maxCommitDocumentItems + 1 {
+		nodes := make([]string, 0, maxFeedDocumentItems+1)
+		for range maxFeedDocumentItems + 1 {
 			nodes = append(nodes, node)
 		}
 		return nodes
@@ -1564,9 +1570,123 @@ func TestMapCommitHistoriesRefusesEveryMalformedMergeOrRelease(t *testing.T) {
 	}
 	// The positive controls: exactly the bound's worth of each list maps, so
 	// the refusals above are about the drift and not about the builders.
-	atBound := historyDocumentWith("fixture-repo", nil, oversized(good)[:maxCommitDocumentItems], oversized(released)[:maxCommitDocumentItems])
-	if work, err := mapCommitHistories([]byte(atBound), fixtureRepos, commitFixtureNow); err != nil || len(work.merges) != maxCommitDocumentItems || len(work.releases) != maxCommitDocumentItems {
+	atBound := historyDocumentWith("fixture-repo", nil, oversized(good)[:maxFeedDocumentItems], oversized(released)[:maxFeedDocumentItems])
+	if work, err := mapCommitHistories([]byte(atBound), fixtureRepos, commitFixtureNow); err != nil || len(work.merges) != maxFeedDocumentItems || len(work.releases) != maxFeedDocumentItems {
 		t.Errorf("lists exactly at the bound = %d merges, %d releases, %v", len(work.merges), len(work.releases), err)
+	}
+}
+
+// wholeFeed builds one repository's worth of merged pull requests and
+// releases: count of each, distinct, an hour apart and newest first, all of
+// them rows a reader is shown.
+func wholeFeed(count int) (pulls, releases []string) {
+	for index := range count {
+		at := commitFixtureNow.Add(-time.Duration(index+1) * time.Hour).Format(time.RFC3339)
+		pulls = append(pulls, pullNode(int64(index+1), fmt.Sprintf("Merge %d", index+1), at, fixtureSHA(index+1)))
+		releases = append(releases, releaseNode(fmt.Sprintf("v0.1.%d", index), at, false, false, fixtureSHA(index+1), fmt.Sprintf("Release 0.1.%d", index)))
+	}
+	return pulls, releases
+}
+
+// TestOneRepositoryFillsEveryFeedAlone pins the per-repository selection of
+// merged pull requests and releases at the served cap (issue #401): the
+// document asks each repository for a whole feed of each, so one repository
+// with that many fills each feed by itself, which a smaller per-repository
+// bound could never do.
+func TestOneRepositoryFillsEveryFeedAlone(t *testing.T) {
+	t.Parallel()
+	pulls, releases := wholeFeed(maxServedCommits)
+	work, err := mapCommitHistories([]byte(historyDocumentWith("fixture-repo", nil, pulls, releases)), fixtureRepos, commitFixtureNow)
+	if err != nil {
+		t.Fatalf("one repository with a whole feed of merges and releases was refused: %v", err)
+	}
+	served := work.newest(maxServedCommits)
+	if len(served.merges) != maxServedCommits || len(served.releases) != maxServedCommits {
+		t.Errorf("one repository served %d merges and %d releases, want %d of each", len(served.merges), len(served.releases), maxServedCommits)
+	}
+}
+
+// TestOneRowPastTheFeedRefusesTheDocument is the other side of that bound: a
+// repository answering one merged pull request or one release more than the
+// served cap is drift, and it refuses the whole document rather than being cut.
+func TestOneRowPastTheFeedRefusesTheDocument(t *testing.T) {
+	t.Parallel()
+	pulls, releases := wholeFeed(maxServedCommits)
+	morePulls, moreReleases := wholeFeed(maxServedCommits + 1)
+	for name, document := range map[string]string{
+		"one merged pull request past the cap": historyDocumentWith("fixture-repo", nil, morePulls, releases),
+		"one release past the cap":             historyDocumentWith("fixture-repo", nil, pulls, moreReleases),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if work, err := mapCommitHistories([]byte(document), fixtureRepos, commitFixtureNow); err == nil {
+				t.Fatalf("a list past the per-repository bound was accepted as %d merges, %d releases", len(work.merges), len(work.releases))
+			}
+		})
+	}
+}
+
+// TestPreReleasesDoNotStarveTheReleaseFeed: the selection takes a
+// repository's newest releases and the mapper drops the drafts and
+// pre-releases afterwards, so ten pre-releases ahead of twenty stable ones,
+// inside the bound, still serve every stable one — newest first.
+func TestPreReleasesDoNotStarveTheReleaseFeed(t *testing.T) {
+	t.Parallel()
+	releases := make([]string, 0, maxFeedDocumentItems)
+	for index := range 30 {
+		at := commitFixtureNow.Add(-time.Duration(index+1) * time.Hour).Format(time.RFC3339)
+		prerelease := index < 10
+		releases = append(releases, releaseNode(fmt.Sprintf("v0.%d.0", index), at, false, prerelease, fixtureSHA(index+1), "release"))
+	}
+	work, err := mapCommitHistories([]byte(historyDocumentWith("fixture-repo", nil, nil, releases)), fixtureRepos, commitFixtureNow)
+	if err != nil {
+		t.Fatalf("ten pre-releases and twenty releases were refused: %v", err)
+	}
+	served := work.newest(maxServedCommits)
+	if len(served.releases) != 20 {
+		t.Fatalf("served %d releases, want the 20 stable ones", len(served.releases))
+	}
+	if served.releases[0].Tag != "v0.10.0" || served.releases[19].Tag != "v0.29.0" {
+		t.Errorf("the release feed runs %s to %s, want v0.10.0 to v0.29.0", served.releases[0].Tag, served.releases[19].Tag)
+	}
+}
+
+// TestMergesSortByTheirMergeInstant: the host orders a repository's merged
+// pull requests by when each was last UPDATED, so the newest merge can sit
+// anywhere in the document — in any repository's list, at any place in it.
+// Wherever it sits, the feed opens on it, because the sort is by mergedAt and
+// never by document order.
+func TestMergesSortByTheirMergeInstant(t *testing.T) {
+	t.Parallel()
+	repos := []contributionRepo{
+		{id: "R_first", name: "first-repo", at: commitFixtureNow},
+		{id: "R_second", name: "second-repo", at: commitFixtureNow},
+	}
+	const each = maxServedCommits / 2
+	for place := range 2 * each {
+		lists := [2][]string{}
+		number := int64(1)
+		for slot := range 2 * each {
+			at := commitFixtureNow.Add(-time.Duration(slot+2) * time.Hour)
+			title := "an older merge"
+			if slot == place {
+				at, title = commitFixtureNow.Add(-time.Hour), "the newest merge"
+			}
+			lists[slot/each] = append(lists[slot/each], pullNode(number, title, at.Format(time.RFC3339), fixtureSHA(int(number))))
+			number++
+		}
+		document := `{"data":{"nodes":[` + historyEntry("first-repo", nil, lists[0], nil) + "," + historyEntry("second-repo", nil, lists[1], nil) + `]}}`
+		work, err := mapCommitHistories([]byte(document), repos, commitFixtureNow)
+		if err != nil {
+			t.Fatalf("place %d: a two-repository document was refused: %v", place, err)
+		}
+		served := work.newest(maxServedCommits)
+		if len(served.merges) != 2*each {
+			t.Fatalf("place %d: served %d merges, want %d", place, len(served.merges), 2*each)
+		}
+		if served.merges[0].Title != "the newest merge" {
+			t.Errorf("place %d: the feed opens on %+v, want the newest merge", place, served.merges[0])
+		}
 	}
 }
 

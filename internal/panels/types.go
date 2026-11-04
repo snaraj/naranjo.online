@@ -429,13 +429,20 @@ type VCSActivityData struct {
 	EndDate string `json:"endDate,omitempty"`
 	// Streak is the current consecutive-day contribution streak.
 	Streak int `json:"streak"`
-	// RecentCommits lists the latest commits, newest first.
+	// RecentCommits lists, newest first, the newest of the commits the
+	// history document asked for: each active repository's ten newest
+	// default-branch commits by the account.
 	RecentCommits []VCSCommit `json:"recentCommits"`
-	// RecentMerges lists the latest MERGED pull requests across the same
-	// repositories, and RecentReleases their latest published releases, each
-	// newest first and capped at the configured max exactly as RecentCommits
-	// is (issue #401: the stream's three feeds are the latest commits, merges
-	// and releases, and each pages to the same height). They come out of the
+	// RecentMerges and RecentReleases are the other two feeds of issue #401,
+	// each newest first and capped at the configured max exactly as
+	// RecentCommits is, so each pages to the same height. RecentMerges is the
+	// newest thirty among every active repository's thirty most recently
+	// updated merged pull requests, and RecentReleases the newest thirty among
+	// every active repository's thirty most recently created releases, less
+	// the drafts and pre-releases among them. The selection is bounded, not
+	// paginated, by design (confined egress), so a repository whose thirty
+	// most recently updated merged pull requests are all older than a newer
+	// merge omits that merge until the host updates it. They come out of the
 	// SAME history document as the commits, so they are read, retained and
 	// refused together and CommitsAt dates all three. Absent when empty.
 	//
@@ -1298,8 +1305,10 @@ type vcsCommitsFetchSpec struct {
 	Contributions *graphQLDocumentSpec `json:"contributions"`
 	// History is the second document: the newest default-branch commits the
 	// account authored in the repositories discovery admitted, asked for by
-	// the node identifiers that answer carried, beside those repositories'
-	// latest merged pull requests and releases (issue #401).
+	// the node identifiers that answer carried, beside each repository's
+	// thirty most recently updated merged pull requests and thirty most
+	// recently created releases (issue #401) — a bounded selection, never
+	// paginated.
 	History *graphQLDocumentSpec `json:"history"`
 	// Owner is the account login every NAMED row must belong to. The account
 	// legitimately contributes to other people's repositories, and those
@@ -1494,6 +1503,12 @@ const (
 	// carry. The document asks for ten; a repository answering with more is
 	// either drift or an upstream trying to make this process hold memory.
 	maxCommitDocumentItems = 30
+	// maxFeedDocumentItems bounds how many merged pull requests, and how many
+	// releases, ONE repository's history may carry (issue #401). It IS the
+	// served cap, and the document asks each repository for exactly that many
+	// of each, so one repository can fill a feed by itself; a repository
+	// answering with more is drift and refuses the whole document.
+	maxFeedDocumentItems = maxServedCommits
 	// maxServedCommits is the absolute ceiling on the merged list, which the
 	// per-panel budget then has to fit as well. Configuration may tighten it
 	// and can never widen it. Raised from 12 to 30 with issue #315: the log
@@ -1668,8 +1683,12 @@ type historyNode struct {
 	// DefaultBranchRef is null for a repository with no default branch — an
 	// empty repository — which contributes no commit rows and is not an error.
 	DefaultBranchRef *historyBranchRef `json:"defaultBranchRef"`
-	// PullRequests and Releases are the repository's latest merged pull
-	// requests and releases (issue #401), asked for in the same selection.
+	// PullRequests and Releases are the repository's thirty most recently
+	// UPDATED merged pull requests and thirty most recently CREATED releases
+	// (issue #401), asked for in the same selection: the host orders merged
+	// pull requests by no merge instant, so the mapper sorts by mergedAt
+	// after the selection, and a selection cannot be sorted back into rows
+	// it never asked for.
 	PullRequests historyPulls    `json:"pullRequests"`
 	Releases     historyReleases `json:"releases"`
 }

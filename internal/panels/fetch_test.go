@@ -1206,6 +1206,12 @@ func TestBuiltinFetchPanelsComeFromTheConstructor(t *testing.T) {
 //     shipped 262144 leaves roughly two kilobytes per subject at the full
 //     maxHistoryRepositories × ten shape, against a 71-character longest
 //     subject measured.
+//   - With issue #401's merged pull requests and releases asked for beside the
+//     commits, thirty of each per repository, the history document answered
+//     71,834 bytes for six repositories on 2026-11-03 (32,832 at ten of each),
+//     its largest single repository entry 15,447 bytes. Twelve entries that
+//     large come to 185,364 bytes, inside the unchanged cap. An answer past
+//     the cap is refused whole and the panel keeps its last good lists.
 //
 // Both caps stay at 262144: exactly HALF the shared bound, unchanged from the
 // bound the retired REST documents carried, so this producer's worst-case
@@ -1251,6 +1257,38 @@ func TestCommitQueryCapsMatchTheMeasuredUpstream(t *testing.T) {
 	if commits.Max > maxServedCommits {
 		t.Errorf("configured row cap %d escapes the mapper's %d bound", commits.Max, maxServedCommits)
 	}
+	// The SELECTION the history document asks of each repository, read out of
+	// the query text itself (issue #401). The commits ask no more than their
+	// per-repository bound admits. The merged pull requests and the releases
+	// ask for exactly a whole feed: fewer and one repository could never fill
+	// a feed alone, more and every answer would be refused by the mapper.
+	for list, bound := range map[string]int{"history": maxCommitDocumentItems, "pullRequests": maxFeedDocumentItems, "releases": maxFeedDocumentItems} {
+		asked := selectionSize(t, commits.History.Query, list)
+		if asked > bound {
+			t.Errorf("the history query asks %s for %d rows, over the mapper's %d bound", list, asked, bound)
+		}
+		if list != "history" && asked != maxServedCommits {
+			t.Errorf("the history query asks %s for %d rows per repository, want exactly the served cap %d", list, asked, maxServedCommits)
+		}
+	}
+}
+
+// selectionSize reads the `first:` argument of one connection in a query
+// document. The connection must appear exactly once, so a query that grew a
+// second selection of the same list cannot slip past the read.
+func selectionSize(t *testing.T, query, connection string) int {
+	t.Helper()
+	marker := connection + "(first: "
+	if count := strings.Count(query, marker); count != 1 {
+		t.Fatalf("the query selects %s %d times, want once", connection, count)
+	}
+	_, rest, _ := strings.Cut(query, marker)
+	digits, _, _ := strings.Cut(rest, ",")
+	size, err := strconv.Atoi(digits)
+	if err != nil {
+		t.Fatalf("the query's %s selection size %q does not parse: %v", connection, digits, err)
+	}
+	return size
 }
 
 // TestQueryDocumentCapRefusesAnOversizeAnswer is the byte-bound regression run

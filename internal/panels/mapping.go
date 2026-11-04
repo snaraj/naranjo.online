@@ -1307,8 +1307,11 @@ func mapCommitHistories(raw []byte, repos []contributionRepo, now time.Time) (da
 			commits = node.DefaultBranchRef.Target.History.Nodes
 		}
 		pulls, releases := node.PullRequests.Nodes, node.Releases.Nodes
-		if most := max(len(commits), len(pulls), len(releases)); most > maxCommitDocumentItems {
-			return datedWork{}, fmt.Errorf("commit history for %s carries a list of %d rows, over the %d bound", repo.name, most, maxCommitDocumentItems)
+		if len(commits) > maxCommitDocumentItems {
+			return datedWork{}, fmt.Errorf("commit history for %s carries %d commits, over the %d bound", repo.name, len(commits), maxCommitDocumentItems)
+		}
+		if most := max(len(pulls), len(releases)); most > maxFeedDocumentItems {
+			return datedWork{}, fmt.Errorf("commit history for %s carries a list of %d merged pull requests or releases, over the %d bound", repo.name, most, maxFeedDocumentItems)
 		}
 		for _, commit := range commits {
 			if !isCommitIdentity(commit.OID) {
