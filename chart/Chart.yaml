@@ -2,6 +2,6 @@ apiVersion: v2
 name: naranjo-online
 description: Go service with embedded Svelte frontend for naranjo.online
 type: application
-version: 0.1.103
-appVersion: "0.1.103"
+version: 0.1.104
+appVersion: "0.1.104"
 kubeVersion: ">=1.36.0-0"

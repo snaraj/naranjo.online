@@ -315,11 +315,13 @@ export type StreamRow = {
    * release itself when its identity is one the information layer can vouch
    * for. */
   readonly title: ActivityLink;
-  /* The identity, already written and display-only: a commit's or a
-   * release's short identity, a merge's "#number", or the honest dash. */
+  /* The identity, already written and display-only: a commit's short
+   * identity, a merge's "#number", a release's tag (issue #406), or the
+   * honest dash. */
   readonly mark: string;
-  /* The version: a release entry's own tag, or on a commit, present ONLY
-   * when the repository's latest release names exactly this commit. */
+  /* The version chip, on a COMMIT only, present ONLY when the repository's
+   * latest release names exactly this commit. A release entry carries none:
+   * its tag is its mark. */
   readonly release?: string;
 };
 
@@ -714,11 +716,11 @@ export type MediaGalleryItem = {
   readonly link?: MediaGalleryLink;
   /* Present exactly when the item moves; see MediaGalleryVideo. */
   readonly video?: MediaGalleryVideo;
-  /* This item's own intrinsic box, when it differs from the gallery's
-   * declared one. It is the element's intrinsic-size HINT, not the reserved
-   * box: the frame's reservation is token-driven and identical for every
-   * item, which is why swapping the vendored set for a runtime one shifts
-   * nothing. */
+  /* This item's own box, when it differs from the gallery's declared one.
+   * Its proportions are its tile's and its tile's share of its row (owner,
+   * 2026-11-04: the tile shows the picture whole, in justified rows), and
+   * they are known before a byte arrives, so the picture's arrival moves
+   * nothing. They must be the picture's real proportions. */
   readonly width?: number;
   readonly height?: number;
   /* The PREVIEW derivative's own intrinsic width, when the source of the item
@@ -733,8 +735,11 @@ export type MediaGalleryItem = {
 };
 
 export type MediaGalleryProps = {
+  /* Every item, in no particular order: the component lays a shuffled copy,
+   * once per list (owner, 2026-11-04, issue #405), so the order here is not
+   * the order a reader sees. */
   readonly items: readonly MediaGalleryItem[];
-  /* The intrinsic box every frame declares, so arrival moves nothing. */
+  /* The box an item that declares none of its own is laid as. */
   readonly width: number;
   readonly height: number;
   /* How many tiles a page of the mosaic shows (owner, 2026-10-17: five; still

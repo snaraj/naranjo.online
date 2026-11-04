@@ -178,6 +178,16 @@ async function serveGalleryManifest(page) {
  * pixel cannot hide a control that is genuinely too small. */
 const subPixel = 0.01;
 
+/* One engine LAYOUT UNIT, for two boxes the engine lays out from one another
+ * rather than from one number: Blink and WebKit place boxes on a 1/64px grid
+ * and Gecko on 1/60px, so a box sized from its parent's can land one unit
+ * off it. A sixteenth of a pixel holds either grid's step with room to spare
+ * and still cannot hide a box that is genuinely another size. (MEASURED on
+ * the gallery's whole-picture set at 1440, 390 and 320px: a thumb sits 0px
+ * off its tile in all three engines, and a tile is within 0.014% of its
+ * picture's declared proportions.) */
+const layoutUnit = 1 / 16;
+
 /* The panels fetch their envelopes after hydration and the page grows as they
  * paint, so a measurement taken at load is a measurement of an empty page —
  * which would pass every floor below while proving nothing about the site
@@ -352,6 +362,47 @@ async function goToItem(page, label) {
     await next.click();
   }
   await expect(count).toHaveText(label);
+}
+
+/* THE GALLERY'S ORDER IS THE VISIT'S (owner, 2026-11-04, issue 405: "this is
+ * fine, just make it random"). The mosaic lays a shuffled copy of its items,
+ * drawn once per visit, so no lane may assume which item a tile holds: a lane
+ * reads the order off the page — each tile's data-key and the name its button
+ * carries — and asserts what holds for EVERY order. The vendored set it is
+ * compared against is read from the module that declares it. */
+const vendoredGalleryKeys = [
+  ...readFileSync(new URL('../src/lib/gallery.ts', import.meta.url), 'utf8').matchAll(/\bsrc: '([^']+)'/g),
+].map((match) => match[1]);
+if (vendoredGalleryKeys.length < 6) {
+  throw new Error('lib/gallery.ts declares too few vendored items for the gallery lanes to page');
+}
+
+/* The tiles of the mosaic's current page, in the order it lays them. */
+async function galleryTiles(page) {
+  return page
+    .locator('#gallery .gallery-tile')
+    .evaluateAll((tiles) => tiles.map((tile) => ({ key: tile.getAttribute('data-key'), name: tile.getAttribute('aria-label') })));
+}
+
+/* The visit's whole order: every page of the mosaic read in turn through its
+ * own pager, then turned back to the first page, where the walk began. */
+async function galleryOrder(page) {
+  const pager = page.locator('#gallery .pager');
+  const count = pager.locator('.pager-count');
+  const pages = Number(/\/\s*(\d+)/.exec((await count.textContent()) ?? '')?.[1]);
+  expect(pages, 'the gallery pager states no page count').toBeGreaterThan(0);
+  await expect(count, 'the walk did not begin on the first page').toHaveText(`1 / ${pages}`);
+  const order = [...(await galleryTiles(page))];
+  for (let at = 2; at <= pages; at += 1) {
+    await pager.locator('.pager-step[data-step="next"]').click();
+    await expect(count).toHaveText(`${at} / ${pages}`);
+    order.push(...(await galleryTiles(page)));
+  }
+  for (let at = pages - 1; at >= 1; at -= 1) {
+    await pager.locator('.pager-step[data-step="previous"]').click();
+    await expect(count).toHaveText(`${at} / ${pages}`);
+  }
+  return order;
 }
 
 /* WCAG 2.2 relative luminance and contrast, over whatever spelling of a color
@@ -6076,7 +6127,7 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
   // of the viewport a lazy image is fetched — Firefox measurably later than
   // Chromium/WebKit here — so this polls for decode rather than asserting it
   // the instant the page settles.
-  const grid = page.locator('.gallery-grid');
+  const grid = page.locator('.gallery-rows');
   await grid.scrollIntoViewIfNeeded();
   const thumbs = page.locator('img.gallery-thumb');
   await expect
@@ -6091,7 +6142,7 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
     .toBe(true);
 
   const observed = await page.evaluate(() => {
-    const gridNode = window.document.querySelector('.gallery-grid');
+    const gridNode = window.document.querySelector('.gallery-rows');
     const all = [...window.document.querySelectorAll('.gallery-tile')];
     const tiles = all.filter((tile) => tile.getClientRects().length > 0);
     const images = tiles.flatMap((tile) => [...tile.querySelectorAll('img.gallery-thumb')]);
@@ -6104,7 +6155,17 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
          the point of the row is that eight masters are not stacked into it. */
       perTile: tiles.map((tile) => tile.querySelectorAll('img.gallery-thumb').length),
       lazy: images.map((image) => image.getAttribute('loading')),
-      fit: images.map((image) => getComputedStyle(image).objectFit),
+      /* Each thumb's box against its tile's: the picture is the whole tile. */
+      whole: tiles.map((tile) => {
+        const outer = tile.getBoundingClientRect();
+        const inner = tile.querySelector('img.gallery-thumb').getBoundingClientRect();
+        return Math.max(
+          Math.abs(inner.left - outer.left),
+          Math.abs(inner.top - outer.top),
+          Math.abs(inner.right - outer.right),
+          Math.abs(inner.bottom - outer.bottom)
+        );
+      }),
       previews: images.every((image) => /-preview-/.test(image.currentSrc)),
       masters: images.filter((image) => /-full-/.test(image.currentSrc)).length,
       /* Nothing enlarged exists until a tile is opened, which is the other
@@ -6114,12 +6175,12 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
       /* No box of information beside the row and no instructions in it
          (owner, 2026-10-17): the row is pictures and nothing else. */
       boxes: window.document.querySelectorAll('.gallery-control, .gallery-set-name').length,
-      words: window.document.querySelector('.gallery-grid').textContent.trim(),
+      words: window.document.querySelector('.gallery-rows').textContent.trim(),
     };
   });
   /* Every width shows the whole page of five since the mosaic (owner,
-     2026-11-02, issue 399): two squares, a wide tile and two squares on a
-     phone, three squares over two wide tiles on a wider screen. */
+     2026-11-02, issue 399): rows of two, two and one on a phone, and of three
+     and two on a wider screen (owner, 2026-11-04: justified rows). */
   const drawn = 5;
 
   expect(observed.mounted, 'the gallery mounted a number of tiles other than the five it declares').toBe(5);
@@ -6132,9 +6193,13 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
   expect(observed.lazy, 'a thumbnail stopped being lazy, so the row costs a reader who never reaches it').toEqual(
     Array(drawn).fill('lazy')
   );
-  expect(observed.fit, 'a thumbnail is letterboxed inside its square instead of filling it').toEqual(
-    Array(drawn).fill('cover')
-  );
+  /* A thumbnail IS its tile's whole box (owner, 2026-11-04, on the 0.1.104
+     preview): the tile is as big as its picture, so nothing is cropped from
+     it and nothing pads it. Whether that box has the picture's proportions,
+     before and after its bytes, is the whole-picture lane's question. */
+  for (const [index, offset] of observed.whole.entries()) {
+    expect(offset, `tile ${index + 1}'s thumbnail is ${offset.toFixed(2)}px off its tile's box`).toBeLessThanOrEqual(layoutUnit);
+  }
   expect(observed.previews, 'a tile is showing something other than the preview derivative').toBe(true);
   expect(observed.masters, 'a full-size master is mounted in the tile row').toBe(0);
   expect(observed.enlarged, 'an enlarged picture is mounted before anybody opened one').toBe(0);
@@ -6167,6 +6232,10 @@ test('a tile costs a reader its preview and the master arrives only when one is 
   await visit(page);
   const tile = page.locator('.gallery-tile[data-gallery-kind="image"]').first();
   await tile.scrollIntoViewIfNeeded();
+  /* WHICH picture the first tile holds is the visit's draw (issue 405), so
+     the master the press must pull is read off the tile, never assumed. */
+  const opened = await tile.getAttribute('data-key');
+  expect(opened, 'the first tile names no vendored item').toMatch(/^gallery-\d+-full\.webp$/);
   await expect
     .poll(() => requested.filter((name) => name.includes('-preview-')).length, {
       message: 'no preview was ever requested, so this lane measured no loading at all',
@@ -6192,8 +6261,8 @@ test('a tile costs a reader its preview and the master arrives only when one is 
     .toBe(1);
   expect(
     requested.filter((name) => name.includes('-full-'))[0],
-    'the stage pulled a master other than the tile that was opened'
-  ).toMatch(/^gallery-01-full-/);
+    `the stage pulled a master other than the ${opened} the tile holds`
+  ).toMatch(new RegExp(`^${opened.replace(/\.webp$/, '')}-`));
 });
 
 test('prev/next cycle the enlarged photograph without leaving the page (issue 176; owner 2026-09-03, issue 287)', async ({
@@ -6301,13 +6370,19 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
      sits on the film's own span exactly as it sits on the picture's. */
   await serveGalleryManifest(page);
   await visit(page);
+  /* The mosaic laid the two in the visit's order (issue 405), so each one's
+     place on the stage is read off the tiles rather than off the manifest. */
+  const mixed = (await galleryTiles(page)).map((tile) => tile.key);
+  expect([...mixed].sort(), 'the gallery did not lay the served still and film once each').toEqual(['lane-film', 'lane-still']);
+  const stillAt = mixed.indexOf('lane-still') + 1;
+  const filmAt = mixed.indexOf('lane-film') + 1;
   await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
   await expect(dialog).toBeVisible();
-  await expect(page.locator('.gallery-count')).toHaveText('Photograph 1 of 2');
+  await expect(page.locator('.gallery-count')).toHaveText(`Photograph ${stillAt} of 2`);
   await expect(next).toHaveAttribute('aria-label', 'Next film');
   await next.click();
   await expect(page.locator('.gallery-count'), 'the stage skipped the film in its own set').toHaveText(
-    'Film 2 of 2'
+    `Film ${filmAt} of 2`
   );
   const film = await page.locator('dialog video.gallery-lightbox-film').boundingBox();
   expect(film, 'paging onto a film staged no player').not.toBeNull();
@@ -6328,7 +6403,7 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
   await expect(previous).toHaveAttribute('aria-label', 'Previous photograph');
   await next.click();
   await expect(page.locator('.gallery-count'), 'the end of a mixed set is a dead stop').toHaveText(
-    'Photograph 1 of 2'
+    `Photograph ${stillAt} of 2`
   );
   await expect(page.locator('dialog video'), 'the film’s player outlived the page it was on').toHaveCount(0);
   await page.keyboard.press('Escape');
@@ -6352,6 +6427,19 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
   );
   await visit(page);
   await expect(page.locator('.gallery-tile')).toHaveCount(1);
+  /* A LONE TILE is half the width at the reading width, rather than one
+     picture the width of the column, and the width on a phone, like any row
+     (owner, 2026-11-04: justified rows). */
+  const lone = await page.locator('#gallery .gallery-rows').evaluate((rows) => ({
+    perRow: rows.getAttribute('data-per-row'),
+    rows: rows.getBoundingClientRect().width,
+    tile: rows.querySelector('.gallery-tile').getBoundingClientRect().width,
+  }));
+  const share = lone.perRow === '3' ? 0.5 : 1;
+  expect(
+    Math.abs(lone.tile - lone.rows * share),
+    `a lone tile is ${lone.tile.toFixed(1)}px of ${lone.rows.toFixed(1)}px with ${lone.perRow} to a row, not ${share * 100}%`
+  ).toBeLessThanOrEqual(1);
   await page.locator('.gallery-tile[data-gallery-kind="image"]').first().click();
   await expect(dialog).toBeVisible();
   await expect(
@@ -6369,11 +6457,16 @@ test('the stage pair pages the set inside 44px targets on every device, wraps bo
  * 06; it replaced the set switch of issue 275, whose claim this keeps: a
  * control over the pictures really changes what is shown, and costs the page
  * no layout). The vendored gallery is eight pictures, so it is a full page of
- * five and a short page of three: the short page lands in the reserve the
- * full one filled, the pager does not move, and the engine's own shift ledger
- * stays empty across the turn. A real Enter on the focused step is the
- * keyboard half: the pager is reachable and operable without a pointer, on
- * every engine. */
+ * five and a short page of three. Since a tile is as tall as its own picture
+ * makes it at its row's height (owner, 2026-11-04) the rows reserve no
+ * height, so a page of other pictures is a mosaic of another height, and the
+ * pager stays where the pictures end: the gallery's top and everything above
+ * it hold still, the pager keeps its place under the pictures, the first
+ * page comes back at its own height, and the engine's shift ledger records
+ * nothing but what the reader's own press moved — the shifts a page's CLS
+ * leaves out by definition. A real Enter on the focused step is the keyboard
+ * half: the pager is reachable and operable without a pointer, on every
+ * engine. */
 test('the gallery pager turns a full page and a short one in place, by pointer and by key (owner 2026-11-02, issue 399)', async ({
   page,
 }) => {
@@ -6381,11 +6474,11 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
   const shape = () =>
     page.evaluate(() => {
       const round = (value) => Math.round(value * 100) / 100;
-      const grid = window.document.querySelector('#gallery .gallery-grid');
+      const grid = window.document.querySelector('#gallery .gallery-rows');
       const pager = window.document.querySelector('#gallery .pager');
       return {
         tiles: grid.querySelectorAll('.gallery-tile').length,
-        first: grid.querySelector('.gallery-tile')?.getAttribute('aria-label') ?? '',
+        keys: [...grid.querySelectorAll('.gallery-tile')].map((tile) => tile.getAttribute('data-key')),
         gridTop: round(grid.getBoundingClientRect().top + window.scrollY),
         gridHeight: round(grid.getBoundingClientRect().height),
         pagerTop: round(pager.getBoundingClientRect().top + window.scrollY),
@@ -6406,6 +6499,7 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
       for (const entry of list.getEntries()) {
         window.__galleryShift.push({
           value: entry.value,
+          pressed: entry.hadRecentInput,
           moved: [...(entry.sources ?? [])].map((source) => `${source.node?.tagName ?? 'unnamed'}.${source.node?.getAttribute?.('class') ?? ''}`),
         });
       }
@@ -6420,7 +6514,17 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
   const second = await shape();
   expect(second.count, 'Enter on the focused step did not turn the page').toBe('2 / 2');
   expect(second.tiles, 'the short page does not hold the three pictures left').toBe(3);
-  expect(second.first, 'the second page shows the first page’s pictures').not.toBe(first.first);
+  /* EVERY ITEM EXACTLY ONCE across the two pages, whatever order the visit
+     drew (issue 405): the pages share no picture, and together they are the
+     vendored set, nothing lost and nothing doubled. */
+  expect(
+    second.keys.filter((key) => first.keys.includes(key)),
+    'the second page shows the first page’s pictures'
+  ).toEqual([]);
+  expect(
+    [...first.keys, ...second.keys].sort(),
+    'the two pages do not hold every vendored picture exactly once'
+  ).toEqual([...vendoredGalleryKeys].sort());
   expect(second.disabled).toEqual(['false', 'true']);
   /* THE STEP KEEPS THE READER'S FOCUS though it has nowhere left to go
      (review, 2026-11-02): it is quiet, not disabled, so a reader turning by
@@ -6437,19 +6541,138 @@ test('the gallery pager turns a full page and a short one in place, by pointer a
   await settled(page);
   const back = await shape();
   expect(back.count).toBe('1 / 2');
-  expect(back.first, 'turning back did not return to the first page').toBe(first.first);
+  /* The visit's order HOLDS across the turns: back on the first page, the
+     same pictures in the same places, so a turn never draws again. */
+  expect(back.keys, 'turning back did not return to the first page as the visit laid it').toEqual(first.keys);
 
+  const under = (shape) => shape.pagerTop - (shape.gridTop + shape.gridHeight);
   for (const [name, after] of [['the turn to a short page', second], ['the turn back', back]]) {
     expect(after.gridTop, `${name} moved the gallery`).toBeCloseTo(first.gridTop, 1);
-    expect(after.gridHeight, `${name} changed the gallery’s reserve`).toBeCloseTo(first.gridHeight, 1);
-    expect(after.pagerTop, `${name} moved the pager`).toBeCloseTo(first.pagerTop, 1);
+    expect(under(after), `${name} parted the pager from the pictures`).toBeCloseTo(under(first), 1);
   }
+  expect(back.gridHeight, 'turning back did not return the first page at its own height').toBeCloseTo(first.gridHeight, 1);
   const shifts = await page.evaluate(() => window.__galleryShift ?? null);
   if (watching) {
-    expect(shifts, `a page turn moved something: ${JSON.stringify(shifts)}`).toEqual([]);
+    expect(
+      shifts.filter((shift) => !shift.pressed),
+      `a page turn moved something the reader's press did not: ${JSON.stringify(shifts)}`
+    ).toEqual([]);
   } else {
     expect(shifts, 'the layout-shift observer was armed but reported nothing at all').toBeNull();
   }
+});
+
+/* THE ORDER IS DRAWN ONCE PER VISIT (owner, 2026-11-04, issue 405: "this is
+ * fine, just make it random"). The mosaic lays a shuffled copy of its items,
+ * so what this proves is what must hold for EVERY draw, in a real engine:
+ *   - every item is laid exactly once across the pages, nothing lost and
+ *     nothing doubled;
+ *   - the order holds for the visit: a page turn, the stage opened and
+ *     closed, and a phone's rotation (or a desktop's narrowing) across the
+ *     width the rows follow all leave it exactly as it was;
+ *   - the stage follows it: the tile pressed is the item staged, the next
+ *     item on the stage is the next tile even across a page of the mosaic,
+ *     the walk wraps from the first tile onto the order's last, and closing
+ *     hands focus back to the very tile pressed — even after a rotation under
+ *     the open stage drew that tile anew in another row;
+ *   - and a new visit draws again: of three loads, not all lay one order. A
+ *     shuffle that never ran lays the declared order on every load; three
+ *     equal draws of eight items by chance is one in 40320 squared.
+ * Three visits settle three times, so the lane owes Playwright's per-test
+ * budget two more settle windows than one visit takes. */
+test('the gallery lays every item once, in an order drawn per visit that a turn, the stage and a rotation all keep (owner 2026-11-04, issue 405)', async ({
+  page,
+}) => {
+  test.setTimeout(test.info().timeout + 2 * settleWindow);
+  const dialog = page.locator('dialog.gallery-lightbox');
+  const counter = page.locator('.gallery-count');
+  const grid = page.locator('#gallery .gallery-rows');
+  const total = vendoredGalleryKeys.length;
+  const staged = () => dialog.getAttribute('aria-label');
+  const altOf = (tile) => tile.name.replace(/^Open photograph: /, '');
+  const pageKeys = async () => (await galleryTiles(page)).map((tile) => tile.key);
+  const focusedKey = () => page.evaluate(() => window.document.activeElement?.getAttribute?.('data-key') ?? null);
+  const orders = [];
+  for (let load = 1; load <= 3; load += 1) {
+    await visit(page);
+    await grid.scrollIntoViewIfNeeded();
+    const order = await galleryOrder(page);
+    const keys = order.map((tile) => tile.key);
+    expect([...keys].sort(), `load ${load} did not lay every vendored picture exactly once`).toEqual(
+      [...vendoredGalleryKeys].sort()
+    );
+    orders.push(keys.join(' '));
+    if (load > 1) {
+      continue;
+    }
+
+    /* THE TURNS KEEP IT: the walk turned through every page and back, and a
+       second walk lays the very same order. */
+    expect((await galleryOrder(page)).map((tile) => tile.key), 'turning the pages drew a new order').toEqual(keys);
+
+    /* THE STAGE FOLLOWS IT. The last tile of the first page opens on its own
+       item, and the next item on the stage is the second page's first tile. */
+    const perPage = (await galleryTiles(page)).length;
+    expect(perPage, 'the first page is not full, so the stage never crosses a page here').toBeLessThan(total);
+    await page.locator('#gallery .gallery-tile').nth(perPage - 1).click();
+    await expect(dialog).toHaveJSProperty('open', true);
+    await expect(counter).toHaveText(`Photograph ${perPage} of ${total}`);
+    expect(await staged(), 'the stage opened on an item other than the tile pressed').toBe(altOf(order[perPage - 1]));
+    await page.locator('.gallery-nav[data-gallery-nav="next"]').click();
+    await expect(counter).toHaveText(`Photograph ${perPage + 1} of ${total}`);
+    expect(await staged(), 'the next item on the stage is not the next tile').toBe(altOf(order[perPage]));
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveJSProperty('open', false);
+    await expect
+      .poll(focusedKey, { message: 'closing the stage handed focus to a tile other than the one pressed' })
+      .toBe(order[perPage - 1].key);
+
+    /* And it wraps the visit's way: previous from the first tile is the last
+       item of the order, wherever the manifest put it. */
+    await page.locator('#gallery .gallery-tile').first().click();
+    await expect(counter).toHaveText(`Photograph 1 of ${total}`);
+    expect(await staged(), 'the first tile opened on an item other than its own').toBe(altOf(order[0]));
+    await page.locator('.gallery-nav[data-gallery-nav="previous"]').click();
+    await expect(counter).toHaveText(`Photograph ${total} of ${total}`);
+    expect(await staged(), 'the walk wrapped onto an item other than the order’s last').toBe(altOf(order.at(-1)));
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveJSProperty('open', false);
+    expect(await pageKeys(), 'opening and closing the stage drew a new order').toEqual(keys.slice(0, perPage));
+
+    /* A TURN ACROSS THE WIDTH the rows follow, so the page is cut into rows
+       of the other count while the items stay where the visit put them. A
+       phone turned on its side is its SCREEN the other way round — the
+       emulated viewport is the portrait one less the browser's chrome, 390 by
+       664 on the iPhone, which turned would still be a phone's width — and a
+       desktop narrowed to a phone's width stands in for the other way.
+       It is made UNDER AN OPEN STAGE, opened from the page's third tile: the
+       third is the last of the first row of three and the first of the second
+       row of two, so the turn draws its tile anew in the other row, and the
+       close must still hand focus to the tile of the item pressed. */
+    const perRow = await grid.getAttribute('data-per-row');
+    const viewport = page.viewportSize();
+    const screen = await page.evaluate(() => ({ width: window.screen.width, height: window.screen.height }));
+    const rowOf = (key) => page.locator(`#gallery .gallery-tile[data-key="${key}"]`).getAttribute('data-row');
+    const thirdRow = await rowOf(order[2].key);
+    await page.locator('#gallery .gallery-tile').nth(2).click();
+    await expect(dialog).toHaveJSProperty('open', true);
+    await page.setViewportSize(perRow === '2' ? { width: screen.height, height: screen.width } : { width: 390, height: 844 });
+    await expect(grid, 'the rotation did not cross the width the rows follow, so it proves nothing').not.toHaveAttribute(
+      'data-per-row',
+      perRow
+    );
+    expect(await rowOf(order[2].key), 'the third tile kept its row across the turn, so its element was never drawn anew').not.toBe(thirdRow);
+    expect(await pageKeys(), 'a rotation drew a new order').toEqual(keys.slice(0, perPage));
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveJSProperty('open', false);
+    await expect
+      .poll(focusedKey, { message: 'a stage closed after a rotation handed focus to a tile other than the one pressed' })
+      .toBe(order[2].key);
+    await page.setViewportSize(viewport);
+    await expect(grid).toHaveAttribute('data-per-row', perRow);
+    expect(await pageKeys(), 'rotating back drew a new order').toEqual(keys.slice(0, perPage));
+  }
+  expect(new Set(orders).size, `three visits laid one order (${orders[0]}), so nothing is drawn per visit`).toBeGreaterThan(1);
 });
 
 test('opening a tile shows a real modal dialog with a larger, unframed photograph; Escape closes it and hands the tile back its focus (issue 202; owner 2026-09-03, issue 287)', async ({
@@ -6481,9 +6704,9 @@ test('opening a tile shows a real modal dialog with a larger, unframed photograp
   await expect(enlarged).toBeVisible();
   const enlargedBox = await enlarged.boundingBox();
 
-  /* "Larger" is measured, not assumed. The tile's thumbnail is `object-fit:
-     cover`, so the picture it paints IS its square box — no contain
-     arithmetic to do, and the comparison is between the pixels a reader can
+  /* "Larger" is measured, not assumed. The tile's thumbnail is the whole
+     picture at the tile's own box (owner, 2026-11-04), so the picture it
+     paints IS that box, and the comparison is between the pixels a reader can
      actually see in each of the two states. */
   expect(
     enlargedBox.width * enlargedBox.height,
@@ -6710,7 +6933,7 @@ test('a film’s tile is a button that opens the stage, where one native player 
   });
   await serveGalleryManifest(page);
   await visit(page);
-  const grid = page.locator('.gallery-grid');
+  const grid = page.locator('.gallery-rows');
   await grid.scrollIntoViewIfNeeded();
   const dialog = page.locator('dialog.gallery-lightbox');
   const counter = page.locator('.gallery-count');
@@ -6730,6 +6953,15 @@ test('a film’s tile is a button that opens the stage, where one native player 
   await expect(page.locator('.gallery-tile')).toHaveCount(2);
   await expect(page.locator('.gallery-control')).toHaveCount(0);
   const rowBefore = await galleryRowShape(page);
+  /* IN THE VISIT'S ORDER (issue 405): the two are laid in an order drawn on
+     this load, so each one's place on the stage is the place its tile took,
+     read here, and every count below is that place. */
+  const laid = (await galleryTiles(page)).map((tile) => tile.key);
+  expect([...laid].sort(), 'the gallery did not lay the served still and film once each').toEqual(
+    galleryManifestFixture.items.map((entry) => entry.key).sort()
+  );
+  const filmAt = laid.indexOf('lane-film') + 1;
+  const stillAt = laid.indexOf('lane-still') + 1;
 
   const tiles = await page.evaluate(() => {
     const round = (box) => ({
@@ -6802,7 +7034,7 @@ test('a film’s tile is a button that opens the stage, where one native player 
      in it, and that press is the one start. */
   await filmTile.click();
   await expect(dialog).toHaveJSProperty('open', true);
-  await expect(counter).toHaveText('Film 2 of 2');
+  await expect(counter).toHaveText(`Film ${filmAt} of 2`);
   await expect
     .poll(plays, { message: 'pressing the film’s tile did not start it', timeout: 5_000 })
     .toEqual(['stage']);
@@ -6919,7 +7151,7 @@ test('a film’s tile is a button that opens the stage, where one native player 
     [[0.8, 0.7, 0.55, 0.4, 0.25].map((at) => stageBox.x + stageBox.width * at), stageBox.y + stageBox.height / 2]
   );
   await page.waitForTimeout(320);
-  await expect(counter, 'a horizontal drag across the film turned the page').toHaveText('Film 2 of 2');
+  await expect(counter, 'a horizontal drag across the film turned the page').toHaveText(`Film ${filmAt} of 2`);
 
   /* PAGING NEVER STARTS A FILM. Onto the still by the pair, back onto the
      film by the pair, and the same round again by the keyboard: the film
@@ -6927,12 +7159,12 @@ test('a film’s tile is a button that opens the stage, where one native player 
   const next = page.locator('.gallery-nav[data-gallery-nav="next"]');
   const previous = page.locator('.gallery-nav[data-gallery-nav="previous"]');
   await next.click();
-  await expect(counter).toHaveText('Photograph 1 of 2');
+  await expect(counter).toHaveText(`Photograph ${stillAt} of 2`);
   await expect(page.locator('video'), 'the film’s player outlived its page').toHaveCount(0);
   await expect(page.locator('.gallery-meta-text'), 'the film’s description stayed on the still').toHaveCount(0);
   expect(await onPage(description), 'the film’s description is on the page with the still staged').toBe(false);
   await previous.click();
-  await expect(counter).toHaveText('Film 2 of 2');
+  await expect(counter).toHaveText(`Film ${filmAt} of 2`);
   await expect(page.locator('dialog video')).toHaveCount(1);
 
   /* THE KEYBOARD KEEPS ITS PLACE ACROSS A KIND. A turn between a film and a
@@ -6947,25 +7179,25 @@ test('a film’s tile is a button that opens the stage, where one native player 
     );
   await next.focus();
   await page.keyboard.press('Enter');
-  await expect(counter).toHaveText('Photograph 1 of 2');
+  await expect(counter).toHaveText(`Photograph ${stillAt} of 2`);
   await expect
     .poll(() => onPair('next'), { message: 'a turn from the film onto the still dropped the keyboard' })
     .toBe(true);
   await page.keyboard.press('ArrowRight');
-  await expect(counter, 'an arrow key on the still’s pair did not turn the stage').toHaveText('Film 2 of 2');
+  await expect(counter, 'an arrow key on the still’s pair did not turn the stage').toHaveText(`Film ${filmAt} of 2`);
   await expect
     .poll(() => onPair('next'), { message: 'a turn from the still onto the film dropped the keyboard' })
     .toBe(true);
   await page.keyboard.press('ArrowLeft');
-  await expect(counter).toHaveText('Photograph 1 of 2');
+  await expect(counter).toHaveText(`Photograph ${stillAt} of 2`);
   await page.keyboard.press('ArrowLeft');
-  await expect(counter).toHaveText('Film 2 of 2');
+  await expect(counter).toHaveText(`Film ${filmAt} of 2`);
   await expect(page.locator('dialog video')).toHaveCount(1);
   /* An arrow pressed ON the film's player is the player's — it seeks — and
      the stage stays where it is. */
   await page.locator('dialog video').dispatchEvent('keydown', { key: 'ArrowRight' });
   await painted();
-  await expect(counter, 'an arrow on the film’s own player turned the stage').toHaveText('Film 2 of 2');
+  await expect(counter, 'an arrow on the film’s own player turned the stage').toHaveText(`Film ${filmAt} of 2`);
   expect(await plays(), 'paging onto a film started it').toEqual(['stage']);
 
   /* CLOSING ends it: no player anywhere, focus on the film's own tile, the
@@ -7061,17 +7293,22 @@ test('a phone never pulls the 4K rung, and the smallest rung is reachable at all
 
 /* THE MOSAIC FILLS ITS COLUMN (issue 202, re-aimed by the owner directive of
  * 2026-09-03, issue 287, by the owner's standing no-dead-space rule — content
- * short of its container's right edge is a defect — and by the mosaic, owner
- * 2026-11-02, issue 399, mock 06).
+ * short of its container's right edge is a defect — by the mosaic, owner
+ * 2026-11-02, issue 399, mock 06, and by its justified rows, owner
+ * 2026-11-04: "prefer only the last row to be uneven, I don't want gaps on
+ * every row, ideally it would be all cohesive until the last one").
  *
  * The complaint this lane was born from — "568.9px of frame at the left of an
- * 842px track, 273px of dead space on the right alone" — is answered by a grid
- * whose tracks are `minmax(0, 1fr)` of the column, and the mosaic keeps that:
- * a full page of five is three squares over two wide tiles, and EVERY ROW
- * reaches both of the grid's edges, so no width leaves a hole at a row's end.
- * Both edges are measured against the reading column's own, and the tiles
- * against each other, so nothing here derives from the stylesheet or a token. */
-test('the gallery mosaic fills the reading column edge to edge, three squares over two wide tiles on a desktop (issue 202; owner 2026-09-03, issue 287; 2026-11-02, issue 399)', async ({
+ * 842px track, 273px of dead space on the right alone" — is answered by rows
+ * that span the column: the rows reach both of the column's edges, a full
+ * page of five is a row of three over a row of two, and EVERY ROW BUT THE
+ * LAST reaches both of the rows' edges at one height. The last row is the one
+ * the owner left uneven: it starts at the left edge at the previous row's
+ * height, and on the vendored set — eight 16:9 pictures — that leaves its end
+ * open by a tile. Both edges are measured against the reading column's own,
+ * and the tiles against each other, so nothing here derives from the
+ * stylesheet or a token. */
+test('the gallery mosaic fills the reading column edge to edge, every row but the last, on a desktop (issue 202; owner 2026-09-03, issue 287; 2026-11-02, issue 399; 2026-11-04)', async ({
   page,
 }) => {
   await visit(page);
@@ -7080,12 +7317,12 @@ test('the gallery mosaic fills the reading column edge to edge, three squares ov
     await settled(page);
     const observed = await page.evaluate(() => {
       const round = (value) => Math.round(value * 100) / 100;
-      const gridNode = window.document.querySelector('.gallery-grid');
+      const gridNode = window.document.querySelector('.gallery-rows');
       const grid = gridNode.getBoundingClientRect();
       /* The column's CONTENT box (owner direction, 2026-10-16): the Keep
          frames the sheet and pads it, and those are the column's own margin
-         now — what the grid must reach is the edge every other block reaches,
-         measured on the page, never a number this file states. */
+         now — what the rows must reach is the edge every other block
+         reaches, measured on the page, never a number this file states. */
       const main = window.document.querySelector('main');
       const mainBox = main.getBoundingClientRect();
       const mainStyle = getComputedStyle(main);
@@ -7096,7 +7333,7 @@ test('the gallery mosaic fills the reading column edge to edge, three squares ov
       const tiles = [...gridNode.querySelectorAll('.gallery-tile')].map((tile) => {
         const box = tile.getBoundingClientRect();
         return {
-          shape: tile.getAttribute('data-shape'),
+          row: Number(tile.getAttribute('data-row')),
           left: round(box.left),
           right: round(box.right),
           top: round(box.top),
@@ -7116,45 +7353,375 @@ test('the gallery mosaic fills the reading column edge to edge, three squares ov
     const at = `at ${width}px`;
     /* ONE PIXEL, and it is a rounding allowance rather than a tolerance for
        dead space: the gutter the owner reported was 273px, and the smallest
-       gap this grid could leave from a real regression is one whole track. */
-    expect(observed.right, `the grid stops ${observed.right}px short of the column's right edge ${at}`).toBeLessThanOrEqual(1);
-    expect(observed.right, `the grid runs past the column's right edge ${at}`).toBeGreaterThanOrEqual(-1);
-    expect(observed.left, `the grid starts ${observed.left}px inside the column ${at}`).toBeLessThanOrEqual(1);
-    expect(observed.left, `the grid starts ${observed.left}px outside the column ${at}`).toBeGreaterThanOrEqual(-1);
-    /* FIVE TILES, TWO ROWS: three squares over two wide tiles. */
-    expect(observed.tiles.map((tile) => tile.shape), `the page is not three squares over two wide tiles ${at}`).toEqual([
-      'sq',
-      'sq',
-      'sq',
-      'wd',
-      'wd',
-    ]);
-    const rows = [observed.tiles.slice(0, 3), observed.tiles.slice(3)];
+       gap a real regression could leave is a whole tile. */
+    expect(observed.right, `the rows stop ${observed.right}px short of the column's right edge ${at}`).toBeLessThanOrEqual(1);
+    expect(observed.right, `the rows run past the column's right edge ${at}`).toBeGreaterThanOrEqual(-1);
+    expect(observed.left, `the rows start ${observed.left}px inside the column ${at}`).toBeLessThanOrEqual(1);
+    expect(observed.left, `the rows start ${observed.left}px outside the column ${at}`).toBeGreaterThanOrEqual(-1);
+    /* FIVE TILES, TWO ROWS: three over two. */
+    const rows = [0, 1].map((row) => observed.tiles.filter((tile) => tile.row === row));
+    expect(observed.tiles.map((tile) => tile.row), `the page is not a row of three over a row of two ${at}`).toEqual([0, 0, 0, 1, 1]);
     for (const [index, row] of rows.entries()) {
       const name = `row ${index + 1} ${at}`;
-      /* Every tile of a row shares the row's top and its height, and the
-         row's tiles are equal widths — the shapes, not the pictures, size
-         them. */
+      /* Every tile of a row shares the row's top and its height: the row is
+         one line of pictures. */
       for (const tile of row) {
         expect(tile.top, `a tile of ${name} is off the row's line`).toBeCloseTo(row[0].top, 0);
         expect(tile.height, `a tile of ${name} is a different height`).toBeCloseTo(row[0].height, 0);
-        expect(tile.width, `a tile of ${name} is a different width`).toBeCloseTo(row[0].width, 0);
       }
-      /* THE ROW REACHES BOTH EDGES of the grid: no hole at its end. */
-      expect(row[0].left, `${name} starts inside the grid`).toBeCloseTo(observed.gridLeft, 0);
-      expect(row.at(-1).right, `${name} stops ${(observed.gridRight - row.at(-1).right).toFixed(1)}px short of the grid`).toBeCloseTo(
-        observed.gridRight,
-        0
-      );
+      expect(row[0].left, `${name} starts inside the rows`).toBeCloseTo(observed.gridLeft, 0);
     }
-    /* The wide tile is wider than the square, the second row sits wholly
-       under the first, and the two rows are the same height. */
-    expect(rows[1][0].width, `a wide tile is no wider than a square ${at}`).toBeGreaterThan(rows[0][0].width + 1);
+    /* THE FIRST ROW REACHES BOTH EDGES: no hole at its end. */
+    expect(rows[0].at(-1).right, `row 1 stops ${(observed.gridRight - rows[0].at(-1).right).toFixed(1)}px short of the rows ${at}`).toBeCloseTo(
+      observed.gridRight,
+      0
+    );
+    /* THE LAST ROW is the first row's height, under it, and on eight 16:9
+       pictures its end is open by a tile: its tiles are the first row's. */
+    expect(rows[1][0].height, `the last row is not the first row's height ${at}`).toBeCloseTo(rows[0][0].height, 0);
+    expect(rows[1][0].width, `the last row's tiles are not the first row's ${at}`).toBeCloseTo(rows[0][0].width, 0);
     expect(rows[1][0].top, `the rows overlap ${at}`).toBeGreaterThanOrEqual(rows[0][0].bottom);
-    expect(rows[1][0].height, `the rows are different heights ${at}`).toBeCloseTo(rows[0][0].height, 0);
+    expect(observed.gridRight - rows[1].at(-1).right, `the last row is justified to the edge ${at}, so its end is not the open one the owner asked for`).toBeGreaterThan(
+      rows[0][0].width
+    );
   }
 });
 
+/* THE ROWS ARE JUSTIFIED, AND ONLY THE LAST IS UNEVEN (owner, 2026-11-04, on
+ * the 0.1.104 preview: "prefer only the last row to be uneven, I don't want
+ * gaps on every row, ideally it would be all cohesive until the last one";
+ * and on the one before it: "just zoom out instead of having the ugly
+ * border, make the picture smaller"). Every row but the last fills the width
+ * at one shared height, each tile as wide as its picture is at that height,
+ * and the last row of a page of two rows or more keeps the previous row's
+ * height from the left with its end open — or, where its pictures would run
+ * past the edge at that height, is justified to the width like the rest.
+ * Nothing is cropped and nothing is padded.
+ *
+ * On two loads, at the reading width and at two phone widths, for EVERY tile
+ * on both pages, in a real engine:
+ *   (a) every row but the last holds the rows' count — three at the reading
+ *       width, two on a phone — and in every row but the last (and in the
+ *       only row of a one-row page) every tile is the row's height and the
+ *       row's tiles span the width, within a pixel;
+ *   (b) the last row of a multi-row page starts at the left edge, its tiles
+ *       one height: the previous row's, ending where its pictures end at that
+ *       height, wherever that is inside the width — and justified to the
+ *       width, the shorter row, wherever it is not. Which of the two a row
+ *       must be is computed here from the pictures' declared proportions and
+ *       the previous row's MEASURED height, never from the stylesheet;
+ *   (c) every thumb's box is its tile's box, the tile has the proportions
+ *       its thumb declares, and once decoded the picture's own proportions
+ *       are its box's within 1.5%, so nothing is cropped and nothing padded;
+ *   (d) every tile's box while its preview is still in flight is the box it
+ *       keeps once the preview has decoded — every preview request is held
+ *       while the page is measured, then released, and the page measured
+ *       again — and so are the rows': zero CLS;
+ *   (e) no tile runs past the rows, no two overlap, and the document does
+ *       not scroll sideways;
+ *   (f) every item is laid once across the pages.
+ *
+ * The manifest is the live set's shapes in miniature — a square drawing, a
+ * 1.28:1 one, a portrait, one twice as tall as wide, one twice as wide as
+ * tall, a 16:9 still and a 16:9 film — each preview served as an SVG of a
+ * quarter of its item's declared size, exactly, so a decoded picture has the
+ * declared proportions and every engine really decodes one. Which of (b)'s
+ * two branches a last row takes depends on the order, so the lane lays two
+ * orders on purpose rather than leaving them to chance: the first puts the
+ * three widest pictures first, so every last row fits at the previous row's
+ * height; the second the narrowest, so every last row would run past the
+ * edge at it, and is justified. The shuffle is the identity under a source
+ * that always draws just under one (tests/mosaic.test.mjs), so the page's
+ * own Math.random is held there and each load lays the order it is served.
+ * The assertions read the order off the page all the same, so they hold for
+ * any order, and the lane asserts it measured both branches at every width. */
+const justifiedLaneItems = {
+  square: ['image', 3840, 3840],
+  landscape: ['image', 3840, 2996],
+  portrait: ['image', 3288, 3840],
+  tall: ['image', 1920, 3840],
+  wide: ['image', 3840, 1920],
+  still: ['image', 3840, 2160],
+  film: ['video', 3840, 2160],
+};
+const justifiedLaneOrders = [
+  ['wide', 'still', 'film', 'tall', 'portrait', 'square', 'landscape'],
+  ['square', 'portrait', 'tall', 'landscape', 'wide', 'still', 'film'],
+];
+const justifiedLaneManifest = (names) => ({
+  schema: 'gallery/v1',
+  items: names.map((name) => {
+    const [kind, width, height] = justifiedLaneItems[name];
+    const key = `lane-row-${name}`;
+    const index = Object.keys(justifiedLaneItems).indexOf(name);
+    const digest = (part) => (index * 4 + part + 1).toString(16).padStart(64, '0');
+    return {
+      kind,
+      key,
+      alt: `A ${kind === 'video' ? 'film' : 'picture'} the justified lane serves, ${width} by ${height}`,
+      full: { path: `gallery/${key}.webp`, sha256: digest(0), width, height },
+      preview: { path: `gallery/${key}-preview.svg`, sha256: digest(1), width: width / 4, height: height / 4 },
+      ...(kind === 'video'
+        ? {
+            poster: { path: `gallery/${key}-poster.webp`, sha256: digest(2), width, height },
+            sources: [{ path: `gallery/${key}-1080.mp4`, sha256: digest(3), type: 'video/mp4', height: 1080 }],
+          }
+        : {}),
+    };
+  }),
+});
+/* The proportions a box may be off its picture's, and nothing looser: 1.5%. */
+const justifiedLaneRatio = 0.015;
+/* A row's edges and heights are held to a pixel: the rounding of a line of
+   fractional boxes, and nothing a real gap or a ragged row could hide in. */
+const justifiedLanePixel = 1;
+
+test('every row but the last fills the width at one height, and the last keeps the previous row’s, with every picture whole and its box kept before its bytes arrive (owner 2026-11-04, on the 0.1.104 preview)', async ({
+  page,
+}) => {
+  test.setTimeout(test.info().timeout + 5 * settleWindow);
+  await page.addInitScript(() => {
+    Math.random = () => 1 - Number.EPSILON;
+  });
+  /* THE HOLD: while it is on, every preview request waits; releasing it
+     answers every waiting request and every later one at once. */
+  let holding = true;
+  let waiting = [];
+  const release = () => {
+    holding = false;
+    for (const answer of waiting.splice(0)) answer();
+  };
+  let served = justifiedLaneManifest(justifiedLaneOrders[0]);
+  await page.route('**/media/mutable/gallery/manifest.json', (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      body: JSON.stringify(served),
+    })
+  );
+  await page.route('**/media/immutable/**', (route) => {
+    const preview = served.items.find((item) => route.request().url().endsWith(`/${item.preview.path}`))?.preview;
+    if (preview === undefined) {
+      return route.fulfill({ status: 404, body: '' });
+    }
+    const { width, height } = preview;
+    const answer = () =>
+      route
+        .fulfill({
+          status: 200,
+          headers: { 'content-type': 'image/svg+xml', 'cache-control': 'no-store' },
+          body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="#5a6b7c"/><circle cx="${width / 2}" cy="${height / 2}" r="${Math.min(width, height) / 3}" fill="#c9b27a"/></svg>`,
+        })
+        .catch(() => {});
+    if (holding) {
+      waiting.push(answer);
+      return undefined;
+    }
+    return answer();
+  });
+  const grid = page.locator('#gallery .gallery-rows');
+  const count = page.locator('#gallery .pager .pager-count');
+  const keys = Object.keys(justifiedLaneItems).map((name) => `lane-row-${name}`).sort();
+  /* Every tile's box and its thumb's, relative to the rows' own origin, so a
+     panel painting elsewhere on the page cannot read as a tile moving. */
+  const measure = () =>
+    grid.evaluate((gridNode) => {
+      const origin = gridNode.getBoundingClientRect();
+      const box = (node) => {
+        const rect = node.getBoundingClientRect();
+        return { left: rect.left - origin.left, top: rect.top - origin.top, right: rect.right - origin.left, bottom: rect.bottom - origin.top };
+      };
+      const root = window.document.documentElement;
+      return {
+        perRow: Number(gridNode.getAttribute('data-per-row')),
+        grid: { width: origin.width, height: origin.height },
+        sideways: root.scrollWidth - root.clientWidth,
+        tiles: [...gridNode.querySelectorAll('.gallery-tile')].map((tile) => {
+          const thumb = tile.querySelector('img.gallery-thumb');
+          return {
+            key: tile.getAttribute('data-key'),
+            row: Number(tile.getAttribute('data-row')),
+            tile: box(tile),
+            thumb: box(thumb),
+            declared: Number(thumb.getAttribute('width')) / Number(thumb.getAttribute('height')),
+            complete: thumb.complete && thumb.naturalWidth > 0,
+            natural: thumb.naturalHeight > 0 ? thumb.naturalWidth / thumb.naturalHeight : null,
+          };
+        }),
+      };
+    });
+  const aspect = (box) => (box.right - box.left) / (box.bottom - box.top);
+  const tall = (box) => box.bottom - box.top;
+  const off = (first, second) =>
+    Math.max(...['left', 'top', 'right', 'bottom'].map((side) => Math.abs(first[side] - second[side])));
+  /* Which last rows each width measured: kept at the previous row's height,
+     or justified to the width. */
+  const branches = new Map();
+
+  for (const [load, names] of justifiedLaneOrders.entries()) {
+    served = justifiedLaneManifest(names);
+    for (const width of [1440, 390, 320]) {
+      const at = `at ${width}px on load ${load + 1}`;
+      holding = true;
+      await page.setViewportSize({ width, height: 900 });
+      /* Not to the load event: WebKit holds it for the previews the hold is
+         holding, which is the point of the hold. */
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await settled(page);
+      await expect(grid.locator('.gallery-tile').first(), `the lane's manifest never replaced the vendored set ${at}`).toHaveAttribute(
+        'data-key',
+        /^lane-row-/
+      );
+      await expect(count).toHaveText('1 / 2');
+      const laid = [];
+      for (let place = 1; place <= 2; place += 1) {
+        const name = `page ${place} ${at}`;
+        if (place > 1) {
+          holding = true;
+          await page.locator('#gallery .pager .pager-step[data-step="next"]').click();
+          await expect(count).toHaveText(`${place} / 2`);
+        }
+        await grid.scrollIntoViewIfNeeded();
+        await expect
+          .poll(() => waiting.length, { message: `no preview of ${name} reached the hold, so nothing was measured in flight`, timeout: 10_000 })
+          .toBeGreaterThan(0);
+        const before = await measure();
+        expect(before.perRow, `the rows hold ${before.perRow} tiles on ${name}`).toBe(width === 1440 ? 3 : 2);
+        expect(
+          before.tiles.filter((tile) => tile.complete).map((tile) => tile.key),
+          `a preview decoded through the hold on ${name}, so this measured nothing in flight`
+        ).toEqual([]);
+        release();
+        await expect
+          .poll(async () => (await measure()).tiles.every((tile) => tile.complete), {
+            message: `a released preview never decoded on ${name}`,
+            timeout: 10_000,
+          })
+          .toBe(true);
+        const after = await measure();
+        expect(after.tiles.map((tile) => tile.key), `the page laid other tiles while its pictures arrived on ${name}`).toEqual(
+          before.tiles.map((tile) => tile.key)
+        );
+        const W = after.grid.width;
+
+        /* (d) ZERO CLS: the box a tile had in flight is the box it keeps, and
+           the rows are the height they were. */
+        expect(Math.abs(after.grid.height - before.grid.height), `the rows changed height as their pictures arrived on ${name}`).toBeLessThanOrEqual(
+          layoutUnit
+        );
+        for (const [index, tile] of after.tiles.entries()) {
+          const named = `${tile.key} in row ${tile.row + 1} of ${name}`;
+          laid.push(tile.key);
+          const moved = off(tile.tile, before.tiles[index].tile);
+          expect(moved, `${named} moved or resized by ${moved.toFixed(2)}px as its picture arrived`).toBeLessThanOrEqual(layoutUnit);
+          /* (c) the picture whole: the thumb is the tile, at the proportions
+             it declares, in flight and decoded... */
+          for (const [state, read] of [
+            ['in flight', before.tiles[index]],
+            ['decoded', tile],
+          ]) {
+            const padded = off(read.thumb, read.tile);
+            expect(padded, `${named}: the picture is ${padded.toFixed(2)}px off its tile ${state}, so the tile crops or pads it`).toBeLessThanOrEqual(
+              layoutUnit
+            );
+            expect(
+              Math.abs(aspect(read.tile) / read.declared - 1),
+              `${named} is ${aspect(read.tile).toFixed(3)}:1 ${state}, against its picture's ${read.declared.toFixed(3)}:1`
+            ).toBeLessThanOrEqual(justifiedLaneRatio);
+          }
+          /* ...and the decoded picture is drawn at its own proportions: a box
+             of any other shape would crop it or pad it. */
+          expect(
+            Math.abs(aspect(tile.thumb) / tile.natural - 1),
+            `${named}: the picture is ${tile.natural.toFixed(3)}:1 and drawn into a ${aspect(tile.thumb).toFixed(3)}:1 box`
+          ).toBeLessThanOrEqual(justifiedLaneRatio);
+          /* (e) the rows hold the tile, and no other tile overlaps it. */
+          expect(tile.tile.left, `${named} starts outside the rows`).toBeGreaterThanOrEqual(-layoutUnit);
+          expect(tile.tile.top, `${named} starts above the rows`).toBeGreaterThanOrEqual(-layoutUnit);
+          expect(tile.tile.right, `${named} runs ${(tile.tile.right - W).toFixed(1)}px past the rows`).toBeLessThanOrEqual(W + layoutUnit);
+          expect(tile.tile.bottom, `${named} runs under the rows`).toBeLessThanOrEqual(after.grid.height + layoutUnit);
+          for (const other of after.tiles.slice(index + 1)) {
+            const across = Math.min(tile.tile.right, other.tile.right) - Math.max(tile.tile.left, other.tile.left);
+            const down = Math.min(tile.tile.bottom, other.tile.bottom) - Math.max(tile.tile.top, other.tile.top);
+            expect(Math.min(across, down), `${named} overlaps ${other.key}`).toBeLessThanOrEqual(layoutUnit);
+          }
+        }
+        /* (e) the document never scrolls sideways. */
+        expect(after.sideways, `the document scrolls ${after.sideways}px sideways on ${name}`).toBe(0);
+
+        /* (a) and (b), row by row, in the order the page laid them. */
+        const rows = [];
+        for (const tile of after.tiles) {
+          (rows[tile.row] ??= []).push(tile);
+        }
+        expect(rows.every(Boolean), `the rows of ${name} are not numbered from the first`).toBe(true);
+        expect(rows.flat().map((tile) => tile.key), `the rows of ${name} do not hold the tiles in the page's order`).toEqual(
+          after.tiles.map((tile) => tile.key)
+        );
+        expect(
+          rows.slice(0, -1).map((row) => row.length),
+          `a row before the last of ${name} holds other than ${after.perRow}: ${rows.map((row) => row.length).join(', ')}`
+        ).toEqual(Array(rows.length - 1).fill(after.perRow));
+        expect(rows.at(-1).length, `the last row of ${name} holds more than ${after.perRow}`).toBeLessThanOrEqual(after.perRow);
+        const height = (row) => tall(row[0].tile);
+        for (const [index, row] of rows.entries()) {
+          const named = `row ${index + 1} of ${name}`;
+          /* One line of pictures: every tile the row's top and height, the
+             first at the left edge. */
+          for (const tile of row) {
+            expect(Math.abs(tile.tile.top - row[0].tile.top), `${tile.key} is off the line of ${named}`).toBeLessThanOrEqual(justifiedLanePixel);
+            expect(
+              Math.abs(tall(tile.tile) - height(row)),
+              `${tile.key} is ${tall(tile.tile).toFixed(1)}px tall in ${named}, a row ${height(row).toFixed(1)}px tall`
+            ).toBeLessThanOrEqual(justifiedLanePixel);
+          }
+          expect(Math.abs(row[0].tile.left), `${named} starts ${row[0].tile.left.toFixed(1)}px in from the left edge`).toBeLessThanOrEqual(
+            justifiedLanePixel
+          );
+          const end = row.at(-1).tile.right;
+          if (index < rows.length - 1 || rows.length === 1) {
+            /* (a) JUSTIFIED: the row spans the width. */
+            expect(Math.abs(W - end), `${named} ends ${(W - end).toFixed(1)}px short of the right edge`).toBeLessThanOrEqual(justifiedLanePixel);
+            continue;
+          }
+          /* (b) THE LAST ROW of a multi-row page. At the previous row's
+             measured height, each of its pictures is that height times its
+             proportions wide, so the row would end at the sum of those and
+             its gaps — the gap read off the previous row's own tiles. */
+          const previous = rows[index - 1];
+          const gap = previous[1].tile.left - previous[0].tile.right;
+          const atPrevious = row.reduce((sum, tile) => sum + height(previous) * tile.declared, 0) + (row.length - 1) * gap;
+          if (atPrevious < W - justifiedLanePixel) {
+            branches.set(width, [...(branches.get(width) ?? []), 'kept']);
+            expect(
+              Math.abs(height(row) - height(previous)),
+              `${named} is ${height(row).toFixed(1)}px tall, not the previous row's ${height(previous).toFixed(1)}px, though it fits the width at that height`
+            ).toBeLessThanOrEqual(justifiedLanePixel);
+            expect(Math.abs(end - atPrevious), `${named} ends at ${end.toFixed(1)}px, not where its pictures end at the previous row's height, ${atPrevious.toFixed(1)}px`).toBeLessThanOrEqual(
+              justifiedLanePixel
+            );
+          } else if (atPrevious > W + justifiedLanePixel) {
+            branches.set(width, [...(branches.get(width) ?? []), 'justified']);
+            expect(Math.abs(W - end), `${named} would run ${(atPrevious - W).toFixed(1)}px past the edge at the previous row's height, and ends ${(W - end).toFixed(1)}px short of it rather than justified`).toBeLessThanOrEqual(
+              justifiedLanePixel
+            );
+            expect(height(row), `${named} is justified to the width and still the previous row's height or taller`).toBeLessThan(height(previous));
+          }
+        }
+      }
+      /* (f) every item once across the pages. */
+      expect([...laid].sort(), `the two pages did not lay every item exactly once ${at}`).toEqual(keys);
+    }
+  }
+  /* Both of (b)'s branches were measured at every width, so neither is green
+     for never having been asked. */
+  for (const width of [1440, 390, 320]) {
+    expect(new Set(branches.get(width)), `the last rows measured at ${width}px were ${branches.get(width)?.join(', ') ?? 'none'}`).toEqual(
+      new Set(['kept', 'justified'])
+    );
+  }
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
 
 /* THE PAGE DOES NOT SCROLL BEHIND THE LIGHTBOX (issue 241).
  *
@@ -7308,10 +7875,10 @@ test('the document holds still while the lightbox is open, and is unchanged afte
  * so the comparison is between two MEASURED states of the same page rather
  * than against any number this file or the stylesheet states. */
 async function galleryRowShape(page) {
-  await page.locator('.gallery-grid').scrollIntoViewIfNeeded();
+  await page.locator('.gallery-rows').scrollIntoViewIfNeeded();
   return page.evaluate(() => {
     const round = (value) => Math.round(value * 10) / 10;
-    const grid = window.document.querySelector('.gallery-grid').getBoundingClientRect();
+    const grid = window.document.querySelector('.gallery-rows').getBoundingClientRect();
     return {
       grid: { width: round(grid.width), height: round(grid.height) },
       /* Each cell relative to the row's own origin, never in viewport
@@ -7332,8 +7899,9 @@ async function galleryRowShape(page) {
 
 /* EVERY TILE RESERVES ITS BOX BEFORE A BYTE ARRIVES (issue 202, re-aimed
  * by the owner directive of 2026-09-03, issue 287, and by the mosaic, owner
- * 2026-11-02, issue 399: a tile is the cells its shape spans, a square or a
- * wide one, and a full page is five tiles at every width).
+ * 2026-11-02, issue 399, and its justified rows, 2026-11-04: a tile is its
+ * share of its row at its picture's proportions, and a full page is five
+ * tiles at every width).
  *
  * The gap the #204 adversarial review found (finding 3): the zero-CLS
  * reservation was pinned at source only, and a centring lane survives the
@@ -7369,7 +7937,7 @@ test('every tile reserves the SAME box with its picture refused as with it serve
   await page.unroute('**/gallery-*.webp');
   await visit(page);
   const thumbs = page.locator('img.gallery-thumb');
-  await page.locator('.gallery-grid').scrollIntoViewIfNeeded();
+  await page.locator('.gallery-rows').scrollIntoViewIfNeeded();
   await expect
     .poll(
       async () =>
@@ -7396,9 +7964,10 @@ test('every tile reserves the SAME box with its picture refused as with it serve
  * about the reader: whatever the gallery draws, it draws it INSIDE the page
  * at every width the contract names, and never takes the document sideways.
  * The phone form adds a second claim of its own — the mock's two tiles across
- * rather than five squeezed ones — and it is measured as the number of
- * distinct column origins the engine actually laid out, which is a fact about
- * the rendered row rather than about the token that produced it. */
+ * rather than five squeezed ones — and it is measured as the rows the engine
+ * actually laid out: two, two and one, every row but the last reaching both
+ * edges (owner, 2026-11-04: justified rows), and the last, on the vendored
+ * set's eight 16:9 pictures, one tile the size of the others at the left. */
 test('the gallery row folds to two tiles across on a phone, at every width this site supports (issue 275; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {
@@ -7409,7 +7978,7 @@ test('the gallery row folds to two tiles across on a phone, at every width this 
     const row = await page.evaluate(() => {
       const round = (value) => Math.round(value * 100) / 100;
       const root = window.document.documentElement;
-      const grid = window.document.querySelector('.gallery-grid').getBoundingClientRect();
+      const grid = window.document.querySelector('.gallery-rows').getBoundingClientRect();
       /* The column's CONTENT box, as the desktop lane above measures it
          (owner direction, 2026-10-16: the Keep frames and pads the sheet). */
       const main = window.document.querySelector('main');
@@ -7422,7 +7991,7 @@ test('the gallery row folds to two tiles across on a phone, at every width this 
       const cells = [...window.document.querySelectorAll('.gallery-tile')].filter((cell) => cell.getClientRects().length > 0).map(
         (cell) => {
           const box = cell.getBoundingClientRect();
-          return { shape: cell.getAttribute('data-shape'), x: Math.round(box.x), y: Math.round(box.y), left: round(box.left), right: round(box.right), width: round(box.width) };
+          return { x: Math.round(box.x), y: Math.round(box.y), left: round(box.left), right: round(box.right), width: round(box.width), height: round(box.height) };
         }
       );
       const rows = new Map();
@@ -7431,7 +8000,6 @@ test('the gallery row folds to two tiles across on a phone, at every width this 
       }
       return {
         columns: [...new Set(cells.map((cell) => cell.x))].length,
-        shapes: cells.map((cell) => cell.shape),
         rows: [...rows.values()],
         gridLeft: round(grid.left),
         gridRight: round(grid.right),
@@ -7442,22 +8010,24 @@ test('the gallery row folds to two tiles across on a phone, at every width this 
       };
     });
     expect(row.columns, `the row draws ${row.columns} columns at ${width}px, not the two the phone form asks for`).toBe(2);
-    /* A full page of five in two columns is two squares, one wide tile
-       across, two squares (owner, 2026-11-02, issue 399, mock 06): no row
-       holds more than two, no square stands alone in one, and every row
-       reaches both of the grid's edges, so no width leaves a hole. */
-    expect(row.shapes, `the phone page is not two squares, a wide tile, two squares at ${width}px`).toEqual(['sq', 'sq', 'wd', 'sq', 'sq']);
-    expect(row.rows.map((cells) => cells.length), `the phone rows hold ${row.rows.map((cells) => cells.length).join(', ')} tiles at ${width}px`).toEqual([2, 1, 2]);
-    const square = row.rows[0][0].width;
+    /* A full page of five two to a row is rows of two, two and one (owner,
+       2026-11-04: justified rows): no row holds more than two, every row
+       but the last reaches both of the rows' edges, and every row starts at
+       the left one. The pictures are all 16:9, so the last row's one tile,
+       at the previous row's height, is the size of every other. */
+    expect(row.rows.map((cells) => cells.length), `the phone rows hold ${row.rows.map((cells) => cells.length).join(', ')} tiles at ${width}px`).toEqual([2, 2, 1]);
+    const tile = row.rows[0][0];
     for (const [index, cells] of row.rows.entries()) {
       for (const cell of cells) {
-        if (cell.shape === 'sq') {
-          expect(cell.width, `a square in row ${index + 1} is ${cell.width}px against ${square}px at ${width}px`).toBeCloseTo(square, 0);
-        }
+        expect(cell.width, `a tile in row ${index + 1} is ${cell.width}px wide against ${tile.width}px at ${width}px`).toBeCloseTo(tile.width, 0);
+        expect(cell.height, `a tile in row ${index + 1} is ${cell.height}px tall against ${tile.height}px at ${width}px`).toBeCloseTo(tile.height, 0);
       }
-      expect(cells[0].left, `row ${index + 1} starts inside the grid at ${width}px`).toBeCloseTo(row.gridLeft, 0);
-      expect(cells.at(-1).right, `row ${index + 1} stops short of the grid at ${width}px`).toBeCloseTo(row.gridRight, 0);
+      expect(cells[0].left, `row ${index + 1} starts inside the rows at ${width}px`).toBeCloseTo(row.gridLeft, 0);
+      if (index < row.rows.length - 1) {
+        expect(cells.at(-1).right, `row ${index + 1} stops short of the rows at ${width}px`).toBeCloseTo(row.gridRight, 0);
+      }
     }
+    expect(row.rows.at(-1)[0].right, `the last row is justified to the edge at ${width}px, so its end is not open`).toBeLessThan(row.gridRight - tile.width / 2);
     expect(row.right, `the row stops ${row.right}px short of the column at ${width}px`).toBeLessThanOrEqual(1);
     expect(row.left, `the row starts ${row.left}px inside the column at ${width}px`).toBeLessThanOrEqual(1);
     expect(
@@ -7619,7 +8189,7 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
      depicts. So the present branch and the absent branch are both exercised
      against the real DOM. */
   await visit(page);
-  const grid = page.locator('.gallery-grid');
+  const grid = page.locator('.gallery-rows');
   await grid.scrollIntoViewIfNeeded();
 
   /* ABSENT ON THE ROW, and it is the row's whole answer now: the caption lane
@@ -7647,7 +8217,7 @@ test('optional metadata renders what an item has and nothing it has not (issue 2
      the pager — and the block ends where the pager does. The dialog is
      `display: none` while closed and nothing else may be there. */
   const trailing = await page.evaluate(() => {
-    const mosaic = window.document.querySelector('.gallery-grid').closest('.gallery-mosaic');
+    const mosaic = window.document.querySelector('.gallery-rows');
     const block = mosaic.parentElement;
     const after = [...block.children]
       .slice([...block.children].indexOf(mosaic) + 1)
@@ -7761,7 +8331,7 @@ test('switching the reading mode repaints the gallery without moving any of it (
         const box = node.getBoundingClientRect();
         return [round(box.x), round(box.y + scrollY), round(box.width), round(box.height)];
       };
-      const grid = window.document.querySelector('.gallery-grid');
+      const grid = window.document.querySelector('.gallery-rows');
       return {
         grid: boxed(grid),
         cells: [...window.document.querySelectorAll('.gallery-tile')].filter((cell) => cell.getClientRects().length > 0).map(boxed),
@@ -7774,7 +8344,7 @@ test('switching the reading mode repaints the gallery without moving any of it (
   /* Measured where a reader sees it: the gallery near the top of the
      viewport (readFrom), so the scroll position the swaps are held to is a
      real offset into the document rather than its top. */
-  await readFrom(page, '.gallery-grid');
+  await readFrom(page, '.gallery-rows');
   const before = await shape();
   expect(before.scrollY, 'the page did not scroll to the gallery, so the no-scroll check reads the top').toBeGreaterThan(0);
   /* A full page of five at every width since the mosaic (owner, 2026-11-02,
@@ -9854,18 +10424,18 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       );
       /* The gallery's TILES, since the frame they used to be one of retired
          (owner directive, 2026-09-03, issue 287), laid as a mosaic since
-         2026-11-02 (issue 399). The grid is measured against its own column
-         here rather than against a ceiling: no tile is drawn taller than it is
-         wide and every row keeps filling the grid, at every width a reader can
-         drag the page down to. */
-      const gridBox = window.document.querySelector('.gallery-grid').getBoundingClientRect();
+         2026-11-02 (issue 399) and in justified rows since 2026-11-04. The
+         rows are measured against their own column here rather than against
+         a ceiling: no 16:9 picture's tile is drawn taller than it is wide,
+         and every row but the last keeps filling the rows, at every width a
+         reader can drag the page down to. */
+      const gridBox = window.document.querySelector('.gallery-rows').getBoundingClientRect();
       const tiles = [...window.document.querySelectorAll('.gallery-tile')].map((tile) => {
         const box = tile.getBoundingClientRect();
         return {
-          shape: tile.getAttribute('data-shape'),
+          row: Number(tile.getAttribute('data-row')),
           left: box.left - gridBox.left,
           right: gridBox.right - box.right,
-          top: Math.round(box.top - gridBox.top),
           width: box.width,
           height: box.height,
         };
@@ -9978,16 +10548,19 @@ test('every width the handle can reach keeps every section intact', async ({ pag
     expect(state.sections, `the page lost a section ${at}`).toBeGreaterThan(2);
     /* The pictures still reserve the boxes they will fill: since 2026-09-03
        a row of squares rather than one capped stage (owner directive, issue
-       287), and since 2026-11-02 a mosaic of squares and wide tiles (issue
-       399). Three properties are under test at every column width, and none
-       is a number this file or the stylesheet states: no tile is drawn
-       TALLER THAN IT IS WIDE and every square stays square or wider, so a
-       narrow column shrinks the work rather than squeezing it into a sliver
-       (measured before the mosaic's rows were bounded by their cells: 60x294
-       at the handle's floor); every row of tiles reaches both of the grid's
-       edges, so no width leaves a hole at a row's end; and the grid still
-       reaches both of the column's edges, so no width a reader can drag to
-       reopens the dead gutter the redesign closed. The 448px ceiling this
+       287), since 2026-11-02 a mosaic (issue 399), and since 2026-11-04
+       justified rows of tiles at their own pictures' proportions. Three
+       properties are under test at every column width, and none is a number
+       this file or the stylesheet states: no tile is drawn TALLER THAN IT IS
+       WIDE — the vendored pictures are 16:9, so a tile that keeps its
+       picture's proportions never is, and a narrow column shrinks the work
+       rather than squeezing it into a sliver (measured under the fixed rows
+       the mosaic began with: 60x294 at the handle's floor); every row of
+       tiles but the last reaches both of the rows' edges, and the last
+       starts at the left one, so no width leaves a hole anywhere but the end
+       the owner left open; and the rows still reach both of the column's
+       edges, so no width a reader can drag to reopens the dead gutter the
+       redesign closed. The 448px ceiling this
        block used to compare against is gone with the frame it capped — a cap
        on a row that is supposed to span its column would BE the defect — and
        what replaced it as the independent expectation is the column itself,
@@ -9997,16 +10570,18 @@ test('every width the handle can reach keeps every section intact', async ({ pag
       expect(tile.width, `gallery tile ${index + 1} reserves nothing ${at}`).toBeGreaterThan(0);
       expect(
         tile.height,
-        `gallery tile ${index + 1} (${tile.shape}) is ${tile.width.toFixed(1)}x${tile.height.toFixed(1)} ${at}, taller than it is wide`
+        `gallery tile ${index + 1} in row ${tile.row + 1} is ${tile.width.toFixed(1)}x${tile.height.toFixed(1)} ${at}, taller than it is wide`
       ).toBeLessThanOrEqual(tile.width + subPixel);
     }
-    const tileRows = new Map();
+    const tileRows = [];
     for (const tile of state.tiles) {
-      tileRows.set(tile.top, [...(tileRows.get(tile.top) ?? []), tile]);
+      (tileRows[tile.row] ??= []).push(tile);
     }
-    for (const [top, row] of tileRows) {
-      expect(Math.min(...row.map((tile) => tile.left)), `the tile row ${top}px down starts inside the grid ${at}`).toBeLessThanOrEqual(1);
-      expect(Math.min(...row.map((tile) => tile.right)), `the tile row ${top}px down stops short of the grid ${at}`).toBeLessThanOrEqual(1);
+    for (const [index, row] of tileRows.entries()) {
+      expect(Math.min(...row.map((tile) => tile.left)), `tile row ${index + 1} starts inside the rows ${at}`).toBeLessThanOrEqual(1);
+      if (index < tileRows.length - 1) {
+        expect(Math.min(...row.map((tile) => tile.right)), `tile row ${index + 1} stops short of the rows ${at}`).toBeLessThanOrEqual(1);
+      }
     }
     expect(
       state.galleryFill.right,
@@ -11767,6 +12342,121 @@ for (const width of [1440, 390]) {
     }
   });
 }
+
+/* A RELEASE'S IDENTITY IS ITS TAG (owner, 2026-11-04, issue 406: "resolve
+ * it", on the live phone Releases feed, where every byline carried the tag
+ * as a chip and both the repository and the tag were cut — "naranjo.o…
+ * v0.1…"). The lane's origin serves no release, so the releases are staged
+ * through the real envelopes, with the latest one cut from a commit the
+ * commit feed holds, and measured at the phone width the owner read:
+ *   - in the Releases feed every entry's identity, at its end, is its own
+ *     tag, no byline carries a chip, the subject links to the release's own
+ *     page, and the repository and a short tag print whole;
+ *   - a tag as long as the grammar admits ellipsizes inside the mark's bound
+ *     instead of taking the subject's room and the document sideways;
+ *   - in the Commits feed the commit that release was cut from keeps its
+ *     chip and its short sha, before the Releases feed and after it. */
+test('a release entry ends on its tag with no chip in its byline, and the commit it was cut from keeps its chip (owner 2026-11-04, issue 406)', async ({
+  page,
+}) => {
+  const cutSha = 'b93ba24fd27c26e0edf52f21f903d3a4b9d4817a';
+  const longest = `v0.0.0-release-candidate.${'0'.repeat(39)}`;
+  expect(longest, 'the long tag is not the grammar’s longest').toHaveLength(64);
+  const releases = [
+    { repo: 'naranjo.online', tag: 'v0.1.103', title: 'Release 0.1.103: three feeds of the recent work', at: '2026-11-03T17:35:00Z', sha: cutSha },
+    { repo: 'obsync', tag: '1.1.12', title: 'Release 1.1.12: pairing again', at: '2026-11-02T18:58:00Z', sha: 'c'.repeat(40) },
+    { repo: 'theme', tag: longest, title: 'A release with the longest tag the grammar admits', at: '2026-11-01T12:00:00Z', sha: 'd'.repeat(40) },
+  ];
+  const cutSubject = 'Release 0.1.103: three feeds of the recent work (#403)';
+  await page.route('**/api/panels/vcs-activity', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.recentCommits = [
+      { repo: 'naranjo.online', sha: cutSha, message: cutSubject, at: '2026-11-03T17:34:45Z' },
+      ...envelope.data.recentCommits,
+    ];
+    envelope.data.recentReleases = releases;
+    await route.fulfill({ response, json: envelope });
+  });
+  await page.route('**/api/panels/coding-projects', async (route) => {
+    const response = await route.fetch();
+    const envelope = await response.json();
+    envelope.data.repos = envelope.data.repos.map((repo) =>
+      repo.name === 'naranjo.online' ? { ...repo, release: 'v0.1.103', releaseSha: cutSha } : repo
+    );
+    await route.fulfill({ response, json: envelope });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await visit(page);
+  const stream = page.locator('#projects .stream');
+  await stream.scrollIntoViewIfNeeded();
+  const entries = () =>
+    page.evaluate(() =>
+      [...window.document.querySelectorAll('#projects .stream-entry')].map((entry) => {
+        const mark = entry.querySelector('.stream-mark');
+        const source = entry.querySelector('.stream-source');
+        const title = entry.querySelector('.stream-title');
+        return {
+          kind: entry.getAttribute('data-kind'),
+          title: title.textContent.trim(),
+          href: entry.querySelector('a.stream-title')?.getAttribute('href') ?? null,
+          mark: mark.textContent.trim(),
+          markWhole: mark.scrollWidth <= mark.clientWidth,
+          markWidth: mark.getBoundingClientRect().width,
+          titleWidth: title.getBoundingClientRect().width,
+          sourceWhole: source.scrollWidth <= source.clientWidth,
+          chips: [...entry.querySelectorAll('.stream-release')].map((chip) => chip.textContent.trim()),
+        };
+      })
+    );
+  const sideways = () => page.evaluate(() => window.document.documentElement.scrollWidth - window.innerWidth);
+  const cutCommit = async () => (await entries()).find((entry) => entry.title === cutSubject);
+
+  /* THE COMMIT FEED FIRST: the commit the release was cut from wears it. */
+  const before = await cutCommit();
+  expect(before, 'the staged release commit is not on the commit feed’s first page').toBeTruthy();
+  expect(before.chips, 'the commit a release was cut from lost its chip').toEqual(['v0.1.103']);
+  expect(before.mark, 'the release commit no longer ends on its short sha').toBe(cutSha.slice(0, 7));
+
+  await page.locator('#projects .stream-filter[aria-label="Releases"]').click();
+  await settled(page);
+  const feed = await entries();
+  expect(feed.map((entry) => entry.kind), 'the Releases feed holds something besides the staged releases').toEqual([
+    'release',
+    'release',
+    'release',
+  ]);
+  expect(feed.map((entry) => entry.mark), 'a release does not end on its own tag').toEqual(releases.map((release) => release.tag));
+  expect(
+    feed.flatMap((entry) => entry.chips),
+    'a release still carries its tag as a chip in its byline'
+  ).toEqual([]);
+  await expect(page.locator('#projects .stream-list .stream-release'), 'the Releases feed draws a chip').toHaveCount(0);
+  expect(feed.map((entry) => entry.href), 'a release’s subject does not open the release’s own page').toEqual(
+    releases.map((release) => `https://github.com/snaraj/${release.repo}/releases/tag/${release.tag}`)
+  );
+  /* WHAT THE OWNER SAW CUT prints whole now: the repository, and a short
+     tag at the entry's end. */
+  for (const entry of feed.slice(0, 2)) {
+    expect(entry.sourceWhole, `the repository of the ${entry.mark} release is cut at 390px`).toBe(true);
+    expect(entry.markWhole, `the ${entry.mark} tag is cut at 390px`).toBe(true);
+  }
+  /* AND THE LONGEST TAG is held by the mark's bound: cut with an ellipsis,
+     the subject keeping more room than the tag takes, and the page still. */
+  const [, , long] = feed;
+  expect(long.markWhole, 'a 64-character tag fits whole, so this measured no bound').toBe(false);
+  expect(long.titleWidth, `the longest tag left its subject ${long.titleWidth}px against its own ${long.markWidth}px`).toBeGreaterThan(
+    long.markWidth
+  );
+  expect(await sideways(), 'a long tag took the document sideways').toBeLessThanOrEqual(subPixel);
+
+  /* BACK ON THE COMMITS, the chip is where it was. */
+  await page.locator('#projects .stream-filter[aria-label="Commits"]').click();
+  await settled(page);
+  const after = await cutCommit();
+  expect(after?.chips, 'the commit a release was cut from lost its chip after the Releases feed').toEqual(['v0.1.103']);
+  expect(after?.mark).toBe(cutSha.slice(0, 7));
+});
 
 /* A PRESSED FILTER SHINES, AND ONLY WHERE MOTION IS WELCOME (owner,
  * 2026-11-02: "generate SVGs with animation that shine/sparkly when clicking

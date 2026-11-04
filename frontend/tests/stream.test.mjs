@@ -199,13 +199,28 @@ describe('the three feeds keep what they name (owner, 2026-11-03, issue 401)', (
     assert.equal(newest.release, undefined, 'a merge wears a version');
   });
 
-  it('builds a release entry from the wire: its tag as the chip, the release’s own page, the commit’s short identity', () => {
-    const [newest] = filterRows(rows, 'release');
+  it('builds a release entry from the wire: the release’s own page, and its tag where the identity sits, with no chip (issue #406)', () => {
+    /* The owner, on a phone byline that cut both the repository and the tag:
+       "resolve it". A release's identity is its tag, at the entry's end where
+       a commit's short sha and a merge's number sit, and its byline is where
+       and when like every other entry's, so nothing in it is a version. */
+    const feed = filterRows(rows, 'release');
+    assert.deepEqual(feed.map((row) => row.mark), ['1.1.12', 'v3'], 'a release’s identity is not its tag');
+    for (const row of feed) {
+      assert.equal(row.release, undefined, `the ${row.mark} release still wears its tag as a chip`);
+      assert.ok(!('release' in row), `the ${row.mark} release carries a chip field at all`);
+    }
+    const [newest] = feed;
     assert.equal(newest.source.text, 'obsync');
-    assert.equal(newest.release, '1.1.12');
     assert.equal(newest.title.text, 'Release 1.1.12: pairing again');
     assert.equal(newest.title.href, `${projectHost}/obsync/releases/tag/1.1.12`);
-    assert.equal(newest.mark, releaseSha.slice(0, 7));
+    assert.match(newest.title.label, /release 1\.1\.12/);
+    assert.notEqual(newest.mark, releaseSha.slice(0, 7), 'a release shows its commit’s short sha again');
+    /* The commit the release was cut from KEEPS its chip: the version rides on
+       that commit in the commit feed exactly as before. */
+    const cut = filterRows(rows, 'commit').find((row) => row.kind === 'commit' && row.title.text === 'release 1.1.12');
+    assert.equal(cut?.release, '1.1.12', 'the commit a release was cut from lost its chip');
+    assert.equal(cut?.mark, releaseSha.slice(0, 7));
   });
 
   it('builds no address from a repository or an identity it cannot vouch for', () => {
@@ -220,7 +235,9 @@ describe('the three feeds keep what they name (owner, 2026-11-03, issue 401)', (
       assert.equal(row.title.href, null);
       assert.equal(row.source.text, hostile, 'the text did not survive as data');
     }
-    assert.equal(feed.find((row) => row.kind === 'release').mark, '—');
+    /* The tag is still the release's identity: the grammar admitted it, and
+       the unverifiable commit costs only the address built from it. */
+    assert.equal(feed.find((row) => row.kind === 'release').mark, releases[0].tag);
   });
 
   it('refuses a payload whose merge or release rows drift, and admits one without them', () => {
@@ -275,7 +292,7 @@ describe('the three feeds keep what they name (owner, 2026-11-03, issue 401)', (
       assert.ok(at(commitFeed[index - 1]) >= at(commitFeed[index]), `commit feed entry ${index} is newer than the one above it`);
     }
     assert.equal(filterRows(many.rows, 'merge')[0].mark, '#1');
-    assert.equal(filterRows(many.rows, 'release')[0].release, 'v0');
+    assert.equal(filterRows(many.rows, 'release')[0].mark, 'v0');
   });
 
   it('gives each feed an empty note of its own when the wire carries none of its rows', () => {

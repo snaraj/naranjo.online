@@ -436,7 +436,17 @@
     outline-offset: -2px;
   }
 
+  /* THE IDENTITY IS BOUNDED (issue 406): a release's is its tag, which the
+     tag grammar admits up to 64 characters, so past the token's width the
+     mark ellipsizes, as the version chip it replaced did, rather than taking
+     the subject's room and the page sideways. MEASURED unbounded at 390px: a
+     64-character tag drew the document 550px wide and its subject 0px. A
+     short sha, a pull request's number and a tag of up to twelve characters
+     print whole. */
   .stream-mark {
+    max-inline-size: var(--stream-mark-max);
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-family: var(--font-mono);
     font-size: var(--ledger-figure-size);
     font-variant-numeric: tabular-nums;
