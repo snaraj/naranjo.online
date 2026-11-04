@@ -78,7 +78,7 @@ function isOptionalTally(value: unknown): boolean {
  * already has. */
 const releaseTagPattern = /^[A-Za-z0-9._-]{1,64}$/;
 
-function isReleaseTag(tag: string): boolean {
+export function isReleaseTag(tag: string): boolean {
   return tag !== '.' && tag !== '..' && releaseTagPattern.test(tag);
 }
 

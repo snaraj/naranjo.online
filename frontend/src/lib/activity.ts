@@ -12,8 +12,8 @@
 import type { ActivityLink } from './blocks.ts';
 import { addDays, type GridCell } from './grid.ts';
 
-import type { VCSActivityData, VCSPrivateDay } from './panels';
-import { projectHost, projectHostLabel } from './projects.ts';
+import type { VCSActivityData, VCSMerge, VCSPrivateDay, VCSRelease } from './panels';
+import { isReleaseTag, projectHost, projectHostLabel } from './projects.ts';
 
 /* The registry identifier the activity strip loads; the one place the id is
  * spelled on the frontend. */
@@ -33,6 +33,43 @@ function isCount(value: unknown): value is number {
  * producer can have meant. */
 function isWholeCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isText(value: unknown): value is string {
+  return typeof value === 'string';
+}
+
+function isNamed(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+/* A merged pull request or a release row, by SHAPE (issue #401): every field
+ * present with its type, a number that is a real one, a repository that is not
+ * empty, and a tag inside the release-tag grammar, because the stream prints
+ * it verbatim as the version. The other strings' grammar is checked where an
+ * address is built from them, exactly as a commit's is. */
+function isMergeRow(row: unknown): row is VCSMerge {
+  return (
+    isRecord(row) &&
+    isNamed(row.repo) &&
+    Number.isSafeInteger(row.number) &&
+    (row.number as number) >= 1 &&
+    isText(row.title) &&
+    isText(row.at) &&
+    isText(row.sha)
+  );
+}
+
+function isReleaseRow(row: unknown): row is VCSRelease {
+  return (
+    isRecord(row) &&
+    isNamed(row.repo) &&
+    isText(row.tag) &&
+    isReleaseTag(row.tag) &&
+    isText(row.title) &&
+    isText(row.at) &&
+    isText(row.sha)
+  );
 }
 
 /* parseVCSActivity admits only payloads carrying the exact shape the strip
@@ -128,6 +165,17 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
       }
     }
   }
+  /* The merged pull requests and the releases are admitted by SHAPE and refuse
+   * the whole payload on any drift, exactly as the private days are (issue
+   * #401). Absent is the rolling-compatibility state: a replica that predates
+   * them serves neither, and their feeds say they hold nothing. */
+  const { recentMerges, recentReleases } = document;
+  if (recentMerges !== undefined && !(Array.isArray(recentMerges) && recentMerges.every(isMergeRow))) {
+    return null;
+  }
+  if (recentReleases !== undefined && !(Array.isArray(recentReleases) && recentReleases.every(isReleaseRow))) {
+    return null;
+  }
   /* The daily commit counts are admitted by SHAPE, the same way the weeks are:
    * the same number of seven-day columns, every cell a count, and a total that
    * is exactly their sum. Any drift refuses the whole payload rather than
@@ -171,6 +219,12 @@ export function parseVCSActivity(document: unknown): VCSActivityData | null {
   }
   if (coverage !== undefined) {
     activity.coverage = coverage;
+  }
+  if (recentMerges !== undefined) {
+    activity.recentMerges = (recentMerges as VCSMerge[]).map(({ repo, number, title, at, sha }) => ({ repo, number, title, at, sha }));
+  }
+  if (recentReleases !== undefined) {
+    activity.recentReleases = (recentReleases as VCSRelease[]).map(({ repo, tag, title, at, sha }) => ({ repo, tag, title, at, sha }));
   }
   if (privateActivity !== undefined) {
     activity.privateActivity = (privateActivity as VCSPrivateDay[]).map((day) => ({
@@ -345,6 +399,32 @@ export function commitShaUrl(commit: { repo: string; sha: string }): string | nu
  * validated full 40, this label's slice is display-only. */
 export function commitShaLinkLabel(message: string, sha: string): string {
   return `${message}, commit ${sha.slice(0, 7)}, opens in a new tab`;
+}
+
+/* A merged pull request's own page and a release's (issue #401), each built
+ * from validated fields only, or null. Unlike a subject's trailing "(#N)",
+ * a merge row's number was read from the repository's own pull-request list,
+ * so its address and its accessible name may say "pull request". */
+export function mergeUrl(merge: { repo: string; number: number }): string | null {
+  const repo = commitRepoUrl(merge.repo);
+  return repo === null || !Number.isSafeInteger(merge.number) || merge.number < 1 ? null : `${repo}/pull/${merge.number}`;
+}
+
+export function releaseUrl(release: { repo: string; tag: string }): string | null {
+  const repo = commitRepoUrl(release.repo);
+  return repo === null || !isReleaseTag(release.tag) ? null : `${repo}/releases/tag/${release.tag}`;
+}
+
+/* The title half of a merge or a release entry: its own page when the fields
+ * validate, plain text otherwise. */
+export function mergeTitleLink(merge: VCSMerge): ActivityLink {
+  const href = mergeUrl(merge);
+  return { text: merge.title, href, label: href === null ? merge.title : `${merge.title}, pull request #${merge.number}, opens in a new tab` };
+}
+
+export function releaseTitleLink(release: VCSRelease): ActivityLink {
+  const href = releaseUrl(release);
+  return { text: release.title, href, label: href === null ? release.title : `${release.title}, release ${release.tag}, opens in a new tab` };
 }
 
 /* ---------------------------------------------------------------------------

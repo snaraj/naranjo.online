@@ -253,13 +253,27 @@ func TestResponsesStayWithinTheOwnerBudgets(t *testing.T) {
 // gives the sealed usage document, and the reason docs/panels-invariants.md
 // carries the number.
 //
-// The MAXIMAL payload is built rather than sampled: a full year of week
-// columns at five-digit daily counts, maxServedCommits public rows each
-// carrying a forty-hex identity, the longest repository name the grammar
-// admits, and a subject at the truncation bound; plus one private aggregate
-// per day of the log window, at the widest figures those counts can reach.
-// Nothing a live round can produce is larger, because every term here is at
-// the bound its own admission enforces.
+// The payload is built at the ENCODING-AWARE maximum of what the mappers
+// admit, measured in the bytes the envelope is served as rather than in runes
+// (issue #401's review: the JSON encoder writes some admitted characters as
+// six bytes each). Every list is at its cap: maxServedCommits commits, merged
+// pull requests and releases, a full year of week columns in both grids, one
+// private aggregate per date the log window can touch. Every subject is the
+// longest commitSubject produces, built from the admitted character that
+// encodes widest, which this test finds by asking commitSubject and the
+// encoder about every rune rather than by assuming it. Every repository name,
+// tag and identity is at its grammar's length, and every number at
+// maxCountValue, the count bound the pipeline shares. Two of them (the
+// streak, a day's repository count) can never reach it, and no payload has
+// every cell and the total that sums them at the bound at once, so the
+// figure is an upper bound rather than a reachable payload. The status is the
+// longest one a payload is served under, and the envelope's instant the
+// widest form it is written in.
+//
+// One term is assumed rather than enforced: the calendar mappers check a
+// day's contribution count for its sign only, and the private-day aggregate
+// a day's commit count likewise, so a count past maxCountValue would be
+// wider. Whatever arrives, prepare's refusal at MaxPanelResponseBytes holds.
 func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 	t.Parallel()
 	// The admission window is the log window plus its slack behind and its
@@ -268,54 +282,65 @@ func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 	// two more dates than the window has days, not the window itself.
 	const admissionSpan = commitLogWindowDays*24*time.Hour + contributionWindowSlack + maxCommitFutureSkew
 	const maxPrivateDays = int(admissionSpan/(24*time.Hour)) + 2
+	// The widest admitted character: every rune commitSubject keeps in the
+	// middle of a subject, measured by the encoder that writes the envelope.
+	widest, width := rune(0), 0
+	for symbol := rune(0); symbol <= 0x10FFFF; symbol++ {
+		if symbol >= 0xD800 && symbol <= 0xDFFF {
+			continue
+		}
+		if _, err := commitSubject("a" + string(symbol) + "a"); err != nil {
+			continue
+		}
+		encoded, err := json.Marshal(string(symbol))
+		if err != nil {
+			t.Fatalf("encode %U: %v", symbol, err)
+		}
+		if len(encoded)-2 > width {
+			widest, width = symbol, len(encoded)-2
+		}
+	}
+	subject, err := commitSubject(strings.Repeat(string(widest), maxCommitMessageRunes+1))
+	if err != nil {
+		t.Fatalf("the longest subject of the widest character %U was refused: %v", widest, err)
+	}
+	const count = maxCountValue
+	total := count
 	payload := VCSActivityData{
-		TotalContributions: 99999,
-		Streak:             999,
+		TotalContributions: count,
+		Streak:             count,
 		EndDate:            "2026-09-11",
 		CommitsAt:          "2026-09-11T23:08:18Z",
 		Coverage:           CoverageComplete,
 		Weeks:              make([][]int, 0, maxCalendarDays/daysPerWeek+1),
+		CommitWeeks:        make([][]int, 0, maxCalendarDays/daysPerWeek+1),
+		TotalCommits:       &total,
 		RecentCommits:      make([]VCSCommit, 0, maxServedCommits),
+		RecentMerges:       make([]VCSMerge, 0, maxServedCommits),
+		RecentReleases:     make([]VCSRelease, 0, maxServedCommits),
 		PrivateActivity:    make([]VCSPrivateDay, 0, maxPrivateDays),
 	}
 	for range maxCalendarDays/daysPerWeek + 1 {
-		week := make([]int, daysPerWeek)
+		week, commits := make([]int, daysPerWeek), make([]int, daysPerWeek)
 		for day := range week {
-			// Five digits per cell: the owner's busiest measured day is three,
-			// so this is two orders of magnitude of headroom on the term that
-			// dominates the payload.
-			week[day] = 99999
+			week[day], commits[day] = count, count
 		}
 		payload.Weeks = append(payload.Weeks, week)
+		payload.CommitWeeks = append(payload.CommitWeeks, commits)
 	}
-	// The commit weeks (owner direction, 2026-10-16) at their own bound: a
-	// day's commits never exceed that day's contributions, so the widest
-	// commit cell is the widest calendar cell, and the total is their sum.
-	commits := 0
-	for _, week := range payload.Weeks {
-		column := make([]int, daysPerWeek)
-		copy(column, week)
-		payload.CommitWeeks = append(payload.CommitWeeks, column)
-		for _, count := range column {
-			commits += count
-		}
-	}
-	payload.TotalCommits = &commits
 	name := strings.Repeat("r", maxRepositoryNameRunes)
-	subject := strings.Repeat("s", maxCommitMessageRunes) + "…"
+	tag := strings.Repeat("v", maxReleaseTagRunes)
 	for index := range maxServedCommits {
-		payload.RecentCommits = append(payload.RecentCommits, VCSCommit{
-			Repo:    name,
-			SHA:     fmt.Sprintf("%040x", index+1),
-			Message: subject,
-			At:      "2026-09-11T23:08:18Z",
-		})
+		sha := fmt.Sprintf("%040x", index+1)
+		payload.RecentCommits = append(payload.RecentCommits, VCSCommit{Repo: name, SHA: sha, Message: subject, At: "2026-09-11T23:08:18Z"})
+		payload.RecentMerges = append(payload.RecentMerges, VCSMerge{Repo: name, Number: count, Title: subject, At: "2026-09-11T23:08:18Z", SHA: sha})
+		payload.RecentReleases = append(payload.RecentReleases, VCSRelease{Repo: name, Tag: tag, Title: subject, At: "2026-09-11T23:08:18Z", SHA: sha})
 	}
 	for index := range maxPrivateDays {
 		payload.PrivateActivity = append(payload.PrivateActivity, VCSPrivateDay{
 			Date:          time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -index).Format(dayLayout),
-			Contributions: 9999,
-			Repositories:  maxContributionRepositories,
+			Contributions: count,
+			Repositories:  count,
 		})
 	}
 	data, err := json.Marshal(payload)
@@ -324,24 +349,26 @@ func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 	}
 	envelope, err := json.Marshal(Envelope{
 		Schema: EnvelopeSchema, ID: "vcs-activity", Kind: KindVCSActivity,
-		Title: "A title as long as any this registry configures", GeneratedAt: "2026-09-11T23:08:20Z",
-		Status: StatusOK, Data: data,
+		// An instant read on a clock with a zone offset, which RFC 3339 writes
+		// five bytes wider than a UTC one.
+		Title: "A title as long as any this registry configures", GeneratedAt: "2026-09-11T16:08:20-07:00",
+		Status: StatusStale, Data: data,
 	})
 	if err != nil {
 		t.Fatalf("marshal the maximal envelope: %v", err)
 	}
-	// The measured figure, recorded in docs/panels-invariants.md. It is
-	// asserted as a CEILING with its headroom named rather than as an equality,
-	// because a payload that shrinks is not a regression — but one that grows
-	// past this without somebody re-measuring is.
-	const measured = 17500
-	if len(envelope) > measured {
-		t.Errorf("the maximal activity envelope is %d bytes, over the %d recorded in docs/panels-invariants.md; re-measure before raising it", len(envelope), measured)
+	// The measured figure, recorded in docs/panels-invariants.md and pinned
+	// EXACTLY: the payload is built from the bounds alone, so its size moves
+	// only when a bound moves or the fixture stops being maximal, and either
+	// one is a re-measurement before anything else.
+	const measured = 103475
+	if len(envelope) != measured {
+		t.Errorf("the maximal activity envelope is %d bytes, not the %d recorded in docs/panels-invariants.md; a bound moved or the fixture stopped being maximal — re-measure and record the new figure", len(envelope), measured)
 	}
 	if len(envelope) > MaxPanelResponseBytes {
 		t.Errorf("the maximal activity envelope is %d bytes, over the owner's %d budget", len(envelope), MaxPanelResponseBytes)
 	}
-	t.Logf("maximal vcs-activity envelope: %d bytes, %d under the %d budget", len(envelope), MaxPanelResponseBytes-len(envelope), MaxPanelResponseBytes)
+	t.Logf("maximal vcs-activity envelope (subjects of %U, %d bytes each encoded): %d bytes, %d under the %d budget", widest, width, len(envelope), MaxPanelResponseBytes-len(envelope), MaxPanelResponseBytes)
 }
 
 // TestProjectsPayloadFitsTheOwnerBudget is the same measurement for the

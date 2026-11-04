@@ -5,18 +5,22 @@
  * many pages they make, and which rows one page shows. The gallery's mosaic
  * pages its tiles with the same two page functions. */
 
-import type { StreamFilter, StreamRow } from './blocks.ts';
+import type { StreamFilter, StreamKind, StreamRow } from './blocks.ts';
 
-/* The rows a filter keeps, in the order they arrived: everything, the public
- * commits, or the entries that carry a release. */
+/* The kinds each feed keeps (owner, 2026-11-03, issue #401): the commit feed
+ * is the public commits and the private days among them, the merge feed the
+ * merged pull requests, the release feed the releases. Every kind is in
+ * exactly one feed, so every entry is too. */
+const feedKinds: Readonly<Record<StreamFilter['key'], readonly StreamKind[]>> = {
+  commit: ['commit', 'private'],
+  merge: ['merge'],
+  release: ['release']
+};
+
+/* The rows a feed keeps, in the order they arrived. */
 export function filterRows(rows: readonly StreamRow[], key: StreamFilter['key']): readonly StreamRow[] {
-  if (key === 'commit') {
-    return rows.filter((row) => row.kind === 'commit');
-  }
-  if (key === 'release') {
-    return rows.filter((row) => row.release !== undefined);
-  }
-  return rows;
+  const kinds = feedKinds[key];
+  return rows.filter((row) => kinds.includes(row.kind));
 }
 
 /* How many pages `total` rows make at `size` a page. Never fewer than one:

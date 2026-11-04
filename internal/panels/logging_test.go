@@ -450,9 +450,9 @@ func TestCommitRoundFailureWarnsWhereItDegrades(t *testing.T) {
 		t.Fatalf("NewFetchSource() error = %v", err)
 	}
 	source.setLogger(slog.New(slog.NewJSONHandler(&out, nil)))
-	rows, _, _, attempted, fresh := source.commitSection(t.Context(), &scriptedDoer{}, func(string) string { return "fixture-credential" }, source.specs.vcs.Commits, time.Now().UTC())
-	if !attempted || fresh || len(rows) != 0 {
-		t.Fatalf("commitSection with a failing transport = %d rows, attempted %t, fresh %t; want an attempted, degraded round", len(rows), attempted, fresh)
+	recent, _, _, attempted, fresh := source.commitSection(t.Context(), &scriptedDoer{}, func(string) string { return "fixture-credential" }, source.specs.vcs.Commits, time.Now().UTC())
+	if !attempted || fresh || len(recent.commits) != 0 {
+		t.Fatalf("commitSection with a failing transport = %d rows, attempted %t, fresh %t; want an attempted, degraded round", len(recent.commits), attempted, fresh)
 	}
 	record := findRecord(refreshLogRecords(t, out.String()), "commit round failed")
 	if record == nil {

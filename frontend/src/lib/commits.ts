@@ -63,7 +63,9 @@ import {
   commitShaUrl,
   commitTitleLink,
   isValidCommitSha,
-  parseVCSActivity
+  mergeTitleLink,
+  parseVCSActivity,
+  releaseTitleLink
 } from './activity.ts';
 import type { CalendarSet, ContributionCalendarProps, StreamFilter, StreamProps, StreamRow } from './blocks.ts';
 import {
@@ -78,7 +80,9 @@ import type {
   PanelEnvelope,
   VCSActivityData,
   VCSCommit,
-  VCSPrivateDay
+  VCSMerge,
+  VCSPrivateDay,
+  VCSRelease
 } from './panels';
 import { codingProjectsPanelId, parseCodingProjects, projectLinkLabel } from './projects.ts';
 import { knownSourceKeys, sourceName, tokenUsagePanelId, tokenUsageSources } from './token-usage.ts';
@@ -111,17 +115,36 @@ export const commitLogListId = 'commits-log';
  * are gone. */
 export const streamPageRows = 5;
 
-/* The stream's three filters (issue #399): marks the eye reads, the words a
- * screen reader hears in their place. Their order is the order they sit in.
- * Each says what its empty list means, in the reserve the entries would have
- * filled, so a filter that keeps nothing is never a blank page. Releases is
- * the one that is empty for a reason of its own: no recent commit is a
- * repository's latest release. */
-export const streamReleasesEmptyNote = 'no release among the recent commits';
+/* HOW MANY ENTRIES A FEED HOLDS: the origin's own cap on each of its three
+ * lists (vcsActivity.commits.max in internal/panels/config/fetch.json, pinned
+ * against this number by tests/stream.test.mjs). Every feed is cut here, the
+ * commits' private days included, so a full feed is the same number of pages
+ * as any other full feed (owner, 2026-11-03, issue #401: "if one shows 6 and
+ * it takes 100 px in height, then the other should match as well"). */
+export const streamFeedRows = 30;
+
+/* The stream's three marks are three FEEDS of the recent work (owner,
+ * 2026-11-03, issue #401: "all entries should display the same thing and
+ * they all should display based on latest"): the newest commits with the
+ * private days among them, the newest merged pull requests, the newest
+ * releases, each as far as the origin's bounded selection reaches (its
+ * vcs-activity field comments state it). Each is newest first and every
+ * entry is in exactly one; there is no view of everything, and the first feed
+ * is the one the stream opens on.
+ * The marks are what the eye reads, the words what a screen reader hears in
+ * their place, and their order is the order they sit in.
+ *
+ * Each says what its empty feed means, in the reserve the entries would have
+ * filled, and each note says only what is absent — never why — because an
+ * absence is all the payload proves (review of issue #401's first head: a
+ * note that claimed every recent commit was a release was printed over a
+ * record holding none). */
+export const streamMergesEmptyNote = 'no merge among the recent work';
+export const streamReleasesEmptyNote = 'no release among the recent work';
 
 export const streamFilters: readonly StreamFilter[] = [
-  { key: 'all', glyph: 'list', label: 'Everything', empty: activityEntriesNote },
-  { key: 'commit', glyph: 'pull', label: 'Commits', empty: activityEntriesNote },
+  { key: 'commit', glyph: 'list', label: 'Commits', empty: activityEntriesNote },
+  { key: 'merge', glyph: 'pull', label: 'Merges', empty: streamMergesEmptyNote },
   { key: 'release', glyph: 'tag', label: 'Releases', empty: streamReleasesEmptyNote }
 ];
 
@@ -194,13 +217,13 @@ export function privateRowText(day: VCSPrivateDay): string {
   return `${contributions} in ${repositories}`;
 }
 
-/* THE LOG IS ONE LIST, newest first, of two kinds of row (issue #315): a
- * public commit, and a day of private contribution the account made without
- * publishing it. Interleaving them is the whole of the owner's ruling — a
- * separate private section would read as a footnote to the record rather than
- * as part of it — and the merge is a plain two-pointer walk over two lists
- * that each already arrive newest first, so nothing here sorts and nothing
- * here can reorder a row its producer dated.
+/* THE COMMIT FEED IS ONE LIST, newest first, of two kinds of row (issue
+ * #315): a public commit, and a day of private contribution the account made
+ * without publishing it. Interleaving them is the whole of the owner's ruling
+ * — a separate private section would read as a footnote to the record rather
+ * than as part of it — and the merge is a plain two-pointer walk over two
+ * lists that each already arrive newest first, so nothing here sorts and
+ * nothing here can reorder a row its producer dated.
  *
  * A private day is dated at the END of its day (23:59:59Z) rather than at its
  * start, so a day's private work sits above the public commits of that same
@@ -209,17 +232,18 @@ export function privateRowText(day: VCSPrivateDay): string {
  * the row itself prints a day-granular age because a day is all the aggregate
  * knows.
  *
- * NOTHING IS SLICED HERE. Every row the wire carried reaches the component,
- * which pages them (issue #399), so the wire's own cap is what bounds the
- * list. A cap in this function would be the page quietly deciding the record
- * stops at whatever one page happens to hold. */
-function logRows(activity: VCSActivityData, releases: ReleaseMap, now: Date): StreamRow[] {
+ * THE FEED STOPS AT THE ORIGIN'S CAP (issue #401). The commits arrive capped,
+ * and the private days beside them would otherwise make this one feed longer
+ * than the merges' and the releases', so the walk stops at streamFeedRows: the
+ * newest thirty entries, whichever kind they are. The component pages them;
+ * nothing below a page decides where the record stops. */
+function commitRows(activity: VCSActivityData, releases: ReleaseMap, now: Date): StreamRow[] {
   const commits = activity.recentCommits;
   const days = activity.privateActivity ?? [];
   const rows: StreamRow[] = [];
   let commit = 0;
   let day = 0;
-  while (commit < commits.length || day < days.length) {
+  while ((commit < commits.length || day < days.length) && rows.length < streamFeedRows) {
     const nextCommit = commits[commit];
     const nextDay = days[day];
     const takeDay =
@@ -302,6 +326,46 @@ function publicRow(commit: VCSCommit, index: number, releases: ReleaseMap, now: 
     mark: commitShaUrl(commit) === null ? noMark : commitMark(commit.sha),
     ...(release !== undefined && release.sha === commit.sha ? { release: release.tag } : {})
   };
+}
+
+/* A merged pull request: the repository as its byline, the title as its
+ * subject linked to the pull request itself, and its number where a commit's
+ * short identity sits. */
+function mergeRow(merge: VCSMerge, index: number, now: Date): StreamRow {
+  return {
+    key: `merge-${merge.repo}-${merge.number}-${index}`,
+    kind: 'merge',
+    age: panelAge(merge.at, now),
+    source: { text: merge.repo, href: commitRepoUrl(merge.repo), label: projectLinkLabel({ name: merge.repo }) },
+    title: mergeTitleLink(merge),
+    mark: `#${merge.number}`
+  };
+}
+
+/* A release: the version as the chip a released commit wears, the subject of
+ * the commit it names linked to the release's own page, and that commit's
+ * short identity. */
+function releaseRow(release: VCSRelease, index: number, now: Date): StreamRow {
+  return {
+    key: `release-${release.repo}-${release.tag}-${index}`,
+    kind: 'release',
+    age: panelAge(release.at, now),
+    source: { text: release.repo, href: commitRepoUrl(release.repo), label: projectLinkLabel({ name: release.repo }) },
+    title: releaseTitleLink(release),
+    mark: commitMark(release.sha),
+    release: release.tag
+  };
+}
+
+/* The three feeds, each newest first as the wire sent it and cut at the one
+ * cap, laid one after another: a feed is a filter over this list by kind, so
+ * the order between feeds is never shown. */
+function streamRows(activity: VCSActivityData, releases: ReleaseMap, now: Date): StreamRow[] {
+  return [
+    ...commitRows(activity, releases, now),
+    ...(activity.recentMerges ?? []).slice(0, streamFeedRows).map((merge, index) => mergeRow(merge, index, now)),
+    ...(activity.recentReleases ?? []).slice(0, streamFeedRows).map((release, index) => releaseRow(release, index, now))
+  ];
 }
 
 export function contributionCalendarProps(
@@ -391,9 +455,9 @@ export function contributionCalendarProps(
  * is dated in its own byline, and the contributions panel keeps its
  * data-through line where the reader meets that panel, under the calendar.
  *
- * NOTHING IS SLICED IN THIS FUNCTION. Every row the wire carried reaches the
- * component, which pages and filters them; that is a rendering decision, not
- * a cap on the record. */
+ * Every row of the three feeds reaches the component, which pages them and
+ * shows one feed at a time; each feed is cut at the origin's own cap and at
+ * nothing a page decides. */
 export function projectsCommitsProps(
   envelopes: readonly (PanelEnvelope | null)[],
   now: Date = new Date()
@@ -408,7 +472,7 @@ export function projectsCommitsProps(
     generatedAt: activityEnvelope?.generatedAt,
     anchor: commitColumnId,
     listId: commitLogListId,
-    rows: activity === null ? [] : logRows(activity, releaseMap(projectsEnvelope), now),
+    rows: activity === null ? [] : streamRows(activity, releaseMap(projectsEnvelope), now),
     pageSize: streamPageRows,
     emptyNote: activityEntriesNote,
     filters: streamFilters

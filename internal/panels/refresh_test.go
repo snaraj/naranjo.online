@@ -878,13 +878,39 @@ type fixtureContributionDay struct {
 
 // historyAnswer builds the commit producer's SECOND answer: one entry per
 // repository asked about, in the order they were asked, each carrying the
-// commits given for it. A repository with no rows answers a null default
-// branch, which is what an empty repository really reports.
+// commits, merged pull requests and releases given for it. A repository with
+// no commit rows answers a null default branch, which is what an empty
+// repository really reports.
 func historyAnswer(repos ...fixtureHistoryRepo) string {
 	nodes := make([]any, 0, len(repos))
 	for _, repo := range repos {
+		pulls := make([]map[string]any, 0, len(repo.merges))
+		for index, merge := range repo.merges {
+			pulls = append(pulls, map[string]any{
+				"number":      index + 1,
+				"title":       merge[0],
+				"mergedAt":    merge[1],
+				"mergeCommit": map[string]any{"oid": fixtureSHA(100 + index + repo.shaOffset)},
+			})
+		}
+		releases := make([]map[string]any, 0, len(repo.releases))
+		for index, release := range repo.releases {
+			releases = append(releases, map[string]any{
+				"tagName":      release[0],
+				"publishedAt":  release[1],
+				"isDraft":      false,
+				"isPrerelease": false,
+				"tagCommit":    map[string]any{"oid": fixtureSHA(200 + index + repo.shaOffset), "messageHeadline": "release " + release[0]},
+			})
+		}
+		node := map[string]any{
+			"name":             repo.name,
+			"defaultBranchRef": nil,
+			"pullRequests":     map[string]any{"nodes": pulls},
+			"releases":         map[string]any{"nodes": releases},
+		}
+		nodes = append(nodes, node)
 		if len(repo.commits) == 0 {
-			nodes = append(nodes, map[string]any{"name": repo.name, "defaultBranchRef": nil})
 			continue
 		}
 		commits := make([]map[string]any, 0, len(repo.commits))
@@ -895,12 +921,9 @@ func historyAnswer(repos ...fixtureHistoryRepo) string {
 				"committedDate":   commit[1],
 			})
 		}
-		nodes = append(nodes, map[string]any{
-			"name": repo.name,
-			"defaultBranchRef": map[string]any{
-				"target": map[string]any{"history": map[string]any{"nodes": commits}},
-			},
-		})
+		node["defaultBranchRef"] = map[string]any{
+			"target": map[string]any{"history": map[string]any{"nodes": commits}},
+		}
 	}
 	encoded, err := json.Marshal(map[string]any{"data": map[string]any{"nodes": nodes}})
 	if err != nil {
@@ -910,10 +933,15 @@ func historyAnswer(repos ...fixtureHistoryRepo) string {
 }
 
 // fixtureHistoryRepo is one repository's answer inside a history document.
+// A merge is {title, mergedAt}, numbered from 1 in order, and a release is
+// {tag, publishedAt}; their commit identities are numbered from 100 and 200
+// past shaOffset.
 type fixtureHistoryRepo struct {
 	name      string
 	shaOffset int
 	commits   [][2]string
+	merges    [][2]string
+	releases  [][2]string
 }
 
 // commitQuerySpec is the fixture commit producer: two query documents on the
@@ -1002,9 +1030,15 @@ func activityAnswersAt(t *testing.T, now time.Time) map[string]cannedAnswer {
 			fixtureHistoryRepo{name: "first-repo", commits: [][2]string{
 				{"feat(panels): the newest thing", activityFixtureInstant(now, 1, 9)},
 				{"fix(panels): the older thing", activityFixtureInstant(now, 3, 9)},
+			}, merges: [][2]string{
+				{"the older merge", activityFixtureInstant(now, 3, 8)},
+			}, releases: [][2]string{
+				{"v1.2.3", activityFixtureInstant(now, 1, 10)},
 			}},
 			fixtureHistoryRepo{name: "second-repo", shaOffset: 10, commits: [][2]string{
 				{"docs: the middle thing", activityFixtureInstant(now, 2, 9)},
+			}, merges: [][2]string{
+				{"the newer merge", activityFixtureInstant(now, 2, 8)},
 			}},
 		)},
 	}
@@ -1078,6 +1112,19 @@ func TestActivityRefreshServesLiveCommits(t *testing.T) {
 	}
 	if payload.CommitsAt == "" {
 		t.Error("a freshly fetched commit list carries no commitsAt; the payload cannot then say which half is older")
+	}
+	// The same round's merges and releases ride beside the commits (issue
+	// #401), newest first across repositories, labelled by configuration.
+	wantMerges := []VCSMerge{
+		{Repo: "second-repo", Number: 1, Title: "the newer merge", At: activityFixtureInstant(now, 2, 8), SHA: fixtureSHA(110)},
+		{Repo: "first-repo", Number: 1, Title: "the older merge", At: activityFixtureInstant(now, 3, 8), SHA: fixtureSHA(100)},
+	}
+	if !reflect.DeepEqual(payload.RecentMerges, wantMerges) {
+		t.Errorf("merges = %+v, want %+v", payload.RecentMerges, wantMerges)
+	}
+	wantReleases := []VCSRelease{{Repo: "first-repo", Tag: "v1.2.3", Title: "release v1.2.3", At: activityFixtureInstant(now, 1, 10), SHA: fixtureSHA(200)}}
+	if !reflect.DeepEqual(payload.RecentReleases, wantReleases) {
+		t.Errorf("releases = %+v, want %+v", payload.RecentReleases, wantReleases)
 	}
 	// The calendar half still maps, and the payload is dated by IT.
 	if payload.TotalContributions != 499 || payload.EndDate != "2026-08-20" {
@@ -1160,6 +1207,14 @@ func TestHostileCommitUpstreamsKeepTheLastGoodList(t *testing.T) {
 			}
 			if payload.CommitsAt != seeded.CommitsAt {
 				t.Errorf("commitsAt = %q, want the retained %q: a stale list must not claim a fresh read", payload.CommitsAt, seeded.CommitsAt)
+			}
+			// The merges and releases are the same round's answer and are
+			// retained with it, never dropped beside a retained commit list.
+			if len(seeded.RecentMerges) == 0 || len(seeded.RecentReleases) == 0 {
+				t.Fatal("the seed round served no merge or no release; the scenario has nothing to retain")
+			}
+			if !reflect.DeepEqual(payload.RecentMerges, seeded.RecentMerges) || !reflect.DeepEqual(payload.RecentReleases, seeded.RecentReleases) {
+				t.Errorf("merges %+v and releases %+v, want the retained %+v and %+v", payload.RecentMerges, payload.RecentReleases, seeded.RecentMerges, seeded.RecentReleases)
 			}
 		})
 	}

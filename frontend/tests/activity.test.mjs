@@ -666,13 +666,15 @@ const activityWith = (count) => ({
 
 test('an empty stream says so instead of showing invented history', () => {
   /* The rows are Ongoing Work's stream (owner, 2026-11-02, issue #399), so the
-     empty branch is Stream's: the adapter's words, in the same reserve the
-     list would fill. */
-  assert.match(stream, /\{#if rows\.length === 0\}\s*<p class="stream-note">\{emptyNote\}<\/p>/);
+     empty branch is Stream's: the shown feed's own words (issue #401), in the
+     same reserve the list would fill, and the stream opens on the commits. */
+  assert.match(stream, /\{#if filtered\.length === 0\}\s*<p class="stream-note">\{filteredEmpty\}<\/p>/);
   // The wording is the adapter's, verbatim from the retired component.
   assert.equal(activityEntriesNote, 'no recent commits reported');
   const empty = projectsCommitsProps([null, null]);
   assert.equal(empty.emptyNote, 'no recent commits reported');
+  assert.equal(empty.filters[0].key, 'commit');
+  assert.equal(empty.filters[0].empty, 'no recent commits reported');
   assert.deepEqual(empty.rows, []);
   assert.equal(empty.status, 'unavailable');
   /* The calendar's own empty face is unchanged, and it still hands the shell
@@ -764,8 +766,9 @@ test('on a phone the subject takes two lines inside the taller pitch, at the she
 
 test('the adapter hands every row, a page size and the stream’s own addresses (issue #399)', () => {
   const now = new Date('2026-08-11T12:00:00Z');
-  /* NOTHING IS SLICED: every row the wire carried reaches the component, which
-     pages them, so the wire's own cap bounds the record and never a page. */
+  /* NOTHING IS SLICED SHORT OF THE WIRE'S CAP: every row the wire carried
+     reaches the component, which pages them, so the origin's own cap bounds
+     each feed (issue #401) and never a page. */
   for (const count of [0, 1, streamPageRows, streamPageRows + 1, 30]) {
     const props = projectsCommitsProps([null, activityWith(count)], now);
     assert.equal(props.rows.length, count, `a ${count}-row payload reached the component short`);
@@ -799,7 +802,7 @@ test('the stream pages and filters with the shared pure functions, and persists 
   assert.match(choose, /page = 1;/, 'a filter leaves the reader on a page of the list they left');
   /* THE STATE IS COMPONENT-LOCAL AND NEVER PERSISTED: a stored page or filter
      would decide what the page shows before a reader has looked at it. */
-  assert.match(script, /let active = \$state<StreamFilter\['key'\]>\('all'\);/);
+  assert.match(script, /let active = \$state<StreamFilter\['key'\]>\('commit'\);/);
   assert.match(script, /let page = \$state\(1\);/);
   assert.doesNotMatch(stream, /localStorage|sessionStorage|document\.cookie/);
   // The pager is the shared one, mounted once, under the list.

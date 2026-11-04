@@ -1214,7 +1214,7 @@ type contributionRepo struct {
 
 // recentRepositories keeps the most recently active repositories, newest
 // first, and drops the rest past maxHistoryRepositories. Dropping by recency
-// rather than refusing is the same clamp mergeCommits applies to its row cap:
+// rather than refusing is the same clamp newestFirst applies to its row cap:
 // a thirteenth repository must not take the panel down, and a third request
 // per round is exactly the per-repository fan-out this producer exists to
 // avoid.
@@ -1270,63 +1270,131 @@ func isNodeIdentifier(s string) bool {
 	return true
 }
 
-// mapCommitHistories maps the SECOND answer onto dated panel rows. The request
-// asked about one node identifier per admitted repository, in order, so the
-// answer's entries are matched to those repositories POSITIONALLY and the row
-// label is the name discovery admitted — never a label this document chose.
+// mapCommitHistories maps the SECOND answer onto dated panel rows: each
+// repository's commits, merged pull requests and releases (issue #401). The
+// request asked about one node identifier per admitted repository, in order,
+// so the answer's entries are matched to those repositories POSITIONALLY and
+// every row label is the name discovery admitted — never a label this
+// document chose.
 //
-// Two upstream states are data rather than errors, and both are narrow: an
-// entry with no default branch is an empty repository and contributes no rows,
-// and a commit tip that is not a commit yields no history. Everything else —
-// a null entry, a count over the bound, a name that disagrees with the one
-// asked about, a malformed identity, subject, or instant — refuses the WHOLE
-// document, because a half-parsed history looks exactly like a quiet week.
-func mapCommitHistories(raw []byte, repos []contributionRepo, now time.Time) ([]datedCommit, error) {
+// Three upstream states are data rather than errors, and all are narrow: an
+// entry with no default branch is an empty repository and contributes no
+// commits, a commit tip that is not a commit yields no history, and a draft or
+// pre-release is not a release a reader is shown. Everything else — a null
+// entry, a list over the bound, a name that disagrees with the one asked
+// about, a malformed identity, subject, number, tag or instant, a merged pull
+// request with no merge commit — refuses the WHOLE document, because a
+// half-parsed history looks exactly like a quiet week.
+func mapCommitHistories(raw []byte, repos []contributionRepo, now time.Time) (datedWork, error) {
 	var data historyData
 	if err := graphQLPayload(raw, "commit history", &data); err != nil {
-		return nil, err
+		return datedWork{}, err
 	}
 	if len(data.Nodes) != len(repos) {
-		return nil, fmt.Errorf("commit history: %d entries answered %d repositories", len(data.Nodes), len(repos))
+		return datedWork{}, fmt.Errorf("commit history: %d entries answered %d repositories", len(data.Nodes), len(repos))
 	}
-	rows := make([]datedCommit, 0, len(repos)*maxCommitDocumentItems)
+	var work datedWork
 	for index, node := range data.Nodes {
 		repo := repos[index]
 		if node == nil {
-			return nil, fmt.Errorf("commit history: the entry for %s is empty", repo.name)
+			return datedWork{}, fmt.Errorf("commit history: the entry for %s is empty", repo.name)
 		}
 		if node.Name != repo.name {
-			return nil, fmt.Errorf("commit history: the entry asked about %s answered under another name", repo.name)
+			return datedWork{}, fmt.Errorf("commit history: the entry asked about %s answered under another name", repo.name)
 		}
-		if node.DefaultBranchRef == nil {
-			continue
+		var commits []historyCommit
+		if node.DefaultBranchRef != nil {
+			commits = node.DefaultBranchRef.Target.History.Nodes
 		}
-		commits := node.DefaultBranchRef.Target.History.Nodes
+		pulls, releases := node.PullRequests.Nodes, node.Releases.Nodes
 		if len(commits) > maxCommitDocumentItems {
-			return nil, fmt.Errorf("commit history for %s carries %d rows, over the %d bound", repo.name, len(commits), maxCommitDocumentItems)
+			return datedWork{}, fmt.Errorf("commit history for %s carries %d commits, over the %d bound", repo.name, len(commits), maxCommitDocumentItems)
+		}
+		if most := max(len(pulls), len(releases)); most > maxFeedDocumentItems {
+			return datedWork{}, fmt.Errorf("commit history for %s carries a list of %d merged pull requests or releases, over the %d bound", repo.name, most, maxFeedDocumentItems)
 		}
 		for _, commit := range commits {
 			if !isCommitIdentity(commit.OID) {
-				return nil, fmt.Errorf("commit history for %s: a row carries no commit identity", repo.name)
+				return datedWork{}, fmt.Errorf("commit history for %s: a row carries no commit identity", repo.name)
 			}
 			subject, err := commitSubject(commit.MessageHeadline)
 			if err != nil {
-				return nil, fmt.Errorf("commit history for %s: %w", repo.name, err)
+				return datedWork{}, fmt.Errorf("commit history for %s: %w", repo.name, err)
 			}
 			at, err := time.Parse(time.RFC3339, commit.CommittedDate)
 			if err != nil {
-				return nil, fmt.Errorf("commit history for %s: commit instant %q: %w", repo.name, commit.CommittedDate, err)
+				return datedWork{}, fmt.Errorf("commit history for %s: commit instant %q: %w", repo.name, commit.CommittedDate, err)
 			}
 			if at.After(now.Add(maxCommitFutureSkew)) || at.Before(now.Add(-maxCommitAge)) {
-				return nil, fmt.Errorf("commit history for %s: commit instant %s is outside the plausible window", repo.name, at.UTC().Format(time.RFC3339))
+				return datedWork{}, fmt.Errorf("commit history for %s: commit instant %s is outside the plausible window", repo.name, at.UTC().Format(time.RFC3339))
 			}
-			rows = append(rows, datedCommit{
+			work.commits = append(work.commits, datedRow[VCSCommit]{
 				at:  at,
 				row: VCSCommit{Repo: repo.name, SHA: commit.OID, Message: subject, At: at.UTC().Format(time.RFC3339)},
 			})
 		}
+		for _, pull := range pulls {
+			if pull.Number < 1 || pull.Number > maxCountValue {
+				return datedWork{}, fmt.Errorf("commit history for %s: a merged pull request carries no number", repo.name)
+			}
+			if pull.MergeCommit == nil || !isCommitIdentity(pull.MergeCommit.OID) {
+				return datedWork{}, fmt.Errorf("commit history for %s: merged pull request #%d carries no merge commit", repo.name, pull.Number)
+			}
+			title, err := commitSubject(pull.Title)
+			if err != nil {
+				return datedWork{}, fmt.Errorf("commit history for %s: merged pull request #%d: %w", repo.name, pull.Number, err)
+			}
+			at, err := historyInstant(pull.MergedAt, now)
+			if err != nil {
+				return datedWork{}, fmt.Errorf("commit history for %s: merged pull request #%d: %w", repo.name, pull.Number, err)
+			}
+			work.merges = append(work.merges, datedRow[VCSMerge]{
+				at:  at,
+				row: VCSMerge{Repo: repo.name, Number: pull.Number, Title: title, At: at.UTC().Format(time.RFC3339), SHA: pull.MergeCommit.OID},
+			})
+		}
+		for _, release := range releases {
+			if release.Draft || release.Prerelease {
+				continue
+			}
+			if release.TagName == "" || !isReleaseTag(release.TagName) {
+				return datedWork{}, fmt.Errorf("commit history for %s: a release tag is outside the host's tag grammar", repo.name)
+			}
+			if release.TagCommit == nil || !isCommitIdentity(release.TagCommit.OID) {
+				return datedWork{}, fmt.Errorf("commit history for %s: release %s names no commit", repo.name, release.TagName)
+			}
+			title, err := commitSubject(release.TagCommit.MessageHeadline)
+			if err != nil {
+				return datedWork{}, fmt.Errorf("commit history for %s: release %s: %w", repo.name, release.TagName, err)
+			}
+			at, err := historyInstant(release.PublishedAt, now)
+			if err != nil {
+				return datedWork{}, fmt.Errorf("commit history for %s: release %s: %w", repo.name, release.TagName, err)
+			}
+			work.releases = append(work.releases, datedRow[VCSRelease]{
+				at:  at,
+				row: VCSRelease{Repo: repo.name, Tag: release.TagName, Title: title, At: at.UTC().Format(time.RFC3339), SHA: release.TagCommit.OID},
+			})
+		}
 	}
-	return rows, nil
+	return work, nil
+}
+
+// historyInstant parses a merge or release instant. It is held to the
+// repository listing's generous floor (maxProjectAge) rather than the recent
+// commits' window: a merge or a release is history, and a repository active
+// this month whose last release is two years old has a real, old release. The
+// floor exists to refuse a zero-valued or misparsed instant; the ceiling is
+// the same clock skew every instant here is allowed.
+func historyInstant(value string, now time.Time) (time.Time, error) {
+	at, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("instant %q: %w", value, err)
+	}
+	if at.After(now.Add(maxCommitFutureSkew)) || at.Before(now.Add(-maxProjectAge)) {
+		return time.Time{}, fmt.Errorf("instant %s is outside the plausible window", at.UTC().Format(time.RFC3339))
+	}
+	return at, nil
 }
 
 // isCommitIdentity reports whether s is a full lowercase hexadecimal commit
@@ -1346,7 +1414,8 @@ func isCommitIdentity(s string) bool {
 	return true
 }
 
-// commitSubject reduces a commit message to the single line a panel row
+// commitSubject reduces a commit message — or a pull request's title, or the
+// subject of the commit a release names — to the single line a panel row
 // renders. Three refusals and one truncation, each chosen deliberately:
 //
 //   - An empty subject is refused. Every real commit has one, and a row with
@@ -1365,15 +1434,15 @@ func commitSubject(message string) (string, error) {
 	subject, _, _ := strings.Cut(message, "\n")
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		return "", errors.New("a row carries no commit subject")
+		return "", errors.New("a row carries no subject")
 	}
 	runes := make([]rune, 0, len(subject))
 	for _, symbol := range subject {
 		if symbol < 0x20 || symbol == 0x7f {
-			return "", errors.New("a commit subject carries control characters")
+			return "", errors.New("a subject carries control characters")
 		}
 		if symbol == '�' {
-			return "", errors.New("a commit subject is not valid UTF-8")
+			return "", errors.New("a subject is not valid UTF-8")
 		}
 		runes = append(runes, symbol)
 	}
@@ -1383,16 +1452,27 @@ func commitSubject(message string) (string, error) {
 	return string(runes), nil
 }
 
-// mergeCommits orders rows newest first across every repository and truncates
-// to the smaller of the configured limit and maxServedCommits. The sort is a
-// bounded insertion — a handful of rows, no import, and stable for equal
-// instants, so two commits sharing a second keep the order their documents
-// gave them.
-func mergeCommits(dated []datedCommit, limit int) []VCSCommit {
+// newest merges each of a history answer's three lists across repositories,
+// newest first, under the one cap.
+func (work datedWork) newest(limit int) recentWork {
+	return recentWork{
+		commits:  newestFirst(work.commits, limit),
+		merges:   newestFirst(work.merges, limit),
+		releases: newestFirst(work.releases, limit),
+	}
+}
+
+// newestFirst orders rows newest first across every repository and truncates
+// to the smaller of the configured limit and maxServedCommits, the one cap all
+// three feeds share. The sort is a bounded insertion — a handful of rows, no
+// import, and stable for equal instants, so two rows sharing a second keep the
+// order their documents gave them. It never returns nil, so an empty feed is
+// an empty list.
+func newestFirst[Row any](dated []datedRow[Row], limit int) []Row {
 	if limit <= 0 || limit > maxServedCommits {
 		limit = maxServedCommits
 	}
-	ordered := make([]datedCommit, 0, limit)
+	ordered := make([]datedRow[Row], 0, limit)
 	for _, candidate := range dated {
 		at := len(ordered)
 		for at > 0 && ordered[at-1].at.Before(candidate.at) {
@@ -1402,12 +1482,12 @@ func mergeCommits(dated []datedCommit, limit int) []VCSCommit {
 			continue
 		}
 		if len(ordered) < limit {
-			ordered = append(ordered, datedCommit{})
+			ordered = append(ordered, datedRow[Row]{})
 		}
 		copy(ordered[at+1:], ordered[at:])
 		ordered[at] = candidate
 	}
-	rows := make([]VCSCommit, 0, len(ordered))
+	rows := make([]Row, 0, len(ordered))
 	for _, entry := range ordered {
 		rows = append(rows, entry.row)
 	}

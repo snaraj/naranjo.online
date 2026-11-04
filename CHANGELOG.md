@@ -7,6 +7,34 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.103] - 2026-11-03
+
+### Fixed
+
+- Ongoing Work's three marks are three feeds of the recent work, so pressing one
+  changes what the stream shows. Commits holds the newest thirty among each
+  active repository's ten newest commits, with the private days among them.
+  Merges holds the newest thirty among every active repository's thirty most
+  recently updated merged pull requests. Releases holds the newest thirty among
+  every active repository's thirty most recently created releases, less the
+  drafts and pre-releases among them. The selection is bounded, not paginated,
+  by design (confined egress), so a repository whose thirty most recently
+  updated merged pull requests are all older than a newer merge omits that merge
+  until the host updates it. Each feed is newest first and cut at thirty
+  entries, so every full feed pages alike in the same five-entry reserve. Every
+  entry is in exactly one feed. The view of everything is gone and the stream
+  opens on the commits. A feed with nothing in it says so in words of its own
+  that state only what is missing. The activity payload carries the merges and
+  releases as `recentMerges` and `recentReleases`, read in the commit round's
+  own history query and added to `vcs-activity/v1` as optional fields (#401).
+
+### Changed
+
+- The gallery manifest's documentation states the publishing rule: the
+  manifest's item order is the feed order, the mosaic's pattern is by position
+  rather than by kind, and the operator interleaves drawings and films so no
+  page is one kind alone (#401).
+
 ## [0.1.102] - 2026-11-02
 
 ### Added
