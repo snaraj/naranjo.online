@@ -1870,11 +1870,14 @@ h1 {
    branch by reading mode for the same reason that sibling does not -- it is
    read against the scrim, which is the same near-black in every mode. */
 :root {
-  /* THE GALLERY IS A MOSAIC (owner, 2026-11-02, issue 399): the gap between
-     its tiles is the one length it declares, because a tile's width is the
-     columns its shape spans and its height is its own picture's (owner,
-     2026-11-04: "the bottom side can be uneven"). */
+  /* THE GALLERY IS A MOSAIC OF JUSTIFIED ROWS (owner, 2026-11-02, issue 399;
+     2026-11-04: "ideally it would be all cohesive until the last one"): the
+     gap between its tiles and rows is the one length its rows declare,
+     because a tile's width and height are its picture's at its row's height.
+     The other is the width a page of one tile is laid at, at the reading
+     width. */
   --gallery-mosaic-gap: 0.375rem;
+  --gallery-lone-tile: 50%;
   /* The GROUND a tile and a film sit on (issue 239) is --gallery-stage-ground,
      declared with the palettes because it branches by reading mode. */
   /* The stage's prev/next pair: the disc inside the 44px target, its ink, its

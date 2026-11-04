@@ -197,14 +197,16 @@ browser's own 404 line as the only console output. The frame's measured box
 was byte-identical between the two runs and the page reported a cumulative
 layout shift of 0 across the swap.
 
-The vendored set renders before any request exists. Since 0.1.104 a tile
-shows its picture whole, at the width its place in the mosaic gives it and in
-the picture's own proportions, so an item's `full` `width` and `height` set its
-tile's proportions, and the tile has that box before a byte of the preview
-arrives: a picture's arrival moves nothing. They must therefore be the
-picture's real proportions, and its preview must have the same ones. The
-mosaic's height follows its pictures, so a live manifest replacing the
-vendored set can change it, as a page turn can.
+The vendored set renders before any request exists. Since 0.1.104 the mosaic
+is justified rows of whole pictures: every row but the last is one height and
+fills the width, each tile as wide as its picture is at that height, and the
+last row keeps the previous row's height. So an item's `full` `width` and
+`height` set its tile's shape — its share of its row and its proportions —
+and the tile has that box before a byte of the preview arrives: a picture's
+arrival moves nothing. They must therefore be the picture's real proportions,
+and its preview must have the same ones. The mosaic's height follows its
+pictures, so a live manifest replacing the vendored set can change it, as a
+page turn can.
 
 ## Publishing, from the operator's side
 
@@ -242,9 +244,9 @@ The manifest's item order carries no meaning for the mosaic: the gallery
 shuffles the manifest's items once per visit, on the page, before it lays a
 tile, so every load mixes drawings and films afresh and the order holds for
 that visit — the pager and the stage's previous and next follow it (owner,
-2026-11-04, issue #405: "this is fine, just make it random"). The mosaic's
-pattern is by position, not by kind — a film in a drawing's slot takes the
-same tile — so the operator need not interleave the kinds when publishing,
+2026-11-04, issue #405: "this is fine, just make it random"). The rows are
+cut by position, not by kind — a film takes its place in a row exactly as a
+drawing does — so the operator need not interleave the kinds when publishing,
 and need not order the items at all.
 
 Everything about the volume's own provisioning — where it comes from, how it

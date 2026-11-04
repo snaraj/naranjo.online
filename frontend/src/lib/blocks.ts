@@ -717,10 +717,10 @@ export type MediaGalleryItem = {
   /* Present exactly when the item moves; see MediaGalleryVideo. */
   readonly video?: MediaGalleryVideo;
   /* This item's own box, when it differs from the gallery's declared one.
-   * Its proportions are its tile's (owner, 2026-11-04: the tile shows the
-   * picture whole, so a tile is as tall as its picture), and they are known
-   * before a byte arrives, so the picture's arrival moves nothing. They must
-   * be the picture's real proportions. */
+   * Its proportions are its tile's and its tile's share of its row (owner,
+   * 2026-11-04: the tile shows the picture whole, in justified rows), and
+   * they are known before a byte arrives, so the picture's arrival moves
+   * nothing. They must be the picture's real proportions. */
   readonly width?: number;
   readonly height?: number;
   /* The PREVIEW derivative's own intrinsic width, when the source of the item
