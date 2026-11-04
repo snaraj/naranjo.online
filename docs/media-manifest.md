@@ -203,6 +203,12 @@ manifest's `width`/`height` are the element's intrinsic-size HINT, not the
 reservation. The vendored set therefore renders before any request exists, and
 a live manifest replaces its CONTENT without moving its box.
 
+A still's `full` box also decides how its tile shows it (0.1.104): where
+covering the tile would cut more than a quarter of the picture on either axis,
+the tile shows the whole picture over a blurred copy of its own preview. So a
+still's declared `width` and `height` must have the picture's real
+proportions. A film's tile always covers.
+
 ## Publishing, from the operator's side
 
 The volume's directory layout IS the URL layout — the origin resolves a

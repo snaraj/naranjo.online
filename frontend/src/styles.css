@@ -1878,6 +1878,20 @@ h1 {
   --gallery-row: 9rem;
   --gallery-row-phone: 10rem;
   --gallery-mosaic-gap: 0.375rem;
+  /* A CONTAINED TILE'S AMBIENT FILL (owner, 2026-11-04, on the 0.1.104
+     preview: "if the drawing is lost you can represent it in a different
+     way"): the picture itself behind the whole picture, blurred, and dimmed
+     by an overlay so the picture above it reads first. A blur fades into
+     transparency at the layer's own edge, so the layer reaches past the tile
+     on every side by three blur radii, where that fade is under 0.3%: the rim
+     lies wholly outside the clipped tile at every tile size. A SCALE could not
+     promise that, because the rim is a length and a tile's side runs from
+     about 100px to 700px: at 1.12 the preview showed a dark band and a line
+     at a contained tile's border. Not branched by reading mode: like the
+     stage's pair, it sits on the artwork's own ground. */
+  --gallery-ambient-blur: 1.25rem;
+  --gallery-ambient-bleed: calc(3 * var(--gallery-ambient-blur));
+  --gallery-ambient-dim: rgba(0, 0, 0, 0.4);
   /* The GROUND a tile and a film sit on (issue 239) is --gallery-stage-ground,
      declared with the palettes because it branches by reading mode. */
   /* The stage's prev/next pair: the disc inside the 44px target, its ink, its

@@ -5,7 +5,11 @@
   chose between them is gone; what an item is lives under it on the stage.
   Their order is chance, once per visit (owner, 2026-11-04, issue 405: "this
   is fine, just make it random"): the grid lays a shuffled copy of the items,
-  and the manifest's own order means nothing to it.
+  and the manifest's own order means nothing to it. So a drawing lands in a
+  wide tile as often as in a square, and where covering that tile would cut
+  too much of it, the tile shows the whole drawing over an ambient fill made
+  of the drawing itself (owner, 2026-11-04: "if the drawing is lost you can
+  represent it in a different way"; lib/mosaic.ts, thumbFit).
 
   A FILM'S TILE OPENS THE STAGE LIKE A PICTURE'S (issue 384). The user, on an
   iPhone, 2026-10-22: "the videos are not responsive to the touch, I should be
@@ -45,7 +49,7 @@
   import Pager from './Pager.svelte';
   import { browserMedia, spreadMediaQuery, watchMedia } from '../columnWidth';
   import { swipeHorizontal } from '../gesture.ts';
-  import { mosaicShapes, shuffled } from '../mosaic.ts';
+  import { mosaicShapes, shuffled, thumbFit, tileAspect } from '../mosaic.ts';
   import { pageCount, pageRows } from '../stream.ts';
   import type { MediaGalleryItem, MediaGalleryProps } from '../blocks.ts';
 
@@ -80,6 +84,33 @@
   $effect(() => watchMedia(browserMedia, spreadMediaQuery, (matches) => (wide = matches)));
   const columns = $derived(wide ? 6 : 2);
   const shapes = $derived(mosaicShapes(pageTiles.length, columns));
+
+  /* THE SHAPE EACH TILE REALLY HAS (owner, 2026-11-04, on the 0.1.104
+     preview). Whether a picture is shown whole is a question about the box it
+     would be cropped to, and a tile's cells are square only where a row's
+     token is at least a cell's width: across a wide reading column the cells
+     widen and the rows do not (lib/mosaic.ts states what was measured). So
+     each tile's box is read as it mounts and again whenever it changes — a
+     rotation, a dragged column — and forgotten when the tile leaves the page;
+     until a tile has a box, the shape it is laid as stands in. Changing a fit
+     changes no box, because the ambient layer is out of flow and object-fit
+     sizes nothing, so a write here never wakes the observer again. */
+  const tileShapes: Record<string, number> = $state({});
+  function measureTile(node: HTMLElement, key: string): { destroy: () => void } | undefined {
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const write = (box: { width: number; height: number } | undefined): void => {
+      if (box !== undefined && box.width > 0 && box.height > 0) tileShapes[key] = box.width / box.height;
+    };
+    write(node.getBoundingClientRect());
+    const observer = new ResizeObserver((entries) => write(entries[0]?.contentRect));
+    observer.observe(node);
+    return {
+      destroy: () => {
+        observer.disconnect();
+        delete tileShapes[key];
+      }
+    };
+  }
 
   function itemNoun(candidate: MediaGalleryItem): string {
     return candidate.video === undefined ? 'photograph' : 'film';
@@ -242,16 +273,34 @@
               film's picture opens the stage exactly as a press on a still's
               does. A film's tile adds a play mark, centred and hidden from the
               accessibility tree: it says what the tile holds, and the button's
-              own name already says so in words. -->
+              own name already says so in words.
+              HOW THE PICTURE FITS is thumbFit's (lib/mosaic.ts), from the
+              item's declared box — the gallery's own where the item states
+              none, as the thumb's size hint does — and the tile's measured
+              shape. A contained picture sits over an ambient copy of itself:
+              the same preview URL, so the one fetch serves both, and hidden
+              from the accessibility tree, because the button's name already
+              says what the tile holds. -->
+            {@const fit = thumbFit(
+              tile.video ? 'video' : 'image',
+              tile.width ?? width,
+              tile.height ?? height,
+              tileShapes[tile.key] ?? tileAspect(shapes[place], columns)
+            )}
             <button
               type="button"
               class="gallery-tile"
               data-gallery-kind={tile.video ? 'video' : 'image'}
               data-key={tile.key}
               data-shape={shapes[place]}
+              data-fit={fit}
+              use:measureTile={tile.key}
               onclick={(event) => open(tile, event.currentTarget)}
               aria-label={`Open ${itemNoun(tile)}: ${tile.alt}`}
             >
+              {#if fit === 'contain'}
+                <img class="gallery-ambient" src={tile.previewSrc} alt="" aria-hidden="true" loading="lazy" decoding="async" />
+              {/if}
               <img
                 class="gallery-thumb"
                 src={tile.previewSrc}
@@ -477,8 +526,9 @@
   }
 
   /* A tile is exactly the cells it spans, stretched to them on both axes and
-     never sized by the picture, and the picture covers it: no radius, no
-     border, no shadow — the page frame is the sheet's only line. */
+     never sized by the picture: no radius, no border, no shadow — the page
+     frame is the sheet's only line. The picture covers it, unless covering
+     would cut too much of the picture (below). */
   .gallery-tile {
     position: relative;
     display: block;
@@ -504,6 +554,36 @@
     inline-size: 100%;
     block-size: 100%;
     object-fit: cover;
+  }
+
+  /* A PICTURE THE TILE WOULD CUT IS SHOWN WHOLE (owner, 2026-11-04, on the
+     0.1.104 preview). The tile says so in data-fit, and draws the preview
+     twice: behind, an ambient fill that covers the tile, blurred, and reaching
+     past the tile's clipped edge by the token's bleed so the blur's soft rim
+     falls outside it; above, the whole picture, contained. The DIM is the
+     contained picture's own background: an overlay between the ambient and
+     the picture, which keeps the token a colour and adds no element. It
+     darkens whatever lies under the picture — the ambient once it decodes,
+     the tile's ground before — where a brightness() filter would need a
+     number for a token and darken the ambient's pixels alone. The picture is
+     lifted above the ambient by position alone, in source order. The picture
+     fills the tile's box exactly as a covered tile's does, and the ambient is
+     out of flow and clipped by the tile, so a tile's fit moves nothing: zero
+     CLS. */
+  .gallery-ambient {
+    position: absolute;
+    inset-block-start: calc(-1 * var(--gallery-ambient-bleed));
+    inset-inline-start: calc(-1 * var(--gallery-ambient-bleed));
+    display: block;
+    inline-size: calc(100% + 2 * var(--gallery-ambient-bleed));
+    block-size: calc(100% + 2 * var(--gallery-ambient-bleed));
+    object-fit: cover;
+    filter: blur(var(--gallery-ambient-blur));
+  }
+  .gallery-tile[data-fit='contain'] .gallery-thumb {
+    position: relative;
+    object-fit: contain;
+    background: var(--gallery-ambient-dim);
   }
 
   /* A film's play mark (issue 384): decoration centred over the picture,

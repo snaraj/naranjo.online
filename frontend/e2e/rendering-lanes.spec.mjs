@@ -13,6 +13,10 @@ import { readFileSync } from 'node:fs';
 
 import { expect, test } from '@playwright/test';
 
+/* The gallery's fit rule, imported rather than restated: the lane that checks
+   every tile's fit asks the same function the component runs. */
+import { thumbFit } from '../src/lib/mosaic.ts';
+
 /* The model vocabulary, read from the one file every consumer reads (issue
  * #302). The lane below builds its payload from it rather than from a list
  * typed here, so it exercises the widest block the shipped vocabulary can
@@ -6145,7 +6149,10 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
          the point of the row is that eight masters are not stacked into it. */
       perTile: tiles.map((tile) => tile.querySelectorAll('img.gallery-thumb').length),
       lazy: images.map((image) => image.getAttribute('loading')),
-      fit: images.map((image) => getComputedStyle(image).objectFit),
+      fit: tiles.map((tile) => ({
+        declared: tile.getAttribute('data-fit'),
+        painted: getComputedStyle(tile.querySelector('img.gallery-thumb')).objectFit,
+      })),
       previews: images.every((image) => /-preview-/.test(image.currentSrc)),
       masters: images.filter((image) => /-full-/.test(image.currentSrc)).length,
       /* Nothing enlarged exists until a tile is opened, which is the other
@@ -6173,9 +6180,16 @@ test('the gallery mounts one thumbnail per tile and exactly one enlarged photogr
   expect(observed.lazy, 'a thumbnail stopped being lazy, so the row costs a reader who never reaches it').toEqual(
     Array(drawn).fill('lazy')
   );
-  expect(observed.fit, 'a thumbnail is letterboxed inside its square instead of filling it').toEqual(
-    Array(drawn).fill('cover')
-  );
+  /* A thumbnail fills its tile, unless covering would cut too much of the
+     picture, where it is shown whole over an ambient copy of itself (owner,
+     2026-11-04, on the 0.1.104 preview). Which fit a tile must take is the
+     fit lane's question, asked of every tile against lib/mosaic.ts's rule;
+     here it is that the picture is fitted the way its tile declares and in
+     no third way. */
+  for (const { declared, painted } of observed.fit) {
+    expect(['cover', 'contain'], `a tile declares a fit of ${declared}`).toContain(declared);
+    expect(painted, `a thumbnail is fitted ${painted} in a tile that declares ${declared}`).toBe(declared);
+  }
   expect(observed.previews, 'a tile is showing something other than the preview derivative').toBe(true);
   expect(observed.masters, 'a full-size master is mounted in the tile row').toBe(0);
   expect(observed.enlarged, 'an enlarged picture is mounted before anybody opened one').toBe(0);
@@ -6642,10 +6656,11 @@ test('opening a tile shows a real modal dialog with a larger, unframed photograp
   await expect(enlarged).toBeVisible();
   const enlargedBox = await enlarged.boundingBox();
 
-  /* "Larger" is measured, not assumed. The tile's thumbnail is `object-fit:
-     cover`, so the picture it paints IS its square box — no contain
-     arithmetic to do, and the comparison is between the pixels a reader can
-     actually see in each of the two states. */
+  /* "Larger" is measured, not assumed. The tile's thumbnail paints at most
+     its box — all of it when it covers the tile, a part of it when the tile
+     contains the picture (owner, 2026-11-04) — so the box is the generous
+     side of the comparison, and the enlarged picture must still out-paint
+     it. */
   expect(
     enlargedBox.width * enlargedBox.height,
     `the enlarged photograph paints ${Math.round(enlargedBox.width * enlargedBox.height)}px² against the tile's ${Math.round(tileBox.width * tileBox.height)}px²`
@@ -7323,6 +7338,227 @@ test('the gallery mosaic fills the reading column edge to edge, three squares ov
     expect(rows[1][0].top, `the rows overlap ${at}`).toBeGreaterThanOrEqual(rows[0][0].bottom);
     expect(rows[1][0].height, `the rows are different heights ${at}`).toBeCloseTo(rows[0][0].height, 0);
   }
+});
+
+/* A PICTURE THE TILE WOULD CUT IS SHOWN WHOLE (owner, 2026-11-04, on the
+ * 0.1.104 preview: "some of the drawings can be put longways and not just all
+ * be squares, if the drawing is lost you can represent it in a different
+ * way"). On that load the two drawings that fell into wide tiles were cropped
+ * by a cover fit and read as lost. A drawing may still take a wide tile; where
+ * covering it would cut more than lib/mosaic.ts allows, the tile contains the
+ * whole drawing over an ambient copy of itself.
+ *
+ * Which tile an item takes is chance once per visit (issue 405), so this lane
+ * never asks where anything went. For EVERY tile laid, on every page, at the
+ * reading width and at a phone's, it reads the tile's kind, declared fit and
+ * MEASURED box and the thumb's declared box, and asks thumbFit — imported,
+ * the very rule the component runs — what the fit must be for a tile of that
+ * shape. A contained tile must draw its picture contained inside its box,
+ * over an ambient layer that is the same preview, sits behind it, covers the
+ * tile and is hidden from assistive technology; a covered tile draws no
+ * ambient at all.
+ *
+ * The manifest is the live set's shapes in miniature — a square drawing, a
+ * 1.28:1 one, a portrait, a 16:9 still and a 16:9 film — plus one twice as
+ * tall as it is wide, which no tile covers, so every load lays at least one
+ * contained tile and (the film) one covered tile whatever order it drew. And
+ * one at 1.38:1, the shape whose fit the table in lib/mosaic.ts gets wrong in
+ * BOTH of the shapes a page of seven lays at 1440px: a "square" that is
+ * really 1.27:1 crops it by 8%, not 28%, and a "3:2" wide tile that is really
+ * 1.91:1 by 28%, not 8%. Wherever it lands at that width, a fit read off the
+ * table instead of the tile turns this lane red. Each preview is served as an
+ * SVG of its declared size, so both layers really decode in every engine.
+ *
+ * AND THE BLUR'S RIM NEVER SHOWS. A blur fades into transparency at its
+ * layer's edge, which in the first form of this change showed as a dark band
+ * and a line at a contained tile's border (a 1.12 scale, seen on the
+ * preview). The fade is three blur radii deep before it is under 0.3%, so
+ * the lane reads the engine's own blur radius and requires the ambient layer
+ * to reach that far past every edge of the tile, where the tile clips it. */
+const ambientRimRadii = 3;
+const fitLaneItems = [
+  ['lane-fit-square', 'image', 3840, 3840],
+  ['lane-fit-landscape', 'image', 3840, 2996],
+  ['lane-fit-portrait', 'image', 3289, 3840],
+  ['lane-fit-tall', 'image', 1920, 3840],
+  ['lane-fit-between', 'image', 3840, 2783],
+  ['lane-fit-still', 'image', 3840, 2160],
+  ['lane-fit-film', 'video', 3840, 2160],
+];
+const fitLaneDigest = (index, part) => (index * 4 + part + 1).toString(16).padStart(64, '0');
+const fitLaneManifest = {
+  schema: 'gallery/v1',
+  items: fitLaneItems.map(([key, kind, width, height], index) => ({
+    kind,
+    key,
+    alt: `A ${kind === 'video' ? 'film' : 'picture'} the fit lane serves, ${width} by ${height}`,
+    full: { path: `gallery/${key}.webp`, sha256: fitLaneDigest(index, 0), width, height },
+    preview: {
+      path: `gallery/${key}-preview.svg`,
+      sha256: fitLaneDigest(index, 1),
+      width: Math.round(width / 3),
+      height: Math.round(height / 3),
+    },
+    ...(kind === 'video'
+      ? {
+          poster: { path: `gallery/${key}-poster.webp`, sha256: fitLaneDigest(index, 2), width, height },
+          sources: [{ path: `gallery/${key}-1080.mp4`, sha256: fitLaneDigest(index, 3), type: 'video/mp4', height: 1080 }],
+        }
+      : {}),
+  })),
+};
+
+test('a picture its tile would cut is shown whole over an ambient copy of itself, and every other picture covers its tile, whatever order the visit drew (owner 2026-11-04, on the 0.1.104 preview)', async ({
+  page,
+}) => {
+  await page.route('**/media/mutable/gallery/manifest.json', (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      body: JSON.stringify(fitLaneManifest),
+    })
+  );
+  await page.route('**/media/immutable/**', (route) => {
+    const preview = fitLaneManifest.items.find((item) => route.request().url().endsWith(`/${item.preview.path}`))?.preview;
+    if (preview === undefined) {
+      return route.fulfill({ status: 404, body: '' });
+    }
+    const { width, height } = preview;
+    return route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'image/svg+xml', 'cache-control': 'no-store' },
+      body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="#5a6b7c"/><circle cx="${width / 2}" cy="${height / 2}" r="${Math.min(width, height) / 3}" fill="#c9b27a"/></svg>`,
+    });
+  });
+  await visit(page);
+  const grid = page.locator('#gallery .gallery-grid');
+  const count = page.locator('#gallery .pager .pager-count');
+  const keys = fitLaneItems.map(([key]) => key).sort();
+
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled(page);
+    const at = `at ${width}px`;
+    await expect(count).toHaveText('1 / 2');
+    const laid = [];
+    const fits = [];
+    for (let place = 1; place <= 2; place += 1) {
+      if (place > 1) {
+        await page.locator('#gallery .pager .pager-step[data-step="next"]').click();
+        await expect(count).toHaveText(`${place} / 2`);
+      }
+      await grid.scrollIntoViewIfNeeded();
+      await expect
+        .poll(
+          () =>
+            grid
+              .locator('img')
+              .evaluateAll((images) => images.length > 0 && images.every((image) => image.complete && image.naturalWidth > 0)),
+          { message: `a tile's picture or its ambient copy never decoded ${at}`, timeout: 10_000 }
+        )
+        .toBe(true);
+      const observed = await grid.evaluate((gridNode) => {
+        const box = (node) => {
+          const rect = node.getBoundingClientRect();
+          return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+        };
+        return {
+          columns: Number(gridNode.getAttribute('data-columns')),
+          tiles: [...gridNode.querySelectorAll('.gallery-tile')].map((tile) => {
+            /* Centred before it is read, so the hit test below lands on the
+               tile itself and not on whatever the viewport's edge holds. */
+            tile.scrollIntoView({ block: 'center', inline: 'nearest' });
+            const thumb = tile.querySelector('img.gallery-thumb');
+            const ambients = [...tile.querySelectorAll('img.gallery-ambient')];
+            const ambient = ambients[0];
+            const tileBox = box(tile);
+            /* PAINT ORDER, read the way the engine hit-tests it: topmost
+               first, at the tile's centre, where the contained picture is
+               always drawn. */
+            const stack = window.document.elementsFromPoint(
+              (tileBox.left + tileBox.right) / 2,
+              (tileBox.top + tileBox.bottom) / 2
+            );
+            return {
+              key: tile.getAttribute('data-key'),
+              shape: tile.getAttribute('data-shape'),
+              aspect: (tileBox.right - tileBox.left) / (tileBox.bottom - tileBox.top),
+              kind: tile.getAttribute('data-gallery-kind'),
+              fit: tile.getAttribute('data-fit'),
+              width: Number(thumb.getAttribute('width')),
+              height: Number(thumb.getAttribute('height')),
+              painted: getComputedStyle(thumb).objectFit,
+              tile: tileBox,
+              thumb: box(thumb),
+              ambients: ambients.length,
+              ambient:
+                ambient === undefined
+                  ? null
+                  : {
+                      box: box(ambient),
+                      hidden: ambient.getAttribute('aria-hidden'),
+                      alt: ambient.getAttribute('alt'),
+                      fit: getComputedStyle(ambient).objectFit,
+                      blur: Number(/blur\(([\d.]+)px\)/.exec(getComputedStyle(ambient).filter)?.[1] ?? 0),
+                      sameSource: ambient.currentSrc !== '' && ambient.currentSrc === thumb.currentSrc,
+                      before: Boolean(ambient.compareDocumentPosition(thumb) & Node.DOCUMENT_POSITION_FOLLOWING),
+                      under: stack.includes(ambient) && stack.indexOf(thumb) < stack.indexOf(ambient),
+                    },
+              onTop: stack.includes(thumb),
+            };
+          }),
+        };
+      });
+      expect(observed.columns, `the grid laid ${observed.columns} columns ${at}`).toBe(width === 1440 ? 6 : 2);
+      for (const tile of observed.tiles) {
+        const name = `${tile.key} in a ${tile.shape} tile ${at}`;
+        laid.push(tile.key);
+        fits.push(tile.fit);
+        /* THE RULE: the tile's declared fit is thumbFit's answer for exactly
+           this tile — its kind, its picture's declared box, and the shape the
+           engine laid it as, measured here. */
+        expect(tile.fit, `${name}, ${tile.aspect.toFixed(2)}:1, declares ${tile.fit}`).toBe(
+          thumbFit(tile.kind, tile.width, tile.height, tile.aspect)
+        );
+        expect(tile.painted, `${name} declares ${tile.fit} and paints ${tile.painted}`).toBe(tile.fit);
+        expect(tile.onTop, `${name}: its picture is not where the tile's centre is drawn`).toBe(true);
+        if (tile.fit === 'cover') {
+          expect(tile.ambients, `${name} covers its tile and still draws an ambient copy`).toBe(0);
+          continue;
+        }
+        /* CONTAINED: the whole picture inside the tile's box... */
+        expect(tile.thumb.left, `${name}: the picture starts outside its tile`).toBeGreaterThanOrEqual(tile.tile.left - subPixel);
+        expect(tile.thumb.top, `${name}: the picture starts above its tile`).toBeGreaterThanOrEqual(tile.tile.top - subPixel);
+        expect(tile.thumb.right, `${name}: the picture runs past its tile`).toBeLessThanOrEqual(tile.tile.right + subPixel);
+        expect(tile.thumb.bottom, `${name}: the picture runs under its tile`).toBeLessThanOrEqual(tile.tile.bottom + subPixel);
+        /* ...over exactly one ambient copy of itself, behind it, covering the
+           tile, and hidden from assistive technology. */
+        expect(tile.ambients, `${name} is contained with no ambient copy behind it`).toBe(1);
+        expect(tile.ambient.sameSource, `${name}: the ambient copy is not the tile's own preview`).toBe(true);
+        expect(tile.ambient.hidden, `${name}: the ambient copy is announced to assistive technology`).toBe('true');
+        expect(tile.ambient.alt, `${name}: the ambient copy carries a name`).toBe('');
+        expect(tile.ambient.fit, `${name}: the ambient copy does not cover the tile`).toBe('cover');
+        expect(tile.ambient.before, `${name}: the ambient copy comes after the picture`).toBe(true);
+        expect(tile.ambient.under, `${name}: the ambient copy is not drawn behind the picture`).toBe(true);
+        /* Covering the tile, and with the blur's whole rim past every edge. */
+        expect(tile.ambient.blur, `${name}: the ambient copy is not blurred`).toBeGreaterThan(0);
+        const rim = ambientRimRadii * tile.ambient.blur;
+        expect(tile.tile.left - tile.ambient.box.left, `${name}: the blur's rim shows at the tile's left edge`).toBeGreaterThanOrEqual(rim - subPixel);
+        expect(tile.tile.top - tile.ambient.box.top, `${name}: the blur's rim shows at the tile's top edge`).toBeGreaterThanOrEqual(rim - subPixel);
+        expect(tile.ambient.box.right - tile.tile.right, `${name}: the blur's rim shows at the tile's right edge`).toBeGreaterThanOrEqual(rim - subPixel);
+        expect(tile.ambient.box.bottom - tile.tile.bottom, `${name}: the blur's rim shows at the tile's bottom edge`).toBeGreaterThanOrEqual(rim - subPixel);
+      }
+    }
+    /* Every item once, and both fits laid: the tall picture is contained by
+       every tile and the film covers every tile, so neither branch above can
+       pass by never running. */
+    expect([...laid].sort(), `the two pages did not lay every item exactly once ${at}`).toEqual(keys);
+    expect(fits, `no tile was contained ${at}`).toContain('contain');
+    expect(fits, `no tile covered ${at}`).toContain('cover');
+    await page.locator('#gallery .pager .pager-step[data-step="previous"]').click();
+    await expect(count).toHaveText('1 / 2');
+  }
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
 

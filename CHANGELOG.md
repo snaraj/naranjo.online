@@ -29,6 +29,14 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   draws again. The mosaic's pattern is unchanged and by position. The
   manifest's item order no longer means feed order, so the operator need not
   interleave the kinds (#405).
+- A drawing in a wide tile keeps its subject. Where covering a tile would cut
+  more than a quarter of a picture on either axis, the tile shows the whole
+  picture over an ambient copy of itself: the same preview, blurred, dimmed and
+  reaching past the tile's edges so the blur's rim never shows. Films always
+  cover their tile. The crop is judged against the box each tile is actually
+  laid as, because a wide reading column stretches the cells: at 1440px the
+  square tile is 1.27:1 and the wide one 1.91:1. The vendored fallback
+  photographs are 16:9, so most square tiles show them whole too (#405).
 
 ## [0.1.103] - 2026-11-03
 

@@ -2615,7 +2615,7 @@ test('the gallery is a mosaic of every item, a page at a time, whose shapes and 
      attribute rather than a second branch of markup. */
   assert.match(
     mediaGallery,
-    /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind=\{tile\.video \? 'video' : 'image'\}\s+data-key=\{tile\.key\}\s+data-shape=\{shapes\[place\]\}\s+onclick=\{\(event\) => open\(tile, event\.currentTarget\)\}\s+aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}\s*>/,
+    /<button\s+type="button"\s+class="gallery-tile"\s+data-gallery-kind=\{tile\.video \? 'video' : 'image'\}\s+data-key=\{tile\.key\}\s+data-shape=\{shapes\[place\]\}\s+data-fit=\{fit\}\s+use:measureTile=\{tile\.key\}\s+onclick=\{\(event\) => open\(tile, event\.currentTarget\)\}\s+aria-label=\{`Open \$\{itemNoun\(tile\)\}: \$\{tile\.alt\}`\}\s*>/,
     'every tile, still or film, is the one button that opens the stage'
   );
   assert.equal((mediaGallery.match(/class="gallery-tile"/g) ?? []).length, 1, 'a second tile shape is back beside the button');
@@ -2663,11 +2663,59 @@ test('the gallery is a mosaic of every item, a page at a time, whose shapes and 
     assert.ok(!styles.includes(retired) && !galleryStyle.includes(retired), `${retired} outlived the grid it sized`);
   }
   /* A tile is the cells it spans: no radius, no border, no shadow (the page
-     frame is the sheet's only line), and the picture covers it. */
+     frame is the sheet's only line), and the picture covers it — unless
+     covering would cut too much of it (the pin below). */
   const tile = galleryRule('.gallery-tile');
   assert.doesNotMatch(tile, /border-radius|box-shadow|aspect-ratio/);
   assert.match(tile, /border: 0;/);
   assert.match(galleryRule('.gallery-thumb'), /inline-size: 100%; block-size: 100%; object-fit: cover;/);
+  /* A PICTURE THE TILE WOULD CUT IS SHOWN WHOLE (owner, 2026-11-04, on the
+     0.1.104 preview: "if the drawing is lost you can represent it in a
+     different way"). The fit is lib/mosaic.ts's thumbFit (executed by
+     tests/mosaic.test.mjs), asked once per tile with the kind, the declared
+     box the thumb's own size hint carries and the tile's MEASURED shape —
+     the shape it is laid as only until it has a box — and the tile states it
+     as data-fit. A tile's box is read as it mounts, observed while it lives
+     and forgotten as it goes. A contained tile, and only a contained one,
+     draws the same preview a second time behind the picture: decoration, lazy
+     and async, hidden from the accessibility tree. */
+  assert.match(
+    mediaGallery,
+    /\{@const fit = thumbFit\(\s*tile\.video \? 'video' : 'image',\s*tile\.width \?\? width,\s*tile\.height \?\? height,\s*tileShapes\[tile\.key\] \?\? tileAspect\(shapes\[place\], columns\)\s*\)\}/,
+    'a tile’s fit is decided from something other than its kind, its declared box and the shape it really has'
+  );
+  assert.match(mediaGallery, /const tileShapes: Record<string, number> = \$state\(\{\}\);/);
+  assert.match(mediaGallery, /write\(node\.getBoundingClientRect\(\)\);\s*const observer = new ResizeObserver\(\(entries\) => write\(entries\[0\]\?\.contentRect\)\);\s*observer\.observe\(node\);/, 'a tile’s box is not read as it mounts and whenever it changes');
+  assert.match(mediaGallery, /observer\.disconnect\(\);\s*delete tileShapes\[key\];/, 'a tile that left the page keeps a shape it no longer has');
+  assert.equal((mediaGallery.match(/tileShapes\[key\] = /g) ?? []).length, 1, 'a tile’s shape is written from somewhere besides its own box');
+  assert.equal((mediaGallery.match(/\bthumbFit\(/g) ?? []).length, 1, 'the fit is decided in more than one place');
+  assert.match(mediaGallery, /width=\{tile\.width \?\? width\}\s+height=\{tile\.height \?\? height\}/, 'the thumb’s size hint and its fit read different boxes');
+  assert.match(
+    mediaGallery,
+    /\{#if fit === 'contain'\}\s*<img class="gallery-ambient" src=\{tile\.previewSrc\} alt="" aria-hidden="true" loading="lazy" decoding="async" \/>\s*\{\/if\}\s*<img\s+class="gallery-thumb"/,
+    'a contained tile lost its ambient copy, the copy is not the tile’s own preview, or it is no longer decoration behind the picture'
+  );
+  assert.equal((mediaGallery.match(/class="gallery-ambient"/g) ?? []).length, 1, 'a second ambient layer is written');
+  /* The ambient covers the tile under the picture, blurred by a token and
+     reaching past every edge by the token's bleed, so the blur's rim is
+     clipped away; the contained picture is lifted over it by position alone
+     and carries the dim as its own background. No colour or length of the
+     component's own. */
+  assert.equal(
+    galleryRule('.gallery-ambient'),
+    'position: absolute; inset-block-start: calc(-1 * var(--gallery-ambient-bleed)); inset-inline-start: calc(-1 * var(--gallery-ambient-bleed)); display: block; inline-size: calc(100% + 2 * var(--gallery-ambient-bleed)); block-size: calc(100% + 2 * var(--gallery-ambient-bleed)); object-fit: cover; filter: blur(var(--gallery-ambient-blur));'
+  );
+  assert.equal(
+    galleryRule(".gallery-tile[data-fit='contain'] .gallery-thumb"),
+    'position: relative; object-fit: contain; background: var(--gallery-ambient-dim);'
+  );
+  for (const token of [
+    '--gallery-ambient-blur: 1.25rem;',
+    '--gallery-ambient-bleed: calc(3 * var(--gallery-ambient-blur));',
+    '--gallery-ambient-dim: rgba(0, 0, 0, 0.4);'
+  ]) {
+    assert.ok(styles.includes(token), `${token} is not the sheet's`);
+  }
   /* THE PAGER IS THE SHARED ONE, once, under the grid; nothing explains the
      row in words, and the set switch is gone with its sets. */
   assert.equal((mediaGallery.match(/<Pager\b/g) ?? []).length, 1);
