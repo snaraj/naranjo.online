@@ -2664,8 +2664,8 @@ test('the gallery is a mosaic of every item, a page at a time, in justified rows
   /* Every number reaches the engine as a custom property through the style
      directive, which the document writes through the CSSOM; a style
      attribute string is refused by this origin's default-src 'self'. */
-  const markup = withoutHtmlComments(mediaGallery.replace(/<script[\s\S]*?<\/script>|<style>[\s\S]*<\/style>/g, ''));
-  const tileMarkup = /<div class="gallery-rows"[\s\S]*?\n {6}<\/div>/.exec(markup)?.[0] ?? '';
+  const template = mediaGallery.slice(mediaGallery.lastIndexOf('</script>'), mediaGallery.indexOf('<style>'));
+  const tileMarkup = /<div class="gallery-rows"[\s\S]*?\n {6}<\/div>/.exec(withoutHtmlComments(template))?.[0] ?? '';
   assert.ok(tileMarkup.length > 0, 'the rows are not where this pin expects them');
   assert.doesNotMatch(tileMarkup, /\sstyle=/, 'a row or a tile writes a style attribute string');
   /* What laid the tiles before is gone from both sheets and the component's
