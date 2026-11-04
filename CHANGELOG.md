@@ -11,15 +11,16 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ### Fixed
 
-- Ongoing Work's commit filter keeps something of its own. A release rides on
-  the commit it was cut from, so the filter that kept every public commit kept
-  the releases too, and pressing it changed nothing a reader could see: it
-  differed from everything only by the private days, which the first page
-  rarely holds. It now keeps the public commits that carry no release and is
-  named Plain commits, so the plain commits and the releases split the public
-  entries between them and a private day shows under everything alone. When
-  every recent commit is a release it says so in the reserve, in words of its
-  own (#401).
+- Ongoing Work's three marks are three feeds of the latest work, so pressing
+  one changes what the stream shows. Commits holds the latest commits with the
+  private days among them, Merges the latest merged pull requests and Releases
+  the latest releases, each newest first and cut at thirty entries, so every
+  full feed pages alike in the same five-entry reserve. Every entry is in
+  exactly one feed. The view of everything is gone and the stream opens on the
+  commits. A feed with nothing in it says so in words of its own that state
+  only what is missing. The activity payload carries the merges and releases
+  as `recentMerges` and `recentReleases`, read in the commit round's own
+  history query and added to `vcs-activity/v1` as optional fields (#401).
 
 ### Changed
 

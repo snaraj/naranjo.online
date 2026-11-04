@@ -470,7 +470,8 @@ func TestAuthenticatedGitHubCadenceFallsBackBeforeReservation(t *testing.T) {
 		// credential's own account, so there is no anonymous half to read.
 		publicDoer := newCapturingDoer(activityAnswersAt(t, now))
 		publicSource := configure(t)
-		rows, days, _, attempted, fresh := publicSource.commitSection(t.Context(), publicDoer, anonymous, publicSource.specs.vcs.Commits, now)
+		recent, days, _, attempted, fresh := publicSource.commitSection(t.Context(), publicDoer, anonymous, publicSource.specs.vcs.Commits, now)
+		rows := recent.commits
 		if attempted {
 			t.Fatal("an unset credential still attempted a commit round")
 		}
@@ -2531,8 +2532,9 @@ func TestTheCommitRoundIsTwoDocumentsAndNeverMore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build source: %v", err)
 	}
-	rows, days, at, attempted, fresh := source.commitSection(t.Context(), doer,
+	recent, days, at, attempted, fresh := source.commitSection(t.Context(), doer,
 		func(string) string { return "fixture-token-value" }, source.specs.vcs.Commits, commitRoundNow)
+	rows := recent.commits
 	if !attempted || !fresh {
 		t.Fatalf("commitSection = attempted %t fresh %t", attempted, fresh)
 	}
@@ -2663,8 +2665,9 @@ func TestTheCredentialNeverReachesAServedByteOrALogLine(t *testing.T) {
 		t.Fatalf("build source: %v", err)
 	}
 	source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	rows, _, _, _, _ := source.commitSection(t.Context(), doer, func(string) string { return credential },
+	recent, _, _, _, _ := source.commitSection(t.Context(), doer, func(string) string { return credential },
 		source.specs.vcs.Commits, commitRoundNow)
+	rows := recent.commits
 	if len(rows) == 0 {
 		t.Fatal("the round served nothing; the scenario would then prove nothing")
 	}
@@ -2866,8 +2869,9 @@ func TestARefusedPrivateEntryIsNeverNamedInALogLine(t *testing.T) {
 				t.Fatalf("build source: %v", err)
 			}
 			source.setLogger(slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
-			rows, _, _, _, ok := source.commitSection(t.Context(), doer, func(string) string { return "fixture-token-value" },
+			recent, _, _, _, ok := source.commitSection(t.Context(), doer, func(string) string { return "fixture-token-value" },
 				source.specs.vcs.Commits, commitRoundNow)
+			rows := recent.commits
 			if ok || len(rows) != 0 {
 				t.Fatalf("a drifted discovery answer served %d rows, ok=%t; the refusal is the case", len(rows), ok)
 			}

@@ -138,6 +138,19 @@ leaving 54,864 bytes of headroom.
 because an answer over the cap would refuse the calendar itself rather than
 only its commit figure.
 
+Re-measured 2026-11-03, when the payload gained `recentMerges` and
+`recentReleases` (issue #401): each repository's latest merged pull requests
+and releases, read in the commit round's own history document. Each is newest
+first and capped at the same `max` as `recentCommits`, so the stream's three
+feeds page alike. Both fields are additive and optional, so the kind stays
+`vcs-activity/v1`. A payload written before them decodes and renders
+unchanged, and a reader that has never heard of them draws the commits
+exactly as it did. The maximal document now also carries thirty merges, each
+with a hundred-character repository name, the widest number a count may
+carry and a title at the truncation bound, and thirty releases with the
+longest tag the grammar admits beside the same name and title. It measures
+**39,645 bytes**, 91,427 under the ceiling, and the pinned ceiling is 40,000.
+
 `coding-projects/v2` replaces `coding-projects/v1`: it carries `closedPulls`,
 `release` and `pinned`, and no longer carries `openIssues`/`openPulls` or the
 two columns that drew them — a breaking payload change, so a new kind version
@@ -157,6 +170,11 @@ repositories, the history answer 12,833 bytes for seven repositories at ten
 commits each. Both endpoints cap at 262,144 — exactly half the shared bound,
 unchanged from the cap the retired REST commit documents carried — so the
 producer's worst-case transient read did not grow when its shape changed.
+With the merged pull requests and releases in the same history document
+(issue #401), its answer measured 32,832 bytes on 2026-11-03 for six
+repositories at ten rows in each of the three lists. The twelve repositories
+the document may ask about project to about 66 KB, a quarter of the
+unchanged cap.
 
 ## Why two of the rendering-lane pins are structural
 

@@ -4,9 +4,11 @@
   replaced the sheet's two columns side by side, and the scroll box and the
   phone's "show all" disclosure with them.
 
-  ONE SHAPE FOR EVERY ENTRY: a mark for its kind, a byline — where, when, and
-  the version it released when it released one — the subject under it, and
-  its short identity at the end. An entry is two links laid on one box: the
+  THREE FEEDS OF THE LATEST WORK (owner, 2026-11-03, issue 401): the marks
+  choose the commits, the merges or the releases, and the stream opens on the
+  first. ONE SHAPE FOR EVERY ENTRY whatever its feed: a mark for its kind, a
+  byline — where, when, and the version when there is one — the subject under
+  it, and its identity at the end. An entry is two links laid on one box: the
   subject's covers the whole entry, so the entry is its target, and the
   byline's source sits over it with a finger's-width box of its own. Neither
   link grows the entry, so every entry is the same pitch whatever it says.
@@ -19,10 +21,9 @@
   family's shapes, written with the same weight Icon writes.
 
   ZERO CLS. The list reserves a whole page of entries before a payload lands,
-  the empty note sits in the same reserve (and so does a filter's own note
-  when it keeps nothing), and the pager is always drawn, so a
-  page turn, a filter or an arriving payload lands in a box that was already
-  its size.
+  a feed that holds nothing says so in its own words in the same reserve, and
+  the pager is always drawn, so a page turn, a feed or an arriving payload
+  lands in a box that was already its size.
 
   Every word, figure and address arrives written. The component formats
   nothing and names no repository, host or vendor; the ids it composes tie
@@ -44,7 +45,7 @@
   /* Which filter is chosen, which page is shown, and which filter was pressed
      last — the one whose mark shines. Component-local and never persisted: a
      page and a filter are answers about this visit to this list. */
-  let active = $state<StreamFilter['key']>('all');
+  let active = $state<StreamFilter['key']>('commit');
   let page = $state(1);
   let lit = $state<StreamFilter['key'] | undefined>(undefined);
   /* Every press counts, so pressing the lit filter again redraws its mark and
@@ -58,8 +59,8 @@
      real page rather than past it. */
   const at = $derived(Math.min(page, pages));
   const shown = $derived(pageRows(filtered, at, pageSize));
-  /* What a filter that keeps nothing says, in the reserve its entries would
-     have filled; the adapter writes one for every filter. */
+  /* What a feed that holds nothing says, in the reserve its entries would
+     have filled; the adapter writes one for every feed. */
   const filteredEmpty = $derived(filters.find((filter) => filter.key === active)?.empty ?? emptyNote);
 
   function choose(key: StreamFilter['key']): void {
@@ -141,15 +142,13 @@
           {/each}
         </div>
       </div>
-      {#if rows.length === 0}
-        <p class="stream-note">{emptyNote}</p>
-      {:else if filtered.length === 0}
+      {#if filtered.length === 0}
         <p class="stream-note">{filteredEmpty}</p>
       {:else}
         <ol class="stream-list" id={listId}>
           {#each shown as row, index (row.key)}
             <li class="stream-entry" data-kind={row.kind}>
-              <span class="stream-kind"><Icon name={row.kind === 'commit' ? 'pull' : 'folder'} slot="row" /></span>
+              <span class="stream-kind"><Icon name={row.kind === 'private' ? 'folder' : 'pull'} slot="row" /></span>
               <div class="stream-body">
                 <!-- The byline is the subject link's description too, so a
                   reader who tabs straight to the subject still hears where and

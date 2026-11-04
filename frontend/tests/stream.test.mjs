@@ -3,18 +3,20 @@
  * with sleek pagination").
  *
  * Two things are executed here. The stream's three pure functions, which the
- * component pages and filters with, at the edges a page has — the plain
- * commits and the releases splitting the public entries between them, and a
- * private day under everything alone (issue 401). And the adapter's one new
- * claim: a commit carries its repository's version EXACTLY when the
+ * component pages and filters with, at the edges a page has — the three feeds
+ * of the latest work (owner, 2026-11-03, issue 401), each keeping its own
+ * kinds, each cut at the origin's cap, every entry in exactly one. And the
+ * adapter's claims: the merge and release entries it builds from the wire, and
+ * a commit carrying its repository's version EXACTLY when the
  * repository's latest release names that commit — full forty-digit equality,
  * never a prefix and never case-folded, because a version on the wrong entry
  * is a claim the record does not make. */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { projectsCommitsProps, streamCommitsEmptyNote, streamReleasesEmptyNote } from '../src/lib/commits.ts';
-import { parseCodingProjects } from '../src/lib/projects.ts';
+import { parseVCSActivity } from '../src/lib/activity.ts';
+import { projectsCommitsProps, streamFeedRows, streamMergesEmptyNote, streamReleasesEmptyNote } from '../src/lib/commits.ts';
+import { parseCodingProjects, projectHost } from '../src/lib/projects.ts';
 import { filterRows, pageCount, pageRows } from '../src/lib/stream.ts';
 
 const now = new Date('2026-11-02T20:00:00Z');
@@ -31,7 +33,7 @@ const projectsEnvelope = (repos) => ({
   data: { repos }
 });
 
-const activityEnvelope = (recentCommits, privateActivity) => ({
+const activityEnvelope = (recentCommits, privateActivity, lists = {}) => ({
   schema: 'panel/v1',
   id: 'vcs-activity',
   kind: 'vcs-activity/v1',
@@ -44,7 +46,8 @@ const activityEnvelope = (recentCommits, privateActivity) => ({
     streak: 2,
     endDate: '2026-11-02',
     recentCommits,
-    ...(privateActivity === undefined ? {} : { privateActivity })
+    ...(privateActivity === undefined ? {} : { privateActivity }),
+    ...lists
   }
 });
 
@@ -130,94 +133,177 @@ describe('a commit carries its repository’s release exactly when the release n
   });
 });
 
-describe('the filters keep what they name', () => {
-  /* The fixture above as the stream builds it: the obsync release commit, two
-     plain commits and a private day — one of every row a filter has to tell
-     apart, which the first case proves so no case below holds vacuously. */
-  const rows = stream(projectsEnvelope([repo('obsync', { release: '1.1.12', releaseSha })]));
-  const publicRows = rows.filter((row) => row.kind === 'commit');
+describe('the three feeds keep what they name (owner, 2026-11-03, issue 401)', () => {
+  /* One row of every kind a feed has to tell apart: public commits (one of
+     them a release commit), a private day, merged pull requests and
+     releases. The first case proves each is present, so no case below holds
+     vacuously. */
+  const merges = [
+    { repo: 'obsync', number: 380, title: 'docs: a privacy page', at: '2026-11-02T19:00:00Z', sha: 'e'.repeat(40) },
+    { repo: 'theme', number: 92, title: 'Formula: v3', at: '2026-10-31T12:00:00Z', sha: 'f'.repeat(40) }
+  ];
+  const releases = [
+    { repo: 'obsync', tag: '1.1.12', title: 'Release 1.1.12: pairing again', at: '2026-11-02T18:58:00Z', sha: releaseSha },
+    { repo: 'theme', tag: 'v3', title: 'Release v3', at: '2026-10-29T12:00:00Z', sha: 'd'.repeat(40) }
+  ];
+  const props = projectsCommitsProps(
+    [
+      projectsEnvelope([repo('obsync', { release: '1.1.12', releaseSha })]),
+      activityEnvelope(
+        [
+          { repo: 'obsync', sha: releaseSha, message: 'release 1.1.12', at: '2026-11-02T18:57:00Z' },
+          { repo: 'obsync', sha: otherSha, message: 'an older commit', at: '2026-11-01T12:00:00Z' },
+          { repo: 'theme', sha: 'c'.repeat(40), message: 'a commit with no release of its own', at: '2026-10-30T12:00:00Z' }
+        ],
+        [{ date: '2026-11-01', contributions: 2, repositories: 1 }],
+        { recentMerges: merges, recentReleases: releases }
+      )
+    ],
+    now
+  );
+  const rows = props.rows;
+  const kinds = (feed) => feed.map((row) => row.kind);
 
-  it('is given a plain commit, a release commit and a private day to tell apart', () => {
-    assert.ok(publicRows.some((row) => row.release === undefined), 'the fixture holds no plain commit');
-    assert.ok(publicRows.some((row) => row.release !== undefined), 'the fixture holds no release commit');
-    assert.ok(rows.some((row) => row.kind === 'private'), 'the fixture holds no private day');
-  });
-
-  it('keeps every row for everything, private days included, in the order it arrived', () => {
-    assert.deepEqual(filterRows(rows, 'all'), rows);
-  });
-
-  /* PLAIN COMMITS (owner, 2026-11-03, issue #401: "clicking on the icons does
-     not change anything specially the first 2"). The commit filter once kept
-     every public commit, so it differed from everything only by the private
-     days and showed the releases a second time. */
-  it('keeps no entry that carries a release among the plain commits', () => {
-    const plain = filterRows(rows, 'commit');
-    assert.ok(plain.length > 0, 'the plain commits kept nothing from a fixture that holds two');
-    assert.ok(plain.every((row) => row.release === undefined), 'a release entry is among the plain commits');
-  });
-
-  it('keeps no private day among the plain commits', () => {
-    assert.ok(filterRows(rows, 'commit').every((row) => row.kind === 'commit'), 'a private day is among the plain commits');
-  });
-
-  it('puts every public entry in exactly one of the plain commits and the releases', () => {
-    const plain = filterRows(rows, 'commit');
-    const released = filterRows(rows, 'release');
-    for (const row of publicRows) {
-      const places = Number(plain.includes(row)) + Number(released.includes(row));
-      assert.equal(places, 1, `${row.key} is in ${places} of the two filters`);
+  it('is given every kind of row to tell apart', () => {
+    for (const kind of ['commit', 'private', 'merge', 'release']) {
+      assert.ok(rows.some((row) => row.kind === kind), `the fixture holds no ${kind} row`);
     }
-    assert.equal(plain.length + released.length, publicRows.length, 'the two filters keep an entry that is not a public commit');
+    assert.ok(rows.some((row) => row.kind === 'commit' && row.release !== undefined), 'the fixture holds no release commit');
   });
 
-  it('keeps only the entries that carry a release', () => {
-    assert.deepEqual(
-      filterRows(rows, 'release').map((row) => row.release),
-      ['1.1.12']
-    );
+  it('keeps the commits and the private days among them in the commit feed, and nothing else', () => {
+    assert.deepEqual(kinds(filterRows(rows, 'commit')), ['commit', 'private', 'commit', 'commit']);
   });
 
-  it('says what an empty filter means, each in its own words', () => {
-    /* Today's state until a capture names a release: commits arrive, none of
-       them is a repository's latest release, and the Releases filter keeps
-       nothing. The component prints the chosen filter's own note in the
-       reserve; the adapter writes one for every filter. */
-    const props = projectsCommitsProps(
-      [projectsEnvelope([repo('obsync', { release: '1.1.12' })]), activityEnvelope([{ repo: 'obsync', sha: otherSha, message: 'a commit', at: '2026-11-01T12:00:00Z' }])],
+  it('keeps only the merged pull requests in the merge feed, and only the releases in the release feed', () => {
+    assert.deepEqual(kinds(filterRows(rows, 'merge')), ['merge', 'merge']);
+    assert.deepEqual(kinds(filterRows(rows, 'release')), ['release', 'release']);
+  });
+
+  it('puts every row in exactly one feed', () => {
+    const feeds = props.filters.map((filter) => filterRows(rows, filter.key));
+    for (const row of rows) {
+      const places = feeds.filter((feed) => feed.includes(row)).length;
+      assert.equal(places, 1, `${row.key} is in ${places} feeds`);
+    }
+    assert.equal(feeds.reduce((total, feed) => total + feed.length, 0), rows.length, 'a feed keeps a row no feed was given');
+  });
+
+  it('builds a merge entry from the wire: the pull request’s own page, its number where the identity sits', () => {
+    const [newest] = filterRows(rows, 'merge');
+    assert.equal(newest.source.text, 'obsync');
+    assert.equal(newest.title.text, 'docs: a privacy page');
+    assert.equal(newest.title.href, `${projectHost}/obsync/pull/380`);
+    assert.match(newest.title.label, /pull request #380/);
+    assert.equal(newest.mark, '#380');
+    assert.equal(newest.release, undefined, 'a merge wears a version');
+  });
+
+  it('builds a release entry from the wire: its tag as the chip, the release’s own page, the commit’s short identity', () => {
+    const [newest] = filterRows(rows, 'release');
+    assert.equal(newest.source.text, 'obsync');
+    assert.equal(newest.release, '1.1.12');
+    assert.equal(newest.title.text, 'Release 1.1.12: pairing again');
+    assert.equal(newest.title.href, `${projectHost}/obsync/releases/tag/1.1.12`);
+    assert.equal(newest.mark, releaseSha.slice(0, 7));
+  });
+
+  it('builds no address from a repository or an identity it cannot vouch for', () => {
+    const hostile = 'evil.example" onmouseover="x';
+    const feed = projectsCommitsProps(
+      [null, activityEnvelope([], undefined, { recentMerges: [{ ...merges[0], repo: hostile }], recentReleases: [{ ...releases[0], repo: hostile, sha: 'not-an-identity' }] })],
       now
-    );
-    const empty = Object.fromEntries(props.filters.map((filter) => [filter.key, filter.empty]));
-    assert.deepEqual(empty, {
-      all: props.emptyNote,
-      commit: streamCommitsEmptyNote,
-      release: streamReleasesEmptyNote
-    });
-    assert.equal(filterRows(props.rows, 'release').length, 0, 'the fixture this case is about keeps a release after all');
-    assert.ok(filterRows(props.rows, 'all').length > 0);
-    for (const filter of props.filters) {
-      assert.ok(filter.empty.trim().length > 0, `the ${filter.key} filter has nothing to say when it keeps nothing`);
+    ).rows;
+    assert.equal(feed.length, 2);
+    for (const row of feed) {
+      assert.equal(row.source.href, null);
+      assert.equal(row.title.href, null);
+      assert.equal(row.source.text, hostile, 'the text did not survive as data');
     }
+    assert.equal(feed.find((row) => row.kind === 'release').mark, '—');
   });
 
-  it('says every recent commit is a release when the plain commits keep nothing, never the whole list’s note', () => {
-    /* The other empty state: the only recent commit is its repository's
-       latest release, so everything and the releases keep it and the plain
-       commits keep nothing. The note is the commit filter's own, and it is
-       not the note for a record with no commits at all — that one would tell
-       a reader looking at a release that nothing was committed. */
-    const props = projectsCommitsProps(
+  it('refuses a payload whose merge or release rows drift, and admits one without them', () => {
+    const drifted = [
+      { recentMerges: [{ ...merges[0], number: 0 }] },
+      { recentMerges: [{ ...merges[0], number: '380' }] },
+      { recentMerges: [{ ...merges[0], title: undefined }] },
+      { recentMerges: {} },
+      { recentReleases: [{ ...releases[0], tag: '' }] },
+      { recentReleases: [{ ...releases[0], tag: 'v1/2' }] },
+      { recentReleases: [{ ...releases[0], sha: 7 }] }
+    ];
+    for (const extra of drifted) {
+      assert.equal(parseVCSActivity(activityEnvelope([], undefined, extra).data), null, `admitted ${JSON.stringify(extra)}`);
+    }
+    assert.notEqual(parseVCSActivity(activityEnvelope([], undefined).data), null);
+  });
+
+  it('cuts every feed at the origin’s own cap, newest first, so full feeds page alike', () => {
+    /* Over the cap in every list, private days included, so the cut is the
+       adapter's own and not only the wire's. The cap itself is pinned to the
+       origin's in tests/panels-ui.test.mjs, beside the other config pins. */
+    assert.equal(streamFeedRows, 30);
+    const instant = (hoursAgo) => new Date(now.getTime() - hoursAgo * 3600000).toISOString().replace('.000', '');
+    const many = projectsCommitsProps(
       [
-        projectsEnvelope([repo('obsync', { release: '1.1.12', releaseSha })]),
-        activityEnvelope([{ repo: 'obsync', sha: releaseSha, message: 'release 1.1.12', at: '2026-11-02T18:57:00Z' }])
+        null,
+        activityEnvelope(
+          Array.from({ length: streamFeedRows + 4 }, (_, index) => ({ repo: 'obsync', sha: index.toString(16).padStart(40, '0'), message: `c${index}`, at: instant(index * 7) })),
+          Array.from({ length: 10 }, (_, index) => ({ date: instant(24 * (index + 1)).slice(0, 10), contributions: 1, repositories: 1 })),
+          {
+            recentMerges: Array.from({ length: streamFeedRows + 4 }, (_, index) => ({ ...merges[0], number: index + 1, at: instant(index) })),
+            recentReleases: Array.from({ length: streamFeedRows + 4 }, (_, index) => ({ ...releases[0], tag: `v${index}`, at: instant(index) }))
+          }
+        )
       ],
       now
     );
-    assert.equal(filterRows(props.rows, 'commit').length, 0, 'the fixture this case is about keeps a plain commit after all');
-    assert.equal(filterRows(props.rows, 'release').length, 1);
-    const commit = props.filters.find((filter) => filter.key === 'commit');
-    assert.equal(commit.empty, streamCommitsEmptyNote);
-    assert.notEqual(commit.empty, props.emptyNote, 'the plain commits fall back to the whole list’s note');
+    const pages = new Set();
+    for (const { key } of many.filters) {
+      const feed = filterRows(many.rows, key);
+      assert.equal(feed.length, streamFeedRows, `the ${key} feed holds ${feed.length}`);
+      pages.add(pageCount(feed.length, many.pageSize));
+    }
+    assert.deepEqual([...pages], [6], 'full feeds page to different counts');
+    /* Newest first: the commit feed interleaves its private days by date
+       (the end of the day, as the adapter orders them), and every feed opens
+       on its newest entry. */
+    const commitFeed = filterRows(many.rows, 'commit');
+    const at = (row) => (row.kind === 'private' ? `${row.key.slice('private-'.length)}T23:59:59Z` : instant(Number(row.title.text.slice(1)) * 7));
+    for (let index = 1; index < commitFeed.length; index += 1) {
+      assert.ok(at(commitFeed[index - 1]) >= at(commitFeed[index]), `commit feed entry ${index} is newer than the one above it`);
+    }
+    assert.equal(filterRows(many.rows, 'merge')[0].mark, '#1');
+    assert.equal(filterRows(many.rows, 'release')[0].release, 'v0');
+  });
+
+  it('gives each feed an empty note of its own when the wire carries none of its rows', () => {
+    const plain = projectsCommitsProps(
+      [null, activityEnvelope([{ repo: 'obsync', sha: otherSha, message: 'a commit', at: '2026-11-01T12:00:00Z' }])],
+      now
+    );
+    const empty = Object.fromEntries(plain.filters.map((filter) => [filter.key, filter.empty]));
+    assert.deepEqual(empty, { commit: plain.emptyNote, merge: streamMergesEmptyNote, release: streamReleasesEmptyNote });
+    assert.equal(filterRows(plain.rows, 'merge').length, 0);
+    assert.equal(filterRows(plain.rows, 'release').length, 0);
+    for (const key of ['merge', 'release']) {
+      assert.notEqual(empty[key], plain.emptyNote, `the ${key} feed falls back to the commit feed’s note`);
+    }
+    assert.notEqual(streamMergesEmptyNote, streamReleasesEmptyNote);
+  });
+
+  it('shows a private-only record in the commit feed, and the other feeds’ own absence notes (review of 12ca17e)', () => {
+    /* The reviewer's case: no public commit, one private day. The commit feed
+       holds the private day; the merge and release feeds hold nothing and say
+       only that, never a reason the record does not prove. */
+    const lone = projectsCommitsProps([null, activityEnvelope([], [{ date: '2026-11-01', contributions: 3, repositories: 2 }])], now);
+    assert.deepEqual(kinds(filterRows(lone.rows, 'commit')), ['private']);
+    const notes = Object.fromEntries(lone.filters.map((filter) => [filter.key, filter.empty]));
+    assert.equal(filterRows(lone.rows, 'merge').length, 0);
+    assert.equal(notes.merge, 'no merge among the recent work');
+    assert.equal(filterRows(lone.rows, 'release').length, 0);
+    assert.equal(notes.release, 'no release among the recent work');
   });
 });
 

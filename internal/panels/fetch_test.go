@@ -1302,7 +1302,7 @@ func TestQueryDocumentCapRefusesAnOversizeAnswer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the admitted answer did not map: %v", err)
 		}
-		if len(rows) == 0 {
+		if len(rows.commits) == 0 {
 			t.Fatal("the admitted answer mapped no rows; a cap that admits bytes nothing can read would pass this test")
 		}
 	})

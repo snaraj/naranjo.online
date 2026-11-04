@@ -297,9 +297,10 @@ export type LedgerLogProps = {
  * that IS a repository's latest release carries the version.
  * ------------------------------------------------------------------------ */
 
-/* What an entry records: a public commit, or a day of private work that can
- * name nothing but its own counts. */
-export type StreamKind = 'commit' | 'private';
+/* What an entry records: a public commit, a day of private work that can name
+ * nothing but its own counts, a merged pull request, or a release (issue
+ * #401). */
+export type StreamKind = 'commit' | 'private' | 'merge' | 'release';
 
 export type StreamRow = {
   readonly key: string;
@@ -310,20 +311,22 @@ export type StreamRow = {
    * validated, or plain text (a null href) where there is nowhere to send a
    * reader. */
   readonly source: ActivityLink;
-  /* What happened: the subject, linked to the commit itself when its identity
-   * is one the information layer can vouch for. */
+  /* What happened: the subject, linked to the commit, the pull request or the
+   * release itself when its identity is one the information layer can vouch
+   * for. */
   readonly title: ActivityLink;
-  /* The short identity, display-only, or the honest dash. */
+  /* The identity, already written and display-only: a commit's or a
+   * release's short identity, a merge's "#number", or the honest dash. */
   readonly mark: string;
-  /* The version this entry released, present ONLY when the repository's
-   * latest release names exactly this commit. */
+  /* The version: a release entry's own tag, or on a commit, present ONLY
+   * when the repository's latest release names exactly this commit. */
   readonly release?: string;
 };
 
-/* One filter at the stream's head: a mark the eye reads and the words a
+/* One feed at the stream's head: a mark the eye reads and the words a
  * screen reader hears in its place. */
 export type StreamFilter = {
-  readonly key: 'all' | 'commit' | 'release';
+  readonly key: 'commit' | 'merge' | 'release';
   readonly glyph: IconName;
   readonly label: string;
   /* What the reserve says when this filter keeps nothing. */
@@ -340,13 +343,13 @@ export type StreamProps = {
   readonly anchor: string;
   /* The id of the list itself. */
   readonly listId: string;
-  /* EVERY row, newest first; the component pages them, so a page turn or a
-   * filter is a rendering decision and never a cap on the record. */
+  /* Every row of every feed, each feed newest first and cut at the origin's
+   * cap; the component shows one feed and pages it. */
   readonly rows: readonly StreamRow[];
   /* How many entries a page shows, which is also how many the list reserves
    * before a payload lands. */
   readonly pageSize: number;
-  /* Rendered instead of the list when there are no rows at all. */
+  /* Rendered instead of the list when no feed holds a row. */
   readonly emptyNote: string;
   readonly filters: readonly StreamFilter[];
 };

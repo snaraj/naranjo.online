@@ -18,7 +18,7 @@ import {
   tally,
   unrankedLabel,
 } from '../src/lib/bossLog.ts';
-import { contributionCalendarProps } from '../src/lib/commits.ts';
+import { contributionCalendarProps, streamFeedRows } from '../src/lib/commits.ts';
 import { gridLevel, gridLevels } from '../src/lib/grid.ts';
 import { unavailablePanel } from '../src/lib/panels.ts';
 
@@ -313,8 +313,10 @@ test('no card announces its own age, and none keeps a control', () => {
   /* The log's own honest empty line moved with the log (owner design decision,
      2026-09-11, issue 318): the rows are Ongoing Work's stream now (issue
      #399), so the note that stands in for them is rendered there, from the
-     same adapter word. */
-  assert.match(stream, /<p class="stream-note">\{emptyNote\}<\/p>/);
+     same adapter word: the shown feed's own note (issue #401), or the
+     stream's when a feed carries none. */
+  assert.match(stream, /<p class="stream-note">\{filteredEmpty\}<\/p>/);
+  assert.match(stream, /const filteredEmpty = \$derived\(filters\.find\(\(filter\) => filter\.key === active\)\?\.empty \?\? emptyNote\);/);
   assert.match(chronicle, /<p class="chronicle-note">\{emptyNote\}<\/p>/);
   // No per-card control, and no panel hands one up any more.
   assert.doesNotMatch(shell, /panel-refresh|<button/, 'a card grew its own refresh control back');
@@ -890,6 +892,16 @@ test('the origin serves the complete boss table', { skip: reducedContextNote }, 
     snapshot.data.bosses.length >= 50,
     `the snapshot ships ${snapshot.data.bosses.length} bosses; the panel exists to show them all`
   );
+});
+
+// The stream cuts each of its three feeds at the origin's own cap (issue
+// #401), so the number the page cuts at and the number the origin serves are
+// one number written twice, and this pin is what keeps them one.
+test('the stream’s feed cap is the origin’s served cap', {
+  skip: reducedContextNote,
+}, async () => {
+  const fetchConfig = await read('../../internal/panels/config/fetch.json').then(JSON.parse);
+  assert.equal(streamFeedRows, fetchConfig.vcsActivity.commits.max, 'the stream’s feed cap disagrees with the origin’s');
 });
 
 // The owner renamed the version-control card to the service it reports from

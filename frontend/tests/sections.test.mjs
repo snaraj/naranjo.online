@@ -1960,17 +1960,19 @@ function motionIn(style) {
 }
 
 test('the stream’s filters are three marks in brand ink, never underlined, that shine only where motion is welcome (owner 2026-11-02, issue #399)', () => {
-  /* THREE ICON-ONLY FILTERS, the adapter's: everything, the plain commits
-     (the public ones that carry no release, issue #401), the releases, each a
-     real toggle button named by its word. */
+  /* THREE ICON-ONLY FEEDS, the adapter's (owner, 2026-11-03, issue #401):
+     the latest commits, merges and releases, each a real toggle button named
+     by its word and each with an empty note of its own that says only what
+     is absent. The stream opens on the first. */
   assert.deepEqual(
     projectsCommitsProps([null, null]).filters,
     [
-      { key: 'all', glyph: 'list', label: 'Everything', empty: 'no recent commits reported' },
-      { key: 'commit', glyph: 'pull', label: 'Plain commits', empty: 'every recent commit is a release' },
-      { key: 'release', glyph: 'tag', label: 'Releases', empty: 'no release among the recent commits' }
+      { key: 'commit', glyph: 'list', label: 'Commits', empty: 'no recent commits reported' },
+      { key: 'merge', glyph: 'pull', label: 'Merges', empty: 'no merge among the recent work' },
+      { key: 'release', glyph: 'tag', label: 'Releases', empty: 'no release among the recent work' }
     ]
   );
+  assert.match(stream, /let active = \$state<StreamFilter\['key'\]>\('commit'\);/, 'the stream does not open on its first feed');
   assert.match(stream, /<div class="stream-filters" role="group" aria-label="Show">\s*\{#each filters as filter \(filter\.key\)\}/);
   /* AT THE STREAM'S INLINE END, under the vine's end, as the approved mock
      drew them (review, 2026-11-02), at both widths: the head rule is the
@@ -1978,15 +1980,15 @@ test('the stream’s filters are three marks in brand ink, never underlined, tha
   const headRules = [...styleBlock(stream).replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/\.stream-head \{([^}]*)\}/g)].map(([, body]) => body);
   assert.equal(headRules.length, 1, 'a second rule places the stream head');
   assert.match(headRules[0], /display: flex;\s*justify-content: flex-end;/, 'the filters do not sit at the stream’s inline end');
-  /* A FILTER THAT KEEPS NOTHING SAYS SO, in the reserve its entries would
+  /* A FEED THAT HOLDS NOTHING SAYS SO, in the reserve its entries would
      have filled (review, 2026-11-02: Releases, until a capture names a
-     release, was a blank page). The whole list's own note comes first, the
-     chosen filter's after it, and both are the one note shape — the shape
-     the reserve rule gives the list's height. */
+     release, was a blank page), in its own words whether or not another feed
+     holds anything (issue #401), and in the one note shape — the shape the
+     reserve rule gives the list's height. */
   assert.match(
     stream,
-    /\{#if rows\.length === 0\}\s*<p class="stream-note">\{emptyNote\}<\/p>\s*\{:else if filtered\.length === 0\}\s*<p class="stream-note">\{filteredEmpty\}<\/p>\s*\{:else\}\s*<ol class="stream-list"/,
-    'a filter that keeps nothing leaves the reserve blank'
+    /\{#if filtered\.length === 0\}\s*<p class="stream-note">\{filteredEmpty\}<\/p>\s*\{:else\}\s*<ol class="stream-list"/,
+    'a feed that holds nothing leaves the reserve blank'
   );
   assert.match(stream, /const filteredEmpty = \$derived\(filters\.find\(\(filter\) => filter\.key === active\)\?\.empty \?\? emptyNote\);/);
   assert.match(

@@ -311,6 +311,25 @@ func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 			At:      "2026-09-11T23:08:18Z",
 		})
 	}
+	// The merged pull requests and releases (issue #401) at their own bounds:
+	// the same cap, the same name and subject bounds, the widest number any
+	// count may carry and the longest tag the grammar admits.
+	for index := range maxServedCommits {
+		payload.RecentMerges = append(payload.RecentMerges, VCSMerge{
+			Repo:   name,
+			Number: maxCountValue,
+			Title:  subject,
+			At:     "2026-09-11T23:08:18Z",
+			SHA:    fmt.Sprintf("%040x", index+1),
+		})
+		payload.RecentReleases = append(payload.RecentReleases, VCSRelease{
+			Repo:  name,
+			Tag:   strings.Repeat("v", maxReleaseTagRunes),
+			Title: subject,
+			At:    "2026-09-11T23:08:18Z",
+			SHA:   fmt.Sprintf("%040x", index+1),
+		})
+	}
 	for index := range maxPrivateDays {
 		payload.PrivateActivity = append(payload.PrivateActivity, VCSPrivateDay{
 			Date:          time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -index).Format(dayLayout),
@@ -334,7 +353,7 @@ func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 	// asserted as a CEILING with its headroom named rather than as an equality,
 	// because a payload that shrinks is not a regression — but one that grows
 	// past this without somebody re-measuring is.
-	const measured = 17500
+	const measured = 40000
 	if len(envelope) > measured {
 		t.Errorf("the maximal activity envelope is %d bytes, over the %d recorded in docs/panels-invariants.md; re-measure before raising it", len(envelope), measured)
 	}

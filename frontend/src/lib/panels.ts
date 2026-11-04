@@ -157,6 +157,26 @@ export interface VCSCommit {
   at: string;
 }
 
+/* A recently merged pull request and a recently published release (issue
+ * #401), from the same history document as the commits. `sha` is the full
+ * identity of the commit the merge produced or the tag names; a release's
+ * `title` is that commit's subject line. */
+export interface VCSMerge {
+  repo: string;
+  number: number;
+  title: string;
+  at: string;
+  sha: string;
+}
+
+export interface VCSRelease {
+  repo: string;
+  tag: string;
+  title: string;
+  at: string;
+  sha: string;
+}
+
 /* Which producer answered for the calendar. The two count different things
  * while both being live and both being true: 'public' is what an anonymous
  * reader may see, 'complete' is the account holder's own record with private
@@ -202,6 +222,11 @@ export interface VCSActivityData {
    * the kind shipped, so a payload without it still renders. */
   endDate?: string;
   recentCommits: VCSCommit[];
+  /* The latest merged pull requests and releases, newest first. Optional:
+   * additive inside the kind, so a payload from a replica that predates them
+   * still renders, and their feeds say they hold nothing. */
+  recentMerges?: VCSMerge[];
+  recentReleases?: VCSRelease[];
 }
 
 /* boss-log/v1 — one game account's skill table and boss tallies. Every figure

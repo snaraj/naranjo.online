@@ -431,6 +431,19 @@ type VCSActivityData struct {
 	Streak int `json:"streak"`
 	// RecentCommits lists the latest commits, newest first.
 	RecentCommits []VCSCommit `json:"recentCommits"`
+	// RecentMerges lists the latest MERGED pull requests across the same
+	// repositories, and RecentReleases their latest published releases, each
+	// newest first and capped at the configured max exactly as RecentCommits
+	// is (issue #401: the stream's three feeds are the latest commits, merges
+	// and releases, and each pages to the same height). They come out of the
+	// SAME history document as the commits, so they are read, retained and
+	// refused together and CommitsAt dates all three. Absent when empty.
+	//
+	// Additive inside the kind, which is why vcs-activity stays v1: a payload
+	// written before these fields decodes and renders unchanged, and a reader
+	// that has never heard of them draws the commits exactly as it did.
+	RecentMerges   []VCSMerge   `json:"recentMerges,omitempty"`
+	RecentReleases []VCSRelease `json:"recentReleases,omitempty"`
 	// CommitsAt is the RFC 3339 instant the recent-commit list was actually
 	// read from its producer, which is NOT the same instant the calendar was
 	// read: the two halves sit on different rate budgets and refresh on
@@ -609,6 +622,34 @@ type VCSCommit struct {
 	Message string `json:"message"`
 	// At is the RFC 3339 commit instant, normalized to UTC.
 	At string `json:"at"`
+}
+
+// VCSMerge is one recently merged pull request. Repo comes from configuration
+// exactly as a commit row's does, and SHA is the full identity of the commit
+// the merge produced: a merged pull request without one is a malformed row.
+type VCSMerge struct {
+	Repo string `json:"repo"`
+	// Number is the pull request's number in its repository, never below 1.
+	Number int64 `json:"number"`
+	// Title is the pull request's title under commitSubject's rules.
+	Title string `json:"title"`
+	// At is the RFC 3339 merge instant, normalized to UTC.
+	At  string `json:"at"`
+	SHA string `json:"sha"`
+}
+
+// VCSRelease is one recently published release. Drafts and pre-releases never
+// become one. Tag is the release's tag under the host's tag grammar, SHA the
+// full identity of the commit it names, and Title that commit's subject line
+// under commitSubject's rules: a row says what was released, not only which
+// version it was.
+type VCSRelease struct {
+	Repo  string `json:"repo"`
+	Tag   string `json:"tag"`
+	Title string `json:"title"`
+	// At is the RFC 3339 publication instant, normalized to UTC.
+	At  string `json:"at"`
+	SHA string `json:"sha"`
 }
 
 // BossLogData is the boss-log/v1 payload: one game account's skill table and
@@ -805,8 +846,8 @@ type FetchSource struct {
 	// Kept only so the reason is logged when it CHANGES rather than on every
 	// round of a fast cadence.
 	commitOmission string
-	// commits is the last successfully fetched commit list.
-	commits []VCSCommit
+	// recent is the last successfully fetched commit round's three feeds.
+	recent recentWork
 	// commitDays is the private-day aggregate read in the same round, retained
 	// beside the rows because the two halves are one answer: serving retained
 	// rows next to a fresh-looking absence of private days would report a
@@ -1202,7 +1243,7 @@ const (
 	// maxCodingProjectSources bounds how many repository ROWS one round may
 	// serve. The listing is SELECTED down to this many — most recently pushed
 	// first — rather than refused over it, the same clamp-by-recency shape
-	// mergeCommits applies to its row cap: a thirteenth public repository must
+	// newestFirst applies to its row cap: a thirteenth public repository must
 	// not take the panel down, and the payload budget still has to fit.
 	maxCodingProjectSources = 12
 	// maxListedRepositories bounds how many entries the listing document may
@@ -1257,7 +1298,8 @@ type vcsCommitsFetchSpec struct {
 	Contributions *graphQLDocumentSpec `json:"contributions"`
 	// History is the second document: the newest default-branch commits the
 	// account authored in the repositories discovery admitted, asked for by
-	// the node identifiers that answer carried.
+	// the node identifiers that answer carried, beside those repositories'
+	// latest merged pull requests and releases (issue #401).
 	History *graphQLDocumentSpec `json:"history"`
 	// Owner is the account login every NAMED row must belong to. The account
 	// legitimately contributes to other people's repositories, and those
@@ -1624,8 +1666,44 @@ type historyNode struct {
 	// request actually asked about.
 	Name string `json:"name"`
 	// DefaultBranchRef is null for a repository with no default branch — an
-	// empty repository — which contributes no rows and is not an error.
+	// empty repository — which contributes no commit rows and is not an error.
 	DefaultBranchRef *historyBranchRef `json:"defaultBranchRef"`
+	// PullRequests and Releases are the repository's latest merged pull
+	// requests and releases (issue #401), asked for in the same selection.
+	PullRequests historyPulls    `json:"pullRequests"`
+	Releases     historyReleases `json:"releases"`
+}
+
+// historyPulls wraps the merged pull-request node list.
+type historyPulls struct {
+	Nodes []historyPull `json:"nodes"`
+}
+
+// historyPull is one merged pull request, reduced to the four values a row
+// renders. Its author is not asked for, so it is never decoded.
+type historyPull struct {
+	Number   int64  `json:"number"`
+	Title    string `json:"title"`
+	MergedAt string `json:"mergedAt"`
+	// MergeCommit is null when the host reports none, which is refused.
+	MergeCommit *historyCommit `json:"mergeCommit"`
+}
+
+// historyReleases wraps the release node list.
+type historyReleases struct {
+	Nodes []historyRelease `json:"nodes"`
+}
+
+// historyRelease is one release. A draft has no publication instant and may
+// have no tag commit yet, which is why the two flags are read first.
+type historyRelease struct {
+	TagName     string `json:"tagName"`
+	PublishedAt string `json:"publishedAt"`
+	Draft       bool   `json:"isDraft"`
+	Prerelease  bool   `json:"isPrerelease"`
+	// TagCommit is the commit the tag names, with its subject line; null is
+	// refused for a published release.
+	TagCommit *historyCommit `json:"tagCommit"`
 }
 
 // historyBranchRef is the default branch's tip.
@@ -1645,7 +1723,8 @@ type historyConnection struct {
 	Nodes []historyCommit `json:"nodes"`
 }
 
-// historyCommit is one commit, reduced to the three values a row renders. The
+// historyCommit is one commit, reduced to the three values a row renders (a
+// merge or tag commit is the same object asked for fewer of them). The
 // upstream also reports the author's name and EMAIL ADDRESS on this object;
 // neither is declared here, so neither is ever decoded into this process's
 // memory (requirement 12) — the same privacy posture the retired projection
@@ -1744,13 +1823,31 @@ type repositoryPullTally struct {
 	TotalCount int64 `json:"totalCount"`
 }
 
-// datedCommit pairs a served row with its parsed instant so the merge across
+// datedRow pairs a served row with its parsed instant so the merge across
 // repositories can order rows without re-parsing or trusting string order.
-type datedCommit struct {
-	// at is the parsed authoring instant.
+type datedRow[Row any] struct {
+	// at is the parsed instant the row is ordered by.
 	at time.Time
-	// row is the served commit row.
-	row VCSCommit
+	// row is the served row.
+	row Row
+}
+
+// datedWork is one history answer's three lists, dated and not yet merged
+// across repositories.
+type datedWork struct {
+	commits  []datedRow[VCSCommit]
+	merges   []datedRow[VCSMerge]
+	releases []datedRow[VCSRelease]
+}
+
+// recentWork is one commit round's three feeds as they are served: each
+// newest first and capped. They are one answer, retained and replaced
+// together, so a payload never pairs one round's commits with another
+// round's merges or releases.
+type recentWork struct {
+	commits  []VCSCommit
+	merges   []VCSMerge
+	releases []VCSRelease
 }
 
 // graphQLDocument is the TRANSPORT envelope EVERY credentialed query answer

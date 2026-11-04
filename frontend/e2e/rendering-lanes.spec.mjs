@@ -11601,14 +11601,28 @@ for (const width of [1440, 390]) {
   }) => {
     await page.setViewportSize({ width, height: 900 });
     await visit(page);
-    /* The wire's own row count, so "more than a page" is a number the origin
-       served rather than one typed here. */
-    const served = await page.evaluate(async () => {
+    /* The wire's own row counts, so "more than a page" is a number the origin
+       served rather than one typed here. The commit feed is the commits and
+       the private days among them, cut at the origin's cap of thirty like
+       every feed (issue 401); the merges and the releases are their own. */
+    const counts = await page.evaluate(async () => {
       const response = await fetch('/api/panels/vcs-activity');
       const envelope = await response.json();
-      return Array.isArray(envelope?.data?.recentCommits) ? envelope.data.recentCommits.length : null;
+      const length = (list) => (Array.isArray(list) ? list.length : 0);
+      return {
+        commits: Array.isArray(envelope?.data?.recentCommits)
+          ? Math.min(30, length(envelope.data.recentCommits) + length(envelope.data.privateActivity))
+          : null,
+        merges: length(envelope?.data?.recentMerges),
+        releases: length(envelope?.data?.recentReleases),
+      };
     });
+    const served = counts.commits;
     expect(served, 'the origin served too few commits to page').toBeGreaterThan(5);
+    /* The lane's origin is the embedded snapshot, which holds no merge and no
+       release, so the two feeds are the empty-feed case this lane measures. */
+    expect(counts.merges, 'the lane’s origin served a merge; the empty-feed case needs none').toBe(0);
+    expect(counts.releases, 'the lane’s origin served a release; the empty-feed case needs none').toBe(0);
 
     const shape = () =>
       page.evaluate(() => {
@@ -11651,7 +11665,7 @@ for (const width of [1440, 390]) {
     expect(first.rows, 'a page does not show five entries').toBe(5);
     expect(first.listHeight, 'the list is not exactly five entries tall').toBeCloseTo(5 * first.pitch, 0);
     expect(first.count, 'the pager does not say where the reader is').toBe(`1 / ${Math.ceil(served / 5)}`);
-    expect(first.pressed, 'the stream does not open on everything').toEqual(['true', 'false', 'false']);
+    expect(first.pressed, 'the stream does not open on its commits').toEqual(['true', 'false', 'false']);
     /* The pager's steps are real buttons at the touch floor, named, the first
        one disabled because there is nothing newer. */
     expect(first.steps.map((step) => step.label)).toEqual(['Newer entries', 'Older entries']);
@@ -11689,45 +11703,54 @@ for (const width of [1440, 390]) {
     expect(second.first, 'the second page shows the first page’s entries').not.toBe(first.first);
     expect(second.steps.map((step) => step.disabled)).toEqual(['false', 'false']);
 
-    /* A filter starts its list at its first page; "Releases" with no release
-       on the wire is an empty list in the SAME reserve, with nothing moved.
-       Plain commits keeps the public commits that carry NO release (issue
-       #401), so its pages are the served commits less the release ones — and
-       this origin serves none, which the Releases case below proves, so every
-       served commit is a plain one. */
-    await page.locator('#projects .stream-filter[aria-label="Plain commits"]').click();
+    /* A FEED THAT HOLDS NOTHING says so in its own words in the SAME reserve
+       (review, 2026-11-02: an empty filter was a blank page), with the pager
+       where it was and nothing moved: the merges, then the releases, which
+       this origin serves none of. */
+    const emptyFeed = () =>
+      page.evaluate(() => {
+        const round = (value) => Math.round(value * 100) / 100;
+        const stream = window.document.querySelector('#projects .stream');
+        const note = stream.querySelector('.stream-note');
+        return {
+          entries: stream.querySelectorAll('.stream-entry').length,
+          note: note?.textContent.trim() ?? null,
+          noteHeight: note === null ? null : round(note.getBoundingClientRect().height),
+          streamTop: round(stream.getBoundingClientRect().top + window.scrollY),
+          streamHeight: round(stream.getBoundingClientRect().height),
+          pagerTop: round(stream.querySelector('.pager').getBoundingClientRect().top + window.scrollY),
+          count: stream.querySelector('.pager-count').textContent.trim(),
+          pressed: [...stream.querySelectorAll('.stream-filter')].map((filter) => filter.getAttribute('aria-pressed')),
+          documentWidth: window.document.documentElement.scrollWidth,
+          viewportWidth: window.innerWidth,
+        };
+      });
+    const empties = [];
+    for (const [label, note, pressed] of [
+      ['Merges', 'no merge among the recent work', ['false', 'true', 'false']],
+      ['Releases', 'no release among the recent work', ['false', 'false', 'true']],
+    ]) {
+      await page.locator(`#projects .stream-filter[aria-label="${label}"]`).click();
+      await settled(page);
+      const empty = await emptyFeed();
+      expect(empty.pressed, `${label} is not the pressed feed`).toEqual(pressed);
+      expect(empty.entries, `the ${label} feed drew an entry the origin did not serve`).toBe(0);
+      expect(empty.note, `an empty ${label} feed does not say so in its own words`).toBe(note);
+      expect(empty.noteHeight, 'the note does not hold the room five entries hold').toBeCloseTo(first.listHeight, 0);
+      expect(empty.count, 'an empty feed is not one page').toBe('1 / 1');
+      empties.push([`the empty ${label} feed`, empty]);
+    }
+
+    /* And a feed starts at its first page: back on the commits, which the
+       reader left on page two, the list opens on page one. */
+    await page.locator('#projects .stream-filter[aria-label="Commits"]').click();
     await settled(page);
     const commits = await shape();
-    expect(commits.pressed).toEqual(['false', 'true', 'false']);
-    expect(commits.count, 'a filter left the reader on a later page').toBe(`1 / ${Math.ceil(served / 5)}`);
+    expect(commits.pressed).toEqual(['true', 'false', 'false']);
+    expect(commits.count, 'a feed left the reader on a later page').toBe(`1 / ${Math.ceil(served / 5)}`);
+    expect(commits.first, 'the commit feed did not open on its newest entry').toBe(first.first);
 
-    /* And the filter that keeps NOTHING — Releases, since the lane's origin
-       serves no release commit — says so in the same reserve (review,
-       2026-11-02: it was a blank page), with the pager where it was. */
-    await page.locator('#projects .stream-filter[aria-label="Releases"]').click();
-    await settled(page);
-    const releases = await page.evaluate(() => {
-      const round = (value) => Math.round(value * 100) / 100;
-      const stream = window.document.querySelector('#projects .stream');
-      const note = stream.querySelector('.stream-note');
-      return {
-        entries: stream.querySelectorAll('.stream-entry').length,
-        note: note?.textContent.trim() ?? null,
-        noteHeight: note === null ? null : round(note.getBoundingClientRect().height),
-        streamTop: round(stream.getBoundingClientRect().top + window.scrollY),
-        streamHeight: round(stream.getBoundingClientRect().height),
-        pagerTop: round(stream.querySelector('.pager').getBoundingClientRect().top + window.scrollY),
-        count: stream.querySelector('.pager-count').textContent.trim(),
-        documentWidth: window.document.documentElement.scrollWidth,
-        viewportWidth: window.innerWidth,
-      };
-    });
-    expect(releases.entries, 'the lane’s origin served a release commit; this case needs none').toBe(0);
-    expect(releases.note, 'an empty Releases filter leaves the reserve blank').toBe('no release among the recent commits');
-    expect(releases.noteHeight, 'the note does not hold the room five entries hold').toBeCloseTo(first.listHeight, 0);
-    expect(releases.count, 'an empty filter is not one page').toBe('1 / 1');
-
-    for (const [name, after] of [['the page turn', second], ['the filter', commits], ['the empty filter', releases]]) {
+    for (const [name, after] of [['the page turn', second], ['the commit feed', commits], ...empties]) {
       expect(after.streamTop, `${name} moved the stream`).toBeCloseTo(first.streamTop, 1);
       expect(after.streamHeight, `${name} changed the stream’s height`).toBeCloseTo(first.streamHeight, 1);
       expect(after.pagerTop, `${name} moved the pager`).toBeCloseTo(first.pagerTop, 1);

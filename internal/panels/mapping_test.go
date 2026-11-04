@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1245,10 +1247,11 @@ func TestMapCommitHistoriesReadsARealisticDocument(t *testing.T) {
 		commitNode(fixtureSHA(1), "feat(panels): a subject line", "2026-08-23T09:00:00Z"),
 		commitNode(fixtureSHA(2), "fix(panels): another subject", "2026-08-22T09:00:00-07:00"),
 	)
-	rows, err := mapCommitHistories([]byte(document), fixtureRepos, commitFixtureNow)
+	work, err := mapCommitHistories([]byte(document), fixtureRepos, commitFixtureNow)
 	if err != nil {
 		t.Fatalf("a realistic history document was refused: %v", err)
 	}
+	rows := work.commits
 	if len(rows) != 2 {
 		t.Fatalf("mapped %d rows, want 2", len(rows))
 	}
@@ -1278,8 +1281,8 @@ func TestMapCommitHistoriesReadsARealisticDocument(t *testing.T) {
 	// An empty repository — no default branch — contributes no rows and is
 	// not an error: that is a real state, not drift.
 	empty := `{"data":{"nodes":[{"name":"fixture-repo","defaultBranchRef":null}]}}`
-	if rows, err := mapCommitHistories([]byte(empty), fixtureRepos, commitFixtureNow); err != nil || len(rows) != 0 {
-		t.Errorf("an empty repository = %d rows, %v; want no rows and no error", len(rows), err)
+	if work, err := mapCommitHistories([]byte(empty), fixtureRepos, commitFixtureNow); err != nil || len(work.commits)+len(work.merges)+len(work.releases) != 0 {
+		t.Errorf("an empty repository = %+v, %v; want no rows and no error", work, err)
 	}
 }
 
@@ -1373,17 +1376,17 @@ func TestCommitSubjectTruncatesRatherThanRefusingLength(t *testing.T) {
 	}
 }
 
-// TestMergeCommitsOrdersNewestFirstAndHoldsTheCap pins the cross-repository
+// TestNewestFirstOrdersNewestFirstAndHoldsTheCap pins the cross-repository
 // merge: newest first regardless of which document a row came from, the
 // configured cap honored, and maxServedCommits honored even when
 // configuration asks for more than the payload budget can carry.
-func TestMergeCommitsOrdersNewestFirstAndHoldsTheCap(t *testing.T) {
+func TestNewestFirstOrdersNewestFirstAndHoldsTheCap(t *testing.T) {
 	t.Parallel()
-	build := func(repo string, days ...int) []datedCommit {
-		rows := make([]datedCommit, 0, len(days))
+	build := func(repo string, days ...int) []datedRow[VCSCommit] {
+		rows := make([]datedRow[VCSCommit], 0, len(days))
 		for _, day := range days {
 			at := time.Date(2026, 8, day, 12, 0, 0, 0, time.UTC)
-			rows = append(rows, datedCommit{
+			rows = append(rows, datedRow[VCSCommit]{
 				at:  at,
 				row: VCSCommit{Repo: repo, SHA: fixtureSHA(day), Message: fmt.Sprintf("%s day %d", repo, day), At: at.Format(time.RFC3339)},
 			})
@@ -1391,7 +1394,7 @@ func TestMergeCommitsOrdersNewestFirstAndHoldsTheCap(t *testing.T) {
 		return rows
 	}
 	dated := append(build("alpha", 20, 18, 12), build("beta", 19, 17)...)
-	merged := mergeCommits(dated, 4)
+	merged := newestFirst(dated, 4)
 	if len(merged) != 4 {
 		t.Fatalf("merged %d rows, want the configured 4", len(merged))
 	}
@@ -1402,16 +1405,221 @@ func TestMergeCommitsOrdersNewestFirstAndHoldsTheCap(t *testing.T) {
 	}
 	// A cap above the structural ceiling is clamped to it, so configuration
 	// cannot widen a payload bound.
-	many := make([]datedCommit, 0, (maxServedCommits+5)*3)
+	many := make([]datedRow[VCSCommit], 0, (maxServedCommits+5)*3)
 	for index := range maxServedCommits + 5 {
 		many = append(many, build("alpha", 1+index%28)...)
 	}
-	if got := len(mergeCommits(many, maxServedCommits+5)); got > maxServedCommits {
+	if got := len(newestFirst(many, maxServedCommits+5)); got > maxServedCommits {
 		t.Errorf("merged %d rows, want at most the structural %d", got, maxServedCommits)
 	}
 	// An unset cap falls back to the ceiling rather than serving nothing, so a
 	// missing value degrades to a bound instead of an outage.
-	if got := len(mergeCommits(dated, 0)); got != len(dated) {
+	if got := len(newestFirst(dated, 0)); got != len(dated) {
 		t.Errorf("an unset cap served %d of %d rows", got, len(dated))
 	}
+}
+
+// pullNode builds one merged pull-request node. An empty merge identity
+// answers a null merge commit and an empty instant a null one, which is how
+// the upstream reports either absence.
+func pullNode(number int64, title, mergedAt, mergeOID string) string {
+	encoded, err := json.Marshal(title)
+	if err != nil {
+		panic("pull fixture title cannot be encoded: " + err.Error())
+	}
+	merge, at := "null", "null"
+	if mergeOID != "" {
+		merge = fmt.Sprintf(`{"oid":%q}`, mergeOID)
+	}
+	if mergedAt != "" {
+		at = fmt.Sprintf("%q", mergedAt)
+	}
+	return fmt.Sprintf(`{"number":%d,"title":%s,"mergedAt":%s,"mergeCommit":%s}`, number, encoded, at, merge)
+}
+
+// releaseNode builds one release node, under the same null conventions: an
+// empty tag identity answers a null tag commit.
+func releaseNode(tag, publishedAt string, draft, prerelease bool, tagOID, headline string) string {
+	encoded, err := json.Marshal(headline)
+	if err != nil {
+		panic("release fixture headline cannot be encoded: " + err.Error())
+	}
+	commit, at := "null", "null"
+	if tagOID != "" {
+		commit = fmt.Sprintf(`{"oid":%q,"messageHeadline":%s}`, tagOID, encoded)
+	}
+	if publishedAt != "" {
+		at = fmt.Sprintf("%q", publishedAt)
+	}
+	return fmt.Sprintf(`{"tagName":%q,"publishedAt":%s,"isDraft":%t,"isPrerelease":%t,"tagCommit":%s}`, tag, at, draft, prerelease, commit)
+}
+
+// historyDocumentWith is historyDocument with the repository's merged pull
+// requests and releases beside its commits (issue #401).
+func historyDocumentWith(name string, commits, pulls, releases []string) string {
+	return fmt.Sprintf(`{"data":{"nodes":[{"name":%q,"defaultBranchRef":{"target":{"history":{"nodes":[%s]}}},"pullRequests":{"nodes":[%s]},"releases":{"nodes":[%s]}}]}}`,
+		name, strings.Join(commits, ","), strings.Join(pulls, ","), strings.Join(releases, ","))
+}
+
+// TestMapCommitHistoriesReadsMergesAndReleases is the happy path of the two
+// feeds the history document gained (issue #401): every list maps, every row
+// is labelled by the CALLER's repository, instants are normalized to UTC, a
+// release says what it released through its tag commit's subject, drafts and
+// pre-releases are skipped rather than refused, and an old release — real
+// history on a repository active this month — is admitted.
+func TestMapCommitHistoriesReadsMergesAndReleases(t *testing.T) {
+	t.Parallel()
+	document := historyDocumentWith("fixture-repo",
+		[]string{commitNode(fixtureSHA(1), "feat: a commit", "2026-08-23T09:00:00Z")},
+		[]string{
+			pullNode(7, "  Merge the newer thing  ", "2026-08-22T10:00:00-07:00", fixtureSHA(70)),
+			pullNode(6, "Merge the older thing", "2026-08-20T09:00:00Z", fixtureSHA(60)),
+		},
+		[]string{
+			releaseNode("v0.2.0-rc.1", "2026-08-23T08:00:00Z", false, true, fixtureSHA(90), "a pre-release"),
+			releaseNode("v0.2.0", "", true, false, "", ""),
+			releaseNode("v0.1.9", "2026-08-21T09:00:00Z", false, false, fixtureSHA(80), "Release 0.1.9: the thing"),
+			releaseNode("v0.0.1", "2024-01-01T00:00:00Z", false, false, fixtureSHA(10), "the first release"),
+		},
+	)
+	work, err := mapCommitHistories([]byte(document), fixtureRepos, commitFixtureNow)
+	if err != nil {
+		t.Fatalf("a realistic document with merges and releases was refused: %v", err)
+	}
+	if len(work.commits) != 1 {
+		t.Errorf("mapped %d commits, want 1", len(work.commits))
+	}
+	merges := []VCSMerge{
+		{Repo: "fixture-repo", Number: 7, Title: "Merge the newer thing", At: "2026-08-22T17:00:00Z", SHA: fixtureSHA(70)},
+		{Repo: "fixture-repo", Number: 6, Title: "Merge the older thing", At: "2026-08-20T09:00:00Z", SHA: fixtureSHA(60)},
+	}
+	if got := newestFirst(work.merges, 0); !reflect.DeepEqual(got, merges) {
+		t.Errorf("merges = %+v, want %+v", got, merges)
+	}
+	releases := []VCSRelease{
+		{Repo: "fixture-repo", Tag: "v0.1.9", Title: "Release 0.1.9: the thing", At: "2026-08-21T09:00:00Z", SHA: fixtureSHA(80)},
+		{Repo: "fixture-repo", Tag: "v0.0.1", Title: "the first release", At: "2024-01-01T00:00:00Z", SHA: fixtureSHA(10)},
+	}
+	if got := newestFirst(work.releases, 0); !reflect.DeepEqual(got, releases) {
+		t.Errorf("releases = %+v, want %+v: a draft or a pre-release reached the feed, or a real one was lost", got, releases)
+	}
+	// A repository with no default branch still has merges and releases to
+	// report: only its commit list is empty.
+	empty := `{"data":{"nodes":[{"name":"fixture-repo","defaultBranchRef":null,"pullRequests":{"nodes":[` +
+		pullNode(1, "Merge", "2026-08-20T09:00:00Z", fixtureSHA(1)) + `]},"releases":{"nodes":[]}}]}}`
+	if work, err := mapCommitHistories([]byte(empty), fixtureRepos, commitFixtureNow); err != nil || len(work.commits) != 0 || len(work.merges) != 1 {
+		t.Errorf("a repository with no default branch = %+v, %v; want its one merge and no commit", work, err)
+	}
+}
+
+// TestMapCommitHistoriesRefusesEveryMalformedMergeOrRelease is the two new
+// feeds' gate, held to the commits' discipline: every malformed row refuses
+// the WHOLE document, never a half list.
+func TestMapCommitHistoriesRefusesEveryMalformedMergeOrRelease(t *testing.T) {
+	t.Parallel()
+	good := pullNode(1, "Merge", "2026-08-20T09:00:00Z", fixtureSHA(1))
+	released := releaseNode("v1", "2026-08-20T09:00:00Z", false, false, fixtureSHA(2), "release v1")
+	pulls := func(nodes ...string) string { return historyDocumentWith("fixture-repo", nil, nodes, nil) }
+	tags := func(nodes ...string) string { return historyDocumentWith("fixture-repo", nil, nil, nodes) }
+	oversized := func(node string) []string {
+		nodes := make([]string, 0, maxCommitDocumentItems+1)
+		for range maxCommitDocumentItems + 1 {
+			nodes = append(nodes, node)
+		}
+		return nodes
+	}
+	for name, document := range map[string]string{
+		"a merge with no merge commit":           pulls(pullNode(1, "Merge", "2026-08-20T09:00:00Z", "")),
+		"a merge commit that is not an identity": pulls(pullNode(1, "Merge", "2026-08-20T09:00:00Z", "abc123")),
+		"a merge numbered zero":                  pulls(pullNode(0, "Merge", "2026-08-20T09:00:00Z", fixtureSHA(1))),
+		"a merge with a negative number":         pulls(pullNode(-4, "Merge", "2026-08-20T09:00:00Z", fixtureSHA(1))),
+		"a merge numbered past every count":      pulls(pullNode(maxCountValue+1, "Merge", "2026-08-20T09:00:00Z", fixtureSHA(1))),
+		"a merge with an empty title":            pulls(pullNode(1, "", "2026-08-20T09:00:00Z", fixtureSHA(1))),
+		"a merge with a whitespace title":        pulls(pullNode(1, "   ", "2026-08-20T09:00:00Z", fixtureSHA(1))),
+		"a merge title carrying a control":       pulls(pullNode(1, "Merge\abell", "2026-08-20T09:00:00Z", fixtureSHA(1))),
+		"a merge with no instant":                pulls(pullNode(1, "Merge", "", fixtureSHA(1))),
+		"a merge with an unparseable instant":    pulls(pullNode(1, "Merge", "yesterday", fixtureSHA(1))),
+		"a merge from the future":                pulls(pullNode(1, "Merge", "2027-01-01T00:00:00Z", fixtureSHA(1))),
+		"a merge at the zero instant":            pulls(pullNode(1, "Merge", "0001-01-01T00:00:00Z", fixtureSHA(1))),
+		"more merges than the bound":             pulls(oversized(good)...),
+		"one good merge and one drifted":         pulls(good, pullNode(2, "Merge", "2026-08-20T09:00:00Z", "")),
+		"a release with an empty tag":            tags(releaseNode("", "2026-08-20T09:00:00Z", false, false, fixtureSHA(2), "release")),
+		"a release tag outside the grammar":      tags(releaseNode("v1/2", "2026-08-20T09:00:00Z", false, false, fixtureSHA(2), "release")),
+		"a release tag past the bound":           tags(releaseNode(strings.Repeat("v", maxReleaseTagRunes+1), "2026-08-20T09:00:00Z", false, false, fixtureSHA(2), "release")),
+		"a release that names no commit":         tags(releaseNode("v1", "2026-08-20T09:00:00Z", false, false, "", "")),
+		"a release commit that is no identity":   tags(releaseNode("v1", "2026-08-20T09:00:00Z", false, false, strings.ToUpper(fixtureSHA(255)), "release")),
+		"a release commit with no subject":       tags(releaseNode("v1", "2026-08-20T09:00:00Z", false, false, fixtureSHA(2), "")),
+		"a release with no instant":              tags(releaseNode("v1", "", false, false, fixtureSHA(2), "release")),
+		"a release from the future":              tags(releaseNode("v1", "2027-01-01T00:00:00Z", false, false, fixtureSHA(2), "release")),
+		"a release at the zero instant":          tags(releaseNode("v1", "0001-01-01T00:00:00Z", false, false, fixtureSHA(2), "release")),
+		"more releases than the bound":           tags(oversized(released)...),
+		"one good release and one drifted":       tags(released, releaseNode("v2", "2026-08-20T09:00:00Z", false, false, "", "")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if work, err := mapCommitHistories([]byte(document), fixtureRepos, commitFixtureNow); err == nil {
+				t.Fatalf("a malformed merge or release was accepted as %+v", work)
+			}
+		})
+	}
+	// The positive controls: exactly the bound's worth of each list maps, so
+	// the refusals above are about the drift and not about the builders.
+	atBound := historyDocumentWith("fixture-repo", nil, oversized(good)[:maxCommitDocumentItems], oversized(released)[:maxCommitDocumentItems])
+	if work, err := mapCommitHistories([]byte(atBound), fixtureRepos, commitFixtureNow); err != nil || len(work.merges) != maxCommitDocumentItems || len(work.releases) != maxCommitDocumentItems {
+		t.Errorf("lists exactly at the bound = %d merges, %d releases, %v", len(work.merges), len(work.releases), err)
+	}
+}
+
+// TestRecentWorkCapsEveryFeed pins the one cap all three feeds share (issue
+// #401: every feed pages to the same height): each list is newest first and
+// cut at the configured max, which configuration can never widen past
+// maxServedCommits.
+func TestRecentWorkCapsEveryFeed(t *testing.T) {
+	t.Parallel()
+	var work datedWork
+	for index := range maxServedCommits + 7 {
+		at := commitFixtureNow.Add(-time.Duration(index) * time.Hour)
+		stamp := at.Format(time.RFC3339)
+		work.commits = append(work.commits, datedRow[VCSCommit]{at: at, row: VCSCommit{Repo: "r", SHA: fixtureSHA(index + 1), Message: "c", At: stamp}})
+		work.merges = append(work.merges, datedRow[VCSMerge]{at: at, row: VCSMerge{Repo: "r", Number: int64(index + 1), Title: "m", At: stamp, SHA: fixtureSHA(index + 1)}})
+		work.releases = append(work.releases, datedRow[VCSRelease]{at: at, row: VCSRelease{Repo: "r", Tag: fmt.Sprintf("v%d", index), Title: "t", At: stamp, SHA: fixtureSHA(index + 1)}})
+	}
+	// Shuffle by reversing, so the order out is the sort's and not the input's.
+	slices.Reverse(work.commits)
+	slices.Reverse(work.merges)
+	slices.Reverse(work.releases)
+	for _, limit := range []int{4, maxServedCommits, maxServedCommits + 5} {
+		served := work.newest(limit)
+		want := min(limit, maxServedCommits)
+		for name, ats := range map[string][]string{
+			"commits":  pluck(served.commits, func(row VCSCommit) string { return row.At }),
+			"merges":   pluck(served.merges, func(row VCSMerge) string { return row.At }),
+			"releases": pluck(served.releases, func(row VCSRelease) string { return row.At }),
+		} {
+			if len(ats) != want {
+				t.Errorf("limit %d: %d %s served, want %d", limit, len(ats), name, want)
+			}
+			for index := 1; index < len(ats); index++ {
+				if ats[index-1] < ats[index] {
+					t.Errorf("limit %d: %s row %d is newer than the row above it", limit, name, index)
+				}
+			}
+			if len(ats) > 0 && ats[0] != commitFixtureNow.Format(time.RFC3339) {
+				t.Errorf("limit %d: the newest of the %s was cut: the feed opens on %s", limit, name, ats[0])
+			}
+		}
+	}
+	// An empty feed is an empty list, never nil.
+	if served := (datedWork{}).newest(maxServedCommits); served.merges == nil || served.releases == nil || served.commits == nil {
+		t.Errorf("an empty round served a nil feed: %+v", served)
+	}
+}
+
+// pluck projects one field out of a feed's rows.
+func pluck[Row any](rows []Row, field func(Row) string) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, field(row))
+	}
+	return out
 }

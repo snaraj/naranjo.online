@@ -654,7 +654,7 @@ func (s *FetchSource) refreshActivity(ctx context.Context, doer fetchDoer, env f
 	if err != nil {
 		return loadedPayload{}, err
 	}
-	commits, privateDays, commitsAt, commitsDue, commitsFresh := s.commitSection(ctx, doer, env, spec.Commits, now)
+	recent, privateDays, commitsAt, commitsDue, commitsFresh := s.commitSection(ctx, doer, env, spec.Commits, now)
 	if !calendarDue && !commitsDue {
 		return loadedPayload{}, errNothingDue
 	}
@@ -662,7 +662,9 @@ func (s *FetchSource) refreshActivity(ctx context.Context, doer fetchDoer, env f
 	if err := decodeStrict(calendar, &payload); err != nil {
 		return loadedPayload{}, fmt.Errorf("contribution calendar: retained payload: %w", err)
 	}
-	payload.RecentCommits = commits
+	payload.RecentCommits = recent.commits
+	payload.RecentMerges = recent.merges
+	payload.RecentReleases = recent.releases
 	payload.PrivateActivity = privateDays
 	payload.CommitsAt = ""
 	if !commitsAt.IsZero() {
@@ -962,7 +964,8 @@ func (s *FetchSource) readProjects(ctx context.Context, doer fetchDoer, credenti
 	return mapRepositoryListing(body, spec, now)
 }
 
-// commitSection returns the recent-commit rows to serve, the private-day
+// commitSection returns the recent-commit round's three feeds to serve (the
+// commits, the merged pull requests and the releases), the private-day
 // aggregate beside them, the instant they were read, whether this cycle
 // attempted them at all, and whether the list is live. A commit producer that
 // is not configured serves an empty list and never makes the panel stale: no
@@ -979,9 +982,9 @@ func (s *FetchSource) readProjects(ctx context.Context, doer fetchDoer, credenti
 // the round serves an empty list and says nothing, which is the honest empty
 // state, rather than inventing rows or reading a narrower public answer under
 // the same heading.
-func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, env func(string) string, spec *vcsCommitsFetchSpec, now time.Time) ([]VCSCommit, []VCSPrivateDay, time.Time, bool, bool) {
+func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, env func(string) string, spec *vcsCommitsFetchSpec, now time.Time) (recentWork, []VCSPrivateDay, time.Time, bool, bool) {
 	if spec == nil {
-		return []VCSCommit{}, nil, time.Time{}, false, true
+		return recentWork{commits: []VCSCommit{}}, nil, time.Time{}, false, true
 	}
 	credential := env(spec.KeyEnvName)
 	if credential == "" {
@@ -989,12 +992,12 @@ func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, env fun
 		// is nothing here that could leak; what a cluster log needs is the
 		// reason the log is empty.
 		s.log().LogAttrs(ctx, slog.LevelDebug, "commit producer skipped: credential unset; serving no commit rows")
-		return []VCSCommit{}, nil, time.Time{}, false, true
+		return recentWork{commits: []VCSCommit{}}, nil, time.Time{}, false, true
 	}
 	interval := s.config.endpointIntervalForCredential(spec.MinIntervalMinutes, spec.AuthenticatedMinIntervalMinutes, credential)
 	if !s.reserve(roleVCSCommits, now, interval) {
 		s.mu.Lock()
-		retained, days, at := s.commits, s.commitDays, s.commitsAt
+		retained, days, at := s.recent, s.commitDays, s.commitsAt
 		s.mu.Unlock()
 		// Inside its budget a retained list IS the current answer, so the
 		// panel stays honest and ok. A list that was never fetched is not.
@@ -1004,7 +1007,7 @@ func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, env fun
 	if err != nil {
 		s.coolOnRateLimit(ctx, roleVCSCommits, now, err)
 		s.mu.Lock()
-		retained, retainedDays, at := s.commits, s.commitDays, s.commitsAt
+		retained, retainedDays, at := s.recent, s.commitDays, s.commitsAt
 		s.mu.Unlock()
 		// A failed commit round never propagates — the panel degrades to
 		// stale instead — so its failure is narrated HERE or nowhere. The
@@ -1013,10 +1016,12 @@ func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, env fun
 		return retainedCommits(retained), retainedDays, at, true, false
 	}
 	s.mu.Lock()
-	s.commits, s.commitDays, s.commitsAt = rows, days, now
+	s.recent, s.commitDays, s.commitsAt = rows, days, now
 	s.mu.Unlock()
 	s.log().LogAttrs(ctx, slog.LevelDebug, "commit refresh cycle",
-		slog.Int("rows_served", len(rows)),
+		slog.Int("rows_served", len(rows.commits)),
+		slog.Int("merges_served", len(rows.merges)),
+		slog.Int("releases_served", len(rows.releases)),
 		slog.Int("private_days", len(days)),
 	)
 	return rows, days, now, true, true
@@ -1031,20 +1036,20 @@ func (s *FetchSource) commitSection(ctx context.Context, doer fetchDoer, env fun
 //
 // A window with no public repository at all skips the second document
 // entirely: a round with nothing to ask is not a round that asks anyway.
-func (s *FetchSource) readCommits(ctx context.Context, doer fetchDoer, credential string, spec *vcsCommitsFetchSpec, now time.Time) ([]VCSCommit, []VCSPrivateDay, error) {
+func (s *FetchSource) readCommits(ctx context.Context, doer fetchDoer, credential string, spec *vcsCommitsFetchSpec, now time.Time) (recentWork, []VCSPrivateDay, error) {
 	body, err := s.queryDocument(ctx, doer, roleVCSCommits, spec.Contributions, credential, spec.KeyHeader, spec.KeyPrefix, queryVariables{
 		From: windowInstant(now, commitLogWindowDays),
 		To:   now.UTC().Format(time.RFC3339),
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("commit contributions: %w", err)
+		return recentWork{}, nil, fmt.Errorf("commit contributions: %w", err)
 	}
 	author, repos, days, err := mapCommitContributions(body, spec.Owner, now)
 	if err != nil {
-		return nil, nil, err
+		return recentWork{}, nil, err
 	}
 	if len(repos) == 0 {
-		return []VCSCommit{}, days, nil
+		return recentWork{commits: []VCSCommit{}}, days, nil
 	}
 	ids := make([]string, 0, len(repos))
 	for _, repo := range repos {
@@ -1055,13 +1060,13 @@ func (s *FetchSource) readCommits(ctx context.Context, doer fetchDoer, credentia
 		IDs:    ids,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("commit history: %w", err)
+		return recentWork{}, nil, fmt.Errorf("commit history: %w", err)
 	}
 	dated, err := mapCommitHistories(body, repos, now)
 	if err != nil {
-		return nil, nil, err
+		return recentWork{}, nil, err
 	}
-	return mergeCommits(dated, spec.Max), days, nil
+	return dated.newest(spec.Max), days, nil
 }
 
 // document reduces the calendar spec to the query document half of it. The
@@ -1098,13 +1103,15 @@ func (s *FetchSource) queryDocument(ctx context.Context, doer fetchDoer, role st
 	})
 }
 
-// retainedCommits hands back a non-nil list so the payload always carries a
-// JSON array rather than a null the frontend would have to special-case.
-func retainedCommits(rows []VCSCommit) []VCSCommit {
-	if rows == nil {
-		return []VCSCommit{}
+// retainedCommits hands back a non-nil commit list so the payload always
+// carries a JSON array rather than a null the frontend would have to
+// special-case. The merges and releases are optional fields and stay absent
+// when empty.
+func retainedCommits(work recentWork) recentWork {
+	if work.commits == nil {
+		work.commits = []VCSCommit{}
 	}
-	return rows
+	return work
 }
 
 // refreshUsage fetches every configured usage source whose credential is
