@@ -29,7 +29,7 @@ import Ticker from '../components/Ticker.svelte';
 function iconMap(files: Record<string, string>): Map<string, string> {
   const icons = new Map<string, string>();
   for (const [path, url] of Object.entries(files)) {
-    const file = path.split('/').at(-1) ?? '';
+    const file = path.slice(path.lastIndexOf('/') + 1);
     icons.set(file.replace(/\.png$/, ''), url);
   }
   return icons;

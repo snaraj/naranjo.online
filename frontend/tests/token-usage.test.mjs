@@ -492,7 +492,7 @@ describe('the board of cards: source contract', () => {
   });
 
   it('sets every dynamic value through a custom property, never an inline style string', () => {
-    /* The CSP floor (default-src 'self' admits no style attribute): a model
+    /* The CSP floor (style-src 'self' admits no style attribute): a model
        row's share, the date stamp riding the cursor and a calendar cell's
        column (the delay its arrival waits) are the genuinely dynamic values
        on the Chronicle, and each reaches the DOM as a custom property Svelte

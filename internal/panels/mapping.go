@@ -158,7 +158,9 @@ func mapContributions(raw []byte) (json.RawMessage, error) {
 	total := 0
 	for offset := range daily {
 		daily[offset] = counts[first.AddDate(0, 0, offset).Format(dayLayout)]
-		total += daily[offset]
+		if err := addBoundedCount(&total, daily[offset]); err != nil {
+			return nil, fmt.Errorf("contribution calendar: the days' sum leaves the shared count bound: %w", err)
+		}
 	}
 	// The public document counts contributions and nothing finer, so it
 	// carries no commit days: the page's dash is this producer's answer.
@@ -316,11 +318,15 @@ func mapCalendarDocument(raw []byte, now time.Time) (json.RawMessage, string, er
 	if dated != span {
 		return nil, "", fmt.Errorf("contribution calendar: %d dated cells cover a %d day span; the document is missing days", dated, span)
 	}
+	// Every day and every running sum is held to the shared count bound, so
+	// a day past it and a total past it are refused alike (issue #404).
 	daily := make([]int, span)
 	total := 0
 	for offset := range daily {
 		daily[offset] = counts[first.AddDate(0, 0, offset).Format(dayLayout)]
-		total += daily[offset]
+		if err := addBoundedCount(&total, daily[offset]); err != nil {
+			return nil, "", fmt.Errorf("contribution calendar: a day or the days' sum leaves the shared count bound: %w", err)
+		}
 	}
 	if total != calendar.Total {
 		return nil, "", fmt.Errorf("contribution calendar: the document reports %d contributions but its days sum to %d", calendar.Total, total)
@@ -1060,7 +1066,7 @@ func countFromLabel(label, id string) (int, error) {
 	}
 	digits := strings.ReplaceAll(head, ",", "")
 	count, err := strconv.Atoi(digits)
-	if err != nil || count < 0 {
+	if err != nil || count < 0 || count > maxCountValue {
 		return 0, fmt.Errorf("contribution calendar: cell %s label %q is not a count", id, label)
 	}
 	return count, nil
@@ -1172,10 +1178,12 @@ func mapCommitContributions(raw []byte, owner string, now time.Time) (string, []
 			if at.Before(oldest) || at.After(newest) {
 				return "", nil, nil, fmt.Errorf("commit contributions: entry %d carries a bucket at %s, outside the requested window", position, at.UTC().Format(time.RFC3339))
 			}
-			if day.CommitCount < 0 {
-				return "", nil, nil, fmt.Errorf("commit contributions: entry %d reports a negative count", position)
+			// The running total is held to the shared count bound, so the two
+			// partial sums below it — this entry's and a private day's — are
+			// bounded too: each adds a subset of the same non-negative counts.
+			if err := addBoundedCount(&total, day.CommitCount); err != nil {
+				return "", nil, nil, fmt.Errorf("commit contributions: entry %d reports a count that leaves [0,%d]", position, maxCountValue)
 			}
-			total += day.CommitCount
 			counted += day.CommitCount
 			if at.After(latest) {
 				latest = at
@@ -1523,18 +1531,18 @@ func mapUsage(shape string, raw []byte) (usageMapping, error) {
 	week := tokenBucket{}
 	for _, bucket := range buckets {
 		if bucket.day == latestDay {
-			if err := addUsageCount(&latest.input, bucket.input); err != nil {
+			if err := addBoundedCount(&latest.input, bucket.input); err != nil {
 				return usageMapping{}, fmt.Errorf("today input: %w", err)
 			}
-			if err := addUsageCount(&latest.output, bucket.output); err != nil {
+			if err := addBoundedCount(&latest.output, bucket.output); err != nil {
 				return usageMapping{}, fmt.Errorf("today output: %w", err)
 			}
 		}
 		if bucket.day >= weekStart && bucket.day <= latestDay {
-			if err := addUsageCount(&week.input, bucket.input); err != nil {
+			if err := addBoundedCount(&week.input, bucket.input); err != nil {
 				return usageMapping{}, fmt.Errorf("week input: %w", err)
 			}
-			if err := addUsageCount(&week.output, bucket.output); err != nil {
+			if err := addBoundedCount(&week.output, bucket.output); err != nil {
 				return usageMapping{}, fmt.Errorf("week output: %w", err)
 			}
 		}
@@ -1551,7 +1559,7 @@ func mapUsage(shape string, raw []byte) (usageMapping, error) {
 		}
 	}
 	windowTotal := week.input
-	if err := addUsageCount(&windowTotal, week.output); err != nil {
+	if err := addBoundedCount(&windowTotal, week.output); err != nil {
 		return usageMapping{}, fmt.Errorf("week total: %w", err)
 	}
 	return usageMapping{
@@ -1600,11 +1608,11 @@ func decodeUsageBuckets(shape string, raw []byte) ([]tokenBucket, error) {
 					result.CacheCreation.Ephemeral5mInputTokens,
 					result.CacheCreation.Ephemeral1hInputTokens,
 				} {
-					if err := addUsageCount(&totals.input, value); err != nil {
+					if err := addBoundedCount(&totals.input, value); err != nil {
 						return nil, fmt.Errorf("usage-report input: %w", err)
 					}
 				}
-				if err := addUsageCount(&totals.output, result.OutputTokens); err != nil {
+				if err := addBoundedCount(&totals.output, result.OutputTokens); err != nil {
 					return nil, fmt.Errorf("usage-report output: %w", err)
 				}
 			}
@@ -1625,10 +1633,10 @@ func decodeUsageBuckets(shape string, raw []byte) ([]tokenBucket, error) {
 			}
 			totals := tokenBucket{day: start.Format(dayLayout), start: start, end: end}
 			for _, result := range bucket.Results {
-				if err := addUsageCount(&totals.input, result.InputTokens); err != nil {
+				if err := addBoundedCount(&totals.input, result.InputTokens); err != nil {
 					return nil, fmt.Errorf("usage-page input: %w", err)
 				}
-				if err := addUsageCount(&totals.output, result.OutputTokens); err != nil {
+				if err := addBoundedCount(&totals.output, result.OutputTokens); err != nil {
 					return nil, fmt.Errorf("usage-page output: %w", err)
 				}
 			}
@@ -1667,12 +1675,13 @@ func validUsageInterval(start, end time.Time) bool {
 	return end.After(start) && !end.After(nextDay)
 }
 
-// addUsageCount applies the same integer contract the sealed producer and
-// browser enforce. Authenticated upstream data is still untrusted input: a
-// negative count, a single value above JavaScript's exact-integer ceiling,
-// or a bucket sum crossing it refuses the refresh instead of producing a
-// plausible-looking wrapped or rounded total.
-func addUsageCount(total *int64, value int64) error {
+// addBoundedCount applies the same integer contract the sealed producer and
+// browser enforce, to every count and every sum of counts a mapper builds.
+// Authenticated upstream data is still untrusted input: a negative count, a
+// single value above JavaScript's exact-integer ceiling, or a sum crossing it
+// refuses the refresh instead of producing a plausible-looking wrapped or
+// rounded total (issue #404).
+func addBoundedCount[N int | int64](total *N, value N) error {
 	if value < 0 || value > maxCountValue || *total > maxCountValue-value {
 		return fmt.Errorf("count lies outside [0,%d]", maxCountValue)
 	}
@@ -1696,10 +1705,10 @@ func dailySeries(buckets []tokenBucket) (*TokenUsageSeries, error) {
 			return nil, fmt.Errorf("usage series day: %w", err)
 		}
 		combined := totalsByDay[bucket.day]
-		if err := addUsageCount(&combined, bucket.input); err != nil {
+		if err := addBoundedCount(&combined, bucket.input); err != nil {
 			return nil, fmt.Errorf("usage series input: %w", err)
 		}
-		if err := addUsageCount(&combined, bucket.output); err != nil {
+		if err := addBoundedCount(&combined, bucket.output); err != nil {
 			return nil, fmt.Errorf("usage series output: %w", err)
 		}
 		totalsByDay[bucket.day] = combined

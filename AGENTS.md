@@ -97,24 +97,28 @@ Numbered for citation, repo-scoped, none negotiable in code:
     exactly one patch from its current protected base: numeric `VERSION`,
     chart `version`, `appVersion`, and changelog `X.Y.Z`, plus plain `vX.Y.Z`
     image tag. A range whose every commit is individually confined to the
-    closed documentation allowlist — root `AGENTS.md`, `README.md`,
-    `.gitignore`, and Markdown files under `docs/` — classifies no-artifact:
-    it advances nothing, and the orchestrator proves that class against
-    evidence the VERDICT CANNOT CHOOSE before skipping the publisher, then
-    logs that verdict explicitly instead of dispatching. The anchor it proves
-    against, the anchor-advance walk, and the gap re-classification are
-    specified in `docs/release-classifier.md`, with the working attack that
-    retired "it re-derives the class from git" as a sufficient answer.
-    Removing the release from a documentation-only merge
-    weakens nothing: the artifact is unchanged, so there is
-    nothing to version, sign, scan, or attest. The classifier has exactly
-    two verdicts and no flag, environment variable, or configuration input;
-    a non-allowlisted path with an unchanged version, a mixed range without
-    its one exact patch, an unparseable diff entry, or a non-regular file
-    mode all deny; renames decompose into add plus delete, so a rename
-    crossing the allowlist boundary denies through its non-allowlisted side.
-    Widening the allowlist is itself an artifact-classified gate change that
-    releases. Two denial modes are deliberate and must not be mistaken for
+    closed no-artifact allowlist — root `AGENTS.md`, `README.md`,
+    `.gitignore`, Markdown files under `docs/`, and the paths no shipped byte
+    can come from: `.github/`, `scripts/ci/`, Go `_test.go` files under `cmd/`
+    and `internal/`, `frontend/tests/`, `frontend/e2e/` and
+    `frontend/playwright.config.mjs` — classifies no-artifact: it advances
+    nothing, and the orchestrator proves that class against evidence the
+    VERDICT CANNOT CHOOSE before skipping the publisher, then logs that
+    verdict explicitly instead of dispatching. The anchor it proves against,
+    the anchor-advance walk, and the gap re-classification are specified in
+    `docs/release-classifier.md`, with the working attack that retired "it
+    re-derives the class from git" as a sufficient answer. Removing the
+    release from a no-artifact merge weakens nothing: the artifact is
+    unchanged, so there is nothing to version, sign, scan, or attest. The
+    classifier has exactly two verdicts and no flag, environment variable, or
+    configuration input; a non-allowlisted path with an unchanged version, a
+    mixed range without its one exact patch, an unparseable diff entry, or a
+    non-regular file mode all deny; renames decompose into add plus delete, so
+    a rename crossing the allowlist boundary denies through its
+    non-allowlisted side. `release_contract.py` states each path's proof; the
+    test paths hold only while no shipped Dockerfile stage builds FROM a stage
+    a test ran in, which its contract test pins.
+    Two denial modes are deliberate and must not be mistaken for
     bugs, and they behave differently — conflating them misleads whoever is
     on the other end of the red build. The BOUNDARY denial, from the
     recovered last release boundary, is STICKY: a documentation merge whose
@@ -239,7 +243,7 @@ defaults to older capabilities.
 Releases: every artifact-classified PR advances numeric `VERSION`, chart
 `version`, `appVersion`, and changelog `X.Y.Z`, plus plain `vX.Y.Z`
 `image.tag`, by exactly one patch from its current protected base; a
-documentation-only range (requirement 10's closed allowlist) advances nothing
+no-artifact range (requirement 10's closed allowlist) advances nothing
 and skips release orchestration entirely. Successful main CI creates NO tag: it
 explicitly dispatches the protected-main publisher with that successful run's
 ID, and the PUBLISHER creates the annotated plain `vX.Y.Z` tag at the exact
@@ -264,7 +268,7 @@ aliases, signer/provenance, and scan policy/results; a weekly read-only audit
 revalidates that complete chain. Histories and tags are append-only; stale
 concurrent PRs must resync
 and take the new next patch when they carry an artifact change; a
-documentation-only PR has no patch to retake. Deployment RESOLVES digests, never tags. The
+no-artifact PR has no patch to retake. Deployment RESOLVES digests, never tags. The
 Helm chart/OCI tag is the documented numeric `X.Y.Z` exception because Helm
 requires its registry tag to equal valid chart SemVer; Git/image/Release tags
 remain plain `vX.Y.Z`.
@@ -347,9 +351,8 @@ step assumes a particular AI tool, and no vendor gets a different protocol.
   merge.
 - **Normal code changes** take focused tests and one full local gate; a
   live check only when runtime behavior changes; one review.
-- **Docs, comments, and formatting** (requirement 10's no-artifact class)
-  run the relevant checks only; adversarial review is the coordinator's
-  routing decision, not a mandate.
+- **Docs, comments, and formatting** run the relevant checks only;
+  adversarial review is the coordinator's routing decision, not a mandate.
 
 Exact-head discipline is unchanged for whatever review DOES run: a
 verdict binds the head it names.
@@ -479,19 +482,18 @@ merges. No third distinct-context pass is required.
   and protected-main chain.
 - **Agent labels.** Every agent-created PR and issue carries TWO further
   labels: the umbrella `agent-authored` AND the acting agent's own label —
-  `fable5.1` (Claude Fable 5.1, color `D97706`, registered 2026-09-04 by
-  owner directive on PR #295), `fable5` (Claude Fable 5), `5.6-sol`
-  (ChatGPT 5.6 SOL ULTRA), `gpt-6` (Codex GPT-6, color `10A37F`),
-  `opus5` (Claude Opus 5), `opus4.8` (Claude
-  Opus 4.8), `sonnet5` (Claude Sonnet 5, color `0EA5E9`). The body
-  signature must match the label (`- Fable5.1` ↔ `fable5.1`,
-  `- Fable5` ↔ `fable5`, `- Codex GPT-6` ↔ `gpt-6`), and
-  adversarial-review verdicts carry the
+  `fable5.1` (Claude Fable 5.1, color `D97706`, registered 2026-09-04 by owner
+  directive on PR #295), `fable5` (Claude Fable 5), `5.6-sol` (ChatGPT 5.6 SOL
+  ULTRA), `gpt-6` (Codex GPT-6, color `10A37F`), `opus5.5` (Claude Opus 5.5,
+  color `8B5CF6`), `opus5` (Claude Opus 5), `opus4.8` (Claude Opus 4.8),
+  `sonnet5` (Claude Sonnet 5, color `0EA5E9`). The body signature must match
+  the label (`- Fable5.1` ↔ `fable5.1`, `- Opus5.5` ↔ `opus5.5`,
+  `- Codex GPT-6` ↔ `gpt-6`), and adversarial-review verdicts carry the
   same identity as `- <Agent> (adversarial reviewer)`. Labels plus
   signatures keep authorship auditable across the parallel frontier-model
-  lanes with no owner relay. When a new model joins, its label — description "Authored by
-  <model>" — is created in ALL THREE repositories before its first PR,
-  per the one-taxonomy rule.
+  lanes with no owner relay. When a new model joins, its label — description
+  "Authored by <model>" — is created in ALL THREE repositories before its
+  first PR, per the one-taxonomy rule.
 - **PR budget.** At most 3 agent PRs open in this repository by default;
   parallel pushes beyond that need explicit owner authorization first.
 - **Merge authority.** THE OWNER ALONE MERGES. Never merge, never
@@ -521,7 +523,7 @@ merges. No third distinct-context pass is required.
 - **Merge readiness.** Draft remains Draft until every check is successful at
   the exact head, the base equals current protected `main`, all discussions and
   findings are resolved, a fresh exact-head APPROVE receipt exists, the next patch
-  still follows that base for an artifact-classified PR (a documentation-only
+  still follows that base for an artifact-classified PR (a no-artifact
   PR reserves no patch at all), the automatic release consequence is proven, and
   the owner-observed release-control receipt proves immutable releases plus
   strict exact required checks, and the owner's separate bypass check reports
@@ -595,15 +597,15 @@ The complete delivery loop, each step gated by the sections around it:
    (`low | med | high | xhigh | max`; `xhigh` admitted by owner ruling,
    2026-09-03) and the tracking issue number; `<lane>` is
    parsed by longest match against the repository-registered label set
-   (`fable5.1`, `fable5`, `5.6-sol`, `opus5`, `opus4.8`, `sonnet5`), then the
-   `-<effort>` suffix — longest match is what lets `fable5.1-high/…` and
-   `fable5-high/…` coexist. A branch with genuinely no issue states why in its
-   PR body. The legacy form (`<lane>/<topic>`, e.g. `sonnet5/contracts-0.1.13`,
-   `opus5/panels-fix`) remains accepted during the transition. One writer
-   per branch, always —
+   (`fable5.1`, `fable5`, `5.6-sol`, `opus5.5`, `opus5`, `opus4.8`, `sonnet5`),
+   then the `-<effort>` suffix — longest match is what lets `fable5.1-high/…`
+   and `fable5-high/…`, or `opus5.5-high/…` and `opus5-high/…`, coexist. A
+   branch with genuinely no issue states why in its PR body. The legacy form
+   (`<lane>/<topic>`, e.g. `sonnet5/contracts-0.1.13`, `opus5/panels-fix`)
+   remains accepted during the transition. One writer per branch, always —
    a branch that is not yours is a branch you never push to. Reserve the exact
    next patch from that base when the change touches any artifact surface; a
-   documentation-only change (requirement 10's closed allowlist) reserves no
+   no-artifact change (requirement 10's closed allowlist) reserves no
    patch and must leave every release lock untouched. If another PR lands, create a fresh branch from
    current main, carry the still-valid diff without rewriting published
    history, take the new next patch, and close/supersede the stale PR.
@@ -706,10 +708,9 @@ committer, on every outgoing commit — is exactly:
 - No `Co-Authored-By` trailers, ever. Agent-authored commit bodies, PR
   bodies, and issue bodies end with the ACTING agent's own signature,
   matching its agent label per the roster (`- Fable5.1` ↔ `fable5.1`,
-  `- Fable5` ↔ `fable5`, `- Sonnet5` ↔ `sonnet5`, `- Opus5` ↔ `opus5`,
-  `- 5.6 Sol` ↔ `5.6-sol`, `- Codex GPT-6` ↔ `gpt-6`) — never a
-  different lane's name and never a
-  fixed default.
+  `- Fable5` ↔ `fable5`, `- Sonnet5` ↔ `sonnet5`, `- Opus5.5` ↔ `opus5.5`,
+  `- Opus5` ↔ `opus5`, `- 5.6 Sol` ↔ `5.6-sol`, `- Codex GPT-6` ↔ `gpt-6`) —
+  never a different lane's name and never a fixed default.
 - Treat the Git index as public (requirement 12): no hostname, IP
   address, machine or account identifier, username, workspace path,
   token, or private operational fact enters any commit, message,
@@ -726,7 +727,7 @@ with unaddressed owner comments.
 
 Dependent work may be described as a merge order, but every eventual
 artifact-classified PR to protected main must independently carry its next
-patch release; a documentation-only PR carries none and is never a release
+patch release; a no-artifact PR carries none and is never a release
 dependency. Keep a
 dependent PR Draft until its predecessor lands. Then fetch current main, create
 a fresh branch without force/rebase, port only the residual diff, allocate the
@@ -808,26 +809,26 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
 
 ## CI map
 
-- **pr-gate.yml** — pull requests AND pushes to `main` (plus manual
-  dispatch): `security` (checksum-verified tool install, actionlint, the
-  Python contract suites under `scripts/ci/` — `unittest discover -s
-  scripts/ci`, the same command the local gate above lists (issue #296) —
-  `gitleaks git` over full history, `gitleaks dir`),
-  `dependency-review` (PRs only; fails on high severity), `application`
-  (toolchain pinned AND verified — Node 24.22.1, npm 11.19.1,
-  Go 1.26.10; frontend check/test/build; gofmt/vet/tests/race; the
-  coverage floor; on main pushes, the measured totals handed over as the
-  `coverage-totals` artifact), `chart` (the four chart pin scripts; helm lint + render
-  at `--kube-version v1.36.0`; the numeric VERSION ↔ numeric chart
-  `version` ↔ numeric `appVersion` ↔ plain-v chart `image.tag` four-way
-  lock, plus a render assertion that the emitted reference still carries a
-  full digest), `container` (PRs only, like `dependency-review`; both
-  production architectures built, never published). `container` remains a
-  REQUIRED pull-request check; `EXPECTED_MAIN_JOBS` in
-  `scripts/ci/release_contract.py` expects `container` and
-  `dependency-review` `skipped` on a main push and the other three
-  successful, exact in both directions. What each chart pin proves, and why
-  the two PR-only jobs carry no main trigger, is in `docs/ci-map.md`.
+- **pr-gate.yml** — pull requests AND pushes to `main` (plus manual dispatch):
+  `security` (checksum-verified, retried tool install, actionlint, every
+  Python contract suite the local gate's `unittest discover -s scripts/ci`
+  finds, each module in its own process, all at once (issue #296) — `gitleaks
+  git` over full history, `gitleaks dir`), `dependency-review` (PRs only;
+  fails on high severity), `application` (toolchain pinned AND verified — Node
+  24.22.1, npm 11.19.1, Go 1.26.10; npm and Go build caches, never a cached
+  test result; frontend check/test/build; gofmt/vet/tests/race; the coverage
+  floor; on main pushes, the measured totals handed over as the
+  `coverage-totals` artifact), `chart` (the four chart pin scripts; helm lint
+  + render at `--kube-version v1.36.0`; the numeric VERSION ↔ numeric chart
+  `version` ↔ numeric `appVersion` ↔ plain-v chart `image.tag` four-way lock,
+  plus a render assertion that the emitted reference still carries a full
+  digest), `container` (PRs only, like `dependency-review`; both production
+  architectures built, never published). `container` remains a REQUIRED
+  pull-request check; `EXPECTED_MAIN_JOBS` in `scripts/ci/release_contract.py`
+  expects `container` and `dependency-review` `skipped` on a main push and the
+  other three successful, exact in both directions. What each chart pin
+  proves, and why the two PR-only jobs carry no main trigger, is in
+  `docs/ci-map.md`.
 - **coverage-badges.yml** — success-only `workflow_run` of a protected-main
   PR gate run (issue #350): publishes that exact run's `coverage-totals`,
   bound to its commit and run ID, to the generated single-commit `badges`
@@ -840,16 +841,17 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   push proceeds only when the commit the current badges record is an
   ancestor of, or equal to, the one being published, under a lease on the
   badge head it read (`scripts/ci/coverage_badges.py`; `docs/ci-map.md`).
-- **browser-lanes.yml** — pull requests and manual dispatch (no `main` push
-  trigger): the rendering-lane smoke matrix (issue #26 stage 2), five
-  projects against the real Go binary on localhost. It holds `contents:
-  read` and nothing else, receives no secret, and publishes nothing.
-  Deliberately NOT a job in `pr-gate.yml`: the release publisher authorizes
-  against that workflow's exact job inventory. One honest limit: the engine
-  builds are not checksum-verified the way `scripts/ci/install-tools.sh`
-  verifies every other third-party binary, because no per-build digest is
-  published — the exact pinned runner version, whose tarball integrity IS in
-  the lockfile, is what selects and bounds them (`docs/ci-map.md`).
+- **browser-lanes.yml** — pull requests touching a rendering path, and manual
+  dispatch (no `main` push trigger): the rendering-lane smoke matrix (issue
+  #26 stage 2), eight projects with WebKit and the iPhone sharded, against the
+  real Go binary on localhost. It holds `contents: read` and nothing else,
+  receives no secret, and publishes nothing. Deliberately NOT a job in
+  `pr-gate.yml`: the release publisher authorizes against that workflow's
+  exact job inventory. One honest limit: the engine builds are not
+  checksum-verified the way `scripts/ci/install-tools.sh` verifies every other
+  third-party binary, because no per-build digest is published — the exact
+  pinned runner version, whose tarball integrity IS in the lockfile, is what
+  selects and bounds them (`docs/ci-map.md`).
 - **codeql.yml** — pull requests, `main` pushes, weekly cron.
 - **release-after-main.yml** — success-only exact-SHA main-CI completion;
   performs no publication mutation and explicitly dispatches the publisher
@@ -869,16 +871,16 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
 - **compliance-live.yml** — weekly, manual, and pull requests that change the
   judge: GETs production and judges what the edge serves against
   `compliance.json` with `scripts/ci/compliance_manifest.py live` (a complete
-  answer, CSP origins, framing, HSTS, nosniff, Referrer-Policy, no cookie,
-  reporting endpoints, scripts in the served HTML and whether the CSP blocks a
-  declared injected one, published legal pages). It holds `contents: read` and
-  no secret. The manifest's schema, its storage list against the writes the
-  source makes, and the judge's rules run in the PR gate's contract suites;
-  the build's own behaviour runs in `frontend/e2e/compliance.spec.mjs` in the
-  browser lanes. Lift: the `compliance.json` entry a liftable refusal prints,
-  with a written reason; header, cookie, on-load-write and incomplete-answer
-  refusals have no manifest lift. `docs/ci-map.md` records what the three
-  checks prove.
+  answer, CSP origins, framing, HSTS, nosniff, Referrer-Policy, COOP,
+  Permissions-Policy, no cookie, reporting endpoints, scripts in the served
+  HTML and whether the CSP blocks a declared injected one, published legal
+  pages). It holds `contents: read` and no secret. The manifest's schema, its
+  storage list against the writes the source makes, and the judge's rules run
+  in the PR gate's contract suites; the build's own behaviour runs in
+  `frontend/e2e/compliance.spec.mjs` in the browser lanes. Lift: the
+  `compliance.json` entry a liftable refusal prints, with a written reason;
+  header, cookie, on-load-write and incomplete-answer refusals have no
+  manifest lift. `docs/ci-map.md` records what the three checks prove.
 - **release-audit.yml** — weekly and manual, read-only audit of the latest
   immutable Release. It re-binds the successful run, annotated tag, exact
   manifest bytes, image/chart semantic aliases and digests, signatures,
@@ -931,15 +933,13 @@ and tests re-derive per repository (requirement 5):
   `color-scheme`, which is what keeps a turn of the scene zero-CLS by
   structure instead of by promise (`docs/panels-invariants.md`).
 - **Rendering lanes, stage 2** (issue #26): `browser-lanes.yml` drives the
-  built binary through Chromium (Chrome and Edge), Firefox and WebKit
-  (Safari and every iOS browser), each at a desktop viewport plus an
-  Android and an iPhone one, asserting the same floors as MEASURED
-  boxes, computed styles and emulated preferences. It is a separate
-  workflow on purpose: the publisher authorizes releases against
-  `pr-gate.yml`'s exact job inventory, and a rendering smoke lane must
-  not touch a release-authorization surface. The two halves answer
-  different questions and neither replaces the other, so a floor lands
-  with both.
+  built binary through Chromium (Chrome and Edge), Firefox and WebKit (Safari
+  and every iOS browser), each at a desktop viewport plus an Android and an
+  iPhone one (and Firefox at a phone's width, a tablet and forced colors),
+  asserting the same floors as MEASURED boxes, computed styles and emulated
+  preferences, and failing on any CSP violation. It is a separate workflow on
+  purpose (CI map, `browser-lanes.yml`). The two halves answer different
+  questions and neither replaces the other, so a floor lands with both.
 - **Zero CLS.** Theme switches and async data arrivals cause no layout
   shift; space for late content is reserved up front.
 - **Honest states.** Empty, loading, disabled, and unavailable states
@@ -1021,8 +1021,8 @@ Structural promises of the panels subsystem, pinned by
 
 - **CHANGELOG discipline.** Keep a Changelog format; every artifact-classified
   PR immediately follows an empty `[Unreleased]` heading with its exact
-  next-version and ISO date, matching every source lock; a documentation-only
-  PR leaves `CHANGELOG.md` untouched (the file sits outside the documentation
+  next-version and ISO date, matching every source lock; a no-artifact
+  PR leaves `CHANGELOG.md` untouched (the file sits outside the no-artifact
   allowlist precisely so a no-release range can never claim one). There is no
   later release PR. Released history below that new heading is APPEND-ONLY and
   the gate proves it (issue #105): `release_contract.py` refuses a snapshot

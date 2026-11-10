@@ -107,7 +107,7 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 				slog.String("panel", state.definition.id),
 				slog.String("panel_title", state.definition.title),
 				slog.Any("error", err),
-				slog.Bool("retained", state.current.Load().payload.status != StatusUnavailable),
+				slog.Bool("retained", state.current.Load().payload.state != servedUnavailable),
 				slog.Float64("duration_ms", float64(elapsed)/float64(time.Millisecond)),
 				slog.Time("next_retry", time.Now().Add(backoff)),
 			}
@@ -122,7 +122,7 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 		if err == nil {
 			backoff = config.InitialBackoff
 			outcome := "complete"
-			if state.current.Load().payload.status != StatusOK {
+			if state.current.Load().payload.state != servedFresh {
 				outcome = "partial"
 			}
 			attrs := []slog.Attr{
@@ -150,7 +150,7 @@ func (reg *Registry) refreshLoop(ctx context.Context, state *panelState, doer fe
 // distinguished from newly read ones even when the calendar half succeeded.
 func servedRefreshSummary(state *panelState, previous *servedPanel) []slog.Attr {
 	current := state.current.Load().payload
-	attrs := []slog.Attr{slog.String("status", string(current.status))}
+	attrs := []slog.Attr{slog.String("status", string(current.state.status()))}
 	switch state.definition.kind {
 	case KindVCSActivity:
 		var data, before VCSActivityData
@@ -214,37 +214,54 @@ func (reg *Registry) refreshPanel(ctx context.Context, state *panelState, doer f
 	return nil
 }
 
-// markStale re-prepares the panel's current payload as stale when it still
-// claims freshness — the "serving last-good past its TTL" transition. The
-// re-preparation reuses bytes that already passed the budget, so it cannot
-// fail; unavailable and already-stale panels are left untouched.
+// markStale turns a served `ok` payload into the retained last-good one — the
+// "serving last-good past its TTL" transition. Every other state is left as it
+// is: unavailable has no last-good, and a payload already stale for any cause
+// stays stale for that cause.
 func (reg *Registry) markStale(state *panelState) {
-	current := state.current.Load()
-	if current.payload.status != StatusOK {
-		return
-	}
-	stalePayload := current.payload
-	stalePayload.status = StatusStale
-	if served, err := state.definition.prepare(stalePayload); err == nil {
-		state.current.Store(served)
-		reg.rebuildIndex()
+	reg.transitionServed(state, servedState.retain)
+}
+
+// markFresh returns a retained last-good payload to `ok` after the failure
+// that marked it stale has cleared without producing new bytes. It is legal
+// only from servedRetained: a cold-start fallback, a partial refresh, an aged
+// capture or a restored copy needs newly admitted bytes, whoever calls this.
+// The sealed data-root loop is the only caller.
+func (reg *Registry) markFresh(state *panelState) {
+	reg.transitionServed(state, servedState.recover)
+}
+
+// retain is markStale's transition and recover is markFresh's: each moves one
+// state and refuses every other.
+func (s servedState) retain() (servedState, bool) { return servedRetained, s == servedFresh }
+
+func (s servedState) recover() (servedState, bool) { return servedFresh, s == servedRetained }
+
+// status is the envelope's public half of the state.
+func (s servedState) status() Status {
+	switch s {
+	case servedFresh:
+		return StatusOK
+	case servedUnavailable:
+		return StatusUnavailable
+	default:
+		return StatusStale
 	}
 }
 
-// markFresh restores one last-good payload after the failure that marked it
-// stale has cleared without producing new bytes. The sealed data-root loop is
-// the only caller: it invokes this only after the exact accepted ciphertext's
-// digest matches the replay floor again. A fetched producer never calls it;
-// those paths need a newly validated fetch to become fresh.
-func (reg *Registry) markFresh(state *panelState) {
+// transitionServed re-prepares the current payload under the state step gives
+// it and publishes it by compare-and-swap: a transition judged against one
+// payload never overwrites a different one stored meanwhile. Re-preparation
+// reuses bytes that already passed the budget, so it cannot fail.
+func (reg *Registry) transitionServed(state *panelState, step func(servedState) (servedState, bool)) {
 	current := state.current.Load()
-	if current.payload.status != StatusStale {
+	next, ok := step(current.payload.state)
+	if !ok {
 		return
 	}
-	freshPayload := current.payload
-	freshPayload.status = StatusOK
-	if served, err := state.definition.prepare(freshPayload); err == nil {
-		state.current.Store(served)
+	payload := current.payload
+	payload.state = next
+	if served, err := state.definition.prepare(payload); err == nil && state.current.CompareAndSwap(current, served) {
 		reg.rebuildIndex()
 	}
 }

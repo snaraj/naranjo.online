@@ -27,8 +27,9 @@ the same manifest:
          bare scheme), script directives must not admit 'unsafe-inline' or
          eval'd code, a declared injected script passes only while a policy
          blocks every inline script, framing must be denied, HSTS must last a
-         year, nosniff and a Referrer-Policy must be present, the document must
-         set no cookie, every reporting endpoint and every script, stylesheet
+         year, nosniff and a Referrer-Policy must be present, the opener policy
+         must be same-origin, the Permissions-Policy must deny every feature in
+         DENIED_FEATURES, the document must set no cookie, every reporting endpoint and every script, stylesheet
          or embedded resource in the served HTML must be this origin's or
          declared, and every published legal page must answer 200. A declared
          third party or edge observation that no longer occurs is refused as
@@ -174,6 +175,9 @@ LINE_TERMINATOR = re.compile("[\n\r\u2028\u2029]")
 SVELTE_ELEMENT = re.compile(r"<(script|style)\b[^>]*>", re.IGNORECASE)
 HSTS_FLOOR_SECONDS = 31_536_000
 REFERRER_POLICIES = {"no-referrer", "same-origin", "strict-origin", "strict-origin-when-cross-origin"}
+# Features no page here uses. Each must be denied outright (`feature=()`); a
+# policy may say more, and what else it says is not this gate's business.
+DENIED_FEATURES = ("camera", "geolocation", "microphone", "payment", "usb")
 FETCH_TIMEOUT_SECONDS = 20
 BODY_CAP_BYTES = 2 * 1024 * 1024
 USER_AGENT = "compliance-live-check/1 (read-only GET)"
@@ -799,6 +803,16 @@ def judge(manifest: dict, document: Fetched, pages: dict[str, Fetched]) -> Verdi
     referrer = [token.strip().lower() for token in (document.first("referrer-policy") or "").split(",") if token.strip()]
     if not referrer or referrer[-1] not in REFERRER_POLICIES:
         verdict.refuse(f"Referrer-Policy must be one of {sorted(REFERRER_POLICIES)}; got {', '.join(referrer) or 'nothing'}")
+    if (document.first("cross-origin-opener-policy") or "").strip().lower() != "same-origin":
+        verdict.refuse("Cross-Origin-Opener-Policy: same-origin is missing, so a window this page opens keeps a handle on it")
+    denied = {
+        name.strip().lower()
+        for name, _, allowlist in (item.partition("=") for item in (document.first("permissions-policy") or "").split(","))
+        if allowlist.strip() == "()"
+    }
+    for feature in DENIED_FEATURES:
+        if feature not in denied:
+            verdict.refuse(f"Permissions-Policy does not deny {feature}=()")
     for cookie in document.all("set-cookie"):
         name = cookie.split("=", 1)[0].strip()
         verdict.refuse(f"the document sets the cookie {name!r} before the visitor has done anything")

@@ -2,6 +2,11 @@
 # Install the exact pinned CI tools with SHA-256-verified downloads, outside
 # the checkout so tree scanners never scan the scanners. Mirrors the pattern
 # proven in snaraj/website-infrastructure.
+#
+# Usage: install-tools.sh [gitleaks|helm|trivy ...] installs the named tools,
+# every pinned tool when none is named; any other name refuses. Each download
+# retries transient failures (a release CDN answering 504 has reddened the
+# gate) and is then verified against its pinned digest exactly as before.
 set -euo pipefail
 
 GITLEAKS_VERSION=v8.30.1
@@ -11,6 +16,19 @@ HELM_SHA256=2114c9dea2844dce6d0ee2d792a9aae846be8cf53d5b19dc2988b5a0e8fec26e
 TRIVY_VERSION=v0.72.0
 TRIVY_SHA256=bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea
 
+if [ "$#" -eq 0 ]; then
+  set -- gitleaks helm trivy
+fi
+for tool in "$@"; do
+  case "${tool}" in
+    gitleaks | helm | trivy) ;;
+    *)
+      printf 'unknown tool: %s\n' "${tool}" >&2
+      exit 2
+      ;;
+  esac
+done
+
 : "${RUNNER_TEMP:?GitHub Actions must provide RUNNER_TEMP}"
 install_root="$(mktemp -d "${RUNNER_TEMP%/}/site-ci-tools.XXXXXX")"
 download_root="$(mktemp -d "${RUNNER_TEMP%/}/site-ci-downloads.XXXXXX")"
@@ -18,34 +36,44 @@ trap 'rm -rf -- "${download_root}"' EXIT
 
 fetch_verify() {
   local url="$1" sha="$2" out="$3"
-  curl --proto '=https' --tlsv1.2 -sSfL "${url}" -o "${out}"
+  curl --proto '=https' --tlsv1.2 -sSfL \
+    --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 \
+    "${url}" -o "${out}"
   printf '%s  %s\n' "${sha}" "${out}" | sha256sum -c - >/dev/null
 }
 
-fetch_verify \
-  "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz" \
-  "${GITLEAKS_SHA256}" "${download_root}/gitleaks.tar.gz"
-tar -xzf "${download_root}/gitleaks.tar.gz" -C "${download_root}" gitleaks
-install -m 0755 "${download_root}/gitleaks" "${install_root}/gitleaks"
-
-fetch_verify \
-  "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
-  "${HELM_SHA256}" "${download_root}/helm.tar.gz"
-tar -xzf "${download_root}/helm.tar.gz" -C "${download_root}" linux-amd64/helm
-install -m 0755 "${download_root}/linux-amd64/helm" "${install_root}/helm"
-
-# Install the scanner directly from Aqua's immutable release archive. Do not
-# add trivy-action/setup-trivy: the Trivy action ecosystem suffered a 2026
-# tag/Release compromise, while this path has one reviewed archive URL and one
-# repository-owned SHA-256 lock.
-fetch_verify \
-  "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz" \
-  "${TRIVY_SHA256}" "${download_root}/trivy.tar.gz"
-tar -xzf "${download_root}/trivy.tar.gz" -C "${download_root}" trivy
-install -m 0755 "${download_root}/trivy" "${install_root}/trivy"
+for tool in "$@"; do
+  case "${tool}" in
+    gitleaks)
+      fetch_verify \
+        "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz" \
+        "${GITLEAKS_SHA256}" "${download_root}/gitleaks.tar.gz"
+      tar -xzf "${download_root}/gitleaks.tar.gz" -C "${download_root}" gitleaks
+      install -m 0755 "${download_root}/gitleaks" "${install_root}/gitleaks"
+      "${install_root}/gitleaks" version
+      ;;
+    helm)
+      fetch_verify \
+        "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
+        "${HELM_SHA256}" "${download_root}/helm.tar.gz"
+      tar -xzf "${download_root}/helm.tar.gz" -C "${download_root}" linux-amd64/helm
+      install -m 0755 "${download_root}/linux-amd64/helm" "${install_root}/helm"
+      "${install_root}/helm" version --short
+      ;;
+    trivy)
+      # Install the scanner directly from Aqua's immutable release archive. Do
+      # not add trivy-action/setup-trivy: the Trivy action ecosystem suffered a
+      # 2026 tag/Release compromise, while this path has one reviewed archive
+      # URL and one repository-owned SHA-256 lock.
+      fetch_verify \
+        "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz" \
+        "${TRIVY_SHA256}" "${download_root}/trivy.tar.gz"
+      tar -xzf "${download_root}/trivy.tar.gz" -C "${download_root}" trivy
+      install -m 0755 "${download_root}/trivy" "${install_root}/trivy"
+      test "$("${install_root}/trivy" --version | awk 'NR == 1 {print $2}')" = "${TRIVY_VERSION#v}"
+      "${install_root}/trivy" --version
+      ;;
+  esac
+done
 
 echo "${install_root}" >> "${GITHUB_PATH}"
-"${install_root}/gitleaks" version
-"${install_root}/helm" version --short
-test "$("${install_root}/trivy" --version | awk 'NR == 1 {print $2}')" = "${TRIVY_VERSION#v}"
-"${install_root}/trivy" --version

@@ -67,6 +67,8 @@ def headers(**overrides: str | None) -> list[tuple[str, str]]:
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Permissions-Policy": "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
         "Report-To": json.dumps({"group": "edge", "max_age": 60, "endpoints": [{"url": REPORTS + "/report?s=x"}]}),
         "NEL": '{"report_to":"edge","max_age":60}',
         "Content-Type": "text/html; charset=utf-8",
@@ -201,6 +203,29 @@ class JudgeTests(unittest.TestCase):
         self.assertRefused(gate.judge(manifest(), document(X_Content_Type_Options=None), {}), "nosniff")
         self.assertRefused(gate.judge(manifest(), document(Referrer_Policy="unsafe-url"), {}), "Referrer-Policy")
         self.assertRefused(gate.judge(manifest(), document(Referrer_Policy=None), {}), "Referrer-Policy")
+
+    def test_the_opener_policy_must_be_same_origin(self) -> None:
+        self.assertRefused(gate.judge(manifest(), document(Cross_Origin_Opener_Policy=None), {}), "Cross-Origin-Opener-Policy")
+        self.assertRefused(gate.judge(manifest(), document(Cross_Origin_Opener_Policy="unsafe-none"), {}), "Cross-Origin-Opener-Policy")
+
+    def test_every_unused_feature_must_be_denied(self) -> None:
+        self.assertRefused(gate.judge(manifest(), document(Permissions_Policy=None), {}), "does not deny camera=()")
+        for feature in gate.DENIED_FEATURES:
+            with self.subTest(feature=feature):
+                admitted = ", ".join(f"{name}=(self)" if name == feature else f"{name}=()" for name in gate.DENIED_FEATURES)
+                self.assertRefused(gate.judge(manifest(), document(Permissions_Policy=admitted), {}), f"does not deny {feature}=()")
+                omitted = ", ".join(f"{name}=()" for name in gate.DENIED_FEATURES if name != feature)
+                self.assertRefused(gate.judge(manifest(), document(Permissions_Policy=omitted), {}), f"does not deny {feature}=()")
+        # Written out rather than derived from the judge, so a feature dropped
+        # from DENIED_FEATURES fails here: the origin's own five, less one.
+        origin = "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
+        for feature in ("camera", "geolocation", "microphone", "payment", "usb"):
+            with self.subTest(written=feature):
+                fewer = origin.replace(f"{feature}=()", f"{feature}=*")
+                self.assertRefused(gate.judge(manifest(), document(Permissions_Policy=fewer), {}), f"does not deny {feature}=()")
+        # Behaviour, not inventory: denying more, in any order, still passes.
+        wider = "fullscreen=(), " + ", ".join(f"{name}=()" for name in reversed(gate.DENIED_FEATURES))
+        self.assertEqual(gate.judge(manifest(), document(Permissions_Policy=wider), {}).refusals, [])
 
     def test_a_cookie_on_the_document_is_refused(self) -> None:
         self.assertRefused(gate.judge(manifest(), document(Set_Cookie="tracker=1; Path=/"), {}), "'tracker'")

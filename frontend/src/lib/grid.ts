@@ -229,7 +229,8 @@ export function monthTicks(columns: GridCell[][], lastDay?: string): MonthTick[]
     // caller's window end when supplied; otherwise prefer represented days.
     // Neither path lets future padding introduce a month before it begins.
     const datedCell = (cell: GridCell): boolean => cell.date.length >= 7 && (lastDay === undefined || cell.date <= lastDay);
-    const dated = column.findLast((cell) => datedCell(cell) && (lastDay !== undefined || !cell.absent))
+    // A reverse find written out: Array.prototype.findLast needs Safari 15.4.
+    const dated = [...column].reverse().find((cell) => datedCell(cell) && (lastDay !== undefined || !cell.absent))
       ?? column.find(datedCell);
     if (!dated) {
       return;

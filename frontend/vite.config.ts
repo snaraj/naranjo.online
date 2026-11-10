@@ -19,7 +19,7 @@ import { validatedDevApiPort } from './src/lib/devApiPort.ts';
 const buildConfig = {
   plugins: [svelte()],
   build: {
-    // The origin serves CSP default-src 'self', which forbids data: URIs,
+    // The origin's CSP admits images and fonts from 'self' only, never data:,
     // so no asset may ever be inlined: every icon stays a real same-origin
     // file with a content-hashed (digest-stable) name.
     assetsInlineLimit: 0,

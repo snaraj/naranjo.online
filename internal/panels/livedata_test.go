@@ -943,8 +943,8 @@ func TestCodingProjectsServeWhatTheHostSaysNow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
-	if loaded.status != StatusOK {
-		t.Errorf("status = %q, want ok when the whole listing was admitted", loaded.status)
+	if loaded.state.status() != StatusOK {
+		t.Errorf("status = %q, want ok when the whole listing was admitted", loaded.state.status())
 	}
 	payload := decodeProjects(t, loaded)
 	if len(payload.Repos) != 3 {
@@ -1015,8 +1015,8 @@ func TestTheRosterIsCuratedByExclusionOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
-	if loaded.status != StatusOK {
-		t.Errorf("status = %q, want ok: curation is not degradation", loaded.status)
+	if loaded.state.status() != StatusOK {
+		t.Errorf("status = %q, want ok: curation is not degradation", loaded.state.status())
 	}
 	payload := decodeProjects(t, loaded)
 	if len(payload.Repos) != 1 || payload.Repos[0].Name != "alpha" {
@@ -1047,8 +1047,8 @@ func TestARosterOverTheRowCapServesTheMostRecent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
-	if loaded.status != StatusOK {
-		t.Errorf("status = %q, want ok: selection is a stated bound, not a failure", loaded.status)
+	if loaded.state.status() != StatusOK {
+		t.Errorf("status = %q, want ok: selection is a stated bound, not a failure", loaded.state.status())
 	}
 	payload := decodeProjects(t, loaded)
 	if len(payload.Repos) != maxCodingProjectSources {
@@ -1080,8 +1080,8 @@ func TestCodingProjectsReadAnonymouslyWithoutACredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
-	if loaded.status != StatusOK {
-		t.Errorf("status = %q, want ok: the credential is headroom, not access", loaded.status)
+	if loaded.state.status() != StatusOK {
+		t.Errorf("status = %q, want ok: the credential is headroom, not access", loaded.state.status())
 	}
 	for _, request := range doer.at("/users/owner/repos") {
 		if got := request.header.Get("Authorization"); got != "" {
@@ -1106,8 +1106,8 @@ func TestARefusedRowIsDroppedAndMakesTheRoundStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
-	if loaded.status != StatusStale {
-		t.Errorf("status = %q, want stale while the roster is short a repository", loaded.status)
+	if loaded.state.status() != StatusStale {
+		t.Errorf("status = %q, want stale while the roster is short a repository", loaded.state.status())
 	}
 	payload := decodeProjects(t, loaded)
 	if len(payload.Repos) != 1 || payload.Repos[0].Name != "alpha" {
@@ -1391,8 +1391,8 @@ func TestTheServedRowsCarryTheReleaseCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
-	if loaded.status != StatusOK {
-		t.Errorf("status = %q, want ok: a dropped release field is not a refused row", loaded.status)
+	if loaded.state.status() != StatusOK {
+		t.Errorf("status = %q, want ok: a dropped release field is not a refused row", loaded.state.status())
 	}
 	rows := decodeProjects(t, loaded).Repos
 	if len(rows) != 4 {
@@ -1450,8 +1450,8 @@ func TestAnAnonymousProjectsRoundKeepsThePublicAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
-	if loaded.status != StatusOK {
-		t.Errorf("status = %q, want ok: the public answer is live, it just says less", loaded.status)
+	if loaded.state.status() != StatusOK {
+		t.Errorf("status = %q, want ok: the public answer is live, it just says less", loaded.state.status())
 	}
 	payload := decodeProjects(t, loaded)
 	if payload.Repos[0].Description != "alpha lives" {
@@ -2040,8 +2040,8 @@ func TestConditionalRoundsRevalidateInsteadOfRetransferring(t *testing.T) {
 	if !bytes.Equal(first.data, second.data) {
 		t.Error("a revalidated round served different bytes than the transfer it stands for")
 	}
-	if second.status != StatusOK || second.generatedAt != later.Format(time.RFC3339) {
-		t.Errorf("revalidated round = %q at %q, want ok dated to the instant the upstream vouched for", second.status, second.generatedAt)
+	if second.state.status() != StatusOK || second.generatedAt != later.Format(time.RFC3339) {
+		t.Errorf("revalidated round = %q at %q, want ok dated to the instant the upstream vouched for", second.state.status(), second.generatedAt)
 	}
 }
 

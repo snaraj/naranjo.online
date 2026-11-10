@@ -53,6 +53,24 @@ which selects the engine revisions. The job installs that exact pinned
 `@playwright/test` from the lockfile and restores the engine cache keyed on
 that version.
 
+It runs on pull requests that touch a path that can change a rendering (the
+frontend with its lanes, `cmd/`, `internal/`, the module, the Dockerfile,
+`compliance.json` and the workflow itself). Every lane is order-independent,
+so the config sets `fullyParallel` and the slow engines shard across runners
+(`--shard i/n`: WebKit two ways, the iPhone three), each named
+`lanes (<engine> i/n)`. Every lane fails on a Content-Security-Policy
+violation (`frontend/e2e/csp-watch.mjs`), which is what proved the origin's
+explicit `default-src 'none'` policy admits everything the page loads.
+
+## Why the container check needs no emulator
+
+Both Dockerfile build stages run on the build platform: the frontend is bytes
+that do not vary by target, Go cross-compiles the arm64 binary, and the final
+stage only copies it in. No arm64 instruction executes, so the `container` job
+sets up Buildx and no QEMU. The test batteries run in stages of their own that
+no target names, so they run once per build, and the stages that build what
+ships start from the source stage rather than from a tested tree.
+
 ## Why coverage badges publish outside the PR gate
 
 Until issue #350 the badge push was a `coverage-badges` job inside

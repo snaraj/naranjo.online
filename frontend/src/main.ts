@@ -25,7 +25,7 @@ if (!target) {
 // Nothing earlier can do it. A width the reader drags is continuous, so the
 // origin cannot prepare a document per width the way it once prepared one per
 // reading mode (that stamp went with the control, owner 2026-10-19), and the
-// site's Content-Security-Policy (default-src 'self') forbids the inline
+// site's Content-Security-Policy (script-src 'self') forbids the inline
 // script the usual pre-paint trick would need. So the width is applied here,
 // and the browser lanes MEASURE the resulting layout shift rather than
 // asserting it.

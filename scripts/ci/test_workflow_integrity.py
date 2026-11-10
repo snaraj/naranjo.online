@@ -3035,8 +3035,34 @@ class WorkflowIntegrityTests(unittest.TestCase):
             code, argv = self._run_lane_step(block, value)
             self.assertNotEqual(code, 0, f"{where}:{lineno}: the lane step admits a worker count of {value!r}")
             self.assertIsNone(argv, f"{where}:{lineno}: the runner ran with a worker count of {value!r}")
+        # The shard rides the same way: from the matrix, guarded to i/n in
+        # single digits with i <= n, handed to the runner as --shard i/n.
+        shard_line = step.env.get("LANE_SHARD")
+        if shard_line is None:
+            self.fail(f"{where}:{lineno}: the step `{step.name}` declares no LANE_SHARD of its own")
+        self.assertEqual(
+            text.splitlines()[shard_line - 1].strip(), "LANE_SHARD: ${{ matrix.engine.shard }}",
+            f"{where}:{shard_line}: the step `{step.name}` does not take LANE_SHARD from the matrix",
+        )
+        shards = set()
+        for entry in entries:
+            found = re.search(r"\bshard: ([^\s,}]+)", entry)
+            if found is None:
+                self.fail(f"{where}: the lane entry `{entry.strip()}` declares no shard")
+            shards.add(found.group(1))
+        for value in sorted(shards | {"1/1", "1/9", "9/9"}):
+            code, argv = self._run_lane_step(block, "2", value)
+            self.assertEqual(code, 0, f"{where}:{lineno}: the lane step refuses the shard {value}")
+            self.assertEqual(
+                (argv or [])[-4:-2], ["--shard", value],
+                f"{where}:{lineno}: the runner was not handed --shard {value}: {argv}",
+            )
+        for value in ["", "1", "0/2", "3/2", "1/10", "1/2; touch admitted", "$(id)/2"]:
+            code, argv = self._run_lane_step(block, "2", value)
+            self.assertNotEqual(code, 0, f"{where}:{lineno}: the lane step admits the shard {value!r}")
+            self.assertIsNone(argv, f"{where}:{lineno}: the runner ran with the shard {value!r}")
 
-    def _run_lane_step(self, block: str, workers: str) -> tuple[int, list[str] | None]:
+    def _run_lane_step(self, block: str, workers: str, shard: str = "1/1") -> tuple[int, list[str] | None]:
         """Run the lane step's block with a stand-in npm: its exit code, and npm's argv if npm ran."""
         with tempfile.TemporaryDirectory() as scratch:
             record = Path(scratch) / "argv"
@@ -3047,7 +3073,7 @@ class WorkflowIntegrityTests(unittest.TestCase):
             script.write_text(re.sub(r"\$\{\{[^}]*\}\}", "webkit", block))
             code = subprocess.run(
                 [shutil.which("bash") or "/bin/bash", "-e", str(script)],
-                env={"PATH": f"{scratch}:/usr/bin:/bin", "HOME": scratch, "LANE_WORKERS": workers, "NPM_ARGV": str(record)},
+                env={"PATH": f"{scratch}:/usr/bin:/bin", "HOME": scratch, "LANE_WORKERS": workers, "LANE_SHARD": shard, "NPM_ARGV": str(record)},
                 capture_output=True, cwd=scratch,
             ).returncode
             return code, record.read_text().splitlines() if record.exists() else None

@@ -11,7 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 
-import { expect, test } from '@playwright/test';
+import { expect, test, watchCSP } from './csp-watch.mjs';
 
 /* The model vocabulary, read from the one file every consumer reads (issue
  * #302). The lane below builds its payload from it rather than from a list
@@ -1147,6 +1147,7 @@ const jPictureBox = (node, degrees) => {
 
 test('J flies off the name from one picture, covering no letter of it, with a gentle rock where motion is welcome and still where it is not (owner 2026-09-11 issue 314, 2026-10-16)', async ({
   browser,
+  cspBreaches,
 }) => {
   /* THE BUDGET THIS LANE'S OWN WAITS NEED (issue 399 review, 2026-11-03).
      It settles the page sixteen times: in each of its two contexts once on
@@ -1162,6 +1163,7 @@ test('J flies off the name from one picture, covering no letter of it, with a ge
     const context = await browser.newContext({
       reducedMotion: motion === 'reduce' ? 'reduce' : 'no-preference',
     });
+    await watchCSP(context, cspBreaches);
     const page = await context.newPage();
     /* Counted from before the navigation, so the picture's own first load is
        in the tally rather than only whatever a later viewport change
@@ -3078,6 +3080,7 @@ test('a finger taps a day and the answer stays, without taking the page its scro
  * switch writes the new line on (owner direction, 2026-10-16). */
 test('the diagram runs no animation for a reader who asked for less motion, and still reads its days (owner 2026-10-16)', async ({
   browser,
+  cspBreaches,
 }) => {
   const animating = (page) =>
     page.evaluate(() => {
@@ -3089,6 +3092,7 @@ test('the diagram runs no animation for a reader who asked for less motion, and 
     });
   for (const motion of ['reduce', 'no-preference']) {
     const context = await browser.newContext({ reducedMotion: motion });
+    await watchCSP(context, cspBreaches);
     const page = await context.newPage();
     await stageChronicleWeek(page);
     await visit(page);
@@ -3938,9 +3942,11 @@ test('the page spends its one mark on its own green, legible as text, in every r
  * pattern"), read in both motion preferences. */
 test('an account never repaints when it is clicked, and every account wears one paint (owner 2026-09-11 issue 316, 2026-09-12 issue 323; 2026-10-16; 2026-10-20)', async ({
   browser,
+  cspBreaches,
 }) => {
   for (const motion of ['no-preference', 'reduce']) {
     const context = await browser.newContext({ reducedMotion: motion });
+    await watchCSP(context, cspBreaches);
     const page = await context.newPage();
     await stageSixCards(page);
     await visit(page);
@@ -4000,6 +4006,7 @@ test('an account never repaints when it is clicked, and every account wears one 
  * under reduced motion the leaf changes with no leaf in the air at all. */
 test('the tome turns its leaf on a press and on its corner, says the new opening, and moves nothing (owner 2026-10-20)', async ({
   browser,
+  cspBreaches,
 }) => {
   /* EACH LEAF IN THE AIR BRINGS ITS OWN TIME. A turn is 1.5s in the air by
      design (Tome.svelte, TURN_MS) and this lane allows each leaf `landing` to
@@ -4016,6 +4023,7 @@ test('the tome turns its leaf on a press and on its corner, says the new opening
       if (motion === 'no-preference') test.setTimeout(test.info().timeout + landing);
     };
     const context = await browser.newContext({ reducedMotion: motion });
+    await watchCSP(context, cspBreaches);
     const page = await context.newPage();
     await visit(page);
     for (const width of [1440, 390]) {
@@ -11438,7 +11446,7 @@ for (const viewport of markViewports) {
     for (const tile of observed.markTiles) {
       expect(tile.tag, 'a role mark is not an image').toBe('IMG');
       /* Named for the organisation it shows (issue 326), and the CSP's own
-         subject: the origin serves `default-src 'self'`, so a mark that ever
+         subject: the origin serves `img-src 'self'`, so a mark that ever
          pointed off-origin would not load at all — this is the measurement
          that says the vendored bytes are what arrived. */
       expect(tile.alt, 'a role mark carries no organisation name').toBe(tile.name);

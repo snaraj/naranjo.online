@@ -17,7 +17,7 @@ const (
 	// every non-media response. The harness pins it as an independent expected
 	// value on purpose: it must never be imported from the server package, or
 	// the assertion would become a tautology.
-	SiteContentSecurityPolicy = "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+	SiteContentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
 	// MediaContentSecurityPolicy is the stricter sandbox policy every media
 	// response pins in place of the site policy.
 	MediaContentSecurityPolicy = "default-src 'none'; sandbox"
@@ -38,8 +38,9 @@ const (
 // assertSecurityBaseline because it is proto-conditional: required on
 // TLS-declared sessions, forbidden on every other.
 var exactSecurityHeaders = map[string]string{
+	"Cross-Origin-Opener-Policy":   "same-origin",
 	"Cross-Origin-Resource-Policy": "same-origin",
-	"Permissions-Policy":           "camera=(), geolocation=(), microphone=()",
+	"Permissions-Policy":           "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
 	"Referrer-Policy":              "no-referrer",
 	"X-Content-Type-Options":       "nosniff",
 	"X-Frame-Options":              "DENY",

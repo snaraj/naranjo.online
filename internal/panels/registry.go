@@ -44,7 +44,7 @@ func newRegistry(fsys fs.FS, definitions []panelDefinition) *Registry {
 		}
 		loaded, err := definition.source.load(fsys, definition.kind)
 		if err != nil {
-			loaded = loadedPayload{status: StatusUnavailable}
+			loaded = loadedPayload{state: servedUnavailable}
 		}
 		served, err := definition.prepare(loaded)
 		if err != nil {
@@ -52,7 +52,7 @@ func newRegistry(fsys fs.FS, definitions []panelDefinition) *Registry {
 			// payload serves as unavailable rather than crashing or busting
 			// the owner's budget. The unavailable envelope is plain strings
 			// and a nil payload, so its own preparation is infallible.
-			served, _ = definition.prepare(loadedPayload{status: StatusUnavailable})
+			served, _ = definition.prepare(loadedPayload{state: servedUnavailable})
 		}
 		state.current.Store(served)
 		reg.states = append(reg.states, state)
@@ -72,7 +72,7 @@ func (d panelDefinition) prepare(loaded loadedPayload) (*servedPanel, error) {
 		Kind:        d.kind,
 		Title:       d.title,
 		GeneratedAt: loaded.generatedAt,
-		Status:      loaded.status,
+		Status:      loaded.state.status(),
 		Data:        loaded.data,
 	}
 	body, err := json.Marshal(envelope)
@@ -103,7 +103,7 @@ func (reg *Registry) rebuildIndex() {
 			ID:     state.definition.id,
 			Kind:   state.definition.kind,
 			Title:  state.definition.title,
-			Status: current.payload.status,
+			Status: current.payload.state.status(),
 		})
 	}
 	body, err := json.Marshal(index)

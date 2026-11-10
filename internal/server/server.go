@@ -304,9 +304,10 @@ func (f *staticFile) serveTo(w http.ResponseWriter, r *http.Request, name string
 // correctly earns no promise.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
-		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
+		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=(), payment=(), usb=()")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		if r.Header.Get(forwardedProtoHeader) == forwardedProtoHTTPS {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000")

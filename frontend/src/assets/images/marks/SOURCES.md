@@ -5,7 +5,7 @@ real marks of the organisations they name — "LinkedIn style … they all have 
 be uniform so square may be the best way" — in place of the two-letter
 monograms issue 313 drew. Four files, one per role, ~10 KB for the whole set.
 
-**Why they are vendored.** The origin serves `default-src 'self'`, so an
+**Why they are vendored.** The origin serves `img-src 'self'`, so an
 external image cannot load at all: a mark on this page is a file in this
 repository or it is nothing. These four are a narrow, dated exception to
 requirement 11's general rule in the same sense the gallery's placeholders and

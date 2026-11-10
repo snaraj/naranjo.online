@@ -28,7 +28,30 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Test hostile contract suites (release, dependabot)
-        run: python3 -I -B -m unittest discover -s scripts/ci -p 'test_*.py' -v
+        # Every module `unittest discover -s scripts/ci -p 'test_*.py'` finds,
+        # each discovered alone in its own process and all of them at once, so
+        # the step takes as long as its slowest module, not their sum. Every
+        # log is printed, and any failed module fails the step by name.
+        run: |
+          set -euo pipefail
+          logs="${RUNNER_TEMP}/contract-suites"
+          mkdir -p "${logs}"
+          running=()
+          for path in scripts/ci/test_*.py; do
+            module="$(basename "${path}")"
+            python3 -I -B -m unittest discover -s scripts/ci -p "${module}" -v \
+              > "${logs}/${module}.log" 2>&1 &
+            running+=("$!:${module}")
+          done
+          failed=()
+          for entry in "${running[@]}"; do
+            wait "${entry%%:*}" || failed+=("${entry#*:}")
+          done
+          cat "${logs}"/*.log
+          if [ "${#failed[@]}" -gt 0 ]; then
+            printf 'contract suite failed: %s\n' "${failed[@]}" >&2
+            exit 1
+          fi
       - name: Validate the Dependabot configuration contract
         run: python3 -I -B scripts/ci/dependabot_contract.py .github/dependabot.yml
       - name: Enforce the commit identity and co-author contract
@@ -109,7 +132,7 @@ jobs:
           # overwrite the collision fails the gate and strands the merged SHA.
           overwrite: true
       - name: Install checksum-verified tools
-        run: ./scripts/ci/install-tools.sh
+        run: ./scripts/ci/install-tools.sh gitleaks trivy
       - name: Reject high or critical source dependency vulnerabilities
         run: >-
           trivy fs --scanners vuln --include-dev-deps
@@ -119,6 +142,7 @@ jobs:
       - name: Validate workflows
         run: |
           curl --proto '=https' --tlsv1.2 -sSfL \
+            --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 \
             https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
             -o "${RUNNER_TEMP}/actionlint.tar.gz"
           printf '%s  %s\n' \
@@ -162,12 +186,20 @@ jobs:
         with:
           node-version: '24.22.1'
           check-latest: false
+          # npm's download cache only: `npm ci` still installs from the
+          # lockfile and checks every tarball against its recorded integrity.
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.10'
           check-latest: false
-          cache: false
+          # The build cache spares recompiling unchanged packages; every
+          # `go test` below passes -count=1, so no cached RESULT ever stands in
+          # for a run. The module is stdlib-only, so go.mod keys the cache.
+          cache: true
+          cache-dependency-path: go.mod
       - name: Verify application toolchain
         # GOTOOLCHAIN=local reads the compiler setup-go installed: in the
         # default auto mode go.mod's `toolchain` line would fetch that release
@@ -196,8 +228,8 @@ jobs:
             exit 1
           fi
           go vet ./...
-          CGO_ENABLED=0 go test ./...
-          go test -race ./...
+          CGO_ENABLED=0 go test -count=1 ./...
+          go test -count=1 -race ./...
       - name: Enforce and report Go test coverage
         id: go_coverage
         env:
@@ -211,7 +243,7 @@ jobs:
           GO_COVERAGE_FLOOR: '93.2'
         run: |
           set -euo pipefail
-          CGO_ENABLED=0 go test -covermode=atomic \
+          CGO_ENABLED=0 go test -count=1 -covermode=atomic \
             -coverprofile="${RUNNER_TEMP}/site.cover.out" ./...
           # internal/testsupport is shared test scaffolding: it executes only
           # inside test binaries, so no test binary attributes coverage to it
@@ -295,7 +327,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install checksum-verified tools
-        run: ./scripts/ci/install-tools.sh
+        run: ./scripts/ci/install-tools.sh helm
       - name: Lint and render the chart
         run: |
           helm lint chart
@@ -355,8 +387,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      # No emulator: both build stages run on the build platform (Go
+      # cross-compiles the arm64 binary) and the final stage only copies it
+      # in, so no arm64 instruction executes here.
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build both production architectures without publishing

@@ -166,12 +166,9 @@ grids, one private aggregate per date the window can touch, the `stale`
 status and an instant written with a zone offset. Two of those numbers (the
 streak, a day's repository count) can never reach `maxCountValue`, and no
 payload has every cell and the total that sums them at the bound at once, so
-the figure is an upper bound rather than a reachable payload. One term it
-assumes rather than enforces: the calendar mappers check a day's
-contribution count for its sign only, and the private-day aggregate a day's
-commit count likewise, so a count past `maxCountValue` (which no browser
-reads exactly) would be wider. Whatever arrives, the serve-time refusal at
-the ceiling still holds. It measures
+the figure is an upper bound rather than a reachable payload. No count can
+be wider: every mapper refuses a count, and a sum of counts, past
+`maxCountValue` (issue #404). It measures
 **103,475 bytes**, 27,597 under the ceiling, and
 `TestActivityPayloadFitsTheOwnerBudget` pins that figure exactly, so it moves
 only when a bound moves or the fixture stops being maximal. The figure
@@ -182,9 +179,13 @@ subjects, not a maximum.
 `release` and `pinned`, and no longer carries `openIssues`/`openPulls` or the
 two columns that drew them — a breaking payload change, so a new kind version
 rather than a mutated one (the envelope doctrine). Its maximal
-document — twelve rows at the name, description and tag bounds, with both
-tallies at `maxCountValue` — measures **7,988 bytes**, 123,084 under the
-ceiling, pinned the same way by `TestProjectsPayloadFitsTheOwnerBudget`.
+document is measured the same encoding-aware way (issue #404): twelve rows at
+the name and tag bounds, every description the longest `projectDescription`
+produces from the admitted character that encodes widest (`&`, six bytes),
+both tallies at `maxCountValue`, the `stale` status and a zone-offset instant.
+It measures **27,196 bytes**, 103,876 under the ceiling, pinned exactly by
+`TestProjectsPayloadFitsTheOwnerBudget`. The 7,988 bytes recorded here before
+was an ASCII fixture's size, not a maximum.
 
 Both were captured live on 2026-09-11 as well, which is the other half of the
 measurement: the real documents are 13,311 and 3,850 bytes on disk (pretty

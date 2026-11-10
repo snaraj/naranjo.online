@@ -121,8 +121,9 @@ the identical tree — so it carries no `main` status badge.
 
 Every protected-main merge that changes an artifact publishes exactly one
 patch release after the merged SHA's PR gate succeeds. A merge whose every
-commit is confined to the documentation allowlist — root `AGENTS.md`,
-`README.md`, `.gitignore`, and Markdown under `docs/` — changes no artifact,
+commit is confined to the no-artifact allowlist — root `AGENTS.md`,
+`README.md`, `.gitignore`, Markdown under `docs/`, workflows, CI scripts and
+test-only files, none of which any shipped byte comes from — changes no artifact,
 advances no version, and publishes nothing; the orchestrator proves that
 class against evidence the merge cannot choose, then logs an explicit
 verdict instead of dispatching the publisher. The complete classification,

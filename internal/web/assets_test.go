@@ -35,9 +35,10 @@ var strongETag = regexp.MustCompile(`^"[0-9a-f]{64}"$`)
 // edgeRequest); the proto-conditional emission itself is pinned by the
 // server package's policy suite.
 var expectedOriginHeaders = map[string]string{
-	"Content-Security-Policy":      "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+	"Content-Security-Policy":      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+	"Cross-Origin-Opener-Policy":   "same-origin",
 	"Cross-Origin-Resource-Policy": "same-origin",
-	"Permissions-Policy":           "camera=(), geolocation=(), microphone=()",
+	"Permissions-Policy":           "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
 	"Referrer-Policy":              "no-referrer",
 	"Strict-Transport-Security":    "max-age=31536000",
 	"X-Content-Type-Options":       "nosniff",

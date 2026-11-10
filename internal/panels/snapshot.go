@@ -31,7 +31,7 @@ func (s SnapshotSource) load(fsys fs.FS, kind string) (loadedPayload, error) {
 	if err != nil {
 		return loadedPayload{}, fmt.Errorf("snapshot %s payload: %w", s.Name, err)
 	}
-	return loadedPayload{generatedAt: document.GeneratedAt, data: data, status: StatusOK}, nil
+	return loadedPayload{generatedAt: document.GeneratedAt, data: data, state: servedFresh}, nil
 }
 
 // load on a FetchSource serves the cold-start state: the embedded fallback
@@ -43,6 +43,6 @@ func (s *FetchSource) load(fsys fs.FS, kind string) (loadedPayload, error) {
 	if err != nil {
 		return loadedPayload{}, err
 	}
-	loaded.status = StatusStale
+	loaded.state = servedColdStart
 	return loaded, nil
 }

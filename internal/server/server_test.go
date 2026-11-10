@@ -237,7 +237,7 @@ func TestForwardedProtoPolicy(t *testing.T) {
 				// The bounce is written inside the securityHeaders wrapper, so
 				// even the redirect carries the baseline policy (HSTS excluded:
 				// the plain leg has not earned the promise).
-				if got := response.Header().Get("Content-Security-Policy"); got != "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'" {
+				if got := response.Header().Get("Content-Security-Policy"); got != "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'" {
 					t.Errorf("redirect Content-Security-Policy = %q, want the site policy", got)
 				}
 			}
@@ -331,8 +331,10 @@ func TestPanelAPIIsWiredIntoTheSite(t *testing.T) {
 		t.Errorf("405 Allow = %q", got)
 	}
 	for header, want := range map[string]string{
-		"Content-Security-Policy":      "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+		"Content-Security-Policy":      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+		"Cross-Origin-Opener-Policy":   "same-origin",
 		"Cross-Origin-Resource-Policy": "same-origin",
+		"Permissions-Policy":           "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
 		"Referrer-Policy":              "no-referrer",
 		"Strict-Transport-Security":    "max-age=31536000",
 		"X-Content-Type-Options":       "nosniff",

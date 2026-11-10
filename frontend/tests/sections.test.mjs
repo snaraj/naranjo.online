@@ -1567,7 +1567,7 @@ test('the role marks are exactly the four vendored tiles the entries name, each 
   /* The third dated requirement-11 exception, and the narrowest of the three:
      four organisation marks, ~10KB the whole set, fetched once from each
      organisation's own publication and vendored with their provenance beside
-     them. The CSP is `default-src 'self'`, so an external logo could never
+     them. The CSP is `img-src 'self'`, so an external logo could never
      load at all — a mark on this page is a vendored file or it is nothing.
 
      The allowlist half is what makes a missing tile a red build rather than an

@@ -148,6 +148,34 @@ const (
 	StatusUnavailable Status = "unavailable"
 )
 
+// servedState is what a served payload IS, of which the envelope's status is
+// only the public half. One wire value, `stale`, covers several causes, and
+// they are not interchangeable: only a payload turned stale after a failure,
+// with the very bytes it had served as `ok`, may return to `ok` without new
+// bytes (servedRetained). Every other stale payload needs a newly admitted
+// document or fetch. One value per (status, cause) pair keeps an `ok` with a
+// cause, or a cause-less `stale`, unrepresentable; the zero value is
+// unavailable, so a payload whose state was never set never claims `ok`.
+type servedState uint8
+
+const (
+	// servedUnavailable is served `unavailable`: nothing could be loaded.
+	servedUnavailable servedState = iota
+	// servedFresh is served `ok`.
+	servedFresh
+	// servedColdStart is a fetch-backed panel's embedded fallback, served
+	// `stale` until a refresh replaces it.
+	servedColdStart
+	// servedPartial is a refresh some, not all, of whose sources answered.
+	servedPartial
+	// servedAged is an admitted capture past its freshness grace.
+	servedAged
+	// servedRestored is the boot-time retained copy (issue #358).
+	servedRestored
+	// servedRetained is a payload once served `ok`, kept after a failure.
+	servedRetained
+)
+
 // Envelope is the one response shape every panel serves, forever:
 // {schema, id, kind, title, generatedAt, status, data}. Data holds the
 // kind-versioned payload and marshals as null when the panel is unavailable.
@@ -725,8 +753,9 @@ type loadedPayload struct {
 	generatedAt string
 	// data is the canonical re-marshaled kind payload.
 	data json.RawMessage
-	// status is the provenance-derived serving status.
-	status Status
+	// state is the provenance-derived serving state; its status() is the
+	// envelope's status.
+	state servedState
 }
 
 // SnapshotSource serves a panel from one embedded JSON file: data captured
@@ -2529,6 +2558,92 @@ type FloorState struct {
 	// floor. Empty on a floor that came from the embedded snapshot, which is
 	// an instant with no ciphertext behind it.
 	Digest string
+}
+
+// dataRootPhase is the data-root loop's memory of where its replay floor came
+// from and whether anything has been published from its state directory. It
+// replaces five booleans whose wrong combinations three reviews found
+// (2026-08-24 finding 5, round-3 findings 2 and 6): every question the loop
+// asks — may the floor be re-admitted at equality, is an absent file a
+// provenance loss, is the floor still unresolved — is a predicate of this one
+// value, and dataRootLoopState.step is the only thing that moves it.
+type dataRootPhase uint8
+
+const (
+	// phaseFloorPending: durable mode, the marker not yet read. No document
+	// is considered until the floor resolves (round-4 finding 6), and the
+	// retained copy has not yet had its one chance.
+	phaseFloorPending dataRootPhase = iota
+	// phaseFloorAhead: the authentic marker names an instant ahead of the
+	// clock. The retained copy has had its chance; the floor stays unresolved.
+	phaseFloorAhead
+	// phaseCold: the floor is resolved and nothing has been published from
+	// this state, so an absent file is the benign cold state.
+	phaseCold
+	// phaseInherited: a previous process published from this state, at or
+	// below the embedded snapshot's instant, which stays the floor.
+	phaseInherited
+	// phaseResumable: the floor IS the marker a previous process recorded,
+	// and the first acceptance may equal it when the file is that exact
+	// ciphertext (round-3 finding 2).
+	phaseResumable
+	// phaseAccepted: this process published the floor; equality is the
+	// ordinary unchanged state between pushes.
+	phaseAccepted
+)
+
+// dataRootLoopState is the loop's whole state between ticks: its phase, the
+// floor it guards, and the closed reason of the refusal in force, empty while
+// healthy, which is the narrative's transition key.
+type dataRootLoopState struct {
+	phase dataRootPhase
+	floor FloorState
+	fault string
+}
+
+// dataRootEventKind names what one tick observed.
+type dataRootEventKind uint8
+
+const (
+	// eventFloorAbsent: the marker of a never-used state directory.
+	eventFloorAbsent dataRootEventKind = iota
+	// eventFloorRead: an authentic marker within the clock's skew.
+	eventFloorRead
+	// eventFloorAhead: an authentic marker ahead of the clock's skew.
+	eventFloorAhead
+	// eventAccepted: a document was admitted, committed and published.
+	eventAccepted
+	// eventUnchanged: the published file is still the one on disk.
+	eventUnchanged
+	// eventSourceAbsent: there is no file.
+	eventSourceAbsent
+	// eventRefused: any refusal, by its closed reason.
+	eventRefused
+)
+
+// dataRootEvent is one observation handed to step.
+type dataRootEvent struct {
+	kind dataRootEventKind
+	// floor is the persisted floor for a marker event, the accepted one for
+	// eventAccepted.
+	floor FloorState
+	// fresh reports, for eventAccepted and eventUnchanged, whether the served
+	// capture is inside its freshness grace.
+	fresh bool
+	// reason is eventRefused's closed reason.
+	reason string
+}
+
+// dataRootEffects is what one step asks of the loop, applied in field order.
+type dataRootEffects struct {
+	// restore attempts the retained copy the event's floor names.
+	restore bool
+	// stale turns a served `ok` payload into the retained last-good one.
+	stale bool
+	// fresh returns a retained last-good payload to `ok`.
+	fresh bool
+	// warn is a newly entered refusal to narrate; cleared, one that cleared.
+	warn, cleared string
 }
 
 // usageSeriesWindowKeys is the CLOSED set of window keys a series document
