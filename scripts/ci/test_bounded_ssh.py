@@ -123,8 +123,12 @@ class BoundedSSHTest(unittest.TestCase):
             with self.subTest(signal=signum), tempfile.TemporaryDirectory() as directory:
                 pidfile = pathlib.Path(directory) / "child-pid"
                 ssh = pathlib.Path(directory) / "ssh"
+                # The pid lands by rename, never by a write a reader can catch
+                # half done: with every contract module running at once, the
+                # poll below read the file between its creation and its write.
                 ssh.write_text("#!" + sys.executable + "\nimport os,pathlib,time\n"
-                               + "pathlib.Path(%r).write_text(str(os.getpid()))\n" % str(pidfile)
+                               + "pathlib.Path(%r).write_text(str(os.getpid()))\n" % (str(pidfile) + ".part")
+                               + "os.replace(%r, %r)\n" % (str(pidfile) + ".part", str(pidfile))
                                + "time.sleep(30)\n")
                 ssh.chmod(0o700)
                 child = subprocess.Popen([sys.executable, str(RUNNER), "ssh"],

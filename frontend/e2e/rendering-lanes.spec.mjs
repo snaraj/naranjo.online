@@ -2718,7 +2718,10 @@ function anchoredEdges(page) {
 /* Chromium's own shift accounting, where the engine has it, counting any entry
  * that names a node outside the reading itself (the figures and captions) and
  * outside the graph (whose cursor and date track the pointer on purpose). A
- * node the entry cannot name is counted too. */
+ * text node is judged by the element it sits in: the date riding the cursor
+ * is text inside the graph, and under a loaded runner Chromium names that text
+ * node, not its element, as the source. A node the entry cannot name is
+ * counted too. */
 async function watchShift(page) {
   return page.evaluate(() => {
     const supported =
@@ -2728,11 +2731,15 @@ async function watchShift(page) {
       return false;
     }
     window.__shift = [];
-    const reading = (node) =>
-      node instanceof Element &&
-      (node.closest('.chronicle-figure') !== null ||
-        node.closest('.chronicle-caption') !== null ||
-        node.closest('.chronicle-chart') !== null);
+    const reading = (node) => {
+      const element = node instanceof Element ? node : node instanceof Text ? node.parentElement : null;
+      return (
+        element !== null &&
+        (element.closest('.chronicle-figure') !== null ||
+          element.closest('.chronicle-caption') !== null ||
+          element.closest('.chronicle-chart') !== null)
+      );
+    };
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
         if (entry.hadRecentInput) continue;
