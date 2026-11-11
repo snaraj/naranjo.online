@@ -354,17 +354,53 @@ func (p dataRootPhase) floorUnresolved() bool {
 	return p == phaseFloorPending || p == phaseFloorAhead
 }
 
+// The three groups an event kind falls in, each named by its members rather
+// than by where they sit in the const block: a kind added anywhere in it
+// belongs to no group until one of these lists names it, so step refuses it
+// instead of a comparison of ordinals silently filing it with its neighbours.
+
+// isFloorEvent reports a marker read: the events that resolve the floor.
+func (k dataRootEventKind) isFloorEvent() bool {
+	switch k {
+	case eventFloorAbsent, eventFloorRead, eventFloorAhead:
+		return true
+	default:
+		return false
+	}
+}
+
+// isDocumentEvent reports a document outcome: the events of a resolved floor.
+func (k dataRootEventKind) isDocumentEvent() bool {
+	switch k {
+	case eventAccepted, eventUnchanged, eventSourceAbsent:
+		return true
+	default:
+		return false
+	}
+}
+
+// isRefusal reports a refusal, legal in any phase with its closed reason.
+func (k dataRootEventKind) isRefusal() bool {
+	switch k {
+	case eventRefused:
+		return true
+	default:
+		return false
+	}
+}
+
 // step is the data-root loop's ONE transition function. It refuses (false)
 // an event its phase cannot receive — a marker read once the floor resolved,
-// a document outcome before it did, a refusal with no reason — so a
-// combination no tick produces is never silently given a meaning.
+// a document outcome before it did, a refusal with no reason, a kind in no
+// group — so a combination no tick produces is never silently given a
+// meaning.
 func (s dataRootLoopState) step(event dataRootEvent) (dataRootLoopState, dataRootEffects, bool) {
 	var effects dataRootEffects
-	floorEvent := event.kind <= eventFloorAhead
+	floorEvent := event.kind.isFloorEvent()
 	switch {
-	case event.kind == eventRefused && event.reason != "":
+	case event.kind.isRefusal() && event.reason != "":
 		return s.fail(effects, event.reason)
-	case event.kind >= eventRefused || floorEvent != s.phase.floorUnresolved():
+	case !floorEvent && !event.kind.isDocumentEvent() || floorEvent != s.phase.floorUnresolved():
 		return s, effects, false
 	case floorEvent:
 		// The retained copy's one chance comes BEFORE the clock is consulted:

@@ -2,6 +2,9 @@ package panels
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 	"time"
 )
@@ -171,6 +174,61 @@ func TestEveryIllegalDataRootTransitionIsRefused(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// Every event kind the const block declares belongs to exactly one of step's
+// three groups, and a kind past the block to none. The census is read from
+// types.go itself rather than from allEventKinds, so a kind added to the block
+// and to no group — the case an ordinal comparison filed silently with its
+// neighbours — fails here by name, and so does a hand list that drifted from
+// the block.
+func TestEveryDataRootEventKindBelongsToExactlyOneGroup(t *testing.T) {
+	t.Parallel()
+	parsed, err := parser.ParseFile(token.NewFileSet(), "types.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse types.go: %v", err)
+	}
+	var declared []string
+	for _, decl := range parsed.Decls {
+		block, ok := decl.(*ast.GenDecl)
+		if !ok || block.Tok != token.CONST || len(block.Specs) == 0 {
+			continue
+		}
+		if first, ok := block.Specs[0].(*ast.ValueSpec); !ok || fmt.Sprint(first.Type) != "dataRootEventKind" {
+			continue
+		}
+		for _, spec := range block.Specs {
+			for _, name := range spec.(*ast.ValueSpec).Names {
+				declared = append(declared, name.Name)
+			}
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatal("types.go declares no dataRootEventKind const block")
+	}
+	if len(allEventKinds) != len(declared) {
+		t.Fatalf("allEventKinds lists %d kinds; types.go declares %d: %v", len(allEventKinds), len(declared), declared)
+	}
+	groups := func(kind dataRootEventKind) (in []string) {
+		for name, member := range map[string]bool{"floor": kind.isFloorEvent(), "document": kind.isDocumentEvent(), "refusal": kind.isRefusal()} {
+			if member {
+				in = append(in, name)
+			}
+		}
+		return in
+	}
+	for ordinal, name := range declared {
+		kind := dataRootEventKind(ordinal)
+		if allEventKinds[ordinal] != kind {
+			t.Errorf("allEventKinds[%d] is %d, not %s", ordinal, allEventKinds[ordinal], name)
+		}
+		if in := groups(kind); len(in) != 1 {
+			t.Errorf("%s belongs to %d groups %v, want exactly one", name, len(in), in)
+		}
+	}
+	if in := groups(dataRootEventKind(len(declared))); len(in) != 0 {
+		t.Errorf("a kind past the block belongs to %v", in)
 	}
 }
 

@@ -1,9 +1,20 @@
 <!-- MediaGallery is the sheet's last section (owner directive, 2026-09-03,
   issue 287): a mosaic of tiles, a page at a time, and a native <dialog> that
-  is the stage. Drawings and films share the one grid in manifest order (owner,
-  2026-11-02, issue 399: "let's combine videos and drawings"), so the set
-  switch that chose between them is gone; what an item is lives under it on
-  the stage.
+  is the stage. Drawings and films share the one grid (owner, 2026-11-02,
+  issue 399: "let's combine videos and drawings"), so the set switch that
+  chose between them is gone; what an item is lives under it on the stage.
+  Their order is chance, once per visit (owner, 2026-11-04, issue 405: "this
+  is fine, just make it random"): the grid lays a shuffled copy of the items,
+  and the manifest's own order means nothing to it. Every tile shows its
+  picture WHOLE, in the picture's own proportions (owner, 2026-11-04, on the
+  0.1.104 preview: "just zoom out instead of having the ugly border, make the
+  picture smaller"), and the tiles are laid in JUSTIFIED ROWS (owner,
+  2026-11-04, on the next one: "prefer only the last row to be uneven, I
+  don't want gaps on every row, ideally it would be all cohesive until the
+  last one"): every row but the last fills the width at one shared height,
+  each tile as wide as its picture is at that height, and the last row keeps
+  the height of the row before it with its end open. Nothing is cropped and
+  nothing is padded.
 
   A FILM'S TILE OPENS THE STAGE LIKE A PICTURE'S (issue 384). The user, on an
   iPhone, 2026-10-22: "the videos are not responsive to the touch, I should be
@@ -31,11 +42,10 @@
   neighbour warming and the caption lane, none of which a tile grid has a
   surface for.
 
-  The tiles are a MOSAIC, not a carousel: five to a page, squares and wide
-  tiles in a fixed pattern for each count (lib/mosaic.ts) that fills every row
-  of six columns at the reading width and of two on a phone, with the shared
-  pager under it. Every dimension is a token in styles.css; the component
-  states no colour, length, radius or duration of its own. -->
+  The tiles are a MOSAIC, not a carousel: five to a page, cut into rows of
+  three at the reading width and of two on a phone (lib/mosaic.ts), with the
+  shared pager under it. Every dimension is a token in styles.css; the
+  component states no colour, length, radius or duration of its own. -->
 <script lang="ts">
   import { tick } from 'svelte';
   import FeedCard from './FeedCard.svelte';
@@ -43,66 +53,114 @@
   import Pager from './Pager.svelte';
   import { browserMedia, spreadMediaQuery, watchMedia } from '../columnWidth';
   import { swipeHorizontal } from '../gesture.ts';
-  import { mosaicShapes } from '../mosaic.ts';
+  import { declaredAspect, keptOrder, rowCounts } from '../mosaic.ts';
   import { pageCount, pageRows } from '../stream.ts';
   import type { MediaGalleryItem, MediaGalleryProps } from '../blocks.ts';
 
   let { items, width, height, pageSize = 5 }: MediaGalleryProps = $props();
 
-  /* THE MOSAIC'S PAGE (owner, 2026-11-02, issue 399): every item in manifest
-     order, films and drawings together, a page of tiles at a time. */
-  let page = $state(1);
-  const pages = $derived(pageCount(items.length, pageSize));
-  const at = $derived(Math.min(page, pages));
-  const pageTiles = $derived(pageRows(items, at, pageSize));
+  /* THE VISIT'S ORDER (owner, 2026-11-04, issue 405): every item, films and
+     drawings together, shuffled ONCE per visit. The first list — the
+     bootstrap set as the component mounts — is drawn whole; a later list,
+     the published manifest as it lands (Block.svelte), keeps the place of
+     every item the visit already laid and draws only the items it has not
+     (lib/mosaic.ts, keptOrder), so a list of the same items moves nothing a
+     reader is looking at, and the published set, which shares no item with
+     the bootstrap one, is drawn as the first list was. The visit's order is
+     the one thing this component remembers between lists, and the derived
+     writes it as it reads it: it runs only when `items` changes, and run
+     again on the same list it draws nothing and lays the same order. A page
+     turn, the stage, a rotation and a re-render read `order` and never reach
+     it, so the pager, the stage's walk and the tile a closed stage hands
+     focus back to all follow the one order. It is computed before the tiles
+     of a list are first drawn, so they are laid in it from their first
+     paint, and every box below is a function of the declared boxes the list
+     carries: zero CLS. */
+  let visit: readonly MediaGalleryItem[] = [];
+  const order = $derived((visit = keptOrder(visit, items, Math.random)));
 
-  /* WHICH GRID THE PAGE IS LAID IN is a question the SCRIPT asks, through the
-     media seam the column handles use (lib/columnWidth.ts): the tiles' shapes
-     are chosen for six columns or for two, and the grid takes its columns from
-     the same answer, so the pattern and the grid it fills can never be read
-     from two different widths. Read once for the first paint, then kept
+  /* THE MOSAIC'S PAGE (owner, 2026-11-02, issue 399): a page of tiles at a
+     time out of the visit's order. */
+  let page = $state(1);
+  const pages = $derived(pageCount(order.length, pageSize));
+  const at = $derived(Math.min(page, pages));
+  const pageTiles = $derived(pageRows(order, at, pageSize));
+
+  /* HOW MANY TILES A ROW HOLDS is a question the SCRIPT asks, through the
+     media seam the column handles use (lib/columnWidth.ts): three at the
+     reading width, two on a phone. Read once for the first paint, then kept
      current for a reader who rotates a phone. */
   let wide = $state(browserMedia(spreadMediaQuery).matches);
   $effect(() => watchMedia(browserMedia, spreadMediaQuery, (matches) => (wide = matches)));
-  const columns = $derived(wide ? 6 : 2);
-  const shapes = $derived(mosaicShapes(pageTiles.length, columns));
+  const perRow = $derived(wide ? 3 : 2);
+  const rows = $derived.by(() => {
+    let start = 0;
+    return rowCounts(pageTiles.length, perRow).map((count) => pageTiles.slice(start, (start += count)));
+  });
+  /* A ROW'S TILES SHARE ONE HEIGHT: each grows from nothing by its share of
+     the row's aspect, aᵢ / Σa (the stylesheet), so a row of aspects a₁…aₙ in
+     a width W with gaps g is (W − (n − 1)g) / Σa tall, every tile whole at
+     that height and the width filled exactly. */
+  const aspect = (tile: MediaGalleryItem): number => declaredAspect(tile, width, height);
+  const span = (row: readonly MediaGalleryItem[]): number => row.reduce((sum, tile) => sum + aspect(tile), 0);
+  /* THE LAST ROW of a page of two rows or more keeps the previous row's
+     height: the stylesheet turns its share of that row's aspect into the
+     width that gives it that height. A page of one row has no row before its
+     last, so it is justified whole — but for a lone tile at the reading
+     width, which is laid at half the width rather than as one picture the
+     width of the column. */
+  const lastRatio = $derived(rows.length > 1 ? span(rows[rows.length - 1]) / span(rows[rows.length - 2]) : undefined);
+  const lone = $derived(wide && pageTiles.length === 1);
 
   function itemNoun(candidate: MediaGalleryItem): string {
     return candidate.video === undefined ? 'photograph' : 'film';
   }
   /* THE STAGE pages EVERY item, stills and films alike (issue 384; one set
-     since the mosaic, issue 399): a film is opened exactly as a picture is.
-     index is assigned in exactly three places — open, next and previous — and
-     read clamped, so items shrinking under it (a manifest load) can never
-     leave it pointing past the end. */
-  let index = $state(0);
-  let enlarged = $state(false);
-  const total = $derived(items.length);
-  const shown = $derived(Math.min(index, Math.max(0, total - 1)));
-  const item = $derived(items[shown]);
-  let openerEl: HTMLElement | undefined;
-  /* WHICH FILM A PRESS ASKED FOR. The press on a film's tile is the reader
-     asking to watch it, so the film that press opened starts; paging onto a
-     film — the pair, an arrow key, a swipe — asks only to see it, so it
-     arrives on its poster and waits. A plain variable rather than state:
-     nothing renders from it, it is read once by the stage player as it
-     mounts, and every other road onto the stage clears it first. */
-  let pressedKey: string | undefined;
-  function open(chosen: MediaGalleryItem, from: EventTarget | null): void {
-    index = Math.max(0, items.indexOf(chosen));
-    openerEl = from instanceof HTMLElement ? from : undefined;
-    pressedKey = chosen.video === undefined ? undefined : chosen.key;
-    enlarged = true;
+     since the mosaic, issue 399), in the visit's order (issue 405): a film is
+     opened exactly as a picture is, and the next item is the next tile.
+     It is ONE value: closed, or open on an item named by its KEY, never by a
+     place in a list, so a new list landing under it (the published manifest)
+     can neither move it onto another item nor leave it pointing past the
+     end. Its place in the count is found in the visit's order as it is now.
+     An open stage whose item has left the set shows nothing, and the native
+     dialog follows it closed (below).
+     `playOnArrival` is WHICH FILM A PRESS ASKED FOR: the press on a film's
+     tile is the reader asking to watch it, so the film that press opened
+     starts; paging onto a film — the pair, an arrow key, a swipe — asks only
+     to see it, so it arrives on its poster and waits. `opener` is THE TILE A
+     CLOSED STAGE HANDS FOCUS BACK TO, by its item's key rather than by
+     element: a rotation across the seam re-cuts the rows under an open stage,
+     and a tile that changes row is drawn anew in its new one, so the element
+     pressed can be gone by the close while its item's tile is not. */
+  type Stage =
+    | { readonly open: false }
+    | { readonly open: true; readonly key: string; readonly playOnArrival: boolean; readonly opener: string };
+  const closedStage: Stage = { open: false };
+  let stage: Stage = $state.raw(closedStage);
+  const total = $derived(order.length);
+  const shown = $derived.by(() => {
+    const current = stage;
+    return current.open ? order.findIndex((tile) => tile.key === current.key) : -1;
+  });
+  const item = $derived(shown < 0 ? undefined : order[shown]);
+  /* Whether the stage shows anything, which is what the dialog and the
+     document lock follow: true from a press to a close, through every turn. */
+  const staged = $derived(item !== undefined);
+  let rowsEl: HTMLDivElement | undefined = $state();
+  function open(chosen: MediaGalleryItem): void {
+    stage = { open: true, key: chosen.key, playOnArrival: chosen.video !== undefined, opener: chosen.key };
+  }
+  function turn(step: -1 | 1): void {
+    const current = stage;
+    if (!current.open || shown < 0) return;
+    stage = { open: true, key: order[(shown + step + total) % total].key, playOnArrival: false, opener: current.opener };
+    void keepPairFocus();
   }
   function next(): void {
-    pressedKey = undefined;
-    index = (shown + 1) % total;
-    void keepPairFocus();
+    turn(1);
   }
   function previous(): void {
-    pressedKey = undefined;
-    index = (shown - 1 + total) % total;
-    void keepPairFocus();
+    turn(-1);
   }
   /* A TURN KEEPS THE KEYBOARD ON THE PAIR. A turn between a still and a film
      swaps the stage the pair sits in, so the control a keyboard reader just
@@ -129,8 +187,8 @@
      platform that wants a second press) leaves the native controls to the
      reader rather than surfacing an error. */
   function startIfPressed(node: HTMLVideoElement, key: string): void {
-    if (key === pressedKey) {
-      pressedKey = undefined;
+    const current = stage;
+    if (current.open && current.playOnArrival && current.key === key) {
       void node.play().catch(() => {});
     }
   }
@@ -150,13 +208,6 @@
     atEnd: () => false
   };
 
-  /* A stage with nothing to show closes rather than showing nothing. */
-  $effect(() => {
-    if (enlarged && item === undefined) {
-      enlarged = false;
-    }
-  });
-
   /* THE DOCUMENT HOLDS STILL UNDER THE OPEN STAGE (issue 241). A modal makes
      the document inert to pointer interaction and nothing else: a wheel, a
      two-finger drag, PageDown and the space bar all still scroll the page
@@ -164,7 +215,7 @@
      they never chose. The lock is one attribute on the document element, read
      by one rule in styles.css (`overflow: hidden`). It is written by an effect
      rather than by the open/close handlers so it cannot be left behind: an
-     effect's teardown runs when `enlarged` goes false AND when this component
+     effect's teardown runs when `staged` goes false AND when this component
      unmounts with the dialog still open, which no pair of handlers can promise.
      The giveback beside it is the zero-CLS half: removing the document's
      overflow removes its scrollbar, so on a classic-scrollbar platform the
@@ -173,7 +224,7 @@
      scrollbars overlay — so it is measured HERE, while the scrollbar is still
      taking its space, and handed to the rule as root padding. */
   $effect(() => {
-    if (!enlarged) {
+    if (!staged) {
       return;
     }
     const root = document.documentElement;
@@ -187,21 +238,27 @@
       root.style.removeProperty('--modal-scrollbar-giveback');
     };
   });
+  /* The native dialog's own open state follows the stage, the one place a
+     <dialog> is opened or closed by script: shown modal when the stage shows
+     an item, closed when it shows none — the reader closed it, or its item
+     left the set under it. */
   $effect(() => {
     if (dialogEl === undefined) return;
-    if (enlarged && !dialogEl.open) dialogEl.showModal();
-    else if (!enlarged && dialogEl.open) dialogEl.close();
+    if (staged && !dialogEl.open) dialogEl.showModal();
+    else if (!staged && dialogEl.open) dialogEl.close();
   });
-  /* Escape, the backdrop and the close mark all arrive here, so this is the
-     single place `enlarged` resets. Focus goes back to the tile that opened
-     the stage explicitly: a native <dialog> restores it to whatever was
-     focused before showModal(), and on macOS WebKit a mouse click does not
-     focus a <button> at all, so on the engine every iOS browser runs the
-     "previously focused element" would be the document body. */
+  /* Escape, the backdrop, the close mark and a stage whose item left the set
+     all arrive here, so this is the single place the stage closes. Focus goes
+     back to the tile that opened the stage explicitly: a native <dialog>
+     restores it to whatever was focused before showModal(), and on macOS
+     WebKit a mouse click does not focus a <button> at all, so on the engine
+     every iOS browser runs the "previously focused element" would be the
+     document body. */
   async function onDialogClose(): Promise<void> {
-    enlarged = false;
+    const opener = stage.open ? stage.opener : undefined;
+    stage = closedStage;
     await tick();
-    openerEl?.focus();
+    [...(rowsEl?.querySelectorAll<HTMLElement>('.gallery-tile') ?? [])].find((tile) => tile.dataset.key === opener)?.focus();
   }
   function onDialogKeydown(event: KeyboardEvent): void {
     /* An arrow pressed on a film's own player is the player's — it seeks —
@@ -219,40 +276,60 @@
 {#if items.length > 0}
   <FeedCard variant="flat">
     {#snippet media()}
-      <div class="gallery-mosaic">
-        <div class="gallery-grid" data-gallery-tiles={pageTiles.length} data-columns={columns}>
-          {#each pageTiles as tile, place (tile.key)}
-            <!-- ONE TILE SHAPE for every item (issue 384): a still and a film
-              are the same button over the same lazy preview, so a press on a
-              film's picture opens the stage exactly as a press on a still's
-              does. A film's tile adds a play mark, centred and hidden from the
-              accessibility tree: it says what the tile holds, and the button's
-              own name already says so in words. -->
-            <button
-              type="button"
-              class="gallery-tile"
-              data-gallery-kind={tile.video ? 'video' : 'image'}
-              data-shape={shapes[place]}
-              onclick={(event) => open(tile, event.currentTarget)}
-              aria-label={`Open ${itemNoun(tile)}: ${tile.alt}`}
-            >
-              <img
-                class="gallery-thumb"
-                src={tile.previewSrc}
-                alt=""
-                width={tile.width ?? width}
-                height={tile.height ?? height}
-                loading="lazy"
-                decoding="async"
-              />
-              {#if tile.video}
-                <span class="gallery-play-disc" aria-hidden="true">
-                  <Icon name="play" slot="chrome" />
-                </span>
-              {/if}
-            </button>
-          {/each}
-        </div>
+      <div class="gallery-rows" data-gallery-tiles={pageTiles.length} data-per-row={perRow} bind:this={rowsEl}>
+        <!-- ONE ROW at a time, carrying the sum of its tiles' aspects, which
+          each tile's share is taken from. The last of two rows or more also
+          carries the three numbers its width is computed from (the
+          stylesheet), and a lone tile at the reading width says so. -->
+        {#each rows as row, place}
+          {@const last = place > 0 && place === rows.length - 1}
+          <div
+            class="gallery-row"
+            data-lone={lone ? '' : undefined}
+            style:--row-aspect={span(row)}
+            style:--row-count={last ? row.length : undefined}
+            style:--row-prev-count={last ? rows[place - 1].length : undefined}
+            style:--row-aspect-ratio={last ? lastRatio : undefined}
+          >
+            {#each row as tile (tile.key)}
+              <!-- ONE TILE SHAPE for every item (issue 384): a still and a
+                film are the same button over the same lazy preview, so a
+                press on a film's picture opens the stage exactly as a press
+                on a still's does. A film's tile adds a play mark, centred
+                and hidden from the accessibility tree: it says what the tile
+                holds, and the button's own name already says so in words.
+                The thumb's width and height are the item's declared box — the
+                gallery's own where the item states none — and the tile's
+                share of its row is the same box's aspect, so the tile has its
+                final size before a byte arrives (below). -->
+              <button
+                type="button"
+                class="gallery-tile"
+                data-gallery-kind={tile.video ? 'video' : 'image'}
+                data-key={tile.key}
+                data-row={place}
+                style:--tile-aspect={aspect(tile)}
+                onclick={() => open(tile)}
+                aria-label={`Open ${itemNoun(tile)}: ${tile.alt}`}
+              >
+                <img
+                  class="gallery-thumb"
+                  src={tile.previewSrc}
+                  alt=""
+                  width={tile.width ?? width}
+                  height={tile.height ?? height}
+                  loading="lazy"
+                  decoding="async"
+                />
+                {#if tile.video}
+                  <span class="gallery-play-disc" aria-hidden="true">
+                    <Icon name="play" slot="chrome" />
+                  </span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/each}
       </div>
       <Pager page={at} {pages} previousLabel="Earlier pictures" nextLabel="Later pictures" onturn={(next) => (page = next)} />
     {/snippet}
@@ -276,7 +353,7 @@
         <Icon name="close" slot="cell" />
       </span>
     </button>
-    {#if enlarged && item !== undefined}
+    {#if item !== undefined}
       <!-- The pair is one pair whichever kind is staged: the same two 44px
         controls on the item's own edges, drawn only when there is somewhere
         to go. -->
@@ -287,7 +364,7 @@
             class="gallery-nav"
             data-gallery-nav="previous"
             onclick={previous}
-            aria-label={`Previous ${itemNoun(items[(shown - 1 + total) % total])}`}
+            aria-label={`Previous ${itemNoun(order[(shown - 1 + total) % total])}`}
           >
             <span class="gallery-nav-disc">
               <Icon name="chevron-left" slot="row" />
@@ -298,7 +375,7 @@
             class="gallery-nav"
             data-gallery-nav="next"
             onclick={next}
-            aria-label={`Next ${itemNoun(items[(shown + 1) % total])}`}
+            aria-label={`Next ${itemNoun(order[(shown + 1) % total])}`}
           >
             <span class="gallery-nav-disc">
               <Icon name="chevron-right" slot="row" />
@@ -394,80 +471,65 @@
 {/if}
 
 <style>
-  /* THE MOSAIC (owner, 2026-11-02, issue 399): six columns at the reading
-     width and two on a phone, every row a fixed height, and each tile spanning
-     the cells its shape names (lib/mosaic.ts), so a page of any count fills its
-     rows to the edge (owner rule: content short of its container's edge is a
-     defect). The grid takes its columns from the same answer the shapes were
-     chosen for — the data attribute — never from a media query of its own, so
-     the pattern and the grid cannot disagree at any width.
-
-     THE GRID RESERVES its fullest page — four rows at the reading width, three
-     on a phone — before a byte arrives, so a shorter page, a turn, a lazy
-     thumbnail or a manifest landing moves nothing under a reader.
-
-     A ROW IS NEVER TALLER THAN ITS CELL IS WIDE. The row height is the
-     token's, until the column a reader drags narrow makes a cell narrower
-     than that: from there the row is the cell's own width, so a square stays
-     a square and no tile is drawn as a sliver taller than it is wide
-     (measured before this rule: 60x294 at the handle's 288px floor). The
-     cell is read off the mosaic's own box, which is why the wrapper is a
-     size container; an engine without container units keeps the token. */
-  .gallery-mosaic {
-    container-type: inline-size;
-  }
-  .gallery-grid {
-    --gallery-track: var(--gallery-row);
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    grid-auto-rows: var(--gallery-track);
+  /* THE MOSAIC IS JUSTIFIED ROWS (owner, 2026-11-04, on the 0.1.104 preview:
+     "prefer only the last row to be uneven, I don't want gaps on every row,
+     ideally it would be all cohesive until the last one"). The script cuts
+     a page into rows of three or two (lib/mosaic.ts); each row is a line of
+     tiles that each grow from nothing by their share of the row's aspect —
+     their picture's declared aspect over the sum of the row's — so a row's
+     tiles share one height, its width less its gaps over that sum, and fill
+     its width exactly, every picture whole at that height. The shares are
+     the quotient rather than the aspects themselves because growth factors
+     that sum to less than one hand out only that fraction of the row:
+     MEASURED in all three engines, a lone 0.86:1 portrait closing a phone's
+     page took 91.7px of a 107.1px row. The aspects are declared numbers, not measurements, so a
+     row has its final shape before a byte arrives: zero CLS. */
+  .gallery-rows {
+    display: flex;
+    flex-direction: column;
     gap: var(--gallery-mosaic-gap);
-    min-block-size: calc(4 * var(--gallery-track) + 3 * var(--gallery-mosaic-gap));
-    align-content: start;
   }
-  .gallery-grid[data-columns='2'] {
-    --gallery-track: var(--gallery-row-phone);
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    min-block-size: calc(3 * var(--gallery-track) + 2 * var(--gallery-mosaic-gap));
+  .gallery-row {
+    display: flex;
+    gap: var(--gallery-mosaic-gap);
   }
-  @supports (width: 1cqi) {
-    .gallery-grid {
-      --gallery-track: min(var(--gallery-row), (100cqi - 5 * var(--gallery-mosaic-gap)) / 6);
-    }
-    .gallery-grid[data-columns='2'] {
-      --gallery-track: min(var(--gallery-row-phone), (100cqi - var(--gallery-mosaic-gap)) / 2);
-    }
+  /* THE LAST ROW of a page of two rows or more is laid at the previous row's
+     height, from the left, with its end open. The previous row of Np tiles is
+     (W − (Np − 1)g) / Σa_prev tall; a last row of Nl tiles and width W_last
+     is (W_last − (Nl − 1)g) / Σa_last; equal heights give
+     W_last = (W − (Np − 1)g) × R + (Nl − 1)g, R = Σa_last / Σa_prev (the
+     script writes the three; tests/mosaic.test.mjs evaluates this rule and
+     equates the heights). A last row that would be wider than the grid at
+     that height is justified to the full width instead — min() — and is then
+     the shorter of the two rather than running past the edge. */
+  .gallery-row:last-child:not(:first-child) {
+    inline-size: min(
+      100%,
+      calc(
+        (100% - (var(--row-prev-count) - 1) * var(--gallery-mosaic-gap)) * var(--row-aspect-ratio) +
+          (var(--row-count) - 1) * var(--gallery-mosaic-gap)
+      )
+    );
   }
-  .gallery-tile[data-shape='sq'] {
-    grid-column: span 2;
-    grid-row: span 2;
-  }
-  .gallery-tile[data-shape='wd'] {
-    grid-column: span 3;
-    grid-row: span 2;
-  }
-  .gallery-tile[data-shape='full'] {
-    grid-column: span 6;
-    grid-row: span 2;
-  }
-  .gallery-grid[data-columns='2'] .gallery-tile[data-shape='sq'] {
-    grid-column: span 1;
-    grid-row: span 1;
-  }
-  .gallery-grid[data-columns='2'] .gallery-tile[data-shape='wd'],
-  .gallery-grid[data-columns='2'] .gallery-tile[data-shape='full'] {
-    grid-column: span 2;
-    grid-row: span 1;
+  /* A page of one tile at the reading width is that one picture at half the
+     width, rather than one picture the width of the column; on a phone it is
+     the width, like any row. */
+  .gallery-row[data-lone] {
+    inline-size: var(--gallery-lone-tile);
   }
 
-  /* A tile is exactly the cells it spans, stretched to them on both axes and
-     never sized by the picture, and the picture covers it: no radius, no
-     border, no shadow — the page frame is the sheet's only line. */
+  /* A tile is its picture at its share of the row: it grows from nothing by
+     its aspect's share of the row's, so it is exactly as wide as its
+     picture is at the row's height, and as tall as that picture makes it, so
+     it pads and crops nothing. The one exception is the touch floor: a
+     picture so narrow in its row, or a row so short, that its tile would be
+     under 44px either way keeps the 44px. No radius, no border, no shadow — the page frame is the sheet's
+     only line. Its ground shows only until the picture paints, because the
+     picture is the whole tile. */
   .gallery-tile {
     position: relative;
     display: block;
-    justify-self: stretch;
-    align-self: stretch;
+    flex: calc(var(--tile-aspect) / var(--row-aspect)) 1 0%;
     min-inline-size: var(--control-target);
     min-block-size: var(--control-target);
     margin: 0;
@@ -483,11 +545,16 @@
     outline: 2px solid var(--color-accent);
     outline-offset: -2px;
   }
+  /* THE PICTURE, WHOLE (owner, 2026-11-04): the tile's width, and the height
+     its own proportions give it, fitted to no box but its own. Its width and
+     height attributes are the item's declared box, which the engine maps to
+     the box's aspect ratio — the same ratio the tile's share of its row is
+     taken from — so the tile has its final size before the bytes land and
+     their arrival moves nothing: zero CLS. */
   .gallery-thumb {
     display: block;
     inline-size: 100%;
-    block-size: 100%;
-    object-fit: cover;
+    block-size: auto;
   }
 
   /* A film's play mark (issue 384): decoration centred over the picture,

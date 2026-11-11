@@ -817,6 +817,17 @@ test('the stream pages and filters with the shared pure functions, and persists 
 test('every entry renders its short identity, and nothing hides it', () => {
   assert.match(stream, /<span class="stream-mark">\{row\.mark\}<\/span>/, 'the short identity left the entry');
   assert.doesNotMatch(streamStyle, /\.stream-mark \{[^}]*display: none/);
+  /* THE IDENTITY IS BOUNDED (issue #406): a release's is its tag, up to the
+     grammar's 64 characters, so the mark stops at the sheet's token and
+     ellipsizes there instead of taking the subject's track and the document
+     with it. The token holds a twelve-character tag whole. The e2e Releases
+     lane measures both halves in an engine. */
+  const mark = [...streamStyle.matchAll(/\.stream-mark \{([^}]*)\}/g)].map(([, body]) => body.replace(/\s+/g, ' ')).join(' ');
+  assert.match(mark, /max-inline-size: var\(--stream-mark-max\);/, 'the mark can take the whole entry again');
+  assert.match(mark, /overflow: hidden;/, 'a tag past the bound spills out of the mark');
+  assert.match(mark, /text-overflow: ellipsis;/, 'a tag past the bound is cut without saying so');
+  assert.match(mark, /white-space: nowrap;/);
+  assert.match(sheet, /--stream-mark-max: 12ch;/, 'the mark’s bound no longer holds a twelve-character tag whole');
   /* THE ENTRY ENDS WHERE THE COLUMN DOES: the body is the one flexible track,
      so a long subject ellipsizes before the identity is pushed off. */
   assert.match(

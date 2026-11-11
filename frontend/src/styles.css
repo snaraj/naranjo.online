@@ -22,7 +22,7 @@
  * src/assets/fonts/ beside their OFL license per the attribution
  * convention, vite content-hashes them like every other asset (they stay
  * same-origin under the requirement-1 local-origin rule and the CSP's
- * default-src 'self'), and `font-display: swap` keeps first paint honest —
+ * font-src 'self'), and `font-display: swap` keeps first paint honest —
  * system text now beats invisible text. */
 @font-face {
   font-family: 'JetBrains Mono';
@@ -823,6 +823,10 @@
   --stream-pad: 0.5rem;
   --stream-gap: 0.75rem;
   --stream-pitch: calc(var(--stream-line) + var(--stream-sub) + 2 * var(--stream-pad));
+  /* The widest identity an entry prints whole (issue 406), in the mark's own
+     monospace characters: a seven-digit sha, a pull request's number, and a
+     release's tag of up to twelve. A longer tag ellipsizes inside it. */
+  --stream-mark-max: 12ch;
   /* A pager step with nowhere to go: the same mark, quieter. */
   --pager-rest-dim: 0.35;
 
@@ -1866,14 +1870,14 @@ h1 {
    branch by reading mode for the same reason that sibling does not -- it is
    read against the scrim, which is the same near-black in every mode. */
 :root {
-  /* THE GALLERY IS A MOSAIC (owner, 2026-11-02, issue 399): the height of one
-     row of its grid at the reading width and on a phone, and the gap between
-     its tiles. A tile spans whole rows, so these three size every tile — and
-     a row never grows taller than the cell it heads is wide (MediaGallery's
-     own rule), so a narrowed column shrinks a row below its token. */
-  --gallery-row: 9rem;
-  --gallery-row-phone: 10rem;
+  /* THE GALLERY IS A MOSAIC OF JUSTIFIED ROWS (owner, 2026-11-02, issue 399;
+     2026-11-04: "ideally it would be all cohesive until the last one"): the
+     gap between its tiles and rows is the one length its rows declare,
+     because a tile's width and height are its picture's at its row's height.
+     The other is the width a page of one tile is laid at, at the reading
+     width. */
   --gallery-mosaic-gap: 0.375rem;
+  --gallery-lone-tile: 50%;
   /* The GROUND a tile and a film sit on (issue 239) is --gallery-stage-ground,
      declared with the palettes because it branches by reading mode. */
   /* The stage's prev/next pair: the disc inside the 44px target, its ink, its
