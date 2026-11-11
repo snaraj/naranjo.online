@@ -823,12 +823,13 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   `version` ↔ numeric `appVersion` ↔ plain-v chart `image.tag` four-way lock,
   plus a render assertion that the emitted reference still carries a full
   digest), `container` (PRs only, like `dependency-review`; both production
-  architectures built, never published). `container` remains a REQUIRED
-  pull-request check; `EXPECTED_MAIN_JOBS` in `scripts/ci/release_contract.py`
-  expects `container` and `dependency-review` `skipped` on a main push and the
-  other three successful, exact in both directions. What each chart pin
-  proves, and why the two PR-only jobs carry no main trigger, is in
-  `docs/ci-map.md`.
+  architectures built, never published, the amd64 one then held to this
+  head's `compliance.json` by `compliance_manifest.py candidate`).
+  `container` remains a REQUIRED pull-request check; `EXPECTED_MAIN_JOBS` in
+  `scripts/ci/release_contract.py` expects `container` and `dependency-review`
+  `skipped` on a main push and the other three successful, exact in both
+  directions. What each chart pin proves, and why the two PR-only jobs carry
+  no main trigger, is in `docs/ci-map.md`.
 - **coverage-badges.yml** — success-only `workflow_run` of a protected-main
   PR gate run (issue #350): publishes that exact run's `coverage-totals`,
   bound to its commit and run ID, to the generated single-commit `badges`
@@ -869,18 +870,17 @@ repair its own protection, an inexact receipt is an intentional Ready blocker.
   state are stated under Releases above; an ordinary manual/unmerged
   dispatch, skip flag, or force path cannot publish (requirement 10).
 - **compliance-live.yml** — weekly, manual, and pull requests that change the
-  judge: GETs production and judges what the edge serves against
-  `compliance.json` with `scripts/ci/compliance_manifest.py live` (a complete
-  answer, CSP origins, framing, HSTS, nosniff, Referrer-Policy, COOP,
-  Permissions-Policy, no cookie, reporting endpoints, scripts in the served
-  HTML and whether the CSP blocks a declared injected one, published legal
-  pages). It holds `contents: read` and no secret. The manifest's schema, its
-  storage list against the writes the source makes, and the judge's rules run
-  in the PR gate's contract suites; the build's own behaviour runs in
-  `frontend/e2e/compliance.spec.mjs` in the browser lanes. Lift: the
-  `compliance.json` entry a liftable refusal prints, with a written reason;
-  header, cookie, on-load-write and incomplete-answer refusals have no
-  manifest lift. `docs/ci-map.md` records what the three checks prove.
+  judge: `scripts/ci/compliance_manifest.py live` takes the release production
+  names in `X-Site-Version`, reads THAT release's `compliance.json` at its tag
+  (no tag or no manifest fails; nothing falls back to the head) and judges what
+  the edge serves by it (a complete answer, CSP origins, framing, HSTS,
+  nosniff, Referrer-Policy, each declared header exact, no cookie, reporting
+  endpoints, scripts in the served HTML, published legal pages); production
+  over a day behind main's VERSION fails. `contents: read`, no secret. The
+  contract suites hold the schema, storage list and rules; `container` holds
+  the head's image to the head's manifest; the browser lanes, the build. Lift:
+  the entry a liftable refusal prints; header, cookie, on-load-write and
+  incomplete-answer refusals have none. `docs/ci-map.md` records each check.
 - **release-audit.yml** — weekly and manual, read-only audit of the latest
   immutable Release. It re-binds the successful run, annotated tag, exact
   manifest bytes, image/chart semantic aliases and digests, signatures,

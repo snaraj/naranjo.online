@@ -228,7 +228,7 @@ type idleDeadlineWriter struct {
 
 // Option adjusts an optional Site construction dependency. Options exist so
 // the constructors' signatures stay stable while the composition root
-// injects cross-cutting concerns; today the only one is the logger.
+// injects cross-cutting concerns: the logger and the release name.
 type Option func(*siteOptions)
 
 // siteOptions carries the resolved optional dependencies.
@@ -236,7 +236,13 @@ type siteOptions struct {
 	// logger receives the per-request completion records; never nil after
 	// siteConfiguration (a discard logger is the quiet default).
 	logger *slog.Logger
+	// version is the release the binary names in siteVersionHeader; empty
+	// names none.
+	version string
 }
+
+// siteVersionHeader carries the release number on every response.
+const siteVersionHeader = "X-Site-Version"
 
 // responseRecorder captures the two completion facts only the write path
 // knows — final status and body byte count — while staying transparent to

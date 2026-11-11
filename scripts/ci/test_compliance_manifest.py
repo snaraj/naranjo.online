@@ -14,6 +14,8 @@ import http.client
 import http.server
 import io
 import json
+import os
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -27,9 +29,28 @@ REPORTS = "https://reports.example"
 MARKER = "/edge-injected/"
 
 
+DECLARED = {
+    "content-security-policy": "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cross-origin-opener-policy": "same-origin",
+    "permissions-policy": "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+}
+
+
+def floor() -> dict:
+    """A release manifest from before headers were declared: v1, as at 0.1.103."""
+    value = manifest()
+    value["schema"] = "compliance/v1"
+    del value["headers"]
+    return value
+
+
 def manifest() -> dict:
     return {
-        "schema": "compliance/v1",
+        "schema": "compliance/v2",
+        "headers": dict(DECLARED),
         "liveUrl": SITE,
         "dataCollected": [
             {"what": "request paths", "where": "pod log", "purpose": "operating the site", "evidence": "evidence.go"}
@@ -62,13 +83,13 @@ HTML = (
 
 def headers(**overrides: str | None) -> list[tuple[str, str]]:
     base = {
-        "Content-Security-Policy": "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+        "Content-Security-Policy": DECLARED["content-security-policy"],
         "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer",
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Permissions-Policy": "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+        "Permissions-Policy": DECLARED["permissions-policy"],
         "Report-To": json.dumps({"group": "edge", "max_age": 60, "endpoints": [{"url": REPORTS + "/report?s=x"}]}),
         "NEL": '{"report_to":"edge","max_age":60}',
         "Content-Type": "text/html; charset=utf-8",
@@ -83,6 +104,10 @@ def document(html: str = HTML, status: int = 200, **overrides: str | None) -> ga
 
 
 class JudgeTests(unittest.TestCase):
+    """The floor every release is held to, judged through a manifest that
+    declares no headers (as every v1 release's did), so each rule is seen on
+    its own; the declared headers have their own cases."""
+
     def assertRefused(self, verdict: gate.Verdict, fragment: str) -> None:
         self.assertTrue(
             any(fragment in refusal for refusal in verdict.refusals),
@@ -90,30 +115,30 @@ class JudgeTests(unittest.TestCase):
         )
 
     def test_the_compliant_baseline_passes(self) -> None:
-        verdict = gate.judge(manifest(), document(), {})
+        verdict = gate.judge(floor(), document(), {})
         self.assertEqual(verdict.refusals, [])
         self.assertIn(f"declared injected script seen: {MARKER}", verdict.notes)
 
     def test_a_non_200_document_is_refused(self) -> None:
-        self.assertRefused(gate.judge(manifest(), document(status=403), {}), "answered 403")
+        self.assertRefused(gate.judge(floor(), document(status=403), {}), "answered 403")
 
     def test_a_missing_csp_is_refused(self) -> None:
-        self.assertRefused(gate.judge(manifest(), document(Content_Security_Policy=None), {}), "no Content-Security-Policy")
+        self.assertRefused(gate.judge(floor(), document(Content_Security_Policy=None), {}), "no Content-Security-Policy")
 
     def test_a_csp_without_default_src_is_refused(self) -> None:
-        verdict = gate.judge(manifest(), document(Content_Security_Policy="script-src 'self'; frame-ancestors 'none'"), {})
+        verdict = gate.judge(floor(), document(Content_Security_Policy="script-src 'self'; frame-ancestors 'none'"), {})
         self.assertRefused(verdict, "no default-src")
 
     def test_an_undeclared_origin_in_any_fetch_directive_is_refused_with_its_lift(self) -> None:
         for directive in ("script-src", "font-src", "connect-src", "img-src", "style-src", "frame-src"):
             with self.subTest(directive=directive):
                 csp = f"default-src 'self'; {directive} 'self' https://cdn.example; frame-ancestors 'none'"
-                verdict = gate.judge(manifest(), document(Content_Security_Policy=csp), {})
+                verdict = gate.judge(floor(), document(Content_Security_Policy=csp), {})
                 self.assertRefused(verdict, f"{directive} admits the undeclared origin https://cdn.example")
                 self.assertRefused(verdict, '"origin": "https://cdn.example"')
 
     def test_a_declared_origin_passes_and_an_unused_declaration_is_stale(self) -> None:
-        declared = manifest()
+        declared = floor()
         declared["thirdParties"] = [
             {"origin": "https://cdn.example", "purpose": "fonts", "consent": "not-required", "reason": "self-hosting is planned"}
         ]
@@ -130,11 +155,11 @@ class JudgeTests(unittest.TestCase):
         ):
             with self.subTest(source=source):
                 csp = f"default-src 'self'; {directive} {source}; frame-ancestors 'none'"
-                self.assertRefused(gate.judge(manifest(), document(Content_Security_Policy=csp), {}), fragment)
+                self.assertRefused(gate.judge(floor(), document(Content_Security_Policy=csp), {}), fragment)
 
     def test_data_images_are_ordinary(self) -> None:
         csp = "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'"
-        self.assertEqual(gate.judge(manifest(), document(Content_Security_Policy=csp), {}).refusals, [])
+        self.assertEqual(gate.judge(floor(), document(Content_Security_Policy=csp), {}).refusals, [])
 
     def test_inline_or_eval_script_sources_are_refused_but_hashes_pass(self) -> None:
         for source, fragment in (
@@ -144,13 +169,13 @@ class JudgeTests(unittest.TestCase):
         ):
             with self.subTest(source=source):
                 csp = f"default-src 'self'; script-src 'self' {source}; frame-ancestors 'none'"
-                self.assertRefused(gate.judge(manifest(), document(Content_Security_Policy=csp), {}), fragment)
+                self.assertRefused(gate.judge(floor(), document(Content_Security_Policy=csp), {}), fragment)
         # Inline style is not script: the gate leaves it to the CSP tests that own it.
         csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
-        self.assertEqual(gate.judge(manifest(), document(Content_Security_Policy=csp), {}).refusals, [])
+        self.assertEqual(gate.judge(floor(), document(Content_Security_Policy=csp), {}).refusals, [])
         # A hash names bytes, not a place, so it admits no origin. With no
         # exempted script on the page there is nothing it could let run.
-        quiet = manifest()
+        quiet = floor()
         quiet["edgeObservations"] = quiet["edgeObservations"][1:]
         html = HTML.replace(INJECTED, "")
         csp = "default-src 'self'; script-src 'self' 'sha256-abc='; frame-ancestors 'none'"
@@ -176,72 +201,74 @@ class JudgeTests(unittest.TestCase):
             ("frame-ancestors 'none'; object-src 'none'", HTML),
         ):
             with self.subTest(csp=csp, probe=probe in html):
-                verdict = gate.judge(manifest(), document(html=html, Content_Security_Policy=csp), {})
+                verdict = gate.judge(floor(), document(html=html, Content_Security_Policy=csp), {})
                 self.assertRefused(verdict, f"declared injected script marked {MARKER!r}, which this CSP can let run")
         # Every enforced policy must admit a script for it to run, so one
         # policy that blocks all inline code is enough to keep it inert.
         nonce = "default-src 'self'; script-src 'self' 'nonce-bm9uY2U='; frame-ancestors 'none'"
         both = [("Content-Security-Policy", nonce), *headers()]
-        self.assertEqual(gate.judge(manifest(), gate.Fetched(SITE, 200, both, HTML.encode()), {}).refusals, [])
+        self.assertEqual(gate.judge(floor(), gate.Fetched(SITE, 200, both, HTML.encode()), {}).refusals, [])
         # script-src-elem governs <script> elements, so a nonce confined to
         # attribute handlers leaves the element blocked.
         attr = "default-src 'self'; script-src-attr 'nonce-bm9uY2U='; frame-ancestors 'none'"
-        self.assertEqual(gate.judge(manifest(), document(Content_Security_Policy=attr), {}).refusals, [])
+        self.assertEqual(gate.judge(floor(), document(Content_Security_Policy=attr), {}).refusals, [])
 
     def test_framing_must_be_denied_somewhere(self) -> None:
         csp = "default-src 'self'"
-        self.assertRefused(gate.judge(manifest(), document(Content_Security_Policy=csp, X_Frame_Options=None), {}), "framing")
-        self.assertEqual(gate.judge(manifest(), document(Content_Security_Policy=csp), {}).refusals, [])
+        self.assertRefused(gate.judge(floor(), document(Content_Security_Policy=csp, X_Frame_Options=None), {}), "framing")
+        self.assertEqual(gate.judge(floor(), document(Content_Security_Policy=csp), {}).refusals, [])
         wide = "default-src 'self'; frame-ancestors https://other.example"
-        self.assertRefused(gate.judge(manifest(), document(Content_Security_Policy=wide), {}), "frame-ancestors admits")
+        self.assertRefused(gate.judge(floor(), document(Content_Security_Policy=wide), {}), "frame-ancestors admits")
 
     def test_hsts_must_last_a_year(self) -> None:
-        self.assertRefused(gate.judge(manifest(), document(Strict_Transport_Security="max-age=86400"), {}), "Strict-Transport-Security")
-        self.assertRefused(gate.judge(manifest(), document(Strict_Transport_Security=None), {}), "Strict-Transport-Security")
+        self.assertRefused(gate.judge(floor(), document(Strict_Transport_Security="max-age=86400"), {}), "Strict-Transport-Security")
+        self.assertRefused(gate.judge(floor(), document(Strict_Transport_Security=None), {}), "Strict-Transport-Security")
 
     def test_nosniff_and_referrer_policy_are_required(self) -> None:
-        self.assertRefused(gate.judge(manifest(), document(X_Content_Type_Options=None), {}), "nosniff")
-        self.assertRefused(gate.judge(manifest(), document(Referrer_Policy="unsafe-url"), {}), "Referrer-Policy")
-        self.assertRefused(gate.judge(manifest(), document(Referrer_Policy=None), {}), "Referrer-Policy")
+        self.assertRefused(gate.judge(floor(), document(X_Content_Type_Options=None), {}), "nosniff")
+        self.assertRefused(gate.judge(floor(), document(Referrer_Policy="unsafe-url"), {}), "Referrer-Policy")
+        self.assertRefused(gate.judge(floor(), document(Referrer_Policy=None), {}), "Referrer-Policy")
 
-    def test_the_opener_policy_must_be_same_origin(self) -> None:
-        self.assertRefused(gate.judge(manifest(), document(Cross_Origin_Opener_Policy=None), {}), "Cross-Origin-Opener-Policy")
-        self.assertRefused(gate.judge(manifest(), document(Cross_Origin_Opener_Policy="unsafe-none"), {}), "Cross-Origin-Opener-Policy")
+    def test_every_declared_header_is_served_once_with_exactly_its_value(self) -> None:
+        for name, value in DECLARED.items():
+            title = "-".join(part.capitalize() for part in name.split("-"))
+            with self.subTest(header=name):
+                self.assertRefused(gate.judge(manifest(), document(**{title.replace("-", "_"): None}), {}), f"declares {name}: ")
+                changed = value.replace("()", "(self)", 1) if "()" in value else value + "x"
+                self.assertRefused(gate.judge(manifest(), document(**{title.replace("-", "_"): changed}), {}), f"declares {name}: ")
+                twice = document()
+                twice.headers.append((title, value))
+                self.assertRefused(gate.judge(manifest(), twice, {}), f"declares {name}: ")
+        # A header the release never declared is not inventory: it passes.
+        extra = document()
+        extra.headers.append(("X-Unrelated", "1"))
+        self.assertEqual(gate.judge(manifest(), extra, {}).refusals, [])
 
-    def test_every_unused_feature_must_be_denied(self) -> None:
-        self.assertRefused(gate.judge(manifest(), document(Permissions_Policy=None), {}), "does not deny camera=()")
-        for feature in gate.DENIED_FEATURES:
-            with self.subTest(feature=feature):
-                admitted = ", ".join(f"{name}=(self)" if name == feature else f"{name}=()" for name in gate.DENIED_FEATURES)
-                self.assertRefused(gate.judge(manifest(), document(Permissions_Policy=admitted), {}), f"does not deny {feature}=()")
-                omitted = ", ".join(f"{name}=()" for name in gate.DENIED_FEATURES if name != feature)
-                self.assertRefused(gate.judge(manifest(), document(Permissions_Policy=omitted), {}), f"does not deny {feature}=()")
-        # Written out rather than derived from the judge, so a feature dropped
-        # from DENIED_FEATURES fails here: the origin's own five, less one.
-        origin = "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
-        for feature in ("camera", "geolocation", "microphone", "payment", "usb"):
-            with self.subTest(written=feature):
-                fewer = origin.replace(f"{feature}=()", f"{feature}=*")
-                self.assertRefused(gate.judge(manifest(), document(Permissions_Policy=fewer), {}), f"does not deny {feature}=()")
-        # Behaviour, not inventory: denying more, in any order, still passes.
-        wider = "fullscreen=(), " + ", ".join(f"{name}=()" for name in reversed(gate.DENIED_FEATURES))
-        self.assertEqual(gate.judge(manifest(), document(Permissions_Policy=wider), {}).refusals, [])
+    def test_a_release_that_declared_no_headers_is_held_to_the_floor_alone(self) -> None:
+        # What `live` does to 0.1.103: its v1 manifest promised no opener
+        # policy and no Permissions-Policy, so today's judge asks for neither.
+        released = manifest()
+        released["schema"] = "compliance/v1"
+        del released["headers"]
+        bare = document(Cross_Origin_Opener_Policy=None, Permissions_Policy=None, Content_Security_Policy="default-src 'self'")
+        self.assertEqual(gate.judge(released, bare, {}).refusals, [])
+        self.assertEqual(gate.shape(released), [])
 
     def test_a_cookie_on_the_document_is_refused(self) -> None:
-        self.assertRefused(gate.judge(manifest(), document(Set_Cookie="tracker=1; Path=/"), {}), "'tracker'")
+        self.assertRefused(gate.judge(floor(), document(Set_Cookie="tracker=1; Path=/"), {}), "'tracker'")
 
     def test_an_undeclared_reporting_endpoint_is_refused_and_a_vanished_one_is_stale(self) -> None:
         other = json.dumps({"group": "x", "endpoints": [{"url": "https://collector.example/r"}]})
-        self.assertRefused(gate.judge(manifest(), document(Report_To=other), {}), "undeclared origin https://collector.example")
-        self.assertRefused(gate.judge(manifest(), document(Report_To=other), {}), f"reporting endpoint {REPORTS}, which no longer occurs")
+        self.assertRefused(gate.judge(floor(), document(Report_To=other), {}), "undeclared origin https://collector.example")
+        self.assertRefused(gate.judge(floor(), document(Report_To=other), {}), f"reporting endpoint {REPORTS}, which no longer occurs")
         endpoints = 'default="https://collector.example/r"'
-        self.assertRefused(gate.judge(manifest(), document(Reporting_Endpoints=endpoints), {}), "https://collector.example")
+        self.assertRefused(gate.judge(floor(), document(Reporting_Endpoints=endpoints), {}), "https://collector.example")
         csp = "default-src 'self'; frame-ancestors 'none'; report-uri https://collector.example/csp"
-        self.assertRefused(gate.judge(manifest(), document(Content_Security_Policy=csp), {}), "https://collector.example")
+        self.assertRefused(gate.judge(floor(), document(Content_Security_Policy=csp), {}), "https://collector.example")
 
     def test_an_undeclared_inline_script_is_refused_and_a_vanished_one_is_stale(self) -> None:
         html = HTML.replace(MARKER, "/something-else/")
-        verdict = gate.judge(manifest(), document(html=html), {})
+        verdict = gate.judge(floor(), document(html=html), {})
         self.assertRefused(verdict, "inline script this repository did not build")
         self.assertRefused(verdict, f"marked {MARKER!r} that no longer occurs")
 
@@ -256,10 +283,10 @@ class JudgeTests(unittest.TestCase):
         ):
             with self.subTest(snippet=snippet):
                 html = HTML.replace("</body>", snippet + "</body>")
-                self.assertRefused(gate.judge(manifest(), document(html=html), {}), "loads")
+                self.assertRefused(gate.judge(floor(), document(html=html), {}), "loads")
 
     def test_a_published_legal_page_must_answer_html(self) -> None:
-        published = manifest()
+        published = floor()
         published["legalPages"] = [{"id": "privacy", "status": "published", "path": "/privacy"}]
         ok = gate.Fetched(SITE + "privacy", 200, [("Content-Type", "text/html")], b"<p>notice</p>")
         self.assertEqual(gate.judge(published, document(), {"/privacy": ok}).refusals, [])
@@ -329,8 +356,58 @@ class ValidateTests(unittest.TestCase):
 
     def test_the_schema_version_is_pinned(self) -> None:
         changed = manifest()
-        changed["schema"] = "compliance/v2"
-        self.assertIn("compliance.json schema must be 'compliance/v1'", self.refusals(changed))
+        changed["schema"] = "compliance/v3"
+        self.assertIn("compliance.json schema must be one of ['compliance/v1', 'compliance/v2']", self.refusals(changed))
+        # v1 is still READ, at the tags of the releases that shipped it, but
+        # the head must declare its headers.
+        released = manifest()
+        released["schema"] = "compliance/v1"
+        del released["headers"]
+        self.assertEqual(gate.shape(released), [])
+        self.assertTrue(any("must be 'compliance/v2'" in r for r in self.refusals(released)))
+        released["headers"] = dict(DECLARED)
+        self.assertIn(
+            "compliance.json carries the unknown key 'headers'; the schema is closed so a typo cannot pass silently",
+            gate.shape(released),
+        )
+
+    def test_the_declared_headers_keep_the_floor(self) -> None:
+        def declared(**changes: str | None) -> list[str]:
+            value = manifest()
+            for name, header in changes.items():
+                name = name.replace("_", "-")
+                if header is None:
+                    del value["headers"][name]
+                else:
+                    value["headers"][name] = header
+            return self.refusals(value)
+
+        self.assertTrue(any("cross-origin-opener-policy: same-origin" in r for r in declared(cross_origin_opener_policy=None)))
+        self.assertTrue(any("cross-origin-opener-policy: same-origin" in r for r in declared(cross_origin_opener_policy="unsafe-none")))
+        self.assertTrue(any("content-security-policy with a default-src" in r for r in declared(content_security_policy=None)))
+        self.assertTrue(any("content-security-policy with a default-src" in r for r in declared(content_security_policy="script-src 'self'")))
+        self.assertTrue(any("denies camera=()" in r for r in declared(permissions_policy=None)))
+        # Written out rather than derived from the judge, so a feature dropped
+        # from DENIED_FEATURES fails here: the origin's own five, less one.
+        origin = "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
+        for feature in ("camera", "geolocation", "microphone", "payment", "usb"):
+            with self.subTest(feature=feature):
+                admitted = origin.replace(f"{feature}=()", f"{feature}=(self)")
+                self.assertTrue(any(f"denies {feature}=()" in r for r in declared(permissions_policy=admitted)))
+                omitted = ", ".join(item for item in origin.split(", ") if not item.startswith(feature))
+                self.assertTrue(any(f"denies {feature}=()" in r for r in declared(permissions_policy=omitted)))
+        # Denying more, in any order, keeps the floor.
+        self.assertEqual(declared(permissions_policy="fullscreen=(), " + ", ".join(reversed(origin.split(", ")))), [])
+        self.assertTrue(any("lowercase HTTP field name" in r for r in declared(**{"X_Frame_Options": "DENY"})))
+        self.assertTrue(any("headers.x-frame-options must be a non-empty string" in r for r in declared(x_frame_options=" ")))
+        for empty in ({}, [], "default-src 'none'", None):
+            with self.subTest(headers=empty):
+                value = manifest()
+                value["headers"] = empty
+                self.assertIn(
+                    "headers must be an object naming each security header the release sends and its exact value",
+                    self.refusals(value),
+                )
 
     def test_every_entry_is_an_object(self) -> None:
         changed = manifest()
@@ -777,6 +854,174 @@ class ShippedManifestTests(unittest.TestCase):
         self.assertIn("decision=fail", output.getvalue())
 
 
+MAIN_CHANGED = 1_800_000_000  # when the fixture's main set VERSION to 0.1.104
+HOUR = 3600
+
+
+class Releases:
+    """A git repository shaped like the one `live` reads: v0.1.103 shipped a
+    v1 manifest, v0.1.104 the v2 one with declared headers, v0.1.105 none at
+    all, and origin/main set VERSION to 0.1.104 at MAIN_CHANGED."""
+
+    def __init__(self, root: Path, main: bool = True) -> None:
+        self.root = root
+        root.mkdir(parents=True, exist_ok=True)
+        self.env = {
+            **os.environ,
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_AUTHOR_NAME": "Fixture",
+            "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "Fixture",
+            "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        }
+        self.git("init", "-q", "-b", "trunk")
+        self.release("0.1.103", floor(), MAIN_CHANGED - 30 * HOUR)
+        main_commit = self.release("0.1.104", manifest(), MAIN_CHANGED)
+        self.release("0.1.105", None, MAIN_CHANGED + HOUR)
+        if main:
+            self.git("update-ref", "refs/remotes/origin/main", main_commit)
+
+    def git(self, *args: str, when: int | None = None) -> str:
+        env = dict(self.env)
+        if when is not None:
+            env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = f"@{when} +0000"
+        return subprocess.run(
+            ["git", "-C", str(self.root), *args], check=True, text=True, capture_output=True, env=env
+        ).stdout.strip()
+
+    def release(self, version: str, value: dict | None, when: int) -> str:
+        (self.root / "VERSION").write_text(version + "\n")
+        path = self.root / "compliance.json"
+        if value is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(json.dumps(value))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", version, when=when)
+        self.git("tag", "-a", f"v{version}", "-m", version, when=when)
+        return self.git("rev-parse", "HEAD")
+
+
+def named(version: str | None, **overrides: str | None) -> gate.Fetched:
+    """The compliant document, naming `version` in X-Site-Version."""
+    answer = document(**overrides)
+    if version is not None:
+        answer.headers.append(("X-Site-Version", version))
+    return answer
+
+
+def no_build(repository: Path, tag: str) -> set[str]:
+    raise AssertionError(f"a site that names its release must never cost a build (asked for {tag})")
+
+
+class DeployedTests(unittest.TestCase):
+    """`live`: production judged against the manifest of the release it runs."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.scratch = tempfile.TemporaryDirectory()
+        root = Path(cls.scratch.name)
+        cls.repository = Releases(root / "releases").root
+        cls.no_main = Releases(root / "releases-no-main", main=False).root
+        # The HEAD manifest a fallback would reach for: one the compliant
+        # site satisfies, so a judge that fell back to it would pass.
+        cls.head = root / "compliance.json"
+        cls.head.write_text(json.dumps(manifest()))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.scratch.cleanup()
+
+    def live(self, answer: gate.Fetched, build=no_build, now: int = MAIN_CHANGED + HOUR, repository=None) -> tuple[int, str]:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = gate.run_live(
+                self.head, fetcher=lambda url: answer, repository=repository or self.repository, build=build, now=lambda: now
+            )
+        return code, output.getvalue()
+
+    def test_a_named_release_is_judged_against_its_own_tagged_manifest(self) -> None:
+        code, output = self.live(named("0.1.104"))
+        self.assertEqual(code, 0, output)
+        self.assertIn("deployed release 0.1.104, named by X-Site-Version; judged against v0.1.104:compliance.json", output)
+
+    def test_a_release_is_held_to_what_it_declared(self) -> None:
+        # 0.1.103 promised no opener policy, so its site passes without one...
+        bare = {"Cross_Origin_Opener_Policy": None, "Permissions_Policy": None}
+        code, output = self.live(named("0.1.103", **bare))
+        self.assertEqual(code, 0, output)
+        # ...and a site naming 0.1.104 is held to 0.1.104's promises.
+        for header, overrides in (
+            ("cross-origin-opener-policy", {"Cross_Origin_Opener_Policy": None}),
+            ("permissions-policy", {"Permissions_Policy": "camera=(), geolocation=(), microphone=()"}),
+        ):
+            with self.subTest(header=header):
+                code, output = self.live(named("0.1.104", **overrides))
+                self.assertEqual(code, 1, output)
+                self.assertIn(f"REFUSE the manifest declares {header}: ", output)
+
+    def test_a_release_with_no_tag_fails(self) -> None:
+        code, output = self.live(named("0.1.199"))
+        self.assertEqual(code, 1, output)
+        self.assertIn("no tag v0.1.199 exists", output)
+
+    def test_a_tag_with_no_manifest_fails(self) -> None:
+        code, output = self.live(named("0.1.105"))
+        self.assertEqual(code, 1, output)
+        self.assertIn("tag v0.1.105 carries no compliance.json", output)
+
+    def test_a_release_named_badly_fails(self) -> None:
+        twice = named("0.1.104")
+        twice.headers.append(("X-Site-Version", "0.1.104"))
+        for answer in (named("v0.1.104"), named("latest"), named("0.1"), named(" "), twice):
+            with self.subTest(sent=answer.all("x-site-version")):
+                code, output = self.live(answer)
+                self.assertEqual(code, 1, output)
+                self.assertIn("X-Site-Version must name one X.Y.Z release", output)
+
+    def test_a_site_naming_no_release_passes_only_as_the_exact_headerless_bundle(self) -> None:
+        asked: list[str] = []
+
+        def build(repository: Path, tag: str) -> set[str]:
+            asked.append(tag)
+            return {"/assets/index.js", "/assets/index.css"}
+
+        bare = {"Cross_Origin_Opener_Policy": None, "Permissions_Policy": None}
+        code, output = self.live(named(None, **bare), build=build)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(asked, ["v0.1.103"])
+        self.assertIn("deployed release 0.1.103, identified by its bundle, which is exactly v0.1.103's", output)
+        for built in ({"/assets/index.js"}, {"/assets/index.js", "/assets/index.css", "/assets/font.woff2"}, set()):
+            with self.subTest(built=sorted(built)):
+                code, output = self.live(named(None, **bare), build=lambda repository, tag: built)
+                self.assertEqual(code, 1, output)
+                self.assertIn("names no release and does not serve the v0.1.103 bundle", output)
+
+        def broken(repository: Path, tag: str) -> set[str]:
+            raise LookupError("building the v0.1.103 bundle failed at npm ci: offline")
+
+        code, output = self.live(named(None, **bare), build=broken)
+        self.assertEqual(code, 1, output)
+        self.assertIn("the deployed release cannot be judged: building the v0.1.103 bundle failed", output)
+
+    def test_production_may_trail_main_for_a_day_and_no_longer(self) -> None:
+        # Written in hours, not read from the constant, so a wider bound fails.
+        code, output = self.live(named("0.1.103"), now=MAIN_CHANGED + 23 * HOUR)
+        self.assertEqual(code, 0, output)
+        self.assertIn("production runs 0.1.103, behind main's 0.1.104 for 23.0 h (bound 24 h)", output)
+        code, output = self.live(named("0.1.103"), now=MAIN_CHANGED + 25 * HOUR)
+        self.assertEqual(code, 1, output)
+        self.assertIn("the release main cut has not reached production", output)
+        # At main's release, any delay is fine.
+        self.assertEqual(self.live(named("0.1.104"), now=MAIN_CHANGED + 400 * HOUR)[0], 0)
+
+    def test_an_unreadable_main_fails(self) -> None:
+        code, output = self.live(named("0.1.104"), repository=self.no_main)
+        self.assertEqual(code, 1, output)
+        self.assertIn("main's VERSION cannot be read from origin/main", output)
+
+
 # Past the byte cap, the review's reproduction: the compliant page padded to
 # exactly the cap, then an undeclared inline script only a complete read sees.
 PAST_CAP = HTML.encode().ljust(gate.BODY_CAP_BYTES) + b"<script>window.reviewProbe=1</script>"
@@ -819,30 +1064,13 @@ class LiveModeTests(unittest.TestCase):
         self.assertEqual(answer.first("x-frame-options"), "DENY")
 
     def test_live_mode_passes_the_compliant_site_and_fails_a_regression(self) -> None:
-        base = self.base
-
-        def fetcher(url: str) -> gate.Fetched:
-            answer = gate.fetch(base + "/" + url.split("/", 3)[3])
-            return gate.Fetched(url, answer.status, answer.headers, answer.body)
-
-        with tempfile.TemporaryDirectory() as scratch:
-            path = Path(scratch) / "compliance.json"
-            value = json.loads(gate.MANIFEST.read_text(encoding="utf-8"))
-            value["liveUrl"] = SITE
-            value["edgeObservations"] = manifest()["edgeObservations"]
-            path.write_text(json.dumps(value))
-            output = io.StringIO()
-            with redirect_stdout(output):
-                self.assertEqual(gate.run_live(path, fetcher=fetcher), 0, output.getvalue())
-            self.assertIn("START mode=live", output.getvalue())
-            self.assertIn("decision=pass", output.getvalue())
-
-            value["edgeObservations"] = []
-            path.write_text(json.dumps(value))
-            output = io.StringIO()
-            with redirect_stdout(output):
-                self.assertEqual(gate.run_live(path, fetcher=fetcher), 1)
-            self.assertIn("decision=fail refusals=2", output.getvalue())
+        code, output = self.live("/")
+        self.assertEqual(code, 0, output)
+        self.assertIn("START mode=live", output)
+        self.assertIn("decision=pass refusals=0 version=0.1.104", output)
+        code, output = self.live("/", drop="cross-origin-opener-policy")
+        self.assertEqual(code, 1, output)
+        self.assertIn("decision=fail refusals=1", output)
 
     def test_live_mode_fails_closed_when_the_site_cannot_be_read(self) -> None:
         for error in (OSError("connection refused"), http.client.IncompleteRead(b"", 100)):
@@ -856,23 +1084,25 @@ class LiveModeTests(unittest.TestCase):
                     self.assertEqual(gate.run_live(gate.MANIFEST, fetcher=unreachable), 1)
                 self.assertIn("could not be read", output.getvalue())
 
-    def live(self, path: str) -> tuple[int, str]:
-        """`live` against the compliant manifest, with the site served at `path`."""
+    def live(self, path: str, drop: str | None = None) -> tuple[int, str]:
+        """`live` with the site, naming 0.1.104, served at `path`."""
         base = self.base
 
         def fetcher(url: str) -> gate.Fetched:
             answer = gate.fetch(base + path)
-            return gate.Fetched(url, answer.status, answer.headers, answer.body)
+            kept = [(key, value) for key, value in answer.headers if key.lower() != drop]
+            return gate.Fetched(url, answer.status, [*kept, ("X-Site-Version", "0.1.104")], answer.body)
 
         with tempfile.TemporaryDirectory() as scratch:
-            manifest_path = Path(scratch) / "compliance.json"
-            value = json.loads(gate.MANIFEST.read_text(encoding="utf-8"))
-            value["liveUrl"] = SITE
-            value["edgeObservations"] = manifest()["edgeObservations"]
-            manifest_path.write_text(json.dumps(value))
+            repository = Releases(Path(scratch) / "releases").root
+            head = Path(scratch) / "compliance.json"
+            head.write_text(json.dumps(manifest()))
             output = io.StringIO()
             with redirect_stdout(output):
-                code = gate.run_live(manifest_path, fetcher=fetcher)
+                code = gate.run_live(
+                    head, fetcher=fetcher, repository=repository, build=no_build,
+                    now=lambda: MAIN_CHANGED,
+                )
         return code, output.getvalue()
 
     def test_an_answer_past_the_byte_cap_is_refused_not_judged_by_its_prefix(self) -> None:
@@ -894,6 +1124,122 @@ class LiveModeTests(unittest.TestCase):
         code, output = self.live("/cut-short")
         self.assertEqual(code, 1, output)
         self.assertIn("could not be read", output)
+
+
+
+HEAD = json.loads(gate.MANIFEST.read_text(encoding="utf-8"))
+HEAD_VERSION = gate.VERSION_FILE.read_text(encoding="utf-8").strip()
+# The page as the origin builds it: no edge, so no injected script.
+ORIGIN_HTML = HTML.replace(INJECTED, "")
+
+
+class _Origin(http.server.BaseHTTPRequestHandler):
+    """The head's image as the candidate check meets it: every header the head
+    manifest declares, its VERSION named, and HSTS only when the request says
+    it arrived over TLS, the way `securityHeaders` decides."""
+
+    def do_GET(self) -> None:  # noqa: N802 - the stdlib names it
+        server = self.server
+        sent = {**HEAD["headers"], "x-site-version": HEAD_VERSION, "content-type": "text/html; charset=utf-8"}
+        if self.headers.get("X-Forwarded-Proto") == "https":
+            sent["strict-transport-security"] = "max-age=31536000"
+        sent.update(server.changes)  # type: ignore[attr-defined]
+        body = (server.html if self.path == "/" else "<!doctype html><title>privacy</title>").encode()  # type: ignore[attr-defined]
+        self.send_response(200)
+        for key, value in sent.items():
+            if value is not None:
+                self.send_header(key, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_: object) -> None:
+        return
+
+
+class CandidateModeTests(unittest.TestCase):
+    """`candidate`: this head's image held strictly to this head's manifest."""
+
+    def setUp(self) -> None:
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Origin)
+        self.server.changes = {}  # type: ignore[attr-defined]
+        self.server.html = ORIGIN_HTML  # type: ignore[attr-defined]
+        self.addCleanup(self.server.server_close)
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(self.server.shutdown)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/"
+
+    def candidate(self, url: str | None = None, **changes: str | None) -> tuple[int, str]:
+        self.server.changes = {name.replace("_", "-").lower(): value for name, value in changes.items()}  # type: ignore[attr-defined]
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = gate.run_candidate(gate.MANIFEST, url or self.url)
+        return code, output.getvalue()
+
+    def test_the_head_manifest_declares_the_promises_this_release_makes(self) -> None:
+        self.assertEqual(HEAD["schema"], "compliance/v2")
+        self.assertEqual(HEAD["headers"]["cross-origin-opener-policy"], "same-origin")
+        self.assertEqual(
+            HEAD["headers"]["content-security-policy"],
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; "
+            "connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; "
+            "object-src 'none'",
+        )
+
+    def test_an_image_that_sends_what_the_head_declares_passes(self) -> None:
+        code, output = self.candidate()
+        self.assertEqual(code, 0, output)
+        self.assertIn(f"decision=pass refusals=0 version={HEAD_VERSION}", output)
+
+    def test_an_image_missing_any_promise_is_refused(self) -> None:
+        policy = HEAD["headers"]["permissions-policy"]
+        cases = {
+            "no opener policy": {"Cross_Origin_Opener_Policy": None},
+            "payment admitted": {"Permissions_Policy": policy.replace("payment=(), ", "")},
+            "usb admitted": {"Permissions_Policy": policy.replace(", usb=()", "")},
+        }
+        csp = HEAD["headers"]["content-security-policy"]
+        directives = [part.strip() for part in csp.split(";")]
+        self.assertEqual(len(directives), 11)
+        for directive in directives:
+            cases[f"CSP without {directive.split()[0]}"] = {
+                "Content_Security_Policy": "; ".join(other for other in directives if other != directive)
+            }
+        for name, changes in cases.items():
+            with self.subTest(name):
+                code, output = self.candidate(**changes)
+                self.assertEqual(code, 1, output)
+                self.assertIn("REFUSE the manifest declares ", output)
+
+    def test_an_image_must_name_the_head_release(self) -> None:
+        for sent, shown in ((None, "nothing"), ("0.1.103", "0.1.103")):
+            with self.subTest(sent=sent):
+                code, output = self.candidate(X_Site_Version=sent)
+                self.assertEqual(code, 1, output)
+                self.assertIn(f"must name its release as X-Site-Version: {HEAD_VERSION}; it sent {shown}", output)
+
+    def test_no_edge_observation_exempts_the_candidate(self) -> None:
+        # Behind the edge this script is a declared observation; from the
+        # image itself it is a script this repository did not build.
+        self.server.html = HTML  # type: ignore[attr-defined]
+        code, output = self.candidate()
+        self.assertEqual(code, 1, output)
+        self.assertIn("inline script this repository did not build", output)
+
+    def test_hsts_is_judged_as_the_edge_would_ask_for_it(self) -> None:
+        # The check states X-Forwarded-Proto: https, so a missing promise is
+        # the image's, not the request's.
+        code, output = self.candidate(Strict_Transport_Security="max-age=60")
+        self.assertEqual(code, 1, output)
+        self.assertIn("Strict-Transport-Security must carry max-age", output)
+
+    def test_the_candidate_runs_only_on_loopback(self) -> None:
+        for url in ("https://naranjo.online/", "http://localhost:8080/", "http://127.0.0.1:8080/x"):
+            with self.subTest(url=url):
+                code, output = self.candidate(url=url)
+                self.assertEqual(code, 1, output)
+                self.assertIn("the candidate URL must be http://127.0.0.1:<port>/", output)
 
 
 if __name__ == "__main__":

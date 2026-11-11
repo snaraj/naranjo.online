@@ -18,8 +18,12 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   resource. Pages also send `Cross-Origin-Opener-Policy: same-origin`, so a
   window another site opens gets no handle on this one, and the
   Permissions-Policy now denies payment and USB access beside the camera,
-  microphone and location. The weekly live check holds production to both.
-  Nothing a visitor sees changes.
+  microphone and location. Every response also names the release it comes
+  from in an `X-Site-Version` header, and nothing else. `compliance.json`
+  now declares each of these headers exactly: every pull request runs its own
+  image against that declaration, and the weekly live check holds production
+  to the declaration of the release it actually runs, read from that
+  release's tag. Nothing a visitor sees changes.
 - The activity panel refuses a day's contribution count, a commit count, or any
   sum of them that a browser cannot hold exactly (past 9,007,199,254,740,991),
   the way it already refused such a row number, so a hostile upstream can no

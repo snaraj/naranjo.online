@@ -87,9 +87,9 @@ func run(ctx context.Context, lookupEnv func(string) string, log processLogger) 
 	}
 	var handler *server.Site
 	if mediaEnabled {
-		handler, err = server.NewWithMedia(assets, mediaOptions, server.WithLogger(log.logger))
+		handler, err = server.NewWithMedia(assets, mediaOptions, server.WithLogger(log.logger), server.WithVersion(siteVersion))
 	} else {
-		handler, err = server.New(assets, server.WithLogger(log.logger))
+		handler, err = server.New(assets, server.WithLogger(log.logger), server.WithVersion(siteVersion))
 	}
 	if err != nil {
 		return err

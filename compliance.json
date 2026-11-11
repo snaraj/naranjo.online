@@ -1,5 +1,5 @@
 {
-  "schema": "compliance/v1",
+  "schema": "compliance/v2",
   "liveUrl": "https://naranjo.online/",
   "dataCollected": [
     {
@@ -32,5 +32,14 @@
       "reason": "The edge appends a bot-detection loader to every HTML response; this origin's CSP blocks it, so it never runs. Keeping or disabling it is an owner decision.",
       "issue": "https://github.com/snaraj/platform/issues/407"
     }
-  ]
+  ],
+  "headers": {
+    "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "permissions-policy": "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY"
+  }
 }

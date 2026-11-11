@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"mime"
 	"net/http"
 	"path"
@@ -23,10 +22,19 @@ import (
 // New constructs the complete naranjo.online HTTP handler from built frontend
 // assets. Construction validates index.html up front, wires Kubernetes probe
 // endpoints, and applies one security-header policy to every response.
-// Options inject cross-cutting dependencies (WithLogger); omitted, the site
-// serves identically and logs nowhere.
+// Options inject cross-cutting dependencies (WithLogger, WithVersion);
+// omitted, the site serves identically, logs nowhere and names no release.
 func New(assets fs.FS, options ...Option) (*Site, error) {
-	return newSite(assets, nil, siteConfiguration(options).logger)
+	return newSite(assets, nil, siteConfiguration(options))
+}
+
+// WithVersion names the release this binary was built as. Every response then
+// carries it in X-Site-Version, and nothing else: it is how the deployed-site
+// compliance check reads which release's manifest to hold the site to. Only a
+// plain X.Y.Z number is admitted; anything else fails construction rather
+// than naming a release that does not exist.
+func WithVersion(version string) Option {
+	return func(configured *siteOptions) { configured.version = version }
 }
 
 // NewWithMedia constructs the site with a separately managed read-only media
@@ -37,7 +45,7 @@ func NewWithMedia(assets fs.FS, media MediaOptions, options ...Option) (*Site, e
 	if err != nil {
 		return nil, err
 	}
-	site, err := newSite(assets, mediaRoute, siteConfiguration(options).logger)
+	site, err := newSite(assets, mediaRoute, siteConfiguration(options))
 	if err != nil {
 		_ = mediaRoute.Close()
 		return nil, err
@@ -48,7 +56,11 @@ func NewWithMedia(assets fs.FS, media MediaOptions, options ...Option) (*Site, e
 // newSite wires the shared response policy after optional capabilities have
 // been validated, keeping the media-disabled and media-enabled paths identical
 // for health probes and embedded frontend behavior.
-func newSite(assets fs.FS, media *mediaHandler, logger *slog.Logger) (*Site, error) {
+func newSite(assets fs.FS, media *mediaHandler, configured siteOptions) (*Site, error) {
+	if configured.version != "" && !releaseNumber(configured.version) {
+		return nil, fmt.Errorf("site version %q is not a plain X.Y.Z release number", configured.version)
+	}
+	logger := configured.logger
 	h, err := newHandler(assets)
 	if err != nil {
 		return nil, err
@@ -80,7 +92,35 @@ func newSite(assets fs.FS, media *mediaHandler, logger *slog.Logger) (*Site, err
 	// requestLog wraps OUTSIDE the policy chain so the completion record
 	// carries every final outcome — including the TLS redirect's 308 and the
 	// ambiguous-path 404 — with the response's actual status and byte count.
-	return &Site{handler: requestLog(logger, securityHeaders(redirectForwardedHTTP(rejectAmbiguousPath(mux)))), media: media, panels: panelAPI}, nil
+	return &Site{handler: requestLog(logger, nameRelease(configured.version, securityHeaders(redirectForwardedHTTP(rejectAmbiguousPath(mux))))), media: media, panels: panelAPI}, nil
+}
+
+// releaseNumber reports whether version is exactly three dot-separated runs
+// of ASCII digits, the only form VERSION takes.
+func releaseNumber(version string) bool {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || strings.Trim(part, "0123456789") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// nameRelease sets X-Site-Version on every response, the redirect and every
+// 404 included, when the binary names a release; a build without one (go run,
+// go test) sends no such header rather than inventing a value.
+func nameRelease(version string, next http.Handler) http.Handler {
+	if version == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(siteVersionHeader, version)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // StartPanelRefresh starts the panel API's background live refresh. It is an

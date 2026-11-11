@@ -1,23 +1,29 @@
 name: Compliance live check
 
-# What a visitor actually receives, judged against compliance.json (issue
-# #355). The PR gate and the browser lanes hold the BUILD to the manifest; only
-# a request to production can see what the edge adds on top -- headers,
-# injected scripts, reporting endpoints -- and that is where every observation
-# behind this workflow was found. See scripts/ci/compliance_manifest.py for
-# the rules and their lift.
+# What a visitor actually receives, judged against the compliance.json of the
+# release production RUNS (issue #355). The PR gate and the browser lanes hold
+# the BUILD to the manifest, and the PR gate's container job holds this head's
+# own image to this head's manifest; only a request to production can see what
+# the edge adds on top -- headers, injected scripts, reporting endpoints -- and
+# that is where every observation behind this workflow was found. The site
+# names its release (X-Site-Version) and the judge reads that release's
+# manifest from its immutable tag, never from the head, so a head that promises
+# more than production ships is not red here, and production is held to every
+# promise of the release it runs. Production may also not stay behind main's
+# VERSION longer than a day. See scripts/ci/compliance_manifest.py for the
+# rules, the bound's measurement and their lift.
 #
 # Weekly and on demand, plus on a pull request that changes the judge itself,
 # so a change to the gate is proven against the live site before it merges.
-# A pull request that only edits compliance.json does not trigger it: such a
-# change often declares something the next deployment ships, and judging it
-# against the current deployment would refuse the change for being early.
-# GitHub notifies whoever last changed this file's schedule when a scheduled
-# run fails.
+# A pull request that only edits compliance.json does not trigger it, because
+# nothing here reads the head's manifest beyond its URL: the candidate check
+# judges that one. GitHub notifies whoever last changed this file's schedule
+# when a scheduled run fails.
 #
 # Zero spend and read-only by construction: one GitHub-hosted runner, no
 # secret, `contents: read`, and the only network traffic is ordinary GETs to
-# the site's own public pages.
+# the site's own public pages, plus the npm registry while the transitional
+# header-less rule below still builds one bundle.
 
 on:
   schedule:
@@ -37,19 +43,31 @@ concurrency:
 jobs:
   live:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
+      # Full history and every tag: the judged manifest is read at the tag of
+      # the release production names, and the lag from origin/main's VERSION.
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      # TRANSITIONAL (HEADERLESS_RELEASE in compliance_manifest.py): 0.1.103
+      # predates X-Site-Version, so while production runs it the judge builds
+      # v0.1.103's bundle from its tag to identify the site. Delete this step
+      # with that constant once production names its release.
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+          check-latest: false
       - name: Validate compliance.json
         run: |
           set -euo pipefail
           python3 -I -B scripts/ci/compliance_manifest.py check
-      - name: Judge the live site against compliance.json
+      - name: Judge the live site against the manifest of the release it runs
         run: |
           set -euo pipefail
           python3 -I -B scripts/ci/compliance_manifest.py live

@@ -398,3 +398,30 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: false
+      # THE CANDIDATE CHECK. compliance-live.yml holds production to the
+      # manifest of the release it runs; this holds the image built from THIS
+      # head to THIS head's compliance.json, strictly and with no edge in
+      # front of it: every declared header served exactly, the head's VERSION
+      # named in X-Site-Version, and no edge observation exempting anything.
+      # The amd64 image is the one just built, loaded from the builder's cache
+      # rather than built again.
+      - name: Load the amd64 image for the candidate check
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: naranjo-candidate:head
+      - name: Judge this head's image against this head's compliance.json
+        run: |
+          set -euo pipefail
+          docker run --detach --name candidate --read-only --publish 127.0.0.1:18080:8080 naranjo-candidate:head
+          for _ in $(seq 1 30); do
+            if curl --silent --fail --output /dev/null http://127.0.0.1:18080/readyz; then break; fi
+            sleep 1
+          done
+          python3 -I -B scripts/ci/compliance_manifest.py candidate --url http://127.0.0.1:18080/
+      - name: Show the candidate's log when the check fails
+        if: failure()
+        run: docker logs candidate

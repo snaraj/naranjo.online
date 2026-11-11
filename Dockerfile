@@ -53,9 +53,15 @@ RUN go test ./... && touch /backend-tested
 # remains a runtime read-only mount and never becomes part of this Go embed.
 FROM backend-source AS backend
 COPY --from=backend-test /backend-tested /backend-tested
+# The binary names the release it is built as on every response
+# (X-Site-Version), which is how the deployed-site compliance check knows
+# which release's compliance.json to hold production to. VERSION is the
+# release lock itself, so the stamp cannot disagree with the tag, and the
+# server refuses to start on anything but a plain X.Y.Z.
+COPY VERSION /src/VERSION
 ARG TARGETOS
 ARG TARGETARCH
-RUN GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -buildid=" -o /out/naranjo-online ./cmd/server
+RUN GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -buildid= -X main.siteVersion=$(cat /src/VERSION)" -o /out/naranjo-online ./cmd/server
 
 # The final shell-less image contains only the independently promotable origin
 # binary, with no package manager, source tree, compiler, Python, or media bytes.
