@@ -7,12 +7,14 @@
  * attributes do; and the component's own stylesheet — its tile share and its
  * last-row width, read out of MediaGallery.svelte and evaluated — gives every
  * row one height that fills its width, and the last row the previous row's
- * height wherever that fits the width. */
+ * height wherever that fits the width. The order the tiles take is executed
+ * too: the shuffle, and the visit keeping that order when a new list of items
+ * reaches it (keptOrder). */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { declaredAspect, rowCounts, shuffled } from '../src/lib/mosaic.ts';
+import { declaredAspect, keptOrder, rowCounts, shuffled } from '../src/lib/mosaic.ts';
 
 test('a page is cut into full rows and one last row of what is left, three at the reading width and two on a phone', () => {
   for (const perRow of [3, 2]) {
@@ -253,4 +255,85 @@ test('a source that draws outside [0, 1) is refused rather than losing an item',
   for (const draw of [1, -0.1, 2, Number.NaN]) {
     assert.throws(() => shuffled(letters, constant(draw)), RangeError, `a draw of ${draw} was used`);
   }
+});
+
+/* THE VISIT KEEPS ITS ORDER (issue 405). The Media block replaces the vendored
+ * set when the published manifest lands, and a reader can be on the second
+ * page, or have the stage open, by then — so a later list is laid by keptOrder,
+ * never drawn again whole. */
+const keyed = (names, tag = 'old') => Object.freeze(names.map((key) => Object.freeze({ key, tag })));
+const keysOf = (order) => order.map((item) => item.key);
+const seeded = (seed) => {
+  let state = seed;
+  return () => {
+    state = (state * 48271) % 2147483647;
+    return (state - 1) / 2147483646;
+  };
+};
+const counting = (source) => {
+  const counted = () => {
+    counted.draws += 1;
+    return source();
+  };
+  counted.draws = 0;
+  return counted;
+};
+
+test('a visit’s first list, and a list sharing no item with the order before it, are drawn whole, draw for draw the shuffle', () => {
+  const items = keyed(Array.from({ length: 9 }, (_, index) => `item-${index}`));
+  const other = keyed(['vendored-1', 'vendored-2', 'vendored-3']);
+  for (let seed = 1; seed <= 200; seed += 1) {
+    assert.deepEqual(keptOrder([], items, seeded(seed)), shuffled(items, seeded(seed)), `seed ${seed}: the first list is not the shuffle’s draw`);
+    assert.deepEqual(
+      keptOrder(shuffled(other, seeded(seed + 1)), items, seeded(seed)),
+      shuffled(items, seeded(seed)),
+      `seed ${seed}: a list sharing no item was not drawn as a first list is`
+    );
+  }
+  /* And not in the list's own order: the published set must stay random. */
+  assert.notDeepEqual(keysOf(keptOrder(other, items, constant(0))), keysOf(items), 'a new set is laid in its manifest order');
+});
+
+test('a list of the same items keeps the visit’s order, carries the new list’s items, and draws nothing', () => {
+  const names = Array.from({ length: 9 }, (_, index) => `item-${index}`);
+  const never = () => assert.fail('the same items drew again');
+  for (let seed = 1; seed <= 50; seed += 1) {
+    const visit = keptOrder([], keyed(names), seeded(seed));
+    // The same keys, as new objects, handed over in another order.
+    const again = keyed([...names].reverse(), 'new');
+    const kept = keptOrder(visit, again, never);
+    assert.deepEqual(keysOf(kept), keysOf(visit), `seed ${seed}: the same items moved`);
+    assert.ok(kept.every((item) => item.tag === 'new'), `seed ${seed}: the order kept the old list’s items rather than the new list’s`);
+    assert.deepEqual(keptOrder(kept, again, never), kept, `seed ${seed}: laying the same list twice changed it`);
+  }
+});
+
+test('an item the new list drops leaves, the rest keep their places, and the new items are drawn among themselves after them', () => {
+  const visit = keyed(['a', 'b', 'c', 'd', 'e']);
+  const next = keyed(['x', 'c', 'a', 'y', 'e', 'z'], 'new');
+  // Under the identity draw the new items keep the order they came in...
+  assert.deepEqual(keysOf(keptOrder(visit, next, constant(1 - Number.EPSILON))), ['a', 'c', 'e', 'x', 'y', 'z']);
+  // ...and under any other they are shuffled, among themselves only.
+  assert.deepEqual(keysOf(keptOrder(visit, next, constant(0))), ['a', 'c', 'e', 'y', 'z', 'x']);
+  for (let seed = 1; seed <= 200; seed += 1) {
+    const source = counting(seeded(seed));
+    const order = keptOrder(visit, next, source);
+    assert.deepEqual(keysOf(order).slice(0, 3), ['a', 'c', 'e'], `seed ${seed}: an item the visit laid moved`);
+    assert.deepEqual([...keysOf(order).slice(3)].sort(), ['x', 'y', 'z'], `seed ${seed}: a new item was lost, doubled or placed among the old`);
+    assert.equal(source.draws, 2, `seed ${seed}: drew ${source.draws} times for three new items`);
+  }
+  // Every item dropped and none added is an empty order, drawing nothing.
+  assert.deepEqual(keptOrder(visit, [], () => assert.fail('an empty list drew')), []);
+});
+
+test('keeping the order never touches either list', () => {
+  const visit = keyed(['a', 'b', 'c']);
+  const next = keyed(['c', 'd', 'a', 'e']);
+  const visitBefore = [...visit];
+  const nextBefore = [...next];
+  const order = keptOrder(visit, next, constant(0));
+  assert.deepEqual([...visit], visitBefore);
+  assert.deepEqual([...next], nextBefore);
+  assert.notEqual(order, visit, 'the visit’s own list was handed back');
+  assert.notEqual(order, next, 'the new list itself was handed back');
 });

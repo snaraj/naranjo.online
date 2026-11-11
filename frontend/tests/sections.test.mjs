@@ -2581,21 +2581,31 @@ test('the gallery is a mosaic of every item, a page at a time, in justified rows
   assert.match(mediaGallery, /pageSize = 5 \}: MediaGalleryProps = \$props\(\)/, 'five tiles a page; the count is a prop with that default');
   assert.match(mediaGallery, /const pageTiles = \$derived\(pageRows\(order, at, pageSize\)\);/, 'a page is cut from something other than the visit’s order');
   assert.match(mediaGallery, /const pages = \$derived\(pageCount\(order\.length, pageSize\)\);/);
-  /* THE VISIT'S ORDER is lib/mosaic.ts's shuffle (executed by
-     tests/mosaic.test.mjs) over the items, ONCE: a derived that reads nothing
-     but the item list, so a page turn, the stage, a rotation or a re-render
-     never reaches it, and nothing else in the component reads the list the
+  /* THE VISIT'S ORDER is lib/mosaic.ts's keptOrder (executed by
+     tests/mosaic.test.mjs) over the items and the order the visit already
+     laid, ONCE per list: a derived that reads nothing but the item list, so a
+     page turn, the stage, a rotation or a re-render never reaches it, and
+     that writes the visit's order as it reads it, so a later list keeps the
+     places the visit gave its items and draws only the new ones. The visit's
+     order is written there and nowhere else, the shuffle is reached through
+     keptOrder alone, and nothing else in the component reads the list the
      host handed it but the guard that draws the gallery at all. The e2e
      gallery lanes prove the consequence in an engine: every item exactly once
-     across the pages, the same order after a turn and a rotation, and the
-     stage opening on the very tile pressed. */
+     across the pages, the same order after a turn, a rotation and the same
+     items landing again, and the stage opening on the very tile pressed. */
   const scriptOnly = withoutHtmlComments(mediaGallery).replace(/\/\*[\s\S]*?\*\//g, '');
-  assert.match(mediaGallery, /const order = \$derived\(shuffled\(items, Math\.random\)\);/, 'the gallery does not lay a shuffled copy of its items');
-  assert.equal((scriptOnly.match(/\bshuffled\(/g) ?? []).length, 1, 'the gallery shuffles in more than one place, so some read reshuffles');
+  assert.match(
+    mediaGallery,
+    /let visit: readonly MediaGalleryItem\[\] = \[\];\s*const order = \$derived\(\(visit = keptOrder\(visit, items, Math\.random\)\)\);/,
+    'the gallery does not lay its items in the order the visit keeps'
+  );
+  assert.equal((scriptOnly.match(/\bkeptOrder\(/g) ?? []).length, 1, 'the visit’s order is drawn in more than one place, so some read redraws it');
+  assert.equal((scriptOnly.match(/\bshuffled\(/g) ?? []).length, 0, 'the gallery shuffles beside the visit’s order, so some read reshuffles');
+  assert.equal((scriptOnly.match(/(?<![.\w])visit = /g) ?? []).length, 1, 'something besides the order’s own derived rewrites the visit’s order');
   assert.equal(
     [...scriptOnly.matchAll(/(?<!-)\bitems\b/g)].length,
     3,
-    'something besides the props, the one shuffle and the draw guard reads the unshuffled items'
+    'something besides the props, the visit’s order and the draw guard reads the unshuffled items'
   );
   assert.match(mediaGallery, /\{#if items\.length > 0\}/);
   /* THE ROWS ARE lib/mosaic.ts's (executed by tests/mosaic.test.mjs): the
@@ -2730,8 +2740,13 @@ test('the gallery is a mosaic of every item, a page at a time, in justified rows
 test('opening a tile is the only way onto the stage, a native <dialog> that loads the full derivative only then', () => {
   assert.match(mediaGallery, /onclick=\{\(\) => open\(tile\)\}/);
   assert.match(mediaGallery, /<dialog\s+bind:this=\{dialogEl\}\s+class="gallery-lightbox"[\s\S]*?onclose=\{onDialogClose\}\s+onkeydown=\{onDialogKeydown\}\s+onclick=\{onBackdropClick\}/);
-  assert.match(mediaGallery, /if \(enlarged && !dialogEl\.open\) dialogEl\.showModal\(\);/);
-  const stage = /\{#if enlarged && item !== undefined\}([\s\S]*)\{\/if\}\s*<\/dialog>/.exec(mediaGallery)?.[1] ?? '';
+  /* The native dialog follows the stage: shown modal while the stage shows
+     an item, closed when it shows none, which is also how a stage whose item
+     left the set closes. */
+  assert.match(mediaGallery, /const staged = \$derived\(item !== undefined\);/);
+  assert.match(mediaGallery, /if \(staged && !dialogEl\.open\) dialogEl\.showModal\(\);\s*else if \(!staged && dialogEl\.open\) dialogEl\.close\(\);/);
+  assert.doesNotMatch(mediaGallery, /\benlarged\s*=/, 'the stage is a second flag beside its item again');
+  const stage = /\{#if item !== undefined\}([\s\S]*)\{\/if\}\s*<\/dialog>/.exec(mediaGallery)?.[1] ?? '';
   assert.ok(stage.length > 0, 'the stage branch is not where this pin expects it');
   assert.match(stage, /src=\{item\.fullSrc\}/, 'the full derivative loads inside the stage branch');
   assert.doesNotMatch(mediaGallery.replace(stage, ''), /fullSrc/, 'and nowhere else');
@@ -2743,10 +2758,13 @@ test('opening a tile is the only way onto the stage, a native <dialog> that load
   /* Back to the tile of the item pressed, found by its key in the rows as
      they are at the close: a rotation under the open stage can rebuild the
      very element pressed in another row. */
-  assert.match(mediaGallery, /function open\(chosen: MediaGalleryItem\): void \{\s*index = Math\.max\(0, order\.indexOf\(chosen\)\);\s*openerKey = chosen\.key;/);
   assert.match(
     mediaGallery,
-    /async function onDialogClose\(\): Promise<void> \{\s*enlarged = false;\s*await tick\(\);\s*\[\.\.\.\(rowsEl\?\.querySelectorAll<HTMLElement>\('\.gallery-tile'\) \?\? \[\]\)\]\.find\(\(tile\) => tile\.dataset\.key === openerKey\)\?\.focus\(\);/,
+    /function open\(chosen: MediaGalleryItem\): void \{\s*stage = \{ open: true, key: chosen\.key, playOnArrival: chosen\.video !== undefined, opener: chosen\.key \};\s*\}/
+  );
+  assert.match(
+    mediaGallery,
+    /async function onDialogClose\(\): Promise<void> \{\s*const opener = stage\.open \? stage\.opener : undefined;\s*stage = closedStage;\s*await tick\(\);\s*\[\.\.\.\(rowsEl\?\.querySelectorAll<HTMLElement>\('\.gallery-tile'\) \?\? \[\]\)\]\.find\(\(tile\) => tile\.dataset\.key === opener\)\?\.focus\(\);/,
     'closing hands focus back to something other than the tile of the item pressed'
   );
   assert.doesNotMatch(mediaGallery, /openerEl/, 'the stage hands focus back to an element that a rotation can have rebuilt');
@@ -2761,15 +2779,36 @@ test('the stage pages the whole set, stills and films alike, with prev/next, the
      like any still, the stage pages past the mosaic's own page, and the next
      item on the stage is the next tile. */
   assert.match(mediaGallery, /const total = \$derived\(order\.length\);/, 'the stage counts something other than the visit’s order');
-  assert.match(mediaGallery, /const item = \$derived\(order\[shown\]\);/, 'the stage shows something other than the visit’s order');
-  assert.match(mediaGallery, /index = Math\.max\(0, order\.indexOf\(chosen\)\);/, 'a tile opens the stage at a place in some other list');
+  assert.match(mediaGallery, /const item = \$derived\(shown < 0 \? undefined : order\[shown\]\);/, 'the stage shows something other than the visit’s order');
+  /* THE STAGE IS ONE VALUE, closed or open on an item's KEY, and its place is
+     found in the visit's order as it is now: no place in a list is kept, so a
+     new list landing under the stage cannot move it onto another item. It is
+     written in exactly three places — a tile's press, a turn and the close. */
+  const scriptCode = withoutHtmlComments(mediaGallery).replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(
+    mediaGallery,
+    /type Stage =\s*\| \{ readonly open: false \}\s*\| \{ readonly open: true; readonly key: string; readonly playOnArrival: boolean; readonly opener: string \};\s*const closedStage: Stage = \{ open: false \};\s*let stage: Stage = \$state\.raw\(closedStage\);/,
+    'the stage is not one value, closed or open on a key'
+  );
+  assert.match(
+    mediaGallery,
+    /const shown = \$derived\.by\(\(\) => \{\s*const current = stage;\s*return current\.open \? order\.findIndex\(\(tile\) => tile\.key === current\.key\) : -1;\s*\}\);/,
+    'the stage’s place is not found by its key in the visit’s order'
+  );
+  assert.doesNotMatch(scriptCode, /\bindex\s*=|let index\b|openerKey|pressedKey/, 'the stage keeps a place in a list, or a key beside itself, again');
+  assert.equal((scriptCode.match(/(?<![.\w])stage = /g) ?? []).length, 3, 'something besides a press, a turn and the close writes the stage');
   assert.doesNotMatch(
     withoutHtmlComments(mediaGallery).replace(/\/\*[\s\S]*?\*\//g, ''),
     /\bstills\b|items\.filter\(|(?<!-)\bvisible\b/,
     'the stage pages a filtered subset again'
   );
-  assert.match(mediaGallery, /index = \(shown \+ 1\) % total;/);
-  assert.match(mediaGallery, /index = \(shown - 1 \+ total\) % total;/);
+  assert.match(
+    mediaGallery,
+    /function turn\(step: -1 \| 1\): void \{\s*const current = stage;\s*if \(!current\.open \|\| shown < 0\) return;\s*stage = \{ open: true, key: order\[\(shown \+ step \+ total\) % total\]\.key, playOnArrival: false, opener: current\.opener \};\s*void keepPairFocus\(\);\s*\}/,
+    'a turn does not stage the neighbour in the visit’s order, both ways round'
+  );
+  assert.match(mediaGallery, /function next\(\): void \{\s*turn\(1\);\s*\}/);
+  assert.match(mediaGallery, /function previous\(\): void \{\s*turn\(-1\);\s*\}/);
   /* ONE PAIR, drawn by both kinds of stage from one snippet rather than two
      copies that could drift apart, its names the neighbours' own nouns. */
   assert.equal((mediaGallery.match(/data-gallery-nav="previous"/g) ?? []).length, 1, 'the previous control is written twice');
@@ -2780,8 +2819,7 @@ test('the stage pages the whole set, stills and films alike, with prev/next, the
   /* A turn between a still and a film swaps the stage the pair sits in, so
      focus is read off the pressed control BEFORE the swap and handed to its
      twin after it; both turns do it. */
-  assert.match(mediaGallery, /index = \(shown \+ 1\) % total;\s*void keepPairFocus\(\);/, 'a forward turn strands a keyboard reader on the document');
-  assert.match(mediaGallery, /index = \(shown - 1 \+ total\) % total;\s*void keepPairFocus\(\);/, 'a backward turn strands a keyboard reader on the document');
+  assert.match(mediaGallery, /opener: current\.opener \};\s*void keepPairFocus\(\);/, 'a turn strands a keyboard reader on the document');
   assert.match(
     mediaGallery,
     /async function keepPairFocus\(\): Promise<void> \{\s*const side = document\.activeElement\?\.getAttribute\('data-gallery-nav'\);\s*if \(!side\) return;\s*await tick\(\);\s*dialogEl\?\.querySelector<HTMLElement>\(`\.gallery-nav\[data-gallery-nav="\$\{side\}"\]`\)\?\.focus\(\);\s*\}/,
@@ -2816,7 +2854,7 @@ test('a film is a tile that opens the stage, where it is one native player start
      keyed by the item so paging builds a fresh one. A still is NOT keyed: a
      rebuilt <img> has no size until its bytes arrive, so a keyed still
      collapses the stage between turns. */
-  const stage = /\{#if enlarged && item !== undefined\}([\s\S]*)\{\/if\}\s*<\/dialog>/.exec(mediaGallery)?.[1] ?? '';
+  const stage = /\{#if item !== undefined\}([\s\S]*)\{\/if\}\s*<\/dialog>/.exec(mediaGallery)?.[1] ?? '';
   assert.ok(stage.length > 0, 'the stage branch is not where this pin expects it');
   const film = /\{#if item\.video\}([\s\S]*?)\{:else\}/.exec(stage)?.[1] ?? '';
   const still = /\{#if item\.video\}[\s\S]*?\{:else\}([\s\S]*?)<div class="gallery-lightbox-meta">/.exec(stage)?.[1] ?? '';
@@ -2844,22 +2882,22 @@ test('a film is a tile that opens the stage, where it is one native player start
   assert.equal((mediaGallery.match(/\.play\(/g) ?? []).length, 1, 'exactly one call ever starts a film');
   assert.match(
     mediaGallery,
-    /function startIfPressed\(node: HTMLVideoElement, key: string\): void \{\s*if \(key === pressedKey\) \{\s*pressedKey = undefined;\s*void node\.play\(\)\.catch\(\(\) => \{\}\);\s*\}\s*\}/,
-    'the one start is not the pressed-key rule'
+    /function startIfPressed\(node: HTMLVideoElement, key: string\): void \{\s*const current = stage;\s*if \(current\.open && current\.playOnArrival && current\.key === key\) \{\s*void node\.play\(\)\.catch\(\(\) => \{\}\);\s*\}\s*\}/,
+    'the one start is not the rule that the press staged this very film'
   );
-  assert.match(mediaGallery, /let pressedKey: string \| undefined;/, 'the pending press became state something renders from');
   assert.match(
     mediaGallery,
-    /function open\(chosen: MediaGalleryItem\): void \{[^}]*pressedKey = chosen\.video === undefined \? undefined : chosen\.key;/,
+    /function open\(chosen: MediaGalleryItem\): void \{[^}]*playOnArrival: chosen\.video !== undefined,/,
     'opening a film from its tile no longer asks for it to start'
   );
   assert.equal(
-    [...mediaGallery.matchAll(/pressedKey = (?!undefined;)/g)].length,
+    [...mediaGallery.matchAll(/playOnArrival: (?!false\b|boolean\b)/g)].length,
     1,
     'something other than a tile press asks for a film to start'
   );
-  assert.match(mediaGallery, /function next\(\): void \{\s*pressedKey = undefined;/, 'paging forward onto a film starts it');
-  assert.match(mediaGallery, /function previous\(\): void \{\s*pressedKey = undefined;/, 'paging back onto a film starts it');
+  assert.match(mediaGallery, /function next\(\): void \{\s*turn\(1\);/, 'paging forward is not the turn that stages without a start');
+  assert.match(mediaGallery, /function previous\(\): void \{\s*turn\(-1\);/, 'paging back is not the turn that stages without a start');
+  assert.match(mediaGallery, /key: order\[\(shown \+ step \+ total\) % total\]\.key, playOnArrival: false,/, 'paging onto a film starts it');
 
   /* The film's box on the stage, all of it tokens and its own attributes. */
   assert.match(

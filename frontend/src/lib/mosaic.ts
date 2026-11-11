@@ -17,8 +17,9 @@
  *
  * WHICH ITEM TAKES WHICH PLACE is chance, once per visit (owner, 2026-11-04,
  * issue #405: "this is fine, just make it random"): the gallery lays a
- * shuffled copy of its items, so the manifest's own order means nothing to
- * the mosaic. */
+ * shuffled copy of its items, kept for the visit when a new list of them
+ * arrives (keptOrder), so the manifest's own order means nothing to the
+ * mosaic. */
 
 /* How many tiles each row of a page of `count` holds, in a grid of `perRow`
  * a row: every row full but the last, which holds what is left. A count that
@@ -68,4 +69,31 @@ export function shuffled<T>(items: readonly T[], random: () => number): readonly
     [order[last], order[pick]] = [order[pick], order[last]];
   }
   return order;
+}
+
+/* THE VISIT KEEPS ITS ORDER when a new list of items reaches it. The Media
+ * block shows the vendored set at once and replaces it when the published
+ * manifest answers (Block.svelte), and a reader can be on the second page, or
+ * have the stage open, by then. So the visit's order is not drawn again for
+ * each list: an item the visit has already laid keeps its place among the
+ * others, found by its key and carried as the NEW list's item; an item the
+ * new list drops leaves; and the items the visit has not laid yet are drawn
+ * among themselves by the same shuffle and go after the rest. Nothing a
+ * reader is looking at moves for a list of the same items, which draws
+ * nothing at all.
+ * A visit's first list is all new, so it is drawn whole, draw for draw the
+ * shuffle above; so is a list that shares no key with the order before it,
+ * as the published set shares none with the vendored one, which keeps the
+ * published set random rather than in the manifest's own order. Keys are
+ * unique within a list: the manifest refuses a repeat and the vendored keys
+ * are file names. */
+export function keptOrder<T extends { readonly key: string }>(
+  visit: readonly T[],
+  items: readonly T[],
+  random: () => number
+): readonly T[] {
+  const byKey = new Map(items.map((item) => [item.key, item]));
+  const kept = visit.flatMap((laid) => byKey.get(laid.key) ?? []);
+  const known = new Set(visit.map((laid) => laid.key));
+  return [...kept, ...shuffled(items.filter((item) => !known.has(item.key)), random)];
 }

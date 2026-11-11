@@ -736,8 +736,9 @@ export type MediaGalleryItem = {
 
 export type MediaGalleryProps = {
   /* Every item, in no particular order: the component lays a shuffled copy,
-   * once per list (owner, 2026-11-04, issue #405), so the order here is not
-   * the order a reader sees. */
+   * drawn once per visit and kept when a later list of items replaces this one
+   * (owner, 2026-11-04, issue #405), so the order here is not the order a
+   * reader sees. */
   readonly items: readonly MediaGalleryItem[];
   /* The box an item that declares none of its own is laid as. */
   readonly width: number;

@@ -53,24 +53,31 @@
   import Pager from './Pager.svelte';
   import { browserMedia, spreadMediaQuery, watchMedia } from '../columnWidth';
   import { swipeHorizontal } from '../gesture.ts';
-  import { declaredAspect, rowCounts, shuffled } from '../mosaic.ts';
+  import { declaredAspect, keptOrder, rowCounts } from '../mosaic.ts';
   import { pageCount, pageRows } from '../stream.ts';
   import type { MediaGalleryItem, MediaGalleryProps } from '../blocks.ts';
 
   let { items, width, height, pageSize = 5 }: MediaGalleryProps = $props();
 
   /* THE VISIT'S ORDER (owner, 2026-11-04, issue 405): every item, films and
-     drawings together, shuffled ONCE per item list — the bootstrap set as the
-     component mounts, and the runtime manifest once, as it lands — because
-     this derived reads nothing but `items`, and the host hands a new list
-     exactly when the set itself changes (Block.svelte). A page turn, the
-     stage, a rotation and a re-render read `order` and never reach the
-     shuffle, so the pager, the stage's walk and the tile a closed stage hands
+     drawings together, shuffled ONCE per visit. The first list — the
+     bootstrap set as the component mounts — is drawn whole; a later list,
+     the published manifest as it lands (Block.svelte), keeps the place of
+     every item the visit already laid and draws only the items it has not
+     (lib/mosaic.ts, keptOrder), so a list of the same items moves nothing a
+     reader is looking at, and the published set, which shares no item with
+     the bootstrap one, is drawn as the first list was. The visit's order is
+     the one thing this component remembers between lists, and the derived
+     writes it as it reads it: it runs only when `items` changes, and run
+     again on the same list it draws nothing and lays the same order. A page
+     turn, the stage, a rotation and a re-render read `order` and never reach
+     it, so the pager, the stage's walk and the tile a closed stage hands
      focus back to all follow the one order. It is computed before the tiles
-     of that list are first drawn, so the tiles are laid in it from their
-     first paint, and every box below is a function of the declared boxes the
-     list carries: zero CLS. */
-  const order = $derived(shuffled(items, Math.random));
+     of a list are first drawn, so they are laid in it from their first
+     paint, and every box below is a function of the declared boxes the list
+     carries: zero CLS. */
+  let visit: readonly MediaGalleryItem[] = [];
+  const order = $derived((visit = keptOrder(visit, items, Math.random)));
 
   /* THE MOSAIC'S PAGE (owner, 2026-11-02, issue 399): a page of tiles at a
      time out of the visit's order. */
@@ -111,43 +118,49 @@
   /* THE STAGE pages EVERY item, stills and films alike (issue 384; one set
      since the mosaic, issue 399), in the visit's order (issue 405): a film is
      opened exactly as a picture is, and the next item is the next tile.
-     index is assigned in exactly three places — open, next and previous — and
-     read clamped, so items shrinking under it (a manifest load) can never
-     leave it pointing past the end. */
-  let index = $state(0);
-  let enlarged = $state(false);
+     It is ONE value: closed, or open on an item named by its KEY, never by a
+     place in a list, so a new list landing under it (the published manifest)
+     can neither move it onto another item nor leave it pointing past the
+     end. Its place in the count is found in the visit's order as it is now.
+     An open stage whose item has left the set shows nothing, and the native
+     dialog follows it closed (below).
+     `playOnArrival` is WHICH FILM A PRESS ASKED FOR: the press on a film's
+     tile is the reader asking to watch it, so the film that press opened
+     starts; paging onto a film — the pair, an arrow key, a swipe — asks only
+     to see it, so it arrives on its poster and waits. `opener` is THE TILE A
+     CLOSED STAGE HANDS FOCUS BACK TO, by its item's key rather than by
+     element: a rotation across the seam re-cuts the rows under an open stage,
+     and a tile that changes row is drawn anew in its new one, so the element
+     pressed can be gone by the close while its item's tile is not. */
+  type Stage =
+    | { readonly open: false }
+    | { readonly open: true; readonly key: string; readonly playOnArrival: boolean; readonly opener: string };
+  const closedStage: Stage = { open: false };
+  let stage: Stage = $state.raw(closedStage);
   const total = $derived(order.length);
-  const shown = $derived(Math.min(index, Math.max(0, total - 1)));
-  const item = $derived(order[shown]);
-  /* THE TILE A CLOSED STAGE HANDS FOCUS BACK TO, by its item's key rather
-     than by element: a rotation across the seam re-cuts the rows under an
-     open stage, and a tile that changes row is drawn anew in its new one, so
-     the element pressed can be gone by the close while its item's tile is
-     not. */
-  let openerKey: string | undefined;
+  const shown = $derived.by(() => {
+    const current = stage;
+    return current.open ? order.findIndex((tile) => tile.key === current.key) : -1;
+  });
+  const item = $derived(shown < 0 ? undefined : order[shown]);
+  /* Whether the stage shows anything, which is what the dialog and the
+     document lock follow: true from a press to a close, through every turn. */
+  const staged = $derived(item !== undefined);
   let rowsEl: HTMLDivElement | undefined = $state();
-  /* WHICH FILM A PRESS ASKED FOR. The press on a film's tile is the reader
-     asking to watch it, so the film that press opened starts; paging onto a
-     film — the pair, an arrow key, a swipe — asks only to see it, so it
-     arrives on its poster and waits. A plain variable rather than state:
-     nothing renders from it, it is read once by the stage player as it
-     mounts, and every other road onto the stage clears it first. */
-  let pressedKey: string | undefined;
   function open(chosen: MediaGalleryItem): void {
-    index = Math.max(0, order.indexOf(chosen));
-    openerKey = chosen.key;
-    pressedKey = chosen.video === undefined ? undefined : chosen.key;
-    enlarged = true;
+    stage = { open: true, key: chosen.key, playOnArrival: chosen.video !== undefined, opener: chosen.key };
+  }
+  function turn(step: -1 | 1): void {
+    const current = stage;
+    if (!current.open || shown < 0) return;
+    stage = { open: true, key: order[(shown + step + total) % total].key, playOnArrival: false, opener: current.opener };
+    void keepPairFocus();
   }
   function next(): void {
-    pressedKey = undefined;
-    index = (shown + 1) % total;
-    void keepPairFocus();
+    turn(1);
   }
   function previous(): void {
-    pressedKey = undefined;
-    index = (shown - 1 + total) % total;
-    void keepPairFocus();
+    turn(-1);
   }
   /* A TURN KEEPS THE KEYBOARD ON THE PAIR. A turn between a still and a film
      swaps the stage the pair sits in, so the control a keyboard reader just
@@ -174,8 +187,8 @@
      platform that wants a second press) leaves the native controls to the
      reader rather than surfacing an error. */
   function startIfPressed(node: HTMLVideoElement, key: string): void {
-    if (key === pressedKey) {
-      pressedKey = undefined;
+    const current = stage;
+    if (current.open && current.playOnArrival && current.key === key) {
       void node.play().catch(() => {});
     }
   }
@@ -195,13 +208,6 @@
     atEnd: () => false
   };
 
-  /* A stage with nothing to show closes rather than showing nothing. */
-  $effect(() => {
-    if (enlarged && item === undefined) {
-      enlarged = false;
-    }
-  });
-
   /* THE DOCUMENT HOLDS STILL UNDER THE OPEN STAGE (issue 241). A modal makes
      the document inert to pointer interaction and nothing else: a wheel, a
      two-finger drag, PageDown and the space bar all still scroll the page
@@ -209,7 +215,7 @@
      they never chose. The lock is one attribute on the document element, read
      by one rule in styles.css (`overflow: hidden`). It is written by an effect
      rather than by the open/close handlers so it cannot be left behind: an
-     effect's teardown runs when `enlarged` goes false AND when this component
+     effect's teardown runs when `staged` goes false AND when this component
      unmounts with the dialog still open, which no pair of handlers can promise.
      The giveback beside it is the zero-CLS half: removing the document's
      overflow removes its scrollbar, so on a classic-scrollbar platform the
@@ -218,7 +224,7 @@
      scrollbars overlay — so it is measured HERE, while the scrollbar is still
      taking its space, and handed to the rule as root padding. */
   $effect(() => {
-    if (!enlarged) {
+    if (!staged) {
       return;
     }
     const root = document.documentElement;
@@ -232,21 +238,27 @@
       root.style.removeProperty('--modal-scrollbar-giveback');
     };
   });
+  /* The native dialog's own open state follows the stage, the one place a
+     <dialog> is opened or closed by script: shown modal when the stage shows
+     an item, closed when it shows none — the reader closed it, or its item
+     left the set under it. */
   $effect(() => {
     if (dialogEl === undefined) return;
-    if (enlarged && !dialogEl.open) dialogEl.showModal();
-    else if (!enlarged && dialogEl.open) dialogEl.close();
+    if (staged && !dialogEl.open) dialogEl.showModal();
+    else if (!staged && dialogEl.open) dialogEl.close();
   });
-  /* Escape, the backdrop and the close mark all arrive here, so this is the
-     single place `enlarged` resets. Focus goes back to the tile that opened
-     the stage explicitly: a native <dialog> restores it to whatever was
-     focused before showModal(), and on macOS WebKit a mouse click does not
-     focus a <button> at all, so on the engine every iOS browser runs the
-     "previously focused element" would be the document body. */
+  /* Escape, the backdrop, the close mark and a stage whose item left the set
+     all arrive here, so this is the single place the stage closes. Focus goes
+     back to the tile that opened the stage explicitly: a native <dialog>
+     restores it to whatever was focused before showModal(), and on macOS
+     WebKit a mouse click does not focus a <button> at all, so on the engine
+     every iOS browser runs the "previously focused element" would be the
+     document body. */
   async function onDialogClose(): Promise<void> {
-    enlarged = false;
+    const opener = stage.open ? stage.opener : undefined;
+    stage = closedStage;
     await tick();
-    [...(rowsEl?.querySelectorAll<HTMLElement>('.gallery-tile') ?? [])].find((tile) => tile.dataset.key === openerKey)?.focus();
+    [...(rowsEl?.querySelectorAll<HTMLElement>('.gallery-tile') ?? [])].find((tile) => tile.dataset.key === opener)?.focus();
   }
   function onDialogKeydown(event: KeyboardEvent): void {
     /* An arrow pressed on a film's own player is the player's — it seeks —
@@ -341,7 +353,7 @@
         <Icon name="close" slot="cell" />
       </span>
     </button>
-    {#if enlarged && item !== undefined}
+    {#if item !== undefined}
       <!-- The pair is one pair whichever kind is staged: the same two 44px
         controls on the item's own edges, drawn only when there is somewhere
         to go. -->

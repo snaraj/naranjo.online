@@ -6690,6 +6690,129 @@ test('the gallery lays every item once, in an order drawn per visit that a turn,
   expect(new Set(orders).size, `three visits laid one order (${orders[0]}), so nothing is drawn per visit`).toBeGreaterThan(1);
 });
 
+/* THE SET CAN LAND UNDER A READER (issue 405). The Media block renders the
+ * vendored set at once and replaces it when the published manifest answers
+ * (Block.svelte), so a reader can already be on the second page, or have the
+ * stage open, when a new list of items arrives. What must hold then:
+ *   - a list of the SAME items — the same keys — keeps the visit's order, so
+ *     the page a reader is on lays the same pictures and the stage keeps the
+ *     very item it shows, at its place in the count, its next item still the
+ *     next tile, and closing still hands focus to the tile pressed;
+ *   - a list that shares no item with it is a new set, drawn as the first was
+ *     (laid in an order of its own, not the manifest's), and a stage whose
+ *     item left the set closes rather than showing another item in its place.
+ * The manifest is HELD until the reader is there, then released. The page's
+ * Math.random is a fixed seeded source, so the draws are the same on every
+ * run and a second draw of the same list cannot match the first by chance. */
+function seededRandomScript() {
+  let state = 0x2545f491;
+  Math.random = () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
+    mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const landingManifest = (keys, alt) => ({
+  schema: 'gallery/v1',
+  items: keys.map((key, at) => ({
+    kind: 'image',
+    key,
+    alt: alt(at),
+    full: { path: `gallery/landing-${at}.webp`, sha256: String(at).padEnd(64, 'a'), width: 3840, height: 2160 },
+    preview: { path: `gallery/landing-${at}-preview.webp`, sha256: String(at).padEnd(64, 'b'), width: 960, height: 540 },
+  })),
+});
+test('the page and the stage keep their item when the published set lands under them, and a new set is drawn afresh (issue 405)', async ({
+  page,
+}) => {
+  test.setTimeout(test.info().timeout + settleWindow);
+  await page.addInitScript(seededRandomScript);
+  const dialog = page.locator('dialog.gallery-lightbox');
+  const counter = page.locator('.gallery-count');
+  const grid = page.locator('#gallery .gallery-rows');
+  const pagerCount = page.locator('#gallery .pager .pager-count');
+  const total = vendoredGalleryKeys.length;
+  const pageKeys = async () => (await galleryTiles(page)).map((tile) => tile.key);
+  const focusedKey = () => page.evaluate(() => window.document.activeElement?.getAttribute?.('data-key') ?? null);
+  let served = null;
+  let release = () => {};
+  await page.route('**/media/mutable/gallery/manifest.json', async (route) => {
+    await new Promise((resolve) => (release = resolve));
+    await route
+      .fulfill({
+        status: 200,
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+        body: JSON.stringify(served),
+      })
+      .catch(() => {});
+  });
+
+  /* THE SAME ITEMS, delivered again under the stage on the second page. */
+  const redelivered = (at) => `Re-delivered photograph ${at + 1}`;
+  served = landingManifest(vendoredGalleryKeys, redelivered);
+  await visit(page);
+  await grid.scrollIntoViewIfNeeded();
+  const order = (await galleryOrder(page)).map((tile) => tile.key);
+  const perPage = (await galleryTiles(page)).length;
+  expect(perPage, 'the vendored set fits one page, so there is no second page to stand on').toBeLessThan(total);
+  await page.locator('#gallery .pager-step[data-step="next"]').click();
+  await expect(pagerCount).toHaveText(/^2 \//);
+  expect(await pageKeys()).toEqual(order.slice(perPage, 2 * perPage));
+  await page.locator('#gallery .gallery-tile').first().click();
+  await expect(dialog).toHaveJSProperty('open', true);
+  await expect(counter).toHaveText(`Photograph ${perPage + 1} of ${total}`);
+  const staged = order[perPage];
+  release();
+  await expect
+    .poll(async () => (await galleryTiles(page)).every((tile) => tile.name.includes('Re-delivered')), {
+      message: 'the held manifest never replaced the vendored set',
+    })
+    .toBe(true);
+  expect(await pageKeys(), 'the same items landing moved the page the reader was on').toEqual(
+    order.slice(perPage, 2 * perPage)
+  );
+  await expect(pagerCount).toHaveText(/^2 \//);
+  await expect(dialog, 'the same items landing closed the stage').toHaveJSProperty('open', true);
+  await expect(dialog, 'the same items landing moved the stage off the item it showed').toHaveAttribute(
+    'aria-label',
+    redelivered(vendoredGalleryKeys.indexOf(staged))
+  );
+  await expect(counter).toHaveText(`Photograph ${perPage + 1} of ${total}`);
+  await page.locator('.gallery-nav[data-gallery-nav="next"]').click();
+  await expect(dialog, 'the next item on the stage is no longer the next tile').toHaveAttribute(
+    'aria-label',
+    redelivered(vendoredGalleryKeys.indexOf(order[(perPage + 1) % total]))
+  );
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveJSProperty('open', false);
+  await expect
+    .poll(focusedKey, { message: 'closing the stage handed focus to a tile other than the one pressed' })
+    .toBe(staged);
+  await page.locator('#gallery .pager-step[data-step="previous"]').click();
+  await expect(pagerCount).toHaveText(/^1 \//);
+  expect((await galleryOrder(page)).map((tile) => tile.key), 'the same items landing drew a new order').toEqual(order);
+
+  /* A NEW SET, sharing no item with the one on the page, under the open
+     stage. */
+  const fresh = Array.from({ length: total + 1 }, (_, at) => `landing-${at + 1}`);
+  served = landingManifest(fresh, (at) => `Published photograph ${at + 1}`);
+  await visit(page);
+  await grid.scrollIntoViewIfNeeded();
+  await page.locator('#gallery .gallery-tile').first().click();
+  await expect(dialog).toHaveJSProperty('open', true);
+  release();
+  await expect(dialog, 'the stage kept showing a picture after it left the set').toHaveJSProperty('open', false);
+  await expect
+    .poll(async () => (await galleryTiles(page)).every((tile) => tile.key.startsWith('landing-')), {
+      message: 'the held manifest never replaced the vendored set',
+    })
+    .toBe(true);
+  const laid = (await galleryOrder(page)).map((tile) => tile.key);
+  expect([...laid].sort(), 'the new set was not laid exactly once').toEqual([...fresh].sort());
+  expect(laid, 'the new set was laid in its manifest order rather than drawn').not.toEqual(fresh);
+});
+
 test('opening a tile shows a real modal dialog with a larger, unframed photograph; Escape closes it and hands the tile back its focus (issue 202; owner 2026-09-03, issue 287)', async ({
   page,
 }) => {

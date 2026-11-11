@@ -26,18 +26,22 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   tile, so drawings and films mix at random on every load. The order holds for
   the visit: the pager, the stage's previous and next, and the tile a closed
   stage returns focus to all follow it, and a page turn or a rotation never
-  draws again. The manifest's item order no longer means feed order, so the
-  operator need not interleave the kinds. And the tiles are laid in justified
-  rows, three across at the reading width and two on a phone: every row but
-  the last is one height and fills the width exactly, each picture whole at
-  that height, so nothing is cropped and nothing is padded; the last row keeps
-  the height of the row before it, from the left, with its end open, and is
-  justified to the width like the rest only where its pictures would otherwise
-  run past the edge. A page of one picture is half the width at the reading
-  width. Each tile has its box before its picture arrives, from the item's
-  declared size, so the arrival moves nothing; the gallery's height follows
-  its pictures, so a page turn or the published set replacing the fallback one
-  can change it (#405).
+  draws again. When the published set replaces the fallback one, it is drawn
+  the same way; a later list holding the same pictures leaves every one where
+  it was, so the page a reader is on and the picture open on the stage stay
+  put, and a stage left open on a picture the new set no longer holds closes
+  rather than showing another in its place. The manifest's item order no
+  longer means feed order, so the operator need not interleave the kinds. And
+  the tiles are laid in justified rows, three across at the reading width and
+  two on a phone: every row but the last is one height and fills the width
+  exactly, each picture whole at that height, so nothing is cropped and
+  nothing is padded; the last row keeps the height of the row before it, from
+  the left, with its end open, and is justified to the width like the rest
+  only where its pictures would otherwise run past the edge. A page of one
+  picture is half the width at the reading width. Each tile has its box before
+  its picture arrives, from the item's declared size, so the arrival moves
+  nothing; the gallery's height follows its pictures, so a page turn or the
+  published set replacing the fallback one can change it (#405).
 ## [0.1.104] - 2026-11-10
 
 ### Security
