@@ -22,7 +22,7 @@
  * src/assets/fonts/ beside their OFL license per the attribution
  * convention, vite content-hashes them like every other asset (they stay
  * same-origin under the requirement-1 local-origin rule and the CSP's
- * default-src 'self'), and `font-display: swap` keeps first paint honest —
+ * font-src 'self'), and `font-display: swap` keeps first paint honest —
  * system text now beats invisible text. */
 @font-face {
   font-family: 'JetBrains Mono';

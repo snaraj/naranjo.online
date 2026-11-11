@@ -42,6 +42,15 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
   its picture arrives, from the item's declared size, so the arrival moves
   nothing; the gallery's height follows its pictures, so a page turn or the
   published set replacing the fallback one can change it (#405).
+- The token-usage panel's sealed-file loop names which of its three kinds each
+  event is, instead of telling them apart by their place in a list, so an
+  event added later belongs to no kind until one names it rather than
+  silently joining its neighbours. Every panel serves byte-for-byte what it
+  served before. Comments that still said the page's policy was
+  `default-src 'self'` now name the directive that applies, among them one in
+  the stylesheet and one in the page's own HTML; nothing a visitor sees
+  changes.
+
 ## [0.1.104] - 2026-11-10
 
 ### Security

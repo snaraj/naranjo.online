@@ -2673,7 +2673,7 @@ test('the gallery is a mosaic of every item, a page at a time, in justified rows
   );
   /* Every number reaches the engine as a custom property through the style
      directive, which the document writes through the CSSOM; a style
-     attribute string is refused by this origin's default-src 'self'. */
+     attribute string is refused by this origin's style-src 'self'. */
   const template = mediaGallery.slice(mediaGallery.lastIndexOf('</script>'), mediaGallery.indexOf('<style>'));
   const tileMarkup = /<div class="gallery-rows"[\s\S]*?\n {6}<\/div>/.exec(withoutHtmlComments(template))?.[0] ?? '';
   assert.ok(tileMarkup.length > 0, 'the rows are not where this pin expects them');

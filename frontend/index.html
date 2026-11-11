@@ -93,7 +93,7 @@
           Detecting the failure needs script, and the failure this is for is
           exactly the one where script did not load — so a detector would be
           absent precisely when it was needed, while adding a request that can
-          fail on its own. A CSP of default-src 'self' also forbids an inline
+          fail on its own. A CSP of script-src 'self' also forbids an inline
           script and an inline handler outright, and widening it for a status
           message is not a trade this repository makes. The retry is therefore
           a plain link to the origin, which needs no script at all: the shell

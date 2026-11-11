@@ -10334,7 +10334,7 @@ test('a stored width is on the page before it paints, and moves nothing', async 
      axis only, once per load, visible only to a reader who has dragged the
      column. The restore lives in the bundle because this origin's CSP admits
      no inline script to run it earlier, and index.html's own comment records
-     that the repository declines to widen `default-src` even for its boot
+     that the repository declines to widen `script-src` even for its boot
      status line; a column-width restore is not a better reason. CSS cannot
      read storage, the shell must reserve the masthead's exact box to satisfy
      the hydration pin below, and a box equal to the masthead is by definition

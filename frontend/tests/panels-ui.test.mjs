@@ -605,7 +605,7 @@ test('the ticker renders the tallies through the tested renderers, formatting no
   // Content-Security-Policy admits no style attribute at all.
   assert.match(ticker, /data-quiet=\{item\.quiet \? 'true' : 'false'\}/);
   assert.match(ticker, /data-peak=\{item\.peak \? 'true' : 'false'\}/);
-  assert.doesNotMatch(ticker, /style="/, 'an inline style attribute is unservable under default-src \'self\'');
+  assert.doesNotMatch(ticker, /style="/, 'an inline style attribute is unservable under style-src \'self\'');
   assert.match(styles, /\.ticker-item\[data-quiet='true'\] \.ticker-icon \{[^}]*opacity: var\(--ticker-dim\)/);
   assert.match(styles, /\.ticker-item\[data-peak='true'\] \.ticker-figure \{[^}]*color: var\(--ledger-highlight\)/);
   // The fill variant existed only to claim the retired rail's height; a card
