@@ -646,8 +646,8 @@ func TestUsageSourcesShareOneRateBudget(t *testing.T) {
 	})
 
 	first, err := source.refreshUsage(t.Context(), doer, oneKey, now)
-	if err != nil || first.status != StatusStale || doer.next != 1 {
-		t.Fatalf("first partial round = status %q, attempts %d, error %v; want stale/1/nil", first.status, doer.next, err)
+	if err != nil || first.state.status() != StatusStale || doer.next != 1 {
+		t.Fatalf("first partial round = status %q, attempts %d, error %v; want stale/1/nil", first.state.status(), doer.next, err)
 	}
 	if _, err := source.refreshUsage(t.Context(), doer, bothKeys, now.Add(time.Minute)); !errors.Is(err, errNothingDue) {
 		t.Fatalf("second round inside the group budget = %v, want errNothingDue", err)
@@ -656,8 +656,8 @@ func TestUsageSourcesShareOneRateBudget(t *testing.T) {
 		t.Fatalf("a newly available source split the budgeted round: attempts = %d, want 1", doer.next)
 	}
 	complete, err := source.refreshUsage(t.Context(), doer, bothKeys, now.Add(5*time.Minute))
-	if err != nil || complete.status != StatusOK || doer.next != 3 {
-		t.Fatalf("complete round after budget = status %q, attempts %d, error %v; want ok/3/nil", complete.status, doer.next, err)
+	if err != nil || complete.state.status() != StatusOK || doer.next != 3 {
+		t.Fatalf("complete round after budget = status %q, attempts %d, error %v; want ok/3/nil", complete.state.status(), doer.next, err)
 	}
 }
 

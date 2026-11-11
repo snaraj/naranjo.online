@@ -237,7 +237,7 @@ func TestForwardedProtoPolicy(t *testing.T) {
 				// The bounce is written inside the securityHeaders wrapper, so
 				// even the redirect carries the baseline policy (HSTS excluded:
 				// the plain leg has not earned the promise).
-				if got := response.Header().Get("Content-Security-Policy"); got != "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'" {
+				if got := response.Header().Get("Content-Security-Policy"); got != "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'" {
 					t.Errorf("redirect Content-Security-Policy = %q, want the site policy", got)
 				}
 			}
@@ -331,8 +331,10 @@ func TestPanelAPIIsWiredIntoTheSite(t *testing.T) {
 		t.Errorf("405 Allow = %q", got)
 	}
 	for header, want := range map[string]string{
-		"Content-Security-Policy":      "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+		"Content-Security-Policy":      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+		"Cross-Origin-Opener-Policy":   "same-origin",
 		"Cross-Origin-Resource-Policy": "same-origin",
+		"Permissions-Policy":           "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
 		"Referrer-Policy":              "no-referrer",
 		"Strict-Transport-Security":    "max-age=31536000",
 		"X-Content-Type-Options":       "nosniff",
@@ -522,5 +524,54 @@ func TestHealthMethodsAndMissingPath(t *testing.T) {
 	direct.ServeHTTP(traversal, httptest.NewRequest(http.MethodGet, "/../index.html", nil))
 	if traversal.Code != http.StatusNotFound {
 		t.Errorf("traversal status = %d", traversal.Code)
+	}
+}
+
+// TestSiteNamesItsRelease pins X-Site-Version, the one fact the deployed-site
+// compliance check reads to choose the release manifest it holds production
+// to: a site built as a release names it exactly once on every response (the
+// document, a probe, the panel API, a miss and the plain-HTTP bounce alike),
+// and a site built without one names nothing rather than inventing a value.
+func TestSiteNamesItsRelease(t *testing.T) {
+	named, err := New(testsupport.FrontendFS(), WithVersion("0.1.104"))
+	if err != nil {
+		t.Fatalf("New(WithVersion) error = %v", err)
+	}
+	sites := map[string]struct {
+		handler http.Handler
+		want    []string
+	}{
+		"named":   {named, []string{"0.1.104"}},
+		"unnamed": {testHandler(t), nil},
+	}
+	for _, target := range []struct{ path, proto string }{
+		{"/", "https"}, {"/livez", ""}, {"/api/panels", ""}, {"/no-such-page.txt", ""}, {"/", "http"},
+	} {
+		for name, site := range sites {
+			request := httptest.NewRequest(http.MethodGet, "https://example.invalid"+target.path, nil)
+			if target.proto != "" {
+				request.Header.Set("X-Forwarded-Proto", target.proto)
+			}
+			response := httptest.NewRecorder()
+			site.handler.ServeHTTP(response, request)
+			got := response.Header().Values("X-Site-Version")
+			if strings.Join(got, "|") != strings.Join(site.want, "|") || len(got) != len(site.want) {
+				t.Errorf("%s site, GET %s (proto %q): X-Site-Version = %q, want %q", name, target.path, target.proto, got, site.want)
+			}
+		}
+	}
+}
+
+// TestMalformedReleaseRefusesConstruction pins that only VERSION's own form,
+// three runs of ASCII digits, can be named: anything else fails construction
+// on both constructors instead of naming a release that does not exist.
+func TestMalformedReleaseRefusesConstruction(t *testing.T) {
+	for _, version := range []string{"v0.1.104", "0.1", "0.1.104.1", "0.1.104\n", " 0.1.104", "0..104", "0.1.x", "0.1.-1", "０.1.104"} {
+		if _, err := New(testsupport.FrontendFS(), WithVersion(version)); err == nil {
+			t.Errorf("New(WithVersion(%q)) succeeded; want a refusal", version)
+		}
+		if _, err := NewWithMedia(testsupport.FrontendFS(), MediaOptions{Root: testsupport.MediaRoot(t), MaxConcurrent: 2}, WithVersion(version)); err == nil {
+			t.Errorf("NewWithMedia(WithVersion(%q)) succeeded; want a refusal", version)
+		}
 	}
 }

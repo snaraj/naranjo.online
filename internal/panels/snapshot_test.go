@@ -81,8 +81,8 @@ func TestEveryShippedSnapshotParsesStrictly(t *testing.T) {
 			t.Errorf("panel %s: shipped snapshot fails the strict gate: %v", definition.id, err)
 			continue
 		}
-		if loaded.status != wantStatus {
-			t.Errorf("panel %s: cold-start status = %q, want %q", definition.id, loaded.status, wantStatus)
+		if loaded.state.status() != wantStatus {
+			t.Errorf("panel %s: cold-start status = %q, want %q", definition.id, loaded.state.status(), wantStatus)
 		}
 		if _, err := time.Parse(time.RFC3339, loaded.generatedAt); err != nil {
 			t.Errorf("panel %s: generatedAt %q is not RFC 3339: %v", definition.id, loaded.generatedAt, err)

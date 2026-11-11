@@ -122,5 +122,5 @@ export type IconSlot = 'chrome' | 'row' | 'cell';
  * Exported so a node test can execute that refusal; the union type is what
  * stops a typo compiling in the first place, and this is the floor under it. */
 export function iconParts(name: IconName): readonly IconPart[] {
-  return Object.hasOwn(icons, name) ? icons[name] : [];
+  return Object.prototype.hasOwnProperty.call(icons, name) ? icons[name] : [];
 }

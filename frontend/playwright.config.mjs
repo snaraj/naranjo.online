@@ -26,11 +26,18 @@ const origin = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: './e2e',
+  /* The forced-colors lanes assert the reader's palette, so only the project
+     that forces it (below) runs them. */
+  testIgnore: /forced-colors\.spec\.mjs$/,
   /* No retries anywhere. A flake is a finding that names its test
      (AGENTS.md, "Flake probe"), and a retry is how a suite stops reporting
      one. */
   retries: 0,
   forbidOnly: Boolean(process.env.CI),
+  /* Every lane is order-independent — each opens its own page on a fresh
+     context — so a file's lanes spread across workers and shards like any
+     other, which is what lets the slow engines split across runners. */
+  fullyParallel: true,
   /* Several agent lanes share one machine and heavy suites contend for CPU
      (AGENTS.md, "Parallel agents in one checkout"). Two workers keeps this
      matrix from being the lane that starves the others. */
@@ -88,5 +95,17 @@ export default defineConfig({
        no-sideways-scroll floors actually apply. */
     { name: 'android-chrome', use: { ...devices['Pixel 5'] } },
     { name: 'ios-safari', use: { ...devices['iPhone 13'] } },
+    /* Wider than the five: Gecko at a phone's width (Firefox emulates no
+       mobile device, so the viewport is all this changes), a tablet, and
+       Chromium in forced colors, which runs only the legibility lanes made
+       for it. */
+    { name: 'firefox-phone', use: { ...devices['Desktop Firefox'], viewport: { width: 390, height: 844 } } },
+    { name: 'tablet', use: { ...devices['Galaxy Tab S4'] } },
+    {
+      name: 'forced-colors',
+      use: { ...devices['Desktop Chrome'], forcedColors: 'active' },
+      testMatch: /forced-colors\.spec\.mjs$/,
+      testIgnore: [],
+    },
   ],
 });

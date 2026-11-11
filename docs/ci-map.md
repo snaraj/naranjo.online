@@ -53,6 +53,24 @@ which selects the engine revisions. The job installs that exact pinned
 `@playwright/test` from the lockfile and restores the engine cache keyed on
 that version.
 
+It runs on pull requests that touch a path that can change a rendering (the
+frontend with its lanes, `cmd/`, `internal/`, the module, the Dockerfile,
+`compliance.json` and the workflow itself). Every lane is order-independent,
+so the config sets `fullyParallel` and the slow engines shard across runners
+(`--shard i/n`: WebKit two ways, the iPhone three), each named
+`lanes (<engine> i/n)`. Every lane fails on a Content-Security-Policy
+violation (`frontend/e2e/csp-watch.mjs`), which is what proved the origin's
+explicit `default-src 'none'` policy admits everything the page loads.
+
+## Why the container check needs no emulator
+
+Both Dockerfile build stages run on the build platform: the frontend is bytes
+that do not vary by target, Go cross-compiles the arm64 binary, and the final
+stage only copies it in. No arm64 instruction executes, so the `container` job
+sets up Buildx and no QEMU. The test batteries run in stages of their own that
+no target names, so they run once per build, and the stages that build what
+ships start from the source stage rather than from a tested tree.
+
 ## Why coverage badges publish outside the PR gate
 
 Until issue #350 the badge push was a `coverage-badges` job inside
@@ -83,8 +101,10 @@ reverse order and a race lost to a newer publisher.
 
 `compliance.json` states what the site stores on a visitor's device and when,
 which third-party origins a page may contact (none today), which legal pages
-exist, and which edge behaviours are known and why (issue #355). Three
-checks hold the site to it, and each answers a different question:
+exist, which edge behaviours are known and why (issue #355), and, from
+`compliance/v2` (0.1.104) on, the exact security headers the release sends.
+Every release's copy stays readable at its tag. Four checks hold the site to
+it, and each answers a different question:
 
 - `scripts/ci/test_compliance_manifest.py`, in the PR gate's contract suites,
   keeps the manifest valid and current: a closed schema (a present section,
@@ -117,19 +137,44 @@ checks hold the site to it, and each answers a different question:
   literal in the served document, scripts or stylesheets, and every published
   legal page linked and served. The focus measurement is itself proven able
   to refuse, in every engine, against indicators that paint nothing.
-- `compliance-live.yml`, weekly and on demand, GETs production and judges what
-  the edge serves: the answer read whole (a body past 2 MiB, or short of its
-  `Content-Length`, fails rather than being judged by its prefix); CSP fetch
-  directives admit no undeclared origin, wildcard, bare scheme or
-  `'unsafe-inline'` script source; a declared injected script passes only
-  while some enforced policy blocks every inline script, because that block is
-  the declaration's reason; framing is denied; HSTS lasts a year; nosniff and
-  a Referrer-Policy are present; the document sets no cookie; every reporting
+- The PR gate's required `container` job, after building both architectures,
+  runs the amd64 image on loopback and judges it with `compliance_manifest.py
+  candidate` against THIS head's manifest, strictly: every declared header
+  served once with exactly its declared value, the head's `VERSION` named in
+  `X-Site-Version`, the rules below, and no edge observation exempting
+  anything, because no edge is in front of it. A head that promises a header
+  its image does not send is red before it merges.
+- `compliance-live.yml`, weekly and on demand, judges PRODUCTION against the
+  manifest of the release it RUNS. The site names that release in
+  `X-Site-Version`; the judge reads `vX.Y.Z:compliance.json` from the
+  immutable tag (the checkout fetches every tag), never from the head or from
+  anything the site serves, and a version with no tag or a tag with no
+  manifest fails with no fallback. So a head that promises more than
+  production ships is not red here, and production is held to every promise
+  of the release it runs. Then: the answer read whole (a body past 2 MiB, or
+  short of its `Content-Length`, fails rather than being judged by its
+  prefix); CSP fetch directives admit no undeclared origin, wildcard, bare
+  scheme or `'unsafe-inline'` script source; a declared injected script
+  passes only while some enforced policy blocks every inline script, because
+  that block is the declaration's reason; framing is denied; HSTS lasts a
+  year; nosniff and a Referrer-Policy are present; every header the release
+  declared is served exactly; the document sets no cookie; every reporting
   endpoint and every script, stylesheet or embed in the served HTML is this
-  origin's or declared; every published legal page answers 200. It also runs
-  on a pull request that changes the judge, so the judge is proven against
-  the live site before it merges, but not on one that only edits the
-  manifest, which often declares what the next deployment ships.
+  origin's or declared; every published legal page answers 200. Production
+  may not run behind `origin/main`'s `VERSION` for more than a day from the
+  commit that set it: of the eleven releases 0.1.92 to 0.1.103, nine were live
+  15 to 72 minutes after their merge, one waited 19.1 hours overnight for its
+  promotion review, and 0.1.98 was never promoted (0.1.99 replaced it 10.2
+  days later), so a day admits the overnight wait and refuses the stall. A
+  rule a release must newly meet enters through its manifest, never the
+  judge's floor, or production would be held to a promise its release never
+  made. One transitional rule: 0.1.103 predates the header, so a site that
+  names no release is accepted as 0.1.103 only while it serves exactly the
+  bundle `v0.1.103` builds to, built in the job from that tag; it is deleted
+  with the job's Node step once production names its release. The workflow
+  also runs on a pull request that changes the judge, so the judge is proven
+  against the live site before it merges, but not on one that only edits the
+  manifest, which nothing here reads beyond its URL.
 
 A declared entry that no longer occurs is refused as stale, so no exemption
 outlives its case. A refusal a manifest line can lift prints that line; the

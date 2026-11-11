@@ -38,6 +38,12 @@ const (
 	logLevelError = "error"
 )
 
+// siteVersion is the release this binary was built as. The container build
+// stamps it from VERSION (`-ldflags -X main.siteVersion=...`); a build without
+// the stamp, `go run` and every test binary included, leaves it empty and the
+// site names no release (server.WithVersion).
+var siteVersion string
+
 // processLogger is the composition root's logging decision, carried as one
 // value: the constructed logger plus the resolved format and level names the
 // startup line reports, so what the process says it does and what it was

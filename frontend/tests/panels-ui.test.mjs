@@ -976,7 +976,7 @@ test('vendored icons stay CSP-servable, never inlined', () => {
   assert.match(
     viteConfig,
     /assetsInlineLimit:\s*0/,
-    "CSP default-src 'self' forbids data: URIs — assets must never inline"
+    "CSP img-src 'self' forbids data: URIs — assets must never inline"
   );
 });
 

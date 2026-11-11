@@ -161,17 +161,17 @@ test('the static shell states its own boot failure and offers a way out (issue 2
     'scripting-off is a different truth from failed-to-load and needs its own element'
   );
   /* And the constraint the whole design is shaped by: the origin's policy is
-     default-src 'self', it is not being widened, and neither a script-hosting
+     script-src 'self', it is not being widened, and neither a script-hosting
      status detector nor an inline handler may creep in here later. Every one
      of these would be silently DEAD under that policy, which is worse than
      absent — it looks like a working affordance in the source. */
   assert.doesNotMatch(
     fallback,
     /<script(?![^>]*\ssrc=)/,
-    "an inline <script> is refused by default-src 'self'; it would be dead code wearing a feature's shape"
+    "an inline <script> is refused by script-src 'self'; it would be dead code wearing a feature's shape"
   );
-  assert.doesNotMatch(fallback, /\son[a-z]+=["']/, "an inline event handler is refused by default-src 'self'");
-  assert.doesNotMatch(fallback, /\sstyle=["']/, "an inline style attribute is refused by default-src 'self'");
+  assert.doesNotMatch(fallback, /\son[a-z]+=["']/, "an inline event handler is refused by script-src 'self'");
+  assert.doesNotMatch(fallback, /\sstyle=["']/, "an inline style attribute is refused by style-src 'self'");
 });
 
 test('initial source remains local and viewport-responsive', () => {
@@ -1614,7 +1614,7 @@ test('J flies off the name from one seat, reserved, silent, still at rest, and f
      component's own style names the sheet and the still by relative path, so
      the bundler resolves each to a content-hashed same-origin URL (the build
      inlines nothing — assetsInlineLimit 0, pinned by vite-config.test.mjs —
-     because the origin's default-src 'self' refuses a data: URI). */
+     because the origin's img-src 'self' refuses a data: URI). */
   assert.doesNotMatch(markup, /\.webp|src=|style=/, 'the element names a file or writes an inline style');
   assert.doesNotMatch(script, /\.webp|import\.meta|assets\//, 'the script resolves J’s picture itself');
   const urls = [...style.matchAll(/url\(([^)]*)\)/g)].map(([, inner]) => inner.trim());

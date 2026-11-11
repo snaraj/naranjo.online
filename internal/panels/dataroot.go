@@ -229,123 +229,80 @@ func (reg *Registry) DataRootOwnsTokenUsage() bool {
 }
 
 // dataRootLoop re-reads the sealed series on the TTL cadence: an immediate
-// first attempt, then steady dataRootTTL wakes. The published-instant floor
-// starts at the HIGHER of the embedded snapshot's own generatedAt and the
-// persisted marker's instant, and only ever rises, so a replayed older
-// file — one older than the binary's own snapshot OR older than what a
-// previous process published — can never roll the panel back (2026-08-24
-// review finding H2: without the marker, a restart forgot every acceptance).
+// first attempt, then steady dataRootTTL wakes. The replay floor starts at the
+// HIGHER of the embedded snapshot's instant and the persisted marker's, and
+// only rises, so a replayed older file can never roll the panel back
+// (2026-08-24 review finding H2). In durable mode the floor is resolved from
+// the marker before ANY document is considered; an unreadable or future-dated
+// marker refuses the tick rather than reverting to the embedded floor (review
+// finding 2), and is retried each tick, so the documented reset ceremony
+// recovers the loop and a fresh push cannot (round-4 review, finding 6).
 //
-// In durable mode the floor is resolved from the marker before ANY attempt,
-// and an unreadable or future-dated marker refuses the tick outright instead
-// of quietly reverting to the embedded floor (2026-08-24 review finding 2).
-// Resolution is retried on each tick, so the documented reset ceremony
-// recovers the loop without a restart. That ceremony is the only thing that
-// does: a fresh push cannot, because the floor is resolved BEFORE any
-// document is considered (2026-08-25 round-4 review, finding 6).
-//
-// One deliberate asymmetry: when the floor came from the marker, the FIRST
-// acceptance of this process may equal it exactly — that is the very file
-// the previous process published, and re-serving it at boot is recovery, not
-// replay. Equality alone was too weak a key for that door (2026-08-24 round-3
-// review, finding 2): a DIFFERENT authentic document sharing the instant was
-// admitted once per restart. The marker therefore carries the digest of the
-// exact ciphertext it recorded, and recovery admits equality only when the
-// file on disk is that same ciphertext. After anything has been published
-// in-process, equality is again the ordinary unchanged state between pushes.
+// Everything the loop remembers between ticks is one dataRootLoopState, moved
+// only by step: the loop turns each tick into one event and applies the
+// effects step returns.
 func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys fs.FS, unseal Unsealer, marker *FloorMarker, now func() time.Time) {
-	floor := FloorState{Instant: reg.embeddedUsageInstant(state)}
-	floorFromMarker := false
-	// markerPresent records that a floor was ALREADY persisted before this
-	// process started — proof that some process published a document from
-	// this state directory. It is what makes an absent source file a
-	// provenance loss on the FIRST tick after a restart rather than only
-	// after this process has published something itself (2026-08-24 round-3
-	// review, finding 6).
-	markerPresent := false
+	loop := dataRootLoopState{phase: phaseCold, floor: FloorState{Instant: reg.embeddedUsageInstant(state)}}
 	// Durable mode needs BOTH halves: a floor that can be read but not
-	// written, or written but not read, is not a floor that survives a
-	// restart. Either missing leaves the documented process-memory mode.
+	// written, or written but not read, does not survive a restart.
 	durable := marker != nil && marker.Load != nil && marker.Store != nil
-	floorResolved := !durable
 	var commit func(FloorState) error
-	if durable {
-		commit = marker.Store
-	}
-	// The retained copy is written on every acceptance and read once, at the
-	// first authentic marker load. A failing write is narrated on transition
-	// only — the same rule the refusal narrative follows — and never refuses
-	// publication: losing restorability is a degraded restart, not a reason
-	// to keep a current document off the page.
 	var retain func([]byte)
-	restorePending := durable && marker.Retained != nil
-	if durable && marker.Retain != nil {
-		retainFailing := false
-		retain = func(sealed []byte) {
-			err := marker.Retain(sealed)
-			switch {
-			case err != nil && !retainFailing:
-				reg.logger.LogAttrs(ctx, slog.LevelWarn, "token usage retained copy not written",
-					slog.String("panel", dataRootPanelID),
-					slog.String("reason", reasonRetainFailed),
-				)
-			case err == nil && retainFailing:
-				reg.logger.LogAttrs(ctx, slog.LevelInfo, "token usage retained copy written again",
-					slog.String("panel", dataRootPanelID),
-				)
+	if durable {
+		loop.phase, commit = phaseFloorPending, marker.Store
+		// A failing retained-copy write is narrated on transition only and
+		// never refuses publication: it costs a restart, not the page.
+		if marker.Retain != nil {
+			retainFailing := false
+			retain = func(sealed []byte) {
+				err := marker.Retain(sealed)
+				switch {
+				case err != nil && !retainFailing:
+					reg.logger.LogAttrs(ctx, slog.LevelWarn, "token usage retained copy not written",
+						slog.String("panel", dataRootPanelID),
+						slog.String("reason", reasonRetainFailed),
+					)
+				case err == nil && retainFailing:
+					reg.logger.LogAttrs(ctx, slog.LevelInfo, "token usage retained copy written again",
+						slog.String("panel", dataRootPanelID),
+					)
+				}
+				retainFailing = err != nil
 			}
-			retainFailing = err != nil
 		}
 	}
-	acceptedInProcess := false
-	// lastFailure is the transition key for the data-root narrative. The same
-	// bad file can sit on disk through hundreds of wakes; one actionable WARN
-	// is useful and hundreds are noise. A changed cause is a new transition,
-	// and clearing the cause writes one recovery line.
-	lastFailure := ""
-	// degradedByLoop remembers that this loop changed an ok envelope to stale.
-	// It is what permits the exact previously accepted ciphertext to restore
-	// that envelope to ok after a transient read/mount fault. Without it,
-	// errSeriesUnchanged leaves the last-good payload stale forever until a
-	// strictly newer push happens.
-	degradedByLoop := false
-	reportFailure := func(err error) {
-		if state.current.Load().payload.status == StatusOK {
-			degradedByLoop = true
+	apply := func(event dataRootEvent) {
+		next, effects, ok := loop.step(event)
+		if !ok { // unreachable by construction, and refused if it ever happens
+			next, effects, _ = loop.step(dataRootEvent{kind: eventRefused, reason: reasonRefused})
 		}
-		reg.markStale(state)
-		// The transition key is the closed reason, never the message: the
-		// message may quote the document, and the same stage refusing the
-		// same way is the same transition however its text varies.
-		reason := dataRootReason(err)
-		if reason == lastFailure {
-			return
+		if effects.restore && durable && marker.Retained != nil {
+			reg.restoreRetained(ctx, state, marker.Retained, unseal, now, event.floor)
 		}
-		lastFailure = reason
-		reg.logger.LogAttrs(ctx, slog.LevelWarn, "failed to fetch token usage",
-			slog.String("panel", dataRootPanelID),
-			slog.String("reason", reason),
-			slog.Time("next_retry", now().Add(dataRootTTL)),
-		)
-	}
-	reportRecovery := func(restoreLastGood bool) {
-		if lastFailure == "" {
-			return
+		if effects.stale {
+			reg.markStale(state)
 		}
-		if restoreLastGood && degradedByLoop {
+		if effects.fresh {
 			reg.markFresh(state)
 		}
-		// The record says which refusal cleared and what the envelope now
-		// reports. The document's own instant is payload and stays out; the
-		// envelope a reader can fetch carries it anyway.
-		reg.logger.LogAttrs(ctx, slog.LevelInfo, "token usage data root recovered",
-			slog.String("panel", dataRootPanelID),
-			slog.String("status", string(state.current.Load().payload.status)),
-			slog.String("cleared", lastFailure),
-			slog.Time("next_refresh", now().Add(dataRootTTL)),
-		)
-		lastFailure = ""
-		degradedByLoop = false
+		// The narrative speaks on transitions, keyed by the closed reason: the
+		// same bad file through hundreds of wakes is one actionable WARN.
+		if effects.warn != "" {
+			reg.logger.LogAttrs(ctx, slog.LevelWarn, "failed to fetch token usage",
+				slog.String("panel", dataRootPanelID),
+				slog.String("reason", effects.warn),
+				slog.Time("next_retry", now().Add(dataRootTTL)),
+			)
+		}
+		if effects.cleared != "" {
+			reg.logger.LogAttrs(ctx, slog.LevelInfo, "token usage data root recovered",
+				slog.String("panel", dataRootPanelID),
+				slog.String("status", string(state.current.Load().payload.state.status())),
+				slog.String("cleared", effects.cleared),
+				slog.Time("next_refresh", now().Add(dataRootTTL)),
+			)
+		}
+		loop = next
 	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -358,107 +315,120 @@ func (reg *Registry) dataRootLoop(ctx context.Context, state *panelState, fsys f
 		if ctx.Err() != nil {
 			return
 		}
-		if !floorResolved {
+		if loop.phase.floorUnresolved() {
 			persisted, present, err := marker.Load()
-			// Restore BEFORE the future-skew check below, because that check
-			// is exactly what a clock that came back behind the floor trips:
-			// the marker is authentic, the clock is wrong, and the document
-			// the marker names is still the truest thing this process can
-			// serve. Once per process, and only over a floor newer than the
-			// embedded snapshot — an older kept copy would be a downgrade.
-			if restorePending && err == nil && present && persisted.Instant.After(floor.Instant) {
-				restorePending = false
-				reg.restoreRetained(ctx, state, marker.Retained, unseal, now, persisted)
-			}
 			switch {
 			case err != nil:
-				// The deployment asked for a durable floor and the state
-				// backing it is unreadable, nonsensical, sealed under a
-				// superseded key, or GONE from a directory that had already
-				// recorded one. Serving on the embedded floor here would
-				// silently re-admit everything a previous process already
-				// published past — the exact downgrade findings 2 and 4
-				// reproduced — so the tick is refused and the envelope says
-				// so. The next tick retries the load.
-				reportFailure(refuse(reasonFloorUnreadable, fmt.Errorf("data root: the replay floor could not be loaded: %w", err)))
-				timer.Reset(dataRootTTL)
-				continue
-			case present && persisted.Instant.After(now().Add(dataRootFutureSkew)):
-				reportFailure(refuse(reasonFloorFuture, errors.New("data root: the replay floor claims a future capture instant")))
-				timer.Reset(dataRootTTL)
-				continue
-			case present:
-				markerPresent = true
-				if persisted.Instant.After(floor.Instant) {
-					// A marker at or below the embedded floor adds no
-					// INSTANT: the embedded one is already the stronger
-					// bound. Its digest is still recorded, because recovery
-					// asks a different question — "is this the same file?" —
-					// and that answer is useful at any instant.
-					floor = persisted
-					floorFromMarker = true
-				} else {
-					floor.Digest = persisted.Digest
-					floorFromMarker = persisted.Instant.Equal(floor.Instant)
-				}
+				apply(dataRootEvent{kind: eventRefused, reason: reasonFloorUnreadable})
+			case !present:
+				apply(dataRootEvent{kind: eventFloorAbsent})
+			case persisted.Instant.After(now().Add(dataRootFutureSkew)):
+				apply(dataRootEvent{kind: eventFloorAhead, floor: persisted})
+			default:
+				apply(dataRootEvent{kind: eventFloorRead, floor: persisted})
 			}
-			floorResolved = true
+			if loop.phase.floorUnresolved() {
+				timer.Reset(dataRootTTL)
+				continue
+			}
 		}
-		allowEqual := floorFromMarker && !acceptedInProcess
-		accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, now, floor, allowEqual, commit, retain)
+		accepted, err := reg.refreshFromDataRoot(state, fsys, unseal, now, loop.floor, loop.phase == phaseResumable, commit, retain)
+		// An unchanged file's identity does not renew its age.
+		fresh := usageCaptureFresh(state.current.Load().payload.generatedAt, now())
 		switch {
 		case err == nil:
-			floor = accepted
-			acceptedInProcess = true
-			if !usageCaptureFresh(state.current.Load().payload.generatedAt, now()) {
-				reportFailure(refuse(reasonSourceExpired, errors.New("data root: accepted source capture has expired")))
-			} else {
-				reportRecovery(false)
-			}
+			apply(dataRootEvent{kind: eventAccepted, floor: accepted, fresh: fresh})
 		case errors.Is(err, errSeriesUnchanged):
-			// The ordinary state between pushes: the same file, already
-			// published, still there. Its identity does not renew its age.
-			// Only a still-current source may recover after a transient
-			// fault; an expired one stays stale until a fresh capture lands.
-			if !usageCaptureFresh(state.current.Load().payload.generatedAt, now()) {
-				reportFailure(refuse(reasonSourceExpired, errors.New("data root: accepted source capture has expired")))
-			} else {
-				reportRecovery(true)
-			}
+			apply(dataRootEvent{kind: eventUnchanged, fresh: fresh})
 		case errors.Is(err, fs.ErrNotExist):
-			// An absent file means two different things, and conflating them
-			// let a deleted document keep the envelope `ok` forever
-			// (2026-08-24 review finding 5). BEFORE anything was ever
-			// published it is the ordinary cold state — no push has happened
-			// yet, and the embedded snapshot is exactly what the panel should
-			// be serving. AFTER a publication it is provenance loss: the
-			// runtime document this panel serves from has DISAPPEARED, the
-			// data stands, its freshness does not, and the envelope has to
-			// say so.
-			//
-			// "Ever published" is the persisted marker, not this process's
-			// own memory. Binding it to in-process acceptance alone meant a
-			// restarted pod with a valid floor marker and no source file
-			// served `ok` on its first tick, claiming a freshness whose
-			// evidence it had just failed to find (2026-08-24 round-3
-			// review, finding 6).
-			if acceptedInProcess || markerPresent {
-				reportFailure(refuse(reasonSourceMissing, err))
-			} else {
-				// A malformed pre-first-push candidate can disappear again.
-				// That returns the root to its benign cold state and restores
-				// the embedded last-good envelope if this loop degraded it.
-				reportRecovery(true)
-			}
+			apply(dataRootEvent{kind: eventSourceAbsent})
 		default:
-			// File present but unreadable, unauthentic, malformed, replayed,
-			// refused — or accepted but not committable to the durable
-			// floor: keep serving the last good payload and let the
-			// envelope's status say it is no longer fresh.
-			reportFailure(err)
+			apply(dataRootEvent{kind: eventRefused, reason: dataRootReason(err)})
 		}
 		timer.Reset(dataRootTTL)
 	}
+}
+
+// floorUnresolved reports a phase in which no document may be considered.
+func (p dataRootPhase) floorUnresolved() bool {
+	return p == phaseFloorPending || p == phaseFloorAhead
+}
+
+// step is the data-root loop's ONE transition function. It refuses (false)
+// an event its phase cannot receive — a marker read once the floor resolved,
+// a document outcome before it did, a refusal with no reason — so a
+// combination no tick produces is never silently given a meaning.
+func (s dataRootLoopState) step(event dataRootEvent) (dataRootLoopState, dataRootEffects, bool) {
+	var effects dataRootEffects
+	floorEvent := event.kind <= eventFloorAhead
+	switch {
+	case event.kind == eventRefused && event.reason != "":
+		return s.fail(effects, event.reason)
+	case event.kind >= eventRefused || floorEvent != s.phase.floorUnresolved():
+		return s, effects, false
+	case floorEvent:
+		// The retained copy's one chance comes BEFORE the clock is consulted:
+		// a clock behind the floor is exactly what refuses an authentic marker
+		// (issue #358). Only over a floor newer than the embedded snapshot.
+		effects.restore = s.phase == phaseFloorPending && event.kind != eventFloorAbsent && event.floor.Instant.After(s.floor.Instant)
+		switch {
+		case event.kind == eventFloorAhead:
+			if effects.restore {
+				s.phase = phaseFloorAhead
+			}
+			return s.fail(effects, reasonFloorFuture)
+		case event.kind == eventFloorAbsent:
+			s.phase = phaseCold
+		case event.floor.Instant.Before(s.floor.Instant):
+			// The embedded instant stays the stronger bound; the marker's
+			// digest still answers "is this the same file?".
+			s.phase, s.floor.Digest = phaseInherited, event.floor.Digest
+		default:
+			s.phase, s.floor = phaseResumable, event.floor
+		}
+		return s, effects, true
+	case event.kind == eventAccepted:
+		s.phase, s.floor = phaseAccepted, event.floor
+		if !event.fresh {
+			return s.fail(effects, reasonSourceExpired)
+		}
+		return s.recover(effects, false)
+	case event.kind == eventUnchanged:
+		// An expired source stays stale until a fresh capture lands.
+		if !event.fresh {
+			return s.fail(effects, reasonSourceExpired)
+		}
+		return s.recover(effects, true)
+	case s.phase == phaseCold:
+		// No file before anything was published from this state is the
+		// ordinary cold state.
+		return s.recover(effects, true)
+	default:
+		// No file AFTER a publication — this process's or, per the marker, a
+		// previous one's — is provenance loss: the data stands, its freshness
+		// does not (2026-08-24 review finding 5; round-3 finding 6).
+		return s.fail(effects, reasonSourceMissing)
+	}
+}
+
+// fail marks the served payload stale and enters reason, narrating it only
+// when it differs from the refusal already in force.
+func (s dataRootLoopState) fail(effects dataRootEffects, reason string) (dataRootLoopState, dataRootEffects, bool) {
+	effects.stale = true
+	if reason != s.fault {
+		s.fault, effects.warn = reason, reason
+	}
+	return s, effects, true
+}
+
+// recover clears the refusal in force, if any. lastGood lets a retained
+// last-good payload back to `ok` (markFresh refuses every other stale cause);
+// an acceptance passes false, having just published new bytes.
+func (s dataRootLoopState) recover(effects dataRootEffects, lastGood bool) (dataRootLoopState, dataRootEffects, bool) {
+	if s.fault != "" {
+		effects.fresh, effects.cleared, s.fault = lastGood, s.fault, ""
+	}
+	return s, effects, true
 }
 
 // snapshotForState resolves the snapshot source behind one panel: a plain
@@ -600,14 +570,10 @@ func (reg *Registry) publishSealed(state *panelState, sealed []byte, unseal Unse
 	if err != nil {
 		return FloorState{}, refuse(reasonDocumentRefused, err)
 	}
-	status := StatusOK
-	if restored || !usageCaptureFresh(provenance, now()) {
-		status = StatusStale
-	}
 	served, err := state.definition.prepare(loadedPayload{
 		generatedAt: provenance,
 		data:        canonical,
-		status:      status,
+		state:       admittedState(restored, usageCaptureFresh(provenance, now())),
 	})
 	if err != nil {
 		return FloorState{}, refuse(reasonDocumentRefused, err)
@@ -642,13 +608,27 @@ func (reg *Registry) publishSealed(state *panelState, sealed []byte, unseal Unse
 		slog.Bool("authenticated", true),
 		slog.Bool("durable", commit != nil),
 		slog.Bool("recovered", allowEqual && instant.Equal(floor.Instant)),
-		slog.String("status", string(status)),
+		slog.String("status", string(served.payload.state.status())),
 		slog.Time("exported_at", instant.UTC()),
 		slog.Time("captured_at", captured.UTC()),
 		slog.Float64("capture_age_seconds", max(0, now().Sub(captured).Seconds())),
 		slog.Int("sources_served", len(merged.Sources)),
 	)
 	return accepted, nil
+}
+
+// admittedState is the serving state of a document just admitted: a restored
+// copy proves what was last published and nothing about what has been captured
+// since, so it is stale whatever its age; otherwise the capture's age decides.
+func admittedState(restored, fresh bool) servedState {
+	switch {
+	case restored:
+		return servedRestored
+	case !fresh:
+		return servedAged
+	default:
+		return servedFresh
+	}
 }
 
 // usageCaptureFresh evaluates only the oldest validated capture instant.

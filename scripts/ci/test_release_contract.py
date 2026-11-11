@@ -4033,9 +4033,40 @@ class NoArtifactClassTests(SyntheticRepo, unittest.TestCase):
             ("LICENSE", False),
             ("chart/Chart.yaml", False),
             ("chart/values.yaml", False),
-            ("scripts/ci/release_contract.py", False),
-            (".github/workflows/pr-gate.yml", False),
-            (".github/dependabot.yml", False),
+            # Paths no shipped byte can come from (item H): workflows, CI
+            # scripts, Go test files and the frontend's test trees.
+            ("scripts/ci/release_contract.py", True),
+            (".github/workflows/pr-gate.yml", True),
+            (".github/dependabot.yml", True),
+            ("cmd/server/main_test.go", True),
+            ("internal/panels/deep/x_test.go", True),
+            ("frontend/tests/grid.test.mjs", True),
+            ("frontend/e2e/rendering-lanes.spec.mjs", True),
+            ("frontend/playwright.config.mjs", True),
+            # Everything that reaches the image, the bundle or the chart.
+            ("Dockerfile", False),
+            (".dockerignore", False),
+            ("go.mod", False),
+            ("go.sum", False),
+            ("frontend/package.json", False),
+            ("frontend/package-lock.json", False),
+            ("frontend/vite.config.ts", False),
+            ("frontend/tsconfig.json", False),
+            ("frontend/src/lib/grid.ts", False),
+            ("frontend/public/favicon.svg", False),
+            ("frontend/index.html", False),
+            ("internal/panels/mapping.go", False),
+            ("internal/panels/config/models.json", False),
+            ("internal/panels/testdata/fixture.html", False),
+            ("internal/testsupport/visitor.go", False),
+            ("cmd/server/main.go", False),
+            ("chart/templates/deployment.yaml", False),
+            ("scripts/usage-export/export.py", False),
+            ("scripts/ops/x.sh", False),
+            ("tests_test.go", False),
+            ("frontend/tests", False),
+            ("frontend/testsx/a.mjs", False),
+            (".github", False),
             ("docs/tool.py", False),
             ("docs/README", False),
             ("frontend/.gitignore", False),
@@ -4073,6 +4104,36 @@ class NoArtifactClassTests(SyntheticRepo, unittest.TestCase):
             self.assertEqual(verdict["class"], "no-artifact")
             self.assertEqual(verdict["commits"], 3)
             self.assertEqual(verdict["tag"], "v0.1.9")
+
+    def test_ci_and_test_only_ranges_classify_no_artifact(self):
+        # Item H: an actions bump, a gate-script edit or a test change ships
+        # no byte, so it advances nothing and cuts no release.
+        with tempfile.TemporaryDirectory() as temporary:
+            root, base = self.repo(temporary)
+            self.paths_commit(root, {".github/workflows/pr-gate.yml": "name: PR gate\n"}, "workflow")
+            self.paths_commit(root, {"scripts/ci/install-tools.sh": "#!/bin/sh\n"}, "ci script")
+            self.paths_commit(root, {"internal/panels/mapping_test.go": "package panels\n"}, "go test")
+            head = self.paths_commit(
+                root,
+                {"frontend/tests/grid.test.mjs": "//\n", "frontend/e2e/lanes.spec.mjs": "//\n", "frontend/playwright.config.mjs": "//\n"},
+                "frontend tests",
+            )
+            verdict = RC.classify_transition(root, base, head, first_parent=True)
+            self.assertEqual(verdict["class"], "no-artifact")
+            self.assertEqual(verdict["commits"], 4)
+            self.assertEqual(verdict["tag"], "v0.1.9")
+
+    def test_build_inputs_without_release_patch_deny(self):
+        # Every file that reaches the image, the bundle or the chart still
+        # needs its one exact patch, beside a workflow change or alone.
+        for path in ("Dockerfile", ".dockerignore", "go.mod", "frontend/package-lock.json", "frontend/vite.config.ts", "internal/panels/mapping.go", "chart/values.yaml"):
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as temporary:
+                root, base = self.repo(temporary)
+                self.paths_commit(root, {".github/workflows/pr-gate.yml": "name: PR gate\n"}, "workflow")
+                head = self.paths_commit(root, {path: "changed\n"}, "build input")
+                with self.assertRaises(RC.ContractError) as denied:
+                    RC.classify_transition(root, base, head, first_parent=True)
+                self.assertIn(path, str(denied.exception))
 
     def test_mixed_range_without_release_patch_denies_naming_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -7497,7 +7558,7 @@ class GovernanceParityTests(unittest.TestCase):
         ready_block_pins = {
             "AGENTS.md": (
                 ("Releases: every artifact-classified PR advances numeric",
-                 "19224d76b42c32987e399a04dcaba7752415e187c641b30d8992d6c155348ed5"),
+                 "ee50e475f18e861434b621cbd0336684210feb0859e791f1893147942075c6bc"),
                 ("**Verdict format** — posted as a normal PR comment",
                  "5b074e5bab48c010304cc700fc62e47d14e34769c7534255b0ed14451e09a1cd"),
                 ("A green check, a peer approval, or a ready state is evidence",
@@ -7509,9 +7570,9 @@ class GovernanceParityTests(unittest.TestCase):
                 ("- **`requires-review` — the review-readiness signal.**",
                  "340084c93dd72dbd2f93440ccc1f68955f3ad911ff08cf2904be70e0ff5d5694"),
                 ("- **Merge readiness.** Draft remains Draft until",
-                 "729925b29ad4bda67fd507faa56f18ca334ae437469bb785a91e7e612f7cfd9e"),
+                 "58f2b8afbdc5360d61e37483f8d0be275046100465965899b3eaa4aa4561c81d"),
                 ("1. **Claim the work.** (the delivery-loop numbered list)",
-                 "e076d6ee1dbde6f37bb75f1975b5642aa8d8a637ad4cb61d5a846684954bb71e"),
+                 "349ffed4684dfbbf623fb20b5519a0ce154e2299d12cd0293275fa1aed0132ca"),
                 ("Comments the owner leaves on PRs ARE code reviews",
                  "e8e6f2dd0c82a28a8c280cd1705002f4faf8d2e9aa81195df5466d6db83a871c"),
                 ("The full local gate does not substitute for the server boundary",
@@ -8680,9 +8741,50 @@ class NoArtifactWiringTests(unittest.TestCase):
         self.assertIn('--base "${anchor}"', cumulative)
         self.assertIn("= no-artifact", cumulative)
 
+    @staticmethod
+    def require_tests_never_reach_the_shipped_stages(dockerfile: str) -> None:
+        """The classifier's test-file allowance holds only while no stage that
+        ships is built FROM a stage a battery ran in: each battery's stage is
+        reached by its empty pass mark alone."""
+        stages: dict[str, tuple[str, str]] = {}
+        name = ""
+        for line in dockerfile.splitlines():
+            found = re.match(r"FROM (?:--platform=\S+ )?(\S+)(?: AS (\S+))?$", line)
+            if found:
+                name = found.group(2) or "final"
+                stages[name] = (found.group(1), "")
+            elif name and line.startswith(("RUN ", "COPY ")):
+                stages[name] = (stages[name][0], stages[name][1] + line + "\n")
+        batteries = {stage for stage, (_, body) in stages.items() if re.search(r"\b(go test|npm test|npm run check)\b", body)}
+        if batteries != {"frontend-test", "backend-test"}:
+            raise ValueError(f"the test batteries run in {sorted(batteries)}, not their own two stages")
+        for shipped, source in (("frontend", "frontend-source"), ("backend", "backend-source")):
+            parent, body = stages.get(shipped, ("", ""))
+            if parent != source:
+                raise ValueError(f"the shipped stage {shipped} is built FROM {parent or 'nothing'}, not {source}")
+            marks = re.findall(r"^COPY --from=(\S+) (\S+) (\S+)$", body, re.MULTILINE)
+            tested = f"{shipped}-test"
+            if [mark for mark in marks if mark[0] in batteries] != [(tested, f"/{shipped}-tested", f"/{shipped}-tested")]:
+                raise ValueError(f"the shipped stage {shipped} takes {marks} from the batteries, not their pass mark alone")
+        if not re.search(r"^COPY --from=backend --chown=\S+ /out/naranjo-online /naranjo-online$", stages.get("final", ("", ""))[1], re.MULTILINE):
+            raise ValueError("the final image no longer takes exactly the binary from the backend stage")
+
+    def test_tests_never_reach_the_shipped_stages(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.require_tests_never_reach_the_shipped_stages(dockerfile)
+        for name, mutant in (
+            ("backend built from the tested tree", dockerfile.replace("FROM backend-source AS backend\n", "FROM backend-test AS backend\n")),
+            ("frontend built from the tested tree", dockerfile.replace("FROM frontend-source AS frontend\n", "FROM frontend-test AS frontend\n")),
+            ("tests folded back into the build", dockerfile.replace("RUN npm run build", "RUN npm test && npm run build")),
+            ("a battery's tree copied in", dockerfile.replace("COPY --from=backend-test /backend-tested /backend-tested", "COPY --from=backend-test /src /src")),
+            ("go test beside go build", dockerfile.replace('RUN GOOS="${TARGETOS}"', 'RUN go test ./... && GOOS="${TARGETOS}"')),
+        ):
+            with self.subTest(mutant=name), self.assertRaises(ValueError):
+                self.require_tests_never_reach_the_shipped_stages(mutant)
+
     def test_agents_contract_names_the_exact_code_allowlist(self):
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-        for name in sorted(RC.DOCUMENTATION_FILES):
+        for name in sorted(RC.DOCUMENTATION_FILES | RC.NO_ARTIFACT_FILES) + sorted(RC.NO_ARTIFACT_TREES):
             self.assertIn(f"`{name}`", agents)
         self.assertIn("Markdown files under `docs/`", agents)
         self.assertIn("no-artifact", agents)
@@ -8846,9 +8948,6 @@ class WorkflowStructureTests(unittest.TestCase):
             "ref: main",
             "persist-credentials: false",
             "fetch-depth: 0",
-            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
-            "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1",
-            "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2",
             '"repos/${GITHUB_REPOSITORY}/releases/latest"',
             "manifest-record",
             "release-notes",
@@ -8887,6 +8986,22 @@ class WorkflowStructureTests(unittest.TestCase):
         for required in audit_requirements:
             if required not in audit:
                 raise ValueError(f"recurring alias audit lost exact binding: {required}")
+        # The audit's three actions are bound by behaviour, not inventory: each
+        # is a full commit SHA with a version comment, and the very pin the
+        # publisher runs, so the audit re-verifies with the tooling that made
+        # the release and an actions bump moves both files instead of this
+        # test (it used to require three literal SHAs and failed every bump).
+        uses = re.compile(r"^\s*(?:-\s+)?uses:\s+([^@\s]+)@(\S*)(.*)$", re.MULTILINE)
+        for action in ("actions/checkout", "docker/setup-buildx-action", "sigstore/cosign-installer"):
+            audit_pins = {(ref, rest) for name, ref, rest in uses.findall(audit) if name == action}
+            publisher_pins = {(ref, rest) for name, ref, rest in uses.findall(publisher) if name == action}
+            if not audit_pins:
+                raise ValueError(f"recurring alias audit lost {action}")
+            for ref, rest in audit_pins | publisher_pins:
+                if not re.fullmatch(r"[0-9a-f]{40}", ref) or not re.fullmatch(r" # v[0-9]+(\.[0-9]+)*", rest):
+                    raise ValueError(f"{action}@{ref}{rest} is not a full commit SHA with a version comment")
+            if audit_pins != publisher_pins:
+                raise ValueError(f"recurring alias audit pins {action} unlike the publisher: {sorted(audit_pins)} vs {sorted(publisher_pins)}")
         for forbidden in (
             "contents: write",
             "packages: write",
@@ -10190,7 +10305,21 @@ class WorkflowStructureTests(unittest.TestCase):
             (gate, publisher, audit + "\n      gh api --method POST foreign\n", installer),
             (gate, publisher, audit, installer.replace("TRIVY_SHA256=", "TRIVY_SHA256_MUTATED=", 1)),
             (gate, publisher, audit, installer + "\n# aquasecurity/trivy-action@v0.36.0\n"),
+            # The audit's action pins: an unpinned tag, a SHA without its
+            # version comment, a short SHA, and a pin the publisher does not
+            # run, on either side.
+            (gate, publisher, re.sub(r"sigstore/cosign-installer@\S+ # ", "sigstore/cosign-installer@v4 # ", audit), installer),
+            (gate, publisher, re.sub(r"(docker/setup-buildx-action@[0-9a-f]{40}) # \S+", r"\1", audit), installer),
+            (gate, publisher, re.sub(r"actions/checkout@([0-9a-f]{12})[0-9a-f]{28}", r"actions/checkout@\1", audit), installer),
+            (gate, publisher, re.sub(r"sigstore/cosign-installer@[0-9a-f]{40}", "sigstore/cosign-installer@" + "0" * 40, audit), installer),
+            (gate, re.sub(r"docker/setup-buildx-action@[0-9a-f]{40}", "docker/setup-buildx-action@" + "1" * 40, publisher), audit, installer),
+            (gate, publisher, re.sub(r"(actions/checkout@[0-9a-f]{40}) # v[0-9.]+", r"\1 # v0.0.0", audit), installer),
         )
+        # The same bump made on both sides passes: the binding is equality.
+        moved = {"publisher": publisher, "audit": audit}
+        for side, text in moved.items():
+            moved[side] = re.sub(r"sigstore/cosign-installer@[0-9a-f]{40} # \S+", "sigstore/cosign-installer@" + "a" * 40 + " # v9.9.9", text)
+        self.require_vulnerability_and_alias_audit(gate, moved["publisher"], moved["audit"], installer)
         for index, mutant in enumerate(mutants):
             with self.subTest(hostile_mutant=index), self.assertRaises(ValueError):
                 self.require_vulnerability_and_alias_audit(*mutant)

@@ -307,10 +307,12 @@ func TestRunServesTheSiteAndDrainsOnSIGTERM(t *testing.T) {
 			t.Errorf("Cache-Control = %q", got)
 		}
 		for header, want := range map[string]string{
-			"Content-Security-Policy": "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
-			"X-Content-Type-Options":  "nosniff",
-			"X-Frame-Options":         "DENY",
-			"Referrer-Policy":         "no-referrer",
+			"Content-Security-Policy":    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+			"Cross-Origin-Opener-Policy": "same-origin",
+			"Permissions-Policy":         "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+			"X-Content-Type-Options":     "nosniff",
+			"X-Frame-Options":            "DENY",
+			"Referrer-Policy":            "no-referrer",
 		} {
 			if got := response.Header.Get(header); got != want {
 				t.Errorf("%s = %q, want %q", header, got, want)

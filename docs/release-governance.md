@@ -148,9 +148,9 @@ to update a hash instead of reading what changed. The closed token pins in
 `require_documented_contract` reach the same sentences at a fraction of that
 cost, and they are what this change extended — including the App-provisioning
 and audit-scan paragraphs, whose inversion survived 148 tests before it. Those
-pins live in `scripts/ci/test_release_contract.py`, which sits outside
-requirement 10's closed documentation allowlist, so editing any of this
-reclassifies the change as artifact and consumes a release slot.
+pins live in `scripts/ci/test_release_contract.py`, so editing any of this
+moves its pin in the same change; both files sit inside requirement 10's
+no-artifact allowlist, so the change consumes no release slot.
 
 The same owner-observed transaction proves immutable releases enabled, Actions
 full-SHA pinning enabled, Actions otherwise enabled/allowed-all unchanged, and

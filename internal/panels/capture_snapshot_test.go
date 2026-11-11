@@ -60,8 +60,8 @@ func TestCaptureSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("live refresh: %v", err)
 	}
-	if loaded.status != StatusOK {
-		t.Fatalf("live refresh reported %q; a snapshot is only captured from a complete round", loaded.status)
+	if loaded.state.status() != StatusOK {
+		t.Fatalf("live refresh reported %q; a snapshot is only captured from a complete round", loaded.state.status())
 	}
 	if want == "vcs-activity" {
 		// The calendar's commit half can be omitted while the calendar is

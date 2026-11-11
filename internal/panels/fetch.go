@@ -625,7 +625,7 @@ func (s *FetchSource) refreshBossLog(ctx context.Context, doer fetchDoer, now ti
 	if err != nil {
 		return loadedPayload{}, err
 	}
-	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, status: StatusOK}, nil
+	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, state: servedFresh}, nil
 }
 
 // refreshActivity assembles the version-control panel from its TWO public
@@ -672,11 +672,11 @@ func (s *FetchSource) refreshActivity(ctx context.Context, doer fetchDoer, env f
 	}
 	// Marshaling the package-owned payload cannot fail.
 	data, _ := json.Marshal(payload)
-	status := StatusOK
+	state := servedFresh
 	if !commitsFresh {
-		status = StatusStale
+		state = servedPartial
 	}
-	return loadedPayload{generatedAt: calendarAt.Format(time.RFC3339), data: data, status: status}, nil
+	return loadedPayload{generatedAt: calendarAt.Format(time.RFC3339), data: data, state: state}, nil
 }
 
 // calendarSection returns the calendar payload to build from: a freshly
@@ -917,9 +917,9 @@ func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env f
 	for _, entry := range listed {
 		payload.Repos = append(payload.Repos, entry.row)
 	}
-	status := StatusOK
+	state := servedFresh
 	if len(refused) > 0 {
-		status = StatusStale
+		state = servedPartial
 	}
 	logger.LogAttrs(ctx, slog.LevelDebug, "coding projects refresh cycle",
 		slog.Int("repos_served", len(payload.Repos)),
@@ -927,7 +927,7 @@ func (s *FetchSource) refreshProjects(ctx context.Context, doer fetchDoer, env f
 	)
 	// Marshaling the package-owned payload cannot fail.
 	data, _ := json.Marshal(payload)
-	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, status: status}, nil
+	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, state: state}, nil
 }
 
 // readProjects picks THE repository producer for this round and maps its
@@ -1200,9 +1200,9 @@ func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func
 		_ = decodeStrict(fallbackLoaded.data, &fallback)
 	}
 	merged, allFresh := mergeUsagePayload(s.specs.usage, fetched, fallback)
-	status := StatusOK
+	state := servedFresh
 	if !allFresh {
-		status = StatusStale
+		state = servedPartial
 	}
 	logger.LogAttrs(ctx, slog.LevelDebug, "usage refresh cycle",
 		slog.Int("sources_ok", len(fetched)),
@@ -1212,7 +1212,7 @@ func (s *FetchSource) refreshUsage(ctx context.Context, doer fetchDoer, env func
 	)
 	// Marshaling the package-owned payload cannot fail.
 	data, _ := json.Marshal(merged)
-	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, status: status}, nil
+	return loadedPayload{generatedAt: now.Format(time.RFC3339), data: data, state: state}, nil
 }
 
 // withWindowParam appends the endpoint's required time-range parameter.

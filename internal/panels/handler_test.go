@@ -268,12 +268,8 @@ func TestResponsesStayWithinTheOwnerBudgets(t *testing.T) {
 // every cell and the total that sums them at the bound at once, so the
 // figure is an upper bound rather than a reachable payload. The status is the
 // longest one a payload is served under, and the envelope's instant the
-// widest form it is written in.
-//
-// One term is assumed rather than enforced: the calendar mappers check a
-// day's contribution count for its sign only, and the private-day aggregate
-// a day's commit count likewise, so a count past maxCountValue would be
-// wider. Whatever arrives, prepare's refusal at MaxPanelResponseBytes holds.
+// widest form it is written in. No count can be wider: since issue #404 every
+// mapper refuses a count, and a sum of counts, past maxCountValue.
 func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 	t.Parallel()
 	// The admission window is the log window plus its slack behind and its
@@ -372,16 +368,42 @@ func TestActivityPayloadFitsTheOwnerBudget(t *testing.T) {
 }
 
 // TestProjectsPayloadFitsTheOwnerBudget is the same measurement for the
-// repository table's payload after issue #317 added two fields to every row.
+// repository table's payload after issue #317 added two fields to every row,
+// made encoding-aware the way the activity one is (issue #404): every
+// description is the longest projectDescription produces from the admitted
+// character that encodes widest, found by asking projectDescription and the
+// encoder about every rune. Every name and tag is at its grammar's length,
+// both tallies at maxCountValue, the status the longest a payload is served
+// under, and the instant the widest form it is written in.
 func TestProjectsPayloadFitsTheOwnerBudget(t *testing.T) {
 	t.Parallel()
+	widest, width := rune(0), 0
+	for symbol := rune(0); symbol <= 0x10FFFF; symbol++ {
+		if symbol >= 0xD800 && symbol <= 0xDFFF {
+			continue
+		}
+		if line, err := projectDescription("a" + string(symbol) + "a"); err != nil || line != "a"+string(symbol)+"a" {
+			continue
+		}
+		encoded, err := json.Marshal(string(symbol))
+		if err != nil {
+			t.Fatalf("encode %U: %v", symbol, err)
+		}
+		if len(encoded)-2 > width {
+			widest, width = symbol, len(encoded)-2
+		}
+	}
+	description, err := projectDescription(strings.Repeat(string(widest), maxProjectDescriptionRunes+1))
+	if err != nil {
+		t.Fatalf("the longest description of the widest character %U was refused: %v", widest, err)
+	}
 	stars := int64(maxCountValue)
 	pulls := int64(maxCountValue)
 	payload := CodingProjectsData{Repos: make([]CodingProject, 0, maxCodingProjectSources)}
 	for range maxCodingProjectSources {
 		payload.Repos = append(payload.Repos, CodingProject{
 			Name:        strings.Repeat("r", maxRepositoryNameRunes),
-			Description: strings.Repeat("d", maxProjectDescriptionRunes) + "…",
+			Description: description,
 			Stars:       &stars,
 			PushedAt:    "2026-09-11T22:46:22Z",
 			ClosedPulls: &pulls,
@@ -396,18 +418,20 @@ func TestProjectsPayloadFitsTheOwnerBudget(t *testing.T) {
 	}
 	envelope, err := json.Marshal(Envelope{
 		Schema: EnvelopeSchema, ID: "coding-projects", Kind: KindCodingProjects,
-		Title: "A title as long as any this registry configures", GeneratedAt: "2026-09-11T23:07:45Z",
-		Status: StatusOK, Data: data,
+		Title: "A title as long as any this registry configures", GeneratedAt: "2026-09-11T16:07:45-07:00",
+		Status: StatusStale, Data: data,
 	})
 	if err != nil {
 		t.Fatalf("marshal the maximal envelope: %v", err)
 	}
-	const measured = 8000
-	if len(envelope) > measured {
-		t.Errorf("the maximal projects envelope is %d bytes, over the %d recorded in docs/panels-invariants.md; re-measure before raising it", len(envelope), measured)
+	// Pinned EXACTLY, as the activity figure is: built from the bounds alone,
+	// it moves only when a bound moves or the fixture stops being maximal.
+	const measured = 27196
+	if len(envelope) != measured {
+		t.Errorf("the maximal projects envelope is %d bytes, not the %d recorded in docs/panels-invariants.md; a bound moved or the fixture stopped being maximal — re-measure and record the new figure", len(envelope), measured)
 	}
 	if len(envelope) > MaxPanelResponseBytes {
 		t.Errorf("the maximal projects envelope is %d bytes, over the owner's %d budget", len(envelope), MaxPanelResponseBytes)
 	}
-	t.Logf("maximal coding-projects envelope: %d bytes, %d under the %d budget", len(envelope), MaxPanelResponseBytes-len(envelope), MaxPanelResponseBytes)
+	t.Logf("maximal coding-projects envelope (descriptions of %U, %d bytes each encoded): %d bytes, %d under the %d budget", widest, width, len(envelope), MaxPanelResponseBytes-len(envelope), MaxPanelResponseBytes)
 }

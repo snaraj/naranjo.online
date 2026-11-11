@@ -7,6 +7,48 @@ Git, image, and GitHub Release tags use the exact plain `vX.Y.Z` form.
 
 ## [Unreleased]
 
+## [0.1.104] - 2026-11-10
+
+### Security
+
+- Every page now names exactly what a browser may load for it. The origin's
+  Content-Security-Policy refuses everything by default and admits, from the
+  site itself only, the scripts, stylesheets, images, fonts, data requests and
+  media it actually uses; before, its own origin could serve any kind of
+  resource. Pages also send `Cross-Origin-Opener-Policy: same-origin`, so a
+  window another site opens gets no handle on this one, and the
+  Permissions-Policy now denies payment and USB access beside the camera,
+  microphone and location. Every response also names the release it comes
+  from in an `X-Site-Version` header, and nothing else. `compliance.json`
+  now declares each of these headers exactly: every pull request runs its own
+  image against that declaration, and the weekly live check holds production
+  to the declaration of the release it actually runs, read from that
+  release's tag. Nothing a visitor sees changes.
+- The activity panel refuses a day's contribution count, a commit count, or any
+  sum of them that a browser cannot hold exactly (past 9,007,199,254,740,991),
+  the way it already refused such a row number, so a hostile upstream can no
+  longer overflow a total. The projects panel's measured size ceiling now counts
+  its descriptions in the widest characters they may hold: 27,196 bytes, not the
+  7,988 an ASCII fixture measured (#404).
+
+### Changed
+
+- The token-usage panel's sealed-file loop keeps one explicit state instead of
+  five flags whose wrong combinations three past reviews found, and a payload
+  served stale now knows why: only one kept after a failure can turn fresh
+  again without new data. Every panel serves byte-for-byte what it served
+  before.
+- A change confined to workflows, CI scripts or tests no longer cuts a
+  release: none of them reaches the image, the bundle or the chart, and the
+  image build now runs its tests in stages the shipped build never starts
+  from. The browser lanes run every test in parallel, split the slow engines
+  across runners, add Firefox at a phone's width, a tablet and forced colors,
+  run only for changes that can alter a page, and fail on any policy
+  violation. Tool downloads retry a failed fetch, the image tests run once per
+  build, and the container check no longer emulates arm64. Playwright 1.65.0,
+  Vite 8.3.6, svelte-check 4.7.8, the CodeQL action 4.39.3 and the cosign
+  installer 4.1.3.
+
 ## [0.1.103] - 2026-11-03
 
 ### Fixed

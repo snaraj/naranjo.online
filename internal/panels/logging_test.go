@@ -919,7 +919,7 @@ func TestServedRefreshSummaryCountsEveryPublishedRowKind(t *testing.T) {
 			t.Fatalf("%s sentinel: %v", tc.kind, err)
 		}
 		state := &panelState{definition: panelDefinition{kind: tc.kind}}
-		state.current.Store(&servedPanel{payload: loadedPayload{data: raw, status: StatusOK}})
+		state.current.Store(&servedPanel{payload: loadedPayload{data: raw, state: servedFresh}})
 		previous := &servedPanel{payload: loadedPayload{data: json.RawMessage(`{}`)}}
 		got := map[string]int64{}
 		for _, attr := range servedRefreshSummary(state, previous) {
@@ -971,8 +971,8 @@ func TestFailedCycleRetainsOnlyWhatItServes(t *testing.T) {
 					t.Fatalf("no failure WARN in %q", out.String())
 				}
 				served := registry.byID["boss-log"].current.Load().payload
-				if served.status != tc.status || record["status"] != string(tc.status) || record["retained"] != tc.retained {
-					t.Fatalf("failed cycle served %q and logged %v, want %q with retained=%v", served.status, record, tc.status, tc.retained)
+				if served.state.status() != tc.status || record["status"] != string(tc.status) || record["retained"] != tc.retained {
+					t.Fatalf("failed cycle served %q and logged %v, want %q with retained=%v", served.state.status(), record, tc.status, tc.retained)
 				}
 				if tc.retained {
 					var data BossLogData

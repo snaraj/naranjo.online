@@ -17,7 +17,7 @@
  */
 import { readFileSync } from 'node:fs';
 
-import { expect, test } from '@playwright/test';
+import { expect, test } from './csp-watch.mjs';
 
 const manifest = JSON.parse(readFileSync(new URL('../../compliance.json', import.meta.url), 'utf8'));
 const declaredOrigins = new Set(manifest.thirdParties.map((entry) => entry.origin));

@@ -736,22 +736,45 @@ def _validated_history_transitions(
 
 DOCUMENTATION_FILES = frozenset({"AGENTS.md", "README.md", ".gitignore"})
 DOCUMENTATION_TREE = "docs/"
+# Paths no shipped byte can come from (issue #404's train, item H). The image
+# holds one file, the Go binary; the Dockerfile COPYs only go.mod, cmd/,
+# internal/ and frontend/ (with two vocabulary files under internal/), and the
+# chart is chart/. So:
+#   - .github/ and scripts/ci/ are COPYed nowhere and packaged nowhere. They
+#     decide how the NEXT release is built, scanned and signed, and a range
+#     confined to them publishes nothing, so no released byte moves.
+#   - a Go _test.go file is never compiled into the binary, and no //go:embed
+#     pattern matches one; the frontend's tests/, e2e/ and Playwright config
+#     are no Vite input. Their batteries run in Dockerfile stages of their own
+#     that the shipped stages never build FROM, so even running them cannot
+#     reach the bundle or the binary (pinned by the Dockerfile test).
+# Dockerfile, .dockerignore, go.mod, package*.json, chart/, every non-test
+# source and every base-image digest stay artifact surfaces.
+NO_ARTIFACT_TREES = (".github/", "scripts/ci/", "frontend/tests/", "frontend/e2e/")
+NO_ARTIFACT_FILES = frozenset({"frontend/playwright.config.mjs"})
+GO_SOURCE_TREES = ("cmd/", "internal/")
 RELEASE_LOCK_PATHS = ("VERSION", "chart/Chart.yaml", "chart/values.yaml", "CHANGELOG.md")
 _DOCUMENTATION_DIFF_MODES = frozenset({"000000", "100644", "100755"})
 _DOCUMENTATION_DIFF_STATUSES = frozenset({"A", "D", "M"})
 
 
 def is_documentation_path(path: str) -> bool:
-    """Classify one repo-relative path as documentation-only surface.
+    """Classify one repo-relative path as a no-artifact surface.
 
     The allowlist is deliberately closed: root AGENTS.md, README.md, and
-    .gitignore, plus Markdown files under docs/. Everything else — release
-    locks, scripts, workflows, application and chart trees, LICENSE — is an
-    artifact surface, so widening this set is itself a released gate change.
+    .gitignore, Markdown files under docs/, and the paths no shipped byte can
+    come from (NO_ARTIFACT_TREES, NO_ARTIFACT_FILES, and Go test files under
+    cmd/ and internal/). Everything else — release locks, the Dockerfile,
+    module and lock files, application sources, the chart, LICENSE — is an
+    artifact surface.
     """
-    if path in DOCUMENTATION_FILES:
+    if path in DOCUMENTATION_FILES or path in NO_ARTIFACT_FILES:
         return True
-    return path.startswith(DOCUMENTATION_TREE) and path.endswith(".md")
+    if path.startswith(DOCUMENTATION_TREE) and path.endswith(".md"):
+        return True
+    if path.startswith(NO_ARTIFACT_TREES) and not path.endswith("/"):
+        return True
+    return path.startswith(GO_SOURCE_TREES) and path.endswith("_test.go")
 
 
 def _diff_entries(repository: Path, base: str, commit: str) -> list[tuple[str, str, str, str]]:

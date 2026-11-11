@@ -1,12 +1,13 @@
 # Build only the small, version-controlled Svelte UI in a pinned stage. The
 # repository media gate prevents heavy delivery assets from entering this context.
 #
-# Both build stages run on the BUILD platform: the frontend is bytes that do not
-# vary by target, and Go cross-compiles a static binary for any target from any
-# host. Emulating arm64 to run the same checks a second time cost the PR gate
-# ten minutes per run (issue 287); now the checks run once, natively, and only
-# the final stage is per-target.
-FROM --platform=$BUILDPLATFORM docker.io/library/node:24.22.1-trixie-slim@sha256:89c5244bc22a9bc3287d89ebc7e49b9cb5bb84cd40e6175ac3421d5a9f68b95a AS frontend
+# Every build stage runs on the BUILD platform: the frontend is bytes that do
+# not vary by target, and Go cross-compiles a static binary for any target from
+# any host. Emulating arm64 to run the same checks a second time cost the PR
+# gate ten minutes per run (issue 287); now the checks run once, natively, and
+# only the Go compile and the final stage are per-target, so no build needs an
+# emulator.
+FROM --platform=$BUILDPLATFORM docker.io/library/node:24.22.1-trixie-slim@sha256:89c5244bc22a9bc3287d89ebc7e49b9cb5bb84cd40e6175ac3421d5a9f68b95a AS frontend-source
 WORKDIR /src/frontend
 # The model vocabulary is one data file every consumer reads rather than three
 # hand-kept tables (issue #302), and the source vocabulary is its sibling
@@ -21,13 +22,22 @@ RUN test "$(node --version)" = "v24.22.1" && \
     test "$(npm --version)" = "11.19.1" && \
     npm ci --ignore-scripts --no-audit --no-fund
 COPY frontend/ ./
-RUN npm run check && npm test && npm run build
 
-# Test and compile one static binary for CI amd64 and Pi arm64; any future media
-# remains a runtime read-only mount and never becomes part of this Go embed.
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.10-trixie@sha256:7202554ed358a37f41c44e4910ae29bbc5ef0715f289ac637218adbb0ca132dd AS backend
-ARG TARGETOS
-ARG TARGETARCH
+# TESTS NEVER TOUCH WHAT SHIPS. Each battery runs in a stage of its own, and
+# the stage that builds what ships starts again from the source stage and only
+# copies the battery's empty pass mark, so it waits for the tests to pass and
+# nothing a test does can reach the bundle or the binary. That is what lets
+# the release classifier treat test-only files as no-artifact.
+FROM frontend-source AS frontend-test
+RUN npm run check && npm test && touch /frontend-tested
+
+FROM frontend-source AS frontend
+COPY --from=frontend-test /frontend-tested /frontend-tested
+RUN npm run build
+
+# The Go battery runs once: these stages name no target, so every target
+# platform shares them rather than testing once per architecture.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.10-trixie@sha256:7202554ed358a37f41c44e4910ae29bbc5ef0715f289ac637218adbb0ca132dd AS backend-source
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local
 WORKDIR /src
@@ -35,8 +45,23 @@ COPY go.mod ./
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY --from=frontend /src/internal/web/dist/ ./internal/web/dist/
-RUN go test ./... && \
-    GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -buildid=" -o /out/naranjo-online ./cmd/server
+
+FROM backend-source AS backend-test
+RUN go test ./... && touch /backend-tested
+
+# Compile one static binary per target, CI amd64 and Pi arm64; any future media
+# remains a runtime read-only mount and never becomes part of this Go embed.
+FROM backend-source AS backend
+COPY --from=backend-test /backend-tested /backend-tested
+# The binary names the release it is built as on every response
+# (X-Site-Version), which is how the deployed-site compliance check knows
+# which release's compliance.json to hold production to. VERSION is the
+# release lock itself, so the stamp cannot disagree with the tag, and the
+# server refuses to start on anything but a plain X.Y.Z.
+COPY VERSION /src/VERSION
+ARG TARGETOS
+ARG TARGETARCH
+RUN GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -buildid= -X main.siteVersion=$(cat /src/VERSION)" -o /out/naranjo-online ./cmd/server
 
 # The final shell-less image contains only the independently promotable origin
 # binary, with no package manager, source tree, compiler, Python, or media bytes.

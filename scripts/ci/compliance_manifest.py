@@ -1,7 +1,7 @@
-"""The site's compliance manifest, validated, and the live site judged by it.
+"""The site's compliance manifest, validated, and two sites judged by it.
 
 WHY THIS EXISTS. The origin keeps strong privacy properties by construction --
-`default-src 'self'`, no cookie of its own, no client address in its logs --
+`default-src 'none'`, no cookie of its own, no client address in its logs --
 and every one of them is pinned by a Go test against the binary. None of those
 tests can see what a visitor actually receives, because an edge sits between
 the binary and the visitor and can add headers, scripts and reporting
@@ -10,34 +10,56 @@ nothing kept the facts a privacy notice must state -- what the site stores on
 a visitor's device, which third parties a page contacts, which legal pages
 exist -- written down in one place a gate could hold the site to.
 
-`compliance.json` at the repository root is that place. This file has two
-subcommands, and the browser lanes (`frontend/e2e/compliance.spec.mjs`) read
-the same manifest:
+`compliance.json` at the repository root is that place, and every release's
+copy stays readable at its tag. This file has three subcommands, and the
+browser lanes (`frontend/e2e/compliance.spec.mjs`) read the same manifest:
 
-  check  validate the manifest's closed schema, and hold its storage list to
-         the source in both directions: a declared cookie or storage key that
-         no frontend file WRITES as that kind is stale, and a write the
-         manifest does not declare is refused (`storage_writes` states the
-         write grammar). A data-collection entry whose evidence file is gone
-         is stale too.
-  live   GET the production URL and judge what the edge actually serves: the
-         answer must be complete (never a prefix past the byte cap, never
-         short of its Content-Length), the CSP must admit no origin the
-         manifest does not declare (and none at all through a wildcard or a
-         bare scheme), script directives must not admit 'unsafe-inline' or
-         eval'd code, a declared injected script passes only while a policy
-         blocks every inline script, framing must be denied, HSTS must last a
-         year, nosniff and a Referrer-Policy must be present, the document must
-         set no cookie, every reporting endpoint and every script, stylesheet
-         or embedded resource in the served HTML must be this origin's or
-         declared, and every published legal page must answer 200. A declared
-         third party or edge observation that no longer occurs is refused as
-         stale, so an exemption never outlives its case.
+  check      validate the head manifest's closed schema, and hold its storage
+             list to the source in both directions: a declared cookie or
+             storage key that no frontend file WRITES as that kind is stale,
+             and a write the manifest does not declare is refused
+             (`storage_writes` states the write grammar). A data-collection
+             entry whose evidence file is gone is stale too. Its `headers`
+             declare each security header the release sends with its exact
+             value, and must keep the floor: a CSP with a default-src, the
+             opener policy same-origin, and a Permissions-Policy denying every
+             feature in DENIED_FEATURES.
+  live       judge PRODUCTION against the manifest of the release it RUNS. The
+             site names that release in X-Site-Version (`deployed_version`);
+             its manifest is read from the immutable tag (`released_manifest`,
+             `git show vX.Y.Z:compliance.json`), never from the head or from
+             anything the site serves, and a version with no tag, or a tag
+             with no manifest, fails with no fallback. Production may also not
+             stay behind main's VERSION for longer than STALE_AFTER_SECONDS.
+  candidate  judge the image built from THIS head, run on loopback with no
+             edge in front of it, against THIS head's manifest: it must name
+             the head's VERSION and serve every declared header exactly, and
+             no edge observation exempts anything, because no edge is there.
 
-PIN BEHAVIOUR, NOT INVENTORY. Nothing here asserts "the site has exactly these
-headers" or "these are all the scripts". Each rule refuses one construct that
-changes what a visitor is exposed to, and a legitimate addition either passes
-untouched or needs one declared line.
+Both judges apply the same rules (`judge`): the answer must be complete (never
+a prefix past the byte cap, never short of its Content-Length), the CSP must
+admit no origin the manifest does not declare (and none at all through a
+wildcard or a bare scheme), script directives must not admit 'unsafe-inline'
+or eval'd code, a declared injected script passes only while a policy blocks
+every inline script, framing must be denied, HSTS must last a year, nosniff and
+a Referrer-Policy must be present, every declared header must be served once
+with exactly its declared value, the document must set no cookie, every
+reporting endpoint and every script, stylesheet or embedded resource in the
+served HTML must be this origin's or declared, and every published legal page
+must answer 200. A declared third party or edge observation that no longer
+occurs is refused as stale, so an exemption never outlives its case.
+
+A NEW RULE ENTERS THROUGH THE MANIFEST. `live` holds an older release to its
+own manifest with today's judge, so anything a release must newly meet is
+declared in that release's manifest (as `headers` was, in compliance/v2), not
+added to the floor above, or production would be held to a promise the release
+it runs never made.
+
+PIN BEHAVIOUR, NOT INVENTORY. Each rule refuses one construct that changes what
+a visitor is exposed to, and a legitimate addition either passes untouched or
+needs one declared line. `headers` is the one list: it is the release's own
+statement of what it sends, and holding a site to its own statement is the
+point.
 
 LIFT. A refusal a manifest line can admit prints that exact line, and every
 entry needs a written reason (and, for an edge observation, the issue that
@@ -57,9 +79,13 @@ from __future__ import annotations
 import argparse
 import html.parser
 import http.client
+import io
 import json
 import re
+import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -70,7 +96,7 @@ from urllib.parse import urljoin, urlsplit
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "compliance.json"
 SOURCE_ROOT = ROOT / "frontend" / "src"
-SCHEMA = "compliance/v1"
+SCHEMA = "compliance/v2"
 
 TOP_KEYS = {
     "schema",
@@ -80,7 +106,12 @@ TOP_KEYS = {
     "thirdParties",
     "legalPages",
     "edgeObservations",
+    "headers",
 }
+# `live` reads every release's manifest at its tag, so the judge still reads
+# each schema a release shipped: v1, before 0.1.104, declared no headers.
+RELEASED_SCHEMAS = {"compliance/v1": TOP_KEYS - {"headers"}, SCHEMA: TOP_KEYS}
+HEADER_NAME = re.compile(r"\A[a-z0-9-]+\Z")
 ENTRY_KEYS = {
     "dataCollected": ({"what", "where", "purpose", "evidence"}, set()),
     "storage": ({"name", "kind", "writtenWhen", "purpose"}, set()),
@@ -174,6 +205,29 @@ LINE_TERMINATOR = re.compile("[\n\r\u2028\u2029]")
 SVELTE_ELEMENT = re.compile(r"<(script|style)\b[^>]*>", re.IGNORECASE)
 HSTS_FLOOR_SECONDS = 31_536_000
 REFERRER_POLICIES = {"no-referrer", "same-origin", "strict-origin", "strict-origin-when-cross-origin"}
+# Features no page here uses. Each must be denied outright (`feature=()`); a
+# policy may say more, and what else it says is not this gate's business.
+DENIED_FEATURES = ("camera", "geolocation", "microphone", "payment", "usb")
+# The release a binary was built as, on every response (server.WithVersion).
+VERSION_HEADER = "x-site-version"
+RELEASE = re.compile(r"\A[0-9]+\.[0-9]+\.[0-9]+\Z")
+VERSION_FILE = ROOT / "VERSION"
+MAIN_REF = "origin/main"
+# TRANSITIONAL, and the only release it names: 0.1.104 is the first build that
+# names itself, so a site that sends no X-Site-Version is accepted as 0.1.103
+# only while it serves exactly the bundle v0.1.103 builds to, built here from
+# that tag (`built_assets`); any other header-less site fails. Lift: once
+# production names its release, delete this, `built_assets` and the Node step
+# in compliance-live.yml in one change.
+HEADERLESS_RELEASE = "0.1.103"
+BUILD_TIMEOUT_SECONDS = 300
+# How long production may run behind main's VERSION, from the main commit that
+# set it. Measured on 0.1.92 to 0.1.103: nine of eleven releases were live
+# 15 to 72 minutes after their merge, one waited 19.1 hours overnight for its
+# promotion review, and 0.1.98 was never promoted at all (0.1.99 replaced it
+# 10.2 days later). A day admits the overnight wait and refuses the stall.
+STALE_AFTER_SECONDS = 24 * 60 * 60
+CANDIDATE_URL = re.compile(r"\Ahttp://127\.0\.0\.1:[0-9]{1,5}/\Z")
 FETCH_TIMEOUT_SECONDS = 20
 BODY_CAP_BYTES = 2 * 1024 * 1024
 USER_AGENT = "compliance-live-check/1 (read-only GET)"
@@ -231,17 +285,57 @@ def _text(value: object) -> bool:
 
 
 def validate(manifest: object, source_root: Path = SOURCE_ROOT, repo_root: Path = ROOT) -> list[str]:
-    """Every way the manifest fails its closed schema or has gone stale."""
+    """Every way the HEAD manifest fails its closed schema or has gone stale."""
+    refusals = shape(manifest)
+    if not isinstance(manifest, dict):
+        return refusals
+    if manifest.get("schema") != SCHEMA:
+        refusals.append(f"compliance.json schema must be {SCHEMA!r}: the head declares the headers it sends")
+
+    for index, entry in enumerate(_entries(manifest, "dataCollected")):
+        evidence = entry.get("evidence")
+        if _text(evidence) and not (repo_root / evidence).exists():
+            refusals.append(f"dataCollected[{index}].evidence {evidence!r} no longer exists: the entry is stale")
+
+    writes, unread = storage_writes(source_root)
+    declared: set[tuple[str, str]] = set()
+    for index, entry in enumerate(_entries(manifest, "storage")):
+        kind, name = entry.get("kind"), entry.get("name")
+        if _text(name):
+            declared.add((kind, name))
+            if (kind, name) not in writes:
+                refusals.append(
+                    f"storage[{index}] declares {kind} {name!r}, which no file under frontend/src writes: the entry is stale"
+                )
+    for (kind, name), where in sorted(writes.items()):
+        if (kind, name) not in declared:
+            refusals.append(
+                f"frontend/src/{where} writes {kind} {name!r}, which compliance.json does not declare (lift: add to "
+                f'storage {{"name": "{name}", "kind": "{kind}", "writtenWhen": "visitor-action", "purpose": "..."}})'
+            )
+    refusals.extend(unread)
+    return refusals
+
+
+def shape(manifest: object) -> list[str]:
+    """Every way a manifest of any released schema breaks that schema.
+
+    Nothing here reads the source tree, so `live` can hold a release's own
+    manifest, read at its tag, to it."""
     refusals: list[str] = []
     if not isinstance(manifest, dict):
         return ["compliance.json must be one JSON object"]
+    schema = manifest.get("schema")
+    expected = RELEASED_SCHEMAS.get(schema, TOP_KEYS) if isinstance(schema, str) else TOP_KEYS
     keys = set(manifest)
-    for missing in sorted(TOP_KEYS - keys):
+    for missing in sorted(expected - keys):
         refusals.append(f"compliance.json lacks the required key {missing!r}")
-    for unknown in sorted(keys - TOP_KEYS):
+    for unknown in sorted(keys - expected):
         refusals.append(f"compliance.json carries the unknown key {unknown!r}; the schema is closed so a typo cannot pass silently")
-    if manifest.get("schema") != SCHEMA:
-        refusals.append(f"compliance.json schema must be {SCHEMA!r}")
+    if schema not in RELEASED_SCHEMAS:
+        refusals.append(f"compliance.json schema must be one of {sorted(RELEASED_SCHEMAS)}")
+    if "headers" in manifest:
+        refusals.extend(_header_refusals(manifest["headers"]))
     live = manifest.get("liveUrl")
     if not (isinstance(live, str) and live.startswith("https://") and urlsplit(live).netloc):
         refusals.append("liveUrl must be the site's https:// URL")
@@ -268,36 +362,15 @@ def validate(manifest: object, source_root: Path = SOURCE_ROOT, repo_root: Path 
                 if not _text(entry[key]):
                     refusals.append(f"{where}.{key} must be a non-empty string")
 
-    for index, entry in enumerate(_entries(manifest, "dataCollected")):
-        evidence = entry.get("evidence")
-        if _text(evidence) and not (repo_root / evidence).exists():
-            refusals.append(f"dataCollected[{index}].evidence {evidence!r} no longer exists: the entry is stale")
-
-    writes, unread = storage_writes(source_root)
-    declared: set[tuple[str, str]] = set()
     for index, entry in enumerate(_entries(manifest, "storage")):
         where = f"storage[{index}]"
-        kind, name = entry.get("kind"), entry.get("name")
-        if kind not in STORAGE_KINDS:
+        if entry.get("kind") not in STORAGE_KINDS:
             refusals.append(f"{where}.kind must be one of {sorted(STORAGE_KINDS)}")
         if entry.get("writtenWhen") not in WRITTEN_WHEN:
             refusals.append(
                 f"{where}.writtenWhen must be one of {sorted(WRITTEN_WHEN)}: a write on load needs consent, "
                 "and consent needs a mechanism this site does not have"
             )
-        if _text(name):
-            declared.add((kind, name))
-            if (kind, name) not in writes:
-                refusals.append(
-                    f"{where} declares {kind} {name!r}, which no file under frontend/src writes: the entry is stale"
-                )
-    for (kind, name), where in sorted(writes.items()):
-        if (kind, name) not in declared:
-            refusals.append(
-                f"frontend/src/{where} writes {kind} {name!r}, which compliance.json does not declare (lift: add to "
-                f'storage {{"name": "{name}", "kind": "{kind}", "writtenWhen": "visitor-action", "purpose": "..."}})'
-            )
-    refusals.extend(unread)
 
     for index, entry in enumerate(_entries(manifest, "thirdParties")):
         where = f"thirdParties[{index}]"
@@ -336,6 +409,38 @@ def validate(manifest: object, source_root: Path = SOURCE_ROOT, repo_root: Path 
             refusals.append(f"{where} needs the bare https origin the reports go to")
         if not (isinstance(entry.get("issue"), str) and ISSUE_URL.match(entry["issue"])):
             refusals.append(f"{where}.issue must be the issue URL that holds the decision")
+    return refusals
+
+
+def denied_features(policy: object) -> set[str]:
+    """The features a Permissions-Policy value gives the empty allowlist."""
+    if not isinstance(policy, str):
+        return set()
+    return {
+        name.strip().lower()
+        for name, _, allowlist in (item.partition("=") for item in policy.split(","))
+        if allowlist.strip() == "()"
+    }
+
+
+def _header_refusals(declared: object) -> list[str]:
+    if not isinstance(declared, dict) or not declared:
+        return ["headers must be an object naming each security header the release sends and its exact value"]
+    refusals: list[str] = []
+    for name, value in declared.items():
+        if not HEADER_NAME.match(name):
+            refusals.append(f"headers names {name!r}, and a declared header name is a lowercase HTTP field name")
+        if not _text(value):
+            refusals.append(f"headers.{name} must be a non-empty string")
+    csp = declared.get("content-security-policy")
+    if not (isinstance(csp, str) and "default-src" in parse_csp(csp)):
+        refusals.append("headers must declare a content-security-policy with a default-src")
+    if declared.get("cross-origin-opener-policy") != "same-origin":
+        refusals.append("headers must declare cross-origin-opener-policy: same-origin, so a window a page opens keeps no handle on it")
+    denied = denied_features(declared.get("permissions-policy"))
+    for feature in DENIED_FEATURES:
+        if feature not in denied:
+            refusals.append(f"headers must declare a permissions-policy that denies {feature}=()")
     return refusals
 
 
@@ -720,11 +825,16 @@ def reporting_origins(document: Fetched) -> set[str]:
     return origins
 
 
-def judge(manifest: dict, document: Fetched, pages: dict[str, Fetched]) -> Verdict:
+def judge(
+    manifest: dict, document: Fetched, pages: dict[str, Fetched], *, site: str | None = None, edge: bool = True
+) -> Verdict:
+    """Hold one answer to one manifest. `site` is this origin (the manifest's
+    liveUrl unless a candidate runs elsewhere); without an `edge` in front of
+    the answer no edge observation exempts anything and none can go stale."""
     verdict = Verdict()
-    site = origin_of(manifest["liveUrl"])
+    site = site or origin_of(manifest["liveUrl"])
     declared = {entry["origin"].lower() for entry in _entries(manifest, "thirdParties")}
-    observations = _entries(manifest, "edgeObservations")
+    observations = _entries(manifest, "edgeObservations") if edge else []
     markers = {entry["marker"]: False for entry in observations if entry.get("kind") == "injected-inline-script"}
     reporters = {
         entry["origin"].lower(): False for entry in observations if entry.get("kind") == "reporting-endpoint"
@@ -799,6 +909,14 @@ def judge(manifest: dict, document: Fetched, pages: dict[str, Fetched]) -> Verdi
     referrer = [token.strip().lower() for token in (document.first("referrer-policy") or "").split(",") if token.strip()]
     if not referrer or referrer[-1] not in REFERRER_POLICIES:
         verdict.refuse(f"Referrer-Policy must be one of {sorted(REFERRER_POLICIES)}; got {', '.join(referrer) or 'nothing'}")
+    promised = manifest.get("headers")
+    for name, value in sorted(promised.items() if isinstance(promised, dict) else []):
+        served = [item.strip() for item in document.all(name)]
+        if served != [value]:
+            verdict.refuse(
+                f"the manifest declares {name}: {value}, and the site served "
+                + (" | ".join(served) if served else "no such header")
+            )
     for cookie in document.all("set-cookie"):
         name = cookie.split("=", 1)[0].strip()
         verdict.refuse(f"the document sets the cookie {name!r} before the visitor has done anything")
@@ -890,8 +1008,13 @@ def _whole(answer) -> bytes:
     return body
 
 
-def fetch(url: str) -> Fetched:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"}, method="GET")
+def fetch(url: str, proto: str | None = None) -> Fetched:
+    """GET one URL whole. `proto` states X-Forwarded-Proto the way the edge
+    does, for a candidate that has no edge in front of it."""
+    sent = {"User-Agent": USER_AGENT, "Accept": "text/html"}
+    if proto is not None:
+        sent["X-Forwarded-Proto"] = proto
+    request = urllib.request.Request(url, headers=sent, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
             return Fetched(response.geturl(), response.status, list(response.headers.items()), _whole(response))
@@ -924,50 +1047,197 @@ def run_check(manifest_path: Path) -> int:
     return 1 if refusals else 0
 
 
-def run_live(manifest_path: Path, fetcher=fetch) -> int:
-    started = time.monotonic()
-    manifest, problems = _read(manifest_path)
-    if not problems:
-        problems = validate(manifest)
-    pages_budget = len(_entries(manifest, "legalPages")) if isinstance(manifest, dict) else 0
-    live_url = manifest.get("liveUrl") if isinstance(manifest, dict) else None
-    _log(f"START mode=live url={live_url} budget_s={FETCH_TIMEOUT_SECONDS * (1 + pages_budget)}")
-    if problems:
-        for problem in problems:
-            _log(f"REFUSE {problem}")
-        _log(f"SUMMARY mode=live decision=fail refusals={len(problems)} duration_ms={int((time.monotonic() - started) * 1000)}")
-        return 1
+def _git(repository: Path, *args: str, text: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(repository), *args], capture_output=True, text=text, check=False)
+
+
+def _release_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def asset_paths(markup: str, base: str) -> set[str]:
+    """The /assets/ paths an HTML document loads from its own origin."""
+    resources = _Resources()
+    resources.feed(markup)
+    resources.close()
+    paths = set()
+    for _, url in resources.loads:
+        target = urljoin(base, url)
+        if origin_of(target) == origin_of(base) and urlsplit(target).path.startswith("/assets/"):
+            paths.add(urlsplit(target).path)
+    return paths
+
+
+def built_assets(repository: Path, tag: str) -> set[str]:
+    """The /assets/ paths the frontend at `tag` builds to, built here from it.
+
+    Vite names every file by its content hash and the build is reproducible,
+    so a site serving exactly these paths serves exactly that tag's bundle.
+    Only HEADERLESS_RELEASE is ever built."""
+    archive = _git(repository, "archive", "--format=tar", f"refs/tags/{tag}", "frontend", "internal/panels/config", text=False)
+    if archive.returncode:
+        raise LookupError(f"the {tag} tree cannot be read: {archive.stderr.decode(errors='replace').strip()}")
+    with tempfile.TemporaryDirectory(prefix="compliance-build-") as scratch:
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tree:
+            tree.extractall(scratch, filter="data")
+        for command in (["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], ["npm", "run", "build"]):
+            try:
+                done = subprocess.run(
+                    command, cwd=Path(scratch, "frontend"), capture_output=True, text=True, timeout=BUILD_TIMEOUT_SECONDS
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise LookupError(f"building the {tag} bundle failed: {error}") from error
+            if done.returncode:
+                raise LookupError(f"building the {tag} bundle failed at {' '.join(command)}: {done.stderr.strip()[-400:]}")
+        index = Path(scratch, "internal", "web", "dist", "index.html")
+        return asset_paths(index.read_text(encoding="utf-8"), "https://build.invalid/")
+
+
+def deployed_version(document: Fetched, repository: Path, build=built_assets) -> tuple[str, str]:
+    """The release production runs, and how the site said so. LookupError when
+    the site does not say, which fails the check: there is no fallback."""
+    named = [value.strip() for value in document.all(VERSION_HEADER)]
+    if named:
+        if len(named) != 1 or not RELEASE.match(named[0]):
+            raise LookupError(f"X-Site-Version must name one X.Y.Z release; the site sent {' | '.join(named)!r}")
+        return named[0], "named by X-Site-Version"
+    served = asset_paths(document.body.decode("utf-8", errors="replace"), document.url)
+    built = build(repository, f"v{HEADERLESS_RELEASE}")
+    if not served or served != built:
+        raise LookupError(
+            f"the site names no release and does not serve the v{HEADERLESS_RELEASE} bundle, the only release that "
+            f"predates X-Site-Version: it loads {sorted(served - built) or 'nothing'} that bundle does not and "
+            f"lacks {sorted(built - served) or 'nothing'}"
+        )
+    return HEADERLESS_RELEASE, f"identified by its bundle, which is exactly v{HEADERLESS_RELEASE}'s"
+
+
+def released_manifest(repository: Path, version: str) -> dict:
+    """compliance.json as the release `version` shipped it, read at its tag."""
+    tag = f"v{version}"
+    if _git(repository, "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}").returncode:
+        raise LookupError(f"the site runs {version}, and no tag {tag} exists to say what that release promised")
+    shown = _git(repository, "show", f"refs/tags/{tag}:compliance.json")
+    if shown.returncode:
+        raise LookupError(f"tag {tag} carries no compliance.json, so nothing states what that release promised")
     try:
-        document = fetcher(manifest["liveUrl"])
-        pages = {
-            entry["path"]: fetcher(urljoin(manifest["liveUrl"], entry["path"]))
-            for entry in _entries(manifest, "legalPages")
-            if entry.get("status") == "published"
-        }
-    except (OSError, ValueError, http.client.HTTPException) as error:
-        _log(f"REFUSE the live site could not be read: {error!r}")
-        _log(f"SUMMARY mode=live decision=fail refusals=1 duration_ms={int((time.monotonic() - started) * 1000)}")
-        return 1
-    verdict = judge(manifest, document, pages)
+        value = json.loads(shown.stdout)
+    except json.JSONDecodeError as error:
+        raise LookupError(f"{tag}:compliance.json is not JSON: {error}") from error
+    problems = shape(value)
+    if problems:
+        raise LookupError(f"{tag}:compliance.json breaks its own schema: {'; '.join(problems)}")
+    return value
+
+
+def staleness(repository: Path, deployed: str, now: float) -> tuple[str | None, str]:
+    """(refusal or None, note) for how far production runs behind main."""
+    shown = _git(repository, "show", f"{MAIN_REF}:VERSION")
+    changed = _git(repository, "log", "-1", "--format=%ct", MAIN_REF, "--", "VERSION")
+    main = shown.stdout.strip()
+    if shown.returncode or changed.returncode or not RELEASE.match(main) or not changed.stdout.strip().isdigit():
+        raise LookupError(f"main's VERSION cannot be read from {MAIN_REF}, so production's lag cannot be measured")
+    if _release_key(deployed) >= _release_key(main):
+        return None, f"production runs {deployed}; main's VERSION is {main}"
+    behind = now - int(changed.stdout.strip())
+    note = f"production runs {deployed}, behind main's {main} for {behind / 3600:.1f} h (bound {STALE_AFTER_SECONDS // 3600} h)"
+    if behind > STALE_AFTER_SECONDS:
+        return f"{note}: the release main cut has not reached production", note
+    return None, note
+
+
+def _finish(mode: str, started: float, verdict: Verdict, detail: str = "") -> int:
     for note in verdict.notes:
         _log(f"NOTE {note}")
     for refusal in verdict.refusals:
         _log(f"REFUSE {refusal}")
     decision = "fail" if verdict.refusals else "pass"
     _log(
-        f"SUMMARY mode=live decision={decision} refusals={len(verdict.refusals)} "
-        f"status={document.status} duration_ms={int((time.monotonic() - started) * 1000)}"
+        f"SUMMARY mode={mode} decision={decision} refusals={len(verdict.refusals)}{detail} "
+        f"duration_ms={int((time.monotonic() - started) * 1000)}"
     )
     return 1 if verdict.refusals else 0
 
 
+def _pages(manifest: dict, base: str, fetcher, *proto: str) -> dict[str, Fetched]:
+    return {
+        entry["path"]: fetcher(urljoin(base, entry["path"]), *proto)
+        for entry in _entries(manifest, "legalPages")
+        if entry.get("status") == "published"
+    }
+
+
+def run_live(manifest_path: Path, fetcher=fetch, repository: Path = ROOT, build=built_assets, now=time.time) -> int:
+    """Judge production against the manifest of the release it runs."""
+    started = time.monotonic()
+    head, problems = _read(manifest_path)
+    live_url = head.get("liveUrl") if isinstance(head, dict) else None
+    _log(f"START mode=live url={live_url} budget_s={FETCH_TIMEOUT_SECONDS * 2 + BUILD_TIMEOUT_SECONDS * 2}")
+    verdict = Verdict()
+    if problems or not (isinstance(live_url, str) and live_url.startswith("https://")):
+        verdict.refuse(problems[0] if problems else "the head manifest names no https:// liveUrl to read production at")
+        return _finish("live", started, verdict)
+    try:
+        document = fetcher(live_url)
+        version, how = deployed_version(document, repository, build)
+        manifest = released_manifest(repository, version)
+        pages = _pages(manifest, manifest["liveUrl"], fetcher)
+        stale, lag = staleness(repository, version, now())
+    except (OSError, ValueError, http.client.HTTPException) as error:
+        verdict.refuse(f"the live site could not be read: {error!r}")
+        return _finish("live", started, verdict)
+    except LookupError as error:
+        verdict.refuse(f"the deployed release cannot be judged: {error.args[0]}")
+        return _finish("live", started, verdict)
+    verdict = judge(manifest, document, pages)
+    verdict.notes[:0] = [f"deployed release {version}, {how}; judged against v{version}:compliance.json", lag]
+    if stale:
+        verdict.refuse(stale)
+    return _finish("live", started, verdict, f" version={version} status={document.status}")
+
+
+def run_candidate(manifest_path: Path, url: str, fetcher=fetch, version_path: Path = VERSION_FILE) -> int:
+    """Judge this head's image, on loopback, against this head's manifest."""
+    started = time.monotonic()
+    manifest, problems = _read(manifest_path)
+    if not problems:
+        problems = validate(manifest)
+    _log(f"START mode=candidate url={url} budget_s={FETCH_TIMEOUT_SECONDS * 2}")
+    verdict = Verdict()
+    if not CANDIDATE_URL.match(url):
+        problems.append(f"the candidate URL must be http://127.0.0.1:<port>/, the image run on loopback; got {url!r}")
+    try:
+        version = version_path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        problems.append(f"cannot read {version_path.name}: {error}")
+    if problems:
+        verdict.refusals.extend(problems)
+        return _finish("candidate", started, verdict)
+    try:
+        document = fetcher(url, "https")
+        pages = _pages(manifest, url, fetcher, "https")
+    except (OSError, ValueError, http.client.HTTPException) as error:
+        verdict.refuse(f"the candidate could not be read: {error!r}")
+        return _finish("candidate", started, verdict)
+    verdict = judge(manifest, document, pages, site=origin_of(url), edge=False)
+    named = document.all(VERSION_HEADER)
+    if named != [version]:
+        verdict.refuse(f"the image must name its release as X-Site-Version: {version}; it sent {' | '.join(named) or 'nothing'}")
+    return _finish("candidate", started, verdict, f" version={version} status={document.status}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("command", choices=("check", "live"))
+    parser.add_argument("command", choices=("check", "live", "candidate"))
     parser.add_argument("--manifest", type=Path, default=MANIFEST)
+    parser.add_argument("--url", help="candidate only: the loopback URL the head's image answers at")
     args = parser.parse_args(argv)
     if args.command == "check":
         return run_check(args.manifest)
+    if args.command == "candidate":
+        if args.url is None:
+            parser.error("candidate needs --url")
+        return run_candidate(args.manifest, args.url)
     return run_live(args.manifest)
 
 
